@@ -18,10 +18,10 @@ export async function performRestore({ prepared, actor, approval }) {
     actorAccountId: actor.accountId, now: Date.now() });
   const executed = await executeRestore({ api, plan, issueKey: issue.key, issueId,
     controlledFields: fields, ...config.restore });
-  const detail = await verifyRestore({ api, issueKey: issue.key, controlledFields: fields,
+  const { detail, unmatched } = await verifyRestore({ api, issueKey: issue.key, controlledFields: fields,
     baselineDigests: typeof baseline.field_digests === 'string' ? JSON.parse(baseline.field_digests) : baseline.field_digests,
     detail: executed.detail });
-  const { counters, state } = tally(detail);
+  const { counters, state } = tally(detail, unmatched);
   await finishRestore({ restoreId, now: Date.now(), counters, state, detail });
   if (state === 'COMPLETE') await markDecided({ issueId, baselineVersion: baseline.version, approvalId: approval.approval_id });
   await release({ issueId, state: state === 'COMPLETE' ? 'BASELINED' : 'ERROR', now: Date.now(),
@@ -29,7 +29,8 @@ export async function performRestore({ prepared, actor, approval }) {
       driftCount: prepared.driftCount, driftedFieldCount: diff.materialFieldCount, maxMateriality: diff.maxMateriality } });
   await tryAppend({ actorAccountId: actor.accountId, issueId, approvalId: approval.approval_id,
     eventType: state === 'COMPLETE' ? EVENT.RESTORE_COMPLETED : EVENT.RESTORE_PARTIAL,
-    payload: { restoreId: restoreId.toString('base64'), state, counters } });
-  return { success: state === 'COMPLETE', restoreId, state, counters, detail,
+    payload: { restoreId: restoreId.toString('base64'), state, counters,
+      unmatched: unmatched.map((u) => u.fieldId) } });
+  return { success: state === 'COMPLETE', restoreId, state, counters, detail, unmatched,
     message: describeResult({ counters, state }) };
 }

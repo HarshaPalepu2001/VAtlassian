@@ -58,13 +58,19 @@ export function digestOf(field, value) {
  *
  * A FIELD THAT WAS WRITTEN BUT NOT VERIFIED COUNTS AS FAILED. There is
  * deliberately no third category: the whole value of the verification pass is
- * that "succeeded" means something, and a soft middle state is exactly how that
- * erodes. A 204 from Jira means the request was accepted, not that the field
- * holds the value we sent — values get coerced, screens drop fields they do not
- * carry, and post-functions overwrite things a moment later.
+ * that "succeeded" means something.
+ *
+ * `unmatched` carries fields the verifier re-read and found NOT equal to the
+ * baseline, whether or not this restore tried to write them. A tracked field a
+ * post-function rewrote mid-restore lands here, and it is why COMPLETE cannot
+ * be derived from the write outcomes alone: "complete" has to mean the whole
+ * tracked projection matches, not that every attempt succeeded.
  */
-export function tally(detail) {
-  const counters = { attempted: detail.length, succeeded: 0, failed: 0, skipped: 0, irreversible: 0 };
+export function tally(detail, unmatched = []) {
+  const counters = {
+    attempted: detail.length, succeeded: 0, failed: 0, skipped: 0,
+    irreversible: 0, unmatched: unmatched.length
+  };
   for (const d of detail) {
     if (d.outcome === OUTCOME.SUCCEEDED && d.verified) counters.succeeded++;
     else if (d.outcome === OUTCOME.IRREVERSIBLE) counters.irreversible++;
@@ -72,9 +78,15 @@ export function tally(detail) {
     else counters.failed++;
   }
 
-  const state = counters.failed > 0
+  let state = counters.failed > 0
     ? (counters.succeeded > 0 ? RESTORE_STATE.PARTIAL : RESTORE_STATE.FAILED)
     : (counters.irreversible > 0 || counters.skipped > 0 ? RESTORE_STATE.PARTIAL : RESTORE_STATE.COMPLETE);
+
+  // The whole-baseline gate. Nothing else in this file may promote a state to
+  // COMPLETE, and this may only demote.
+  if (counters.unmatched > 0 && state === RESTORE_STATE.COMPLETE) {
+    state = counters.succeeded > 0 ? RESTORE_STATE.PARTIAL : RESTORE_STATE.FAILED;
+  }
 
   return { counters, state };
 }

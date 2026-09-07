@@ -45,40 +45,63 @@ export async function verifyRestore({ api, issueKey, controlledFields, baselineD
     current = body.fields ?? {};
   } catch (e) {
     console.error('restore: verification read failed', issueKey, e);
-    return detail.map((d) => (
-      d.outcome === OUTCOME.SUCCEEDED
-        ? {
-            ...d,
-            outcome: OUTCOME.FAILED,
-            verified: false,
-            reason: 'The work item could not be re-read, so this restore could not be confirmed. Nothing is known to have failed — but nothing is confirmed either.'
-          }
-        : { ...d, verified: false }
-    ));
+    // Deliberately pessimistic. An unverifiable restore reported as complete is
+    // the one outcome this module exists to prevent. `unmatched` carries a
+    // sentinel so tally() cannot reach COMPLETE on an unread issue either.
+    return {
+      detail: detail.map((d) => (
+        d.outcome === OUTCOME.SUCCEEDED
+          ? {
+              ...d, outcome: OUTCOME.FAILED, verified: false,
+              reason: 'The work item could not be re-read, so this restore could not be confirmed. Nothing is known to have failed — but nothing is confirmed either.'
+            }
+          : { ...d, verified: false }
+      )),
+      unmatched: [{ fieldId: null, fieldName: 'the work item', expected: null, actual: null,
+        reason: 'The work item could not be re-read, so no field could be confirmed.' }]
+    };
   }
 
   const { digests } = project(current, controlledFields);
 
-  return detail.map((d) => {
-    // Never written, so there is nothing to verify. Reported as-is.
+  const verified = detail.map((d) => {
     if (d.outcome !== OUTCOME.SUCCEEDED) return { ...d, verified: false };
 
     const expected = baselineDigests?.[d.fieldId] ?? null;
     const actual = digests?.[d.fieldId] ?? null;
-
-    if (expected != null && actual === expected) {
-      return { ...d, verified: true };
-    }
+    if (expected != null && actual === expected) return { ...d, verified: true };
 
     return {
-      ...d,
-      outcome: OUTCOME.FAILED,
-      verified: false,
+      ...d, outcome: OUTCOME.FAILED, verified: false,
       reason: expected == null
         ? 'No approved digest was recorded for this field, so the restore cannot be confirmed.'
         : 'Jira accepted the write but the field does not match the approved value. A screen configuration or a workflow post-function may be overriding it.'
     };
   });
+
+  // ── The whole tracked projection, not just what we tried to write ─────────
+  //
+  // A field this restore never touched can still be wrong: a post-function or
+  // a concurrent edit can change it between the plan and the re-read. Checking
+  // only attempted writes is how "restore complete" came to mean "every write
+  // we attempted landed", which is a different and much weaker claim.
+  const byId = new Map(controlledFields.map((f) => [f.field_id, f]));
+  const unmatched = [];
+  for (const [fieldId, expected] of Object.entries(baselineDigests ?? {})) {
+    const field = byId.get(fieldId);
+    if (!field) continue;                       // no longer tracked; not this restore's business
+    const actual = digests?.[fieldId] ?? null;
+    if (actual === expected) continue;
+    unmatched.push({
+      fieldId,
+      fieldName: field.field_name ?? fieldId,
+      expected,
+      actual,
+      reason: 'This tracked field does not match its approved value after the restore.'
+    });
+  }
+
+  return { detail: verified, unmatched };
 }
 
 /**
@@ -100,6 +123,10 @@ export function describeResult({ counters, state }) {
   if (counters.failed > 0) parts.push(`${counters.failed} could not be restored`);
   if (counters.irreversible > 0) parts.push(`${counters.irreversible} cannot be undone in Jira`);
   if (counters.skipped > 0) parts.push(`${counters.skipped} left for you to correct`);
+
+  if (counters.unmatched > 0) {
+    parts.push(`${counters.unmatched} tracked field${counters.unmatched === 1 ? ' still does' : 's still do'} not match the approved values`);
+  }
 
   if (state === 'FAILED') {
     return `Nothing was restored. ${parts.join(', ')}. The details below say why for each field.`;
