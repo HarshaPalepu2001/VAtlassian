@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ASSURANCE_LEVEL, meetsAssurance } from '../src/lib/approval/levels.js';
+import { ASSURANCE_LEVEL, meetsAssurance, MINIMUM_ASSURANCE, effectiveAssurance } from '../src/lib/approval/levels.js';
 import { providerFor } from '../src/lib/approval/registry.js';
 import { makeApproval, validEvidence } from '../src/lib/approval/record.js';
 
@@ -31,4 +31,24 @@ test('reserved providers fail closed, and the registry refuses unknown providers
     assert.equal((await providerFor(level).verify({ binding })).reason, 'NOT_CONFIGURED');
   }
   assert.throws(() => providerFor('toString'));
+});
+
+test('the floor is an electronic signature', () => {
+  assert.equal(MINIMUM_ASSURANCE, 'ESIGNATURE');
+});
+
+test('a policy configured below the floor is raised to it', () => {
+  assert.equal(effectiveAssurance('NATIVE_TRANSITION'), 'ESIGNATURE');
+  assert.equal(effectiveAssurance('JSM_APPROVAL'), 'ESIGNATURE');
+});
+
+test('a policy at or above the floor is left alone', () => {
+  assert.equal(effectiveAssurance('ESIGNATURE'), 'ESIGNATURE');
+  assert.equal(effectiveAssurance('BIOMETRIC'), 'BIOMETRIC');
+});
+
+test('an unknown or missing policy falls back to the floor, never below it', () => {
+  assert.equal(effectiveAssurance('NONSENSE'), 'ESIGNATURE');
+  assert.equal(effectiveAssurance(null), 'ESIGNATURE');
+  assert.equal(effectiveAssurance(undefined), 'ESIGNATURE');
 });

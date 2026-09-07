@@ -1,5 +1,5 @@
 import { providerFor } from '../lib/approval/registry.js';
-import { meetsAssurance, isAssuranceLevel } from '../lib/approval/levels.js';
+import { meetsAssurance, isAssuranceLevel, effectiveAssurance } from '../lib/approval/levels.js';
 import { makeApproval, validEvidence } from '../lib/approval/record.js';
 import { FailClosed, DENY } from '../lib/errors.js';
 
@@ -38,15 +38,17 @@ export function createApprovalUsecases(deps) {
       if (hasTransition && yes(ct.block_on_drift) && prepared.driftCount > 0) fail('UNDECIDED_DRIFT');
       const binding = { accountId, issueId: issue.issueId, fromStatusId: issue.statusId,
         toStatusId: transition?.toStatusId ?? issue.statusId, contentHash: prepared.contentHash, decision: payload.decision };
-      // A supplied code requests stronger authentication, never silently downgrades to native.
-      const level = payload.code != null ? 'ESIGNATURE' : ct.required_assurance;
+      // The floor applies to APPROVE and REJECT alike. A supplied code requests
+      // stronger authentication and never silently downgrades to native.
+      const required = effectiveAssurance(ct.required_assurance);
+      const level = payload.code != null ? 'ESIGNATURE' : required;
       const proof = await providerFor(level).verify({ binding, confirmed: payload.confirmed, code: payload.code, totpDeps: deps.totpDeps });
       if (!proof.ok) {
         await deps.audit({ eventType: 'APPROVAL_REFUSED', actorAccountId: accountId, issueId: issue.issueId,
-          payload: { reason: proof.reason, requiredAssurance: ct.required_assurance } });
+          payload: { reason: proof.reason, requiredAssurance: required } });
         return { success: false, reason: proof.reason, error: proof.error ?? DENY[proof.reason] ?? DENY.SERVICE_UNAVAILABLE };
       }
-      if (!meetsAssurance(proof.level, ct.required_assurance)) fail('INSUFFICIENT_ASSURANCE');
+      if (!meetsAssurance(proof.level, required)) fail('INSUFFICIENT_ASSURANCE');
       const row = makeApproval({ ...binding, issueKey: issue.issueKey, projectId: issue.projectId, issueTypeId: issue.issueTypeId,
         actorName: actor.displayName, signerRole: ct.required_role, meaning: ct.meaning, transitionId: transition?.id,
         proof, now: deps.now(), baselineId: prepared.baseline?.baseline_id, baselineVersion: prepared.baselineVersion,
@@ -82,7 +84,7 @@ export function createApprovalUsecases(deps) {
       if (!transition || transition.toStatusId !== row.to_status_id || transition.id !== row.transition_id) fail('NO_DECISION');
       const ct = await deps.edge(issue, transition);
       checkPolicy(ct);
-      if (!meetsAssurance(row.assurance_level, ct.required_assurance)) fail('INSUFFICIENT_ASSURANCE');
+      if (!meetsAssurance(row.assurance_level, effectiveAssurance(ct.required_assurance))) fail('INSUFFICIENT_ASSURANCE');
       if (!await deps.eligible({ accountId, projectId: issue.projectId, issueTypeId: issue.issueTypeId, role: ct.required_role })) fail('NOT_ELIGIBLE');
       const prepared = await deps.prepare({ issue, actor: await deps.actor(accountId), decision: 'APPROVE', forTransition: true });
       if (prepared.contentHash !== row.content_hash) fail('CONTENT_CHANGED');

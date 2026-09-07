@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createApprovalUsecases } from '../src/usecases/approval.js';
+import crypto from 'node:crypto';
 
 function fixture() {
   const rows = [], events = [];
   const issue = { issueId: 10, issueKey: 'T-10', projectId: 1, issueTypeId: '1', statusId: '1' };
   const deps = {
-    now: () => 100, issue: async () => issue, actor: async id => ({ accountId: id, displayName: 'Name' }),
+    now: () => 1700000000000, issue: async () => issue, actor: async id => ({ accountId: id, displayName: 'Name' }),
     edge: async () => ({ required_assurance: 'NATIVE_TRANSITION', required_role: 'reviewer', meaning: 'Approve', capture_baseline: true, block_on_drift: true }),
     eligible: async () => true, transition: async () => ({ id: '5', toStatusId: '2' }),
     prepare: async () => ({ contentHash: 'a'.repeat(64), evidenceHash: 'e'.repeat(64), baselineVersion: 1, driftCount: 0 }),
@@ -14,8 +15,26 @@ function fixture() {
     activate: async ({ approvalId, state }) => { rows.find(r => r.approval_id.equals(approvalId)).state = state; return true; },
     performTransition: async () => ({ transitioned: true }),
     byId: async id => rows.find(r => r.approval_id.equals(id)),
+    totpDeps: {
+      now: () => 1700000000000,
+      consume: async () => true, fail: async () => true, audit: async () => {}, alert: async () => {}, activate: async () => true
+    }
   };
-  const request = { context: { accountId: 'trusted' }, payload: { issueKey: 'T-10', transitionId: '5', decision: 'APPROVE', confirmed: true, preauthorize: true, accountId: 'spoof' } };
+  const request = { context: { accountId: 'trusted' }, payload: { issueKey: 'T-10', transitionId: '5', decision: 'APPROVE', confirmed: true, preauthorize: true, accountId: 'spoof', code: '007787' } };
+  
+  // Actually, I can just use a fixed key.
+  const fixedKey = Buffer.alloc(32, 2);
+  deps.totpDeps.key = () => fixedKey;
+  deps.totpDeps.read = async () => {
+    const crypto = await import('node:crypto');
+    const secret = Buffer.alloc(20, 1);
+    const iv = Buffer.alloc(16, 3);
+    const cipher = crypto.createCipheriv('aes-256-gcm', fixedKey, iv);
+    const ciphertext = Buffer.concat([cipher.update(secret), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    return { state: 'ACTIVE', algo: 'TOTP-SHA1', digits: 6, period_seconds: 30, key_version: 1, version: 1, ciphertext, iv, tag };
+  };
+  
   return { deps, rows, events, request };
 }
 test('only resolver identity enters the persisted approval and audit precedes usable capability', async () => {

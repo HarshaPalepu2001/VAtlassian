@@ -5,7 +5,7 @@ import { markDecided } from '../db/driftStore.js';
 import { canDecide, decide } from '../lib/decision.js';
 import { planRestore } from '../lib/restore/planner.js';
 import { performRestore } from './restoreActions.js';
-import { meetsAssurance } from '../lib/approval/levels.js';
+import { meetsAssurance, effectiveAssurance } from '../lib/approval/levels.js';
 
 export async function getState(args) { return respond(async () => {
   const state = await load(args); return { drift: state.diff, review: state.review };
@@ -44,7 +44,7 @@ export async function applyApproval({ issue, actor, approval, prepared, resuming
   // eligibility, assurance or baseline-version checks around it.
   if (!resuming && approval.content_hash !== fresh.contentHash) fail('STALE_EVIDENCE');
   if (Number(approval.baseline_version ?? fresh.baselineVersion) !== fresh.baselineVersion) fail('STALE_EVIDENCE');
-  if (!meetsAssurance(approval.assurance_level, fresh.gate?.required_assurance ?? 'ESIGNATURE')) fail('INSUFFICIENT_ASSURANCE');
+  if (!meetsAssurance(approval.assurance_level, effectiveAssurance(fresh.gate?.required_assurance))) fail('INSUFFICIENT_ASSURANCE');
   let locked = false;
   if (fresh.review) {
     const result = await acquire({ issueId: fresh.issueId, expectedVersion: fresh.review.version,

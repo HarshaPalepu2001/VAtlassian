@@ -1,6 +1,7 @@
 import { executeQuery, toBinaryParam, fromBinaryColumn, limitClause } from '../lib/db.js';
 import { newId, throwing } from './store.js';
 import { withAlwaysControlled } from '../lib/content.js';
+import { effectiveAssurance } from '../lib/approval/levels.js';
 
 /**
  * va_config, va_controlled_transition, va_controlled_field, va_eligibility.
@@ -294,7 +295,7 @@ export async function upsertGatedTransition(row) {
       // Recorded, never matched on. See migrations.js v034.
       row.transition_id ?? null,
       row.required_role, row.meaning ?? 'Approved', row.require_decision === false ? 0 : 1, row.block_on_drift === false ? 0 : 1,
-      row.required_assurance ?? 'ESIGNATURE', row.capture_baseline === false ? 0 : 1, row.state ?? ACTIVE, row.created_at, row.created_by
+      effectiveAssurance(row.required_assurance), row.capture_baseline === false ? 0 : 1, row.state ?? ACTIVE, row.created_at, row.created_by
     ]
   );
   return id;
