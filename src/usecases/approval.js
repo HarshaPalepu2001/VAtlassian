@@ -62,11 +62,12 @@ export function createApprovalUsecases(deps) {
         applied = await deps.apply({ issue, actor, approval: row, prepared, context });
         if (applied?.success !== true) fail('SERVICE_UNAVAILABLE');
       }
-      const state = hasTransition ? 'PENDING' : 'CONSUMED';
-      if (!await deps.activate({ approvalId: row.approval_id, now: deps.now(), state })) fail('SERVICE_UNAVAILABLE');
       const result = { success: true, approvalId: row.approval_id.toString('hex'), assuranceLevel: row.assurance_level,
-        printedName: row.printed_name, meaning: row.meaning, transitioned: false, state };
+        printedName: row.printed_name, meaning: row.meaning, transitioned: false };
       if (hasTransition && payload.preauthorize !== true) Object.assign(result, await deps.performTransition(issue, transition, row));
+      const state = hasTransition ? (result.transitioned ? 'CONSUMED' : 'PENDING') : 'CONSUMED';
+      if (!await deps.activate({ approvalId: row.approval_id, now: deps.now(), state })) fail('SERVICE_UNAVAILABLE');
+      result.state = state;
       if (applied?.restore) result.restore = applied.restore;
       return result;
     } catch (error) { return failure(error); }
