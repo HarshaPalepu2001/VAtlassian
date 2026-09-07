@@ -7,7 +7,8 @@ export async function adminDependencies(overrides, profile = '') {
   ]);
   const api = forge.default;
   const deps = { ...db, ...store, ...ledger, ...directory,
-    asApp: () => api.asApp(), asUser: () => api.asUser(), route: forge.route };
+    asApp: () => api.asApp(), asUser: () => api.asUser(), route: forge.route,
+    hasUnresolvedDrift: (await import('../db/driftStore.js')).hasUnresolvedDrift };
   deps.isJiraAdmin = async () => {
     const response = await api.asUser().requestJira(forge.route`/rest/api/3/mypermissions?permissions=ADMINISTER`);
     if (!response.ok) throw new Error('Could not verify Jira administrator permission.');

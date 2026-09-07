@@ -359,4 +359,59 @@ export const MIGRATIONS = [
     PRIMARY KEY (incident_id),
     KEY idx_incident_issue (issue_id, occurred_at)
   )` },
+  { id: 'v023_proposal_snapshot', sql: `CREATE TABLE IF NOT EXISTS va_proposal (
+    proposal_id BINARY(16) NOT NULL,
+    issue_id BIGINT NOT NULL,
+    baseline_id BINARY(16) NOT NULL,
+    baseline_version INT NOT NULL,
+    baseline_hash CHAR(64) NOT NULL,
+    field_config_version VARCHAR(64) NULL,
+    content_hash CHAR(64) NOT NULL,
+    field_digests TEXT NOT NULL,
+    proposer_account_id VARCHAR(128) NOT NULL,
+    state VARCHAR(16) NOT NULL,
+    captured_at BIGINT NOT NULL,
+    expires_at BIGINT NOT NULL,
+    operation_plan_hash CHAR(64) NULL,
+    PRIMARY KEY (proposal_id),
+    KEY idx_proposal_issue (issue_id, state)
+  )` },
+  { id: 'v023_proposal_snapshot_val', sql: `CREATE TABLE IF NOT EXISTS va_proposal_value (
+    proposal_id BINARY(16) NOT NULL,
+    field_id VARCHAR(64) NOT NULL,
+    seq INT NOT NULL,
+    encoding VARCHAR(16) NOT NULL,
+    raw_bytes INT NOT NULL,
+    data MEDIUMTEXT NOT NULL,
+    PRIMARY KEY (proposal_id, field_id, seq)
+  )` },
+  { id: 'v024_challenge', sql: `CREATE TABLE IF NOT EXISTS va_challenge (
+    challenge_id BINARY(16) NOT NULL,
+    tenant_id VARCHAR(128) NOT NULL,
+    issue_id BIGINT NOT NULL,
+    signer_account_id VARCHAR(128) NOT NULL,
+    decision VARCHAR(16) NOT NULL,
+    meaning VARCHAR(255) NOT NULL,
+    baseline_id BINARY(16) NOT NULL,
+    candidate_hash CHAR(64) NOT NULL,
+    transition_id VARCHAR(32) NULL,
+    operation_plan_hash CHAR(64) NULL,
+    nonce VARCHAR(64) NOT NULL,
+    state VARCHAR(16) NOT NULL,
+    created_at BIGINT NOT NULL,
+    expires_at BIGINT NOT NULL,
+    PRIMARY KEY (challenge_id)
+  )` },
+  { id: 'v025_operation', sql: `CREATE TABLE IF NOT EXISTS va_operation (
+    operation_id BINARY(16) NOT NULL,
+    issue_id BIGINT NOT NULL,
+    type VARCHAR(32) NOT NULL,
+    state VARCHAR(16) NOT NULL,
+    actor_account_id VARCHAR(128) NOT NULL,
+    payload TEXT NOT NULL,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    PRIMARY KEY (operation_id),
+    KEY idx_operation_issue (issue_id, state)
+  )` }
 ];

@@ -11,6 +11,14 @@ import { newId, throwing, isDuplicateKey } from './store.js';
  * transactions to make that safe.
  */
 
+export async function hasUnresolvedDrift(projectId) {
+  const rows = await executeQuery(
+    `SELECT 1 FROM va_drift WHERE project_id = ? AND approval_id IS NULL LIMIT 1`,
+    [projectId]
+  );
+  return rows.result && rows.data.length > 0;
+}
+
 const DRIFT_COLUMNS = `
   TO_BASE64(drift_id) AS drift_id, issue_id, project_id,
   TO_BASE64(baseline_id) AS baseline_id, baseline_version,

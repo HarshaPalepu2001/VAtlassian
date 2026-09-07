@@ -36,12 +36,17 @@ export function fieldRow(deps, scope, payload, catalogue, accountId) {
 
 export function validateConfig(config) {
   if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('Configuration must be an object.');
-  const allowed = new Set(['enabled', 'reviewStatusIds', 'queueThreshold', 'visibility', 'ai', 'restore', 'notifications']);
+  const allowed = new Set(['enabled', 'reviewStatusIds', 'queueThreshold', 'visibility', 'ai', 'restore', 'notifications', 'policy']);
   if (Object.keys(config).some(k => !allowed.has(k))) throw new Error('Unknown configuration key.');
   for (const key of ['enabled']) if (config[key] !== undefined && typeof config[key] !== 'boolean') throw new Error(`${key} must be a boolean.`);
   if (config.reviewStatusIds !== undefined && (!Array.isArray(config.reviewStatusIds) || config.reviewStatusIds.some(s => !/^\d+$/.test(String(s))))) throw new Error('Invalid review statuses.');
   if (config.queueThreshold !== undefined && !['COSMETIC', 'MINOR', 'MAJOR', 'CRITICAL'].includes(config.queueThreshold)) throw new Error('Invalid queue threshold.');
   if (config.visibility !== undefined && !['reviewer-only', 'all'].includes(config.visibility)) throw new Error('Invalid visibility.');
+  if (config.policy !== undefined) {
+    if (!config.policy || typeof config.policy !== 'object' || Array.isArray(config.policy)) throw new Error('Invalid policy settings.');
+    if (Object.keys(config.policy).some(k => !['mode'].includes(k))) throw new Error('Unknown policy setting.');
+    if (config.policy.mode !== undefined && !['STRICT', 'DETECT'].includes(config.policy.mode)) throw new Error('Policy mode must be STRICT or DETECT.');
+  }
   if (config.ai !== undefined) {
     if (!config.ai || typeof config.ai !== 'object' || Array.isArray(config.ai)) throw new Error('Invalid AI settings.');
     if (Object.keys(config.ai).some(k => !['enabled', 'models', 'maxCompletionTokens'].includes(k))) throw new Error('Unknown AI setting.');

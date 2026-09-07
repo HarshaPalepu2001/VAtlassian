@@ -44,6 +44,11 @@ export async function saveConfig(req, overrides) {
     const payload = req.payload ?? {};
     const key = payload.projectId == null ? 'site' : `project:${fieldScope({ ...payload, issueTypeId: '*' }).projectId}`;
     const config = validateConfig(payload.config ?? {});
+    if (config.policy?.mode === 'STRICT' && payload.projectId != null) {
+      if (await deps.hasUnresolvedDrift(payload.projectId)) {
+        throw new Error('Cannot enable STRICT mode: there is unresolved drift. Approve or reject all pending drift first.');
+      }
+    }
     await deps.tryAppend({ actorAccountId: req.context.accountId, eventType: deps.EVENT.CONFIG_CHANGED,
       payload: { scope: key, keys: Object.keys(config), action: 'SAVE_REQUESTED', config } });
     await deps.setConfig(key, config, req.context.accountId, Date.now());

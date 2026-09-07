@@ -72,6 +72,9 @@ export const DEFAULT_PROJECT_CONFIG = {
   notifications: {
     digest: true,
     digestAfterHours: 24
+  },
+  policy: {
+    mode: 'DETECT'
   }
 };
 
@@ -81,6 +84,11 @@ export async function projectConfig(projectId) {
     getConfig(`project:${projectId}`, {})
   ]);
   return deepMerge(deepMerge(DEFAULT_PROJECT_CONFIG, site ?? {}), project ?? {});
+}
+
+export async function isStrictMode(projectId) {
+  const config = await projectConfig(projectId);
+  return config?.policy?.mode === 'STRICT';
 }
 
 function deepMerge(base, over) {
