@@ -17,6 +17,7 @@ import RetentionPage from './pages/RetentionPage';
 import CredentialsPage from './pages/CredentialsPage';
 import HealthPage from './pages/HealthPage';
 import ContentReviewPage from './pages/ContentReviewPage';
+import SettingsPage from './pages/SettingsPage';
 export default function AdminConsole({configure=false}:{configure?:boolean}){
  const [route,setRoute]=useState<AdminRoute|null>('admins');const [access,setAccess]=useState<{isAdmin:boolean;needsBootstrap:boolean}|null>(null);const [projects,setProjects]=useState<Project[]>([]);const [error,setError]=useState('');
  useEffect(()=>{if(configure)return;let active=true;let unlisten:(()=>void)|undefined;view.createHistory().then(history=>{if(!active)return;setRoute(parseAdminRoute(history.location.pathname));unlisten=history.listen(location=>{setRoute(parseAdminRoute(location.pathname));});}).catch(e=>setError(errorMessage(e)));return()=>{active=false;unlisten?.();};},[configure]);
@@ -26,5 +27,5 @@ export default function AdminConsole({configure=false}:{configure?:boolean}){
  if(!access)return <Loading label="Checking administrative access…"/>;
  if(access.needsBootstrap&&!access.isAdmin)return <AdminsPage bootstrap onBootstrap={()=>void check()}/>;
  if(!access.isAdmin)return <Page title="Administrator access required"><Notice>An existing VAtlassian administrator must grant access.</Notice></Page>;
- switch(route){case 'admins':return <AdminsPage/>;case 'roles':return <RolesPage projects={projects}/>;case 'transitions':return <TransitionsPage projects={projects}/>;case 'fields':return <FieldsPage projects={projects}/>;case 'ledger':return <LedgerPage/>;case 'retention':return <RetentionPage projects={projects}/>;case 'credentials':return <CredentialsPage/>;case 'health':return <HealthPage projects={projects}/>;case 'content-review':return <ContentReviewPage/>;default:return <Page title="Page not found"><p>Choose a page in the administration menu.</p></Page>;}
+ switch(route){case 'admins':return <AdminsPage/>;case 'roles':return <RolesPage projects={projects}/>;case 'transitions':return <TransitionsPage projects={projects}/>;case 'fields':return <FieldsPage projects={projects}/>;case 'ledger':return <LedgerPage/>;case 'retention':return <RetentionPage projects={projects}/>;case 'credentials':return <CredentialsPage/>;case 'health':return <HealthPage projects={projects}/>;case 'content-review':return <ContentReviewPage/>;case 'settings':return <SettingsPage projects={projects}/>;default:return <Page title="Page not found"><p>Choose a page in the administration menu.</p></Page>;}
 }
