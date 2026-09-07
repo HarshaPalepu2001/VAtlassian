@@ -1,5 +1,8 @@
 import { FIELD_KIND } from '../content.js';
 import { RESTORABLE, specialHandlerFor } from '../diff/fields.js';
+import { shapeFor, ADAPTER_VERSION } from './adapters.js';
+
+export { ADAPTER_VERSION };
 
 /**
  * Deciding what a rejection will do, BEFORE it does any of it.
@@ -18,92 +21,17 @@ import { RESTORABLE, specialHandlerFor } from '../diff/fields.js';
 /**
  * How each field kind is written back to Jira.
  *
- * Derived from the STORED SCHEMA plus live editmeta, never guessed from the
- * value's runtime shape: a `null` tells you nothing about whether the field
- * wants `{ id }` or a bare string, and getting it wrong produces a 400 that
- * looks like a permissions problem.
+ * The rules live in ./adapters.js so they can be tested exhaustively without
+ * the planner, and so field IDENTITY — not just `schema.type` — decides the
+ * adapter. See that module's header for why the previous schema-type switch
+ * wrote "[object Object]" into description fields.
+ *
+ * Kept as a named export returning the bare value because existing callers and
+ * test/baseline-restore.test.js read it that way. New code should call
+ * `shapeFor` and honour `ok: false`.
  */
 export function writeShape({ field, value, editmeta }) {
-  const meta = editmeta?.[field.field_id];
-  const schema = meta?.schema ?? { type: inferType(field.field_kind) };
-  const { type, items } = schema;
-
-  if (value === null || value === undefined) {
-    // Explicitly clearing. Jira accepts null for most fields and an empty array
-    // for multi-valued ones; sending null to an array field is a 400.
-    return type === 'array' ? [] : null;
-  }
-
-  switch (type) {
-    case 'doc':
-      // ADF is written verbatim. This is the one field type where the stored
-      // RAW value matters absolutely: writing back a normalised document would
-      // strip localIds Jira put there and count as a second edit.
-      return value;
-
-    case 'string':
-      return typeof value === 'string' ? value : String(value);
-
-    case 'number':
-      return typeof value === 'number' ? value : Number(value);
-
-    case 'date':
-      // YYYY-MM-DD. An ISO datetime is rejected by a date field.
-      return typeof value === 'string' ? value.slice(0, 10) : null;
-
-    case 'datetime':
-      return typeof value === 'string' ? value : null;
-
-    case 'user':
-      return idOf(value, 'accountId');
-
-    case 'priority':
-    case 'resolution':
-    case 'issuetype':
-    case 'securitylevel':
-    case 'option':
-    case 'option-with-child':
-      return idOf(value, 'id');
-
-    case 'timetracking':
-      return {
-        originalEstimate: value.originalEstimate ?? undefined,
-        remainingEstimate: value.remainingEstimate ?? undefined
-      };
-
-    case 'array': {
-      const arr = Array.isArray(value) ? value : [value];
-      // Labels are bare strings; everything else entity-backed wants ids.
-      if (items === 'string' || field.field_id === 'labels') return arr.map(String);
-      if (items === 'user') return arr.map((v) => idOf(v, 'accountId'));
-      return arr.map((v) => idOf(v, 'id'));
-    }
-
-    default:
-      // An unrecognised schema is written as-is. It may fail, and if it does the
-      // executor's per-field retry reports exactly which field and why —
-      // which is far more useful than refusing to try and telling the reviewer
-      // nothing.
-      return value;
-  }
-}
-
-function inferType(kind) {
-  switch (kind) {
-    case FIELD_KIND.ADF: return 'doc';
-    case FIELD_KIND.TEXT: return 'string';
-    case FIELD_KIND.MULTI: return 'array';
-    default: return 'string';
-  }
-}
-
-function idOf(value, key) {
-  if (value === null || value === undefined) return null;
-  if (typeof value === 'object') {
-    const id = value[key] ?? value.id ?? value.value ?? value.key;
-    return id == null ? null : { [key]: String(id) };
-  }
-  return { [key]: String(value) };
+  return shapeFor({ field, value, editmeta }).value;
 }
 
 /**
