@@ -15,7 +15,10 @@ export async function performRestore({ prepared, actor, approval }) {
   const plan = planRestore({ diff, baselineValues, controlledFields: fields, editmeta });
   const restoreId = await startRestore({ approvalId: approval.approval_id, issueId, projectId,
     baselineId: baseline.baseline_id, baselineVersion: baseline.version,
-    actorAccountId: actor.accountId, now: Date.now() });
+    actorAccountId: actor.accountId, now: Date.now(),
+    // The rejected candidate, frozen before anything is written back. Without
+    // this the restore erases the only record of what was rejected.
+    candidateDigests: prepared.digests ?? {} });
   const executed = await executeRestore({ api, plan, issueKey: issue.key, issueId,
     controlledFields: fields, ...config.restore });
   const { detail, unmatched } = await verifyRestore({ api, issueKey: issue.key, controlledFields: fields,

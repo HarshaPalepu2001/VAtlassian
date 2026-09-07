@@ -60,7 +60,8 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
   const evidenceHash = diff?.evidenceHash ?? projection.contentHash;
   if (expectedEvidenceHash != null && expectedEvidenceHash !== evidenceHash) fail('STALE_EVIDENCE');
   return { issue, actor, issueId, projectId, issueTypeId, config, baseline, review, gate,
-    eligible, fields, editmeta, baselineValues, driftRows, diff, contentHash: projection.contentHash,
+    eligible, fields, editmeta, baselineValues, driftRows, diff,
+    contentHash: projection.contentHash, digests: projection.digests,
     evidenceHash, baselineVersion: baseline?.version ?? 0, driftCount: driftRows.length, reportHash: null };
 }
 export async function load(args, options = {}) {

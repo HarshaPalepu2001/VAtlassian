@@ -16,6 +16,8 @@ export const DENY = {
   RAW_CODE_ON_SCREEN: 'Your authenticator code was typed into an ordinary Jira field, which stores it in this work item\'s history, so this transition was blocked. The electronic signature field is not rendering correctly on this screen — it is most likely the wrong field. Sign from the Approval & Baseline panel on the work item instead, and report this to your VAtlassian administrator.',
   INSUFFICIENT_ASSURANCE: 'This transition requires stronger approval assurance. Open Approval & Baseline and approve using the required method.',
   CONFIRMATION_REQUIRED: 'Confirm that you reviewed this work item before approving.',
+  NEW_EVIDENCE_REQUIRES_APPROVAL: 'This work item changed after you signed. Review the new changes and decide again — the earlier signature does not cover them.',
+  NO_SIGNED_CANDIDATE: 'This restore predates candidate capture, so there is no record of what was signed. Review and decide again.',
 };
 export const DENY_DETAIL = {
   ITEM_NEVER_OBSERVED: 'No electronic signature has been recorded for this work item, so this transition was blocked. If you just entered a code in this dialog and it did not confirm "Signed as …", the signature field is not collecting it — sign from the Electronic Signature panel on the work item instead.',

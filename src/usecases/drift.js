@@ -28,7 +28,7 @@ export async function prepareApproval({ issue, actor, decision, expectedEvidence
   return prepared;
 }
 
-export async function applyApproval({ issue, actor, approval, prepared }) {
+export async function applyApproval({ issue, actor, approval, prepared, resuming = false }) {
   if (!approval?.approval_id || !actor?.accountId ||
       String(approval.actor_account_id ?? approval.account_id) !== actor.accountId ||
       String(approval.issue_id) !== String(issue.id)) fail('APPROVAL_BINDING_MISMATCH');
@@ -37,8 +37,13 @@ export async function applyApproval({ issue, actor, approval, prepared }) {
   if (!['VOID', 'CONSUMED'].includes(approval.state)) fail('APPROVAL_NOT_VERIFIED');
   const fresh = await prepareApproval({ issue, actor, decision: approval.decision,
     expectedEvidenceHash: prepared?.evidenceHash });
-  if (approval.content_hash !== fresh.contentHash ||
-      Number(approval.baseline_version ?? fresh.baselineVersion) !== fresh.baselineVersion) fail('STALE_EVIDENCE');
+
+  // `resuming` is set ONLY by usecases/restore.js after resumable() has proved
+  // every tracked field still holds either the signed candidate value or the
+  // approved baseline value. It relaxes the content-hash equality — never the
+  // eligibility, assurance or baseline-version checks around it.
+  if (!resuming && approval.content_hash !== fresh.contentHash) fail('STALE_EVIDENCE');
+  if (Number(approval.baseline_version ?? fresh.baselineVersion) !== fresh.baselineVersion) fail('STALE_EVIDENCE');
   if (!meetsAssurance(approval.assurance_level, fresh.gate?.required_assurance ?? 'ESIGNATURE')) fail('INSUFFICIENT_ASSURANCE');
   let locked = false;
   if (fresh.review) {
@@ -52,7 +57,7 @@ export async function applyApproval({ issue, actor, approval, prepared }) {
     const checkedIssue = await readableIssue({ payload: { issueId: issue.id }, context: { accountId: actor.accountId } });
     const checked = await snapshot({ issue: checkedIssue, actor, requireAuthority: true,
       expectedEvidenceHash: fresh.evidenceHash });
-    if (checked.contentHash !== approval.content_hash) fail('STALE_EVIDENCE');
+    if (!resuming && checked.contentHash !== approval.content_hash) fail('STALE_EVIDENCE');
     if (approval.decision === 'REJECT') return await performRestore({ prepared: checked, actor, approval });
     let capture = { captured: false, reason: 'CAPTURE_DISABLED' };
     if (!checked.gate || (checked.gate.capture_baseline !== false && checked.gate.capture_baseline !== 0)) {

@@ -9,7 +9,7 @@ const RESTORE_COLUMNS = `
   TO_BASE64(restore_id) AS restore_id, TO_BASE64(approval_id) AS approval_id,
   issue_id, project_id, TO_BASE64(baseline_id) AS baseline_id, baseline_version,
   actor_account_id, started_at, finished_at,
-  attempted, succeeded, failed, skipped, irreversible, state, detail
+  attempted, succeeded, failed, skipped, irreversible, state, detail, candidate_digests
 `;
 
 function decode(row) {
@@ -22,12 +22,22 @@ function decode(row) {
     // showing those with an empty breakdown is better than showing nothing.
     console.error('restore: unparseable detail for', row.restore_id);
   }
+  let candidateDigests = {};
+  try {
+    candidateDigests = row.candidate_digests ? JSON.parse(row.candidate_digests) : {};
+  } catch {
+    // Unlike detail, this one has a consequence: lib/restore/resume.js treats an
+    // empty candidate as NO_SIGNED_CANDIDATE and refuses the retry. Failing to
+    // an empty object is therefore failing closed, which is what we want.
+    console.error('restore: unparseable candidate digests for', row.restore_id);
+  }
   return {
     ...row,
     restore_id: fromBinaryColumn(row.restore_id),
     approval_id: fromBinaryColumn(row.approval_id),
     baseline_id: fromBinaryColumn(row.baseline_id),
-    detail
+    detail,
+    candidate_digests: candidateDigests
   };
 }
 
@@ -45,18 +55,20 @@ function decode(row) {
  * The counters are all zero here and are only trustworthy after finish().
  */
 export async function startRestore({
-  approvalId, issueId, projectId, baselineId, baselineVersion, actorAccountId, now
+  approvalId, issueId, projectId, baselineId, baselineVersion, actorAccountId, now,
+  candidateDigests = {}
 }) {
   const restoreId = newId();
   await throwing(
     `INSERT INTO va_restore
      (restore_id, approval_id, issue_id, project_id, baseline_id, baseline_version,
       actor_account_id, started_at, finished_at, attempted, succeeded, failed, skipped,
-      irreversible, state, detail)
-     VALUES (FROM_BASE64(?), FROM_BASE64(?), ?, ?, FROM_BASE64(?), ?, ?, ?, NULL, 0, 0, 0, 0, 0, 'RUNNING', NULL)`,
+      irreversible, state, detail, candidate_digests)
+     VALUES (FROM_BASE64(?), FROM_BASE64(?), ?, ?, FROM_BASE64(?), ?, ?, ?, NULL, 0, 0, 0, 0, 0, 'RUNNING', NULL, ?)`,
     [
       toBinaryParam(restoreId), toBinaryParam(approvalId), issueId, projectId,
-      toBinaryParam(baselineId), baselineVersion, actorAccountId, now
+      toBinaryParam(baselineId), baselineVersion, actorAccountId, now,
+      JSON.stringify(candidateDigests ?? {})
     ]
   );
   return restoreId;

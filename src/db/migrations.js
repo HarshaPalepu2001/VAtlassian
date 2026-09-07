@@ -343,4 +343,11 @@ export const MIGRATIONS = [
     PRIMARY KEY (issue_id, field_id, digest),
     KEY idx_suppression_prune (expires_at)
   )` },
+  // 2026-09-07: the rejected candidate's per-field digests, captured when the
+  // restore starts. Two jobs: it is the evidence of WHAT was rejected, which a
+  // successful restore would otherwise erase from the item; and it is what
+  // lib/restore/resume.js needs to decide whether a retry may still resume the
+  // reviewer's signature instead of silently re-signing today's content.
+  { id: 'v021_restore_candidate', sql:
+    `ALTER TABLE va_restore ADD COLUMN candidate_digests MEDIUMTEXT NULL` },
 ];
