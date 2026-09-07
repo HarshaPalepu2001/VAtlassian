@@ -1,0 +1,70 @@
+import { executeQuery, toBinaryParam, fromBinaryColumn, limitClause, affectedRows } from '../lib/db.js';
+import { APPROVAL_STATE, APPROVAL_TTL_MS, DECISION } from '../lib/approval/record.js';
+export { APPROVAL_STATE, APPROVAL_TTL_MS, DECISION };
+
+const columns = ['approval_id','issue_id','issue_key','project_id','issue_type_id','baseline_id','baseline_version',
+  'decision','state','actor_account_id','account_id','actor_name','printed_name','decided_at','signed_at','created_at',
+  'expires_at','consumed_at','from_status_id','to_status_id','transition_id','signer_role','meaning','content_hash',
+  'covers_from_hash','covers_to_hash','drift_count','report_hash','note','assurance_level','provider_id',
+  'provider_ref','provider_evidence','evidence_hash'];
+const binary = new Set(['approval_id','baseline_id']);
+const selection = columns.map(key => binary.has(key) ? `TO_BASE64(${key}) AS ${key}` : key).join(', ');
+const encode = value => value == null ? null : toBinaryParam(value);
+const decode = row => row ? { ...row, approval_id: fromBinaryColumn(row.approval_id), baseline_id: fromBinaryColumn(row.baseline_id) } : null;
+async function query(sql, params) {
+  const result = await executeQuery(sql, params);
+  if (!result.result) throw result.error ?? new Error('Approval storage unavailable');
+  return result;
+}
+
+/** The single insert owner. A durable row starts unusable, even if audit fails. */
+export async function recordApproval(row) {
+  if (row.state !== APPROVAL_STATE.VOID) throw new TypeError('Approval must start VOID');
+  await query(`INSERT INTO va_approval (${columns.join(', ')}) VALUES (${columns.map(key => binary.has(key) ? 'FROM_BASE64(?)' : '?').join(', ')})`,
+    columns.map(key => binary.has(key) ? encode(row[key]) : row[key] ?? null));
+  return row;
+}
+export async function activateApproval({ approvalId, now, state = APPROVAL_STATE.PENDING }) {
+  if (![APPROVAL_STATE.PENDING, APPROVAL_STATE.CONSUMED].includes(state)) throw new TypeError('Invalid activation state');
+  const result = await query(`UPDATE va_approval SET state = ?, consumed_at = ?
+    WHERE approval_id = FROM_BASE64(?) AND state = 'VOID' AND expires_at > ?`,
+  [state, state === 'CONSUMED' ? now : null, encode(approvalId), now]);
+  return affectedRows(result) === 1;
+}
+export async function pendingApprovalFor({ issueId, fromStatusId, toStatusId, now = Date.now(), approvalId }) {
+  const params = [issueId, fromStatusId, toStatusId, now];
+  let idClause = '';
+  if (approvalId) { idClause = ' AND approval_id = FROM_BASE64(?)'; params.push(encode(Buffer.isBuffer(approvalId) ? approvalId : Buffer.from(approvalId, 'hex'))); }
+  const result = await query(`SELECT ${selection} FROM va_approval WHERE issue_id = ?
+    AND state = 'PENDING' AND decision = 'APPROVE' AND from_status_id = ? AND to_status_id = ? AND expires_at > ?${idClause}
+    ORDER BY decided_at DESC LIMIT 1`, params);
+  return decode(result.data[0]);
+}
+export async function casConsume({ approvalId, now }) {
+  const result = await query(`UPDATE va_approval SET state = 'CONSUMED', consumed_at = ?
+    WHERE approval_id = FROM_BASE64(?) AND state = 'PENDING' AND decision = 'APPROVE' AND expires_at > ?`,
+  [now, encode(approvalId), now]);
+  return { consumed: affectedRows(result) === 1 };
+}
+export async function voidOthers({ issueId, exceptApprovalId = null }) {
+  const params = [issueId];
+  if (exceptApprovalId) params.push(encode(exceptApprovalId));
+  return affectedRows(await query(`UPDATE va_approval SET state = 'VOID', consumed_at = NULL
+    WHERE issue_id = ? AND state = 'PENDING'${exceptApprovalId ? ' AND approval_id <> FROM_BASE64(?)' : ''}`, params)) ?? 0;
+}
+export async function approvalById(approvalId) {
+  const result = await query(`SELECT ${selection} FROM va_approval WHERE approval_id = FROM_BASE64(?)`, [encode(approvalId)]);
+  return decode(result.data[0]);
+}
+export async function approvalHistory(issueId, limit = 50) {
+  return (await query(`SELECT ${selection} FROM va_approval WHERE issue_id = ? ORDER BY decided_at DESC LIMIT ${limitClause(limit)}`, [issueId])).data.map(decode);
+}
+export async function approvalsForActor(accountId, { limit = 50 } = {}) {
+  return (await query(`SELECT ${selection} FROM va_approval WHERE actor_account_id = ? ORDER BY decided_at DESC LIMIT ${limitClause(limit)}`, [accountId])).data.map(decode);
+}
+export async function approvalsForProject(projectId, { sinceMs = 0, limit = 100 } = {}) {
+  return (await query(`SELECT ${selection} FROM va_approval WHERE project_id = ? AND decided_at >= ? ORDER BY decided_at DESC LIMIT ${limitClause(limit)}`, [projectId, sinceMs])).data.map(decode);
+}
+export async function expireStale(now) {
+  return affectedRows(await query(`UPDATE va_approval SET state = 'VOID' WHERE state = 'PENDING' AND expires_at <= ?`, [now])) ?? 0;
+}

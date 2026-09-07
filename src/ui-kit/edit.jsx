@@ -1,0 +1,417 @@
+/**
+ * THE SIGNING SCREEN INSIDE JIRA'S TRANSITION DIALOG.
+ *
+ * This renders what a signer must be able to see at the moment they sign:
+ * what the work item says (summary + description), who is accountable for it
+ * (assignee, reporter), what the signature MEANS, where it moves the item to,
+ * and one box for the authenticator code. 21 CFR 11.50(a) requires the
+ * meaning of a signature to be shown with it — a bare code box shows a signer
+ * nothing about what they are attesting to.
+ *
+ * -----------------------------------------------------------------------
+ * HOW TO TELL, IN ONE GLANCE, WHETHER THIS FILE IS RUNNING. It renders a bold
+ * "Review and sign this transition" heading and a footer line reading
+ * "Forge Signature · rendered on: … · item: …". (Deliberately NOT "Electronic
+ * signature required" — the field itself is already named "Electronic
+ * Signature (TOTP)" in the transition screen above this component, so a
+ * heading repeating those same two words said nothing new and just looked
+ * like the label had printed twice.) If the transition dialog shows a bare
+ * 6-digit box with neither of those, Jira is using its BUILT-IN string editor
+ * and none of this code executed — the fault is then field registration
+ * (most often: the field is not on the transition SCREEN, or the wrong
+ * "Electronic Signature" field is), never the signing logic below. That
+ * distinction is the single most expensive thing to get wrong here; it has
+ * cost several deploys.
+ *
+ * When Jira falls back that way it also STORES what was typed as the field's
+ * value, putting the authenticator code into the work item's change history.
+ * src/gate.js's rawCodeSubmitted() exists to catch exactly that and refuse the
+ * transition rather than let it pass unnoticed.
+ * -----------------------------------------------------------------------
+ *
+ * WHAT THIS FILE GOT WRONG BEFORE 2026-08-20, since all three failures
+ * presented identically as "I typed the right code and it said the
+ * transition still needs a signature":
+ *
+ * 1. manifest.yml had no `edit.experience`, which the jira:customField
+ *    reference lists as Required: yes. Without `issue-transition` in it,
+ *    Jira renders its OWN default string editor in the transition dialog
+ *    and this component is never mounted at all. Fixed in the manifest.
+ *
+ * 2. `import { TextField } from '@forge/react'` — the exported component is
+ *    `Textfield` (lower-case f); `TextField` is only a TypeScript type name
+ *    in out/types/. Verified in node_modules/@forge/react/out/index.d.ts,
+ *    per docs-VERIFICATION-PROTOCOL.md, rather than assumed from how the
+ *    name is spelled elsewhere in the React ecosystem. The old import
+ *    resolved to `undefined` and would have thrown on render.
+ *
+ * 3. The field value was set by RETURNING a string from `onSubmit`.
+ *    CustomFieldEdit's `onSubmit` is typed `() => void` and its return value
+ *    is discarded; the documented way to set the value is `view.submit(v)`.
+ *    And the resolver call passed `{ pin, skipTransition: true }` to
+ *    panel:sign, which requires `issueKey`, `ctId` and `code` — so it
+ *    short-circuited on the argument check and never verified anything.
+ *
+ * 4. It failed SILENTLY. Every "nothing to sign" cause — no controlled
+ *    transition configured, no eligibility, no authenticator enrolled, the
+ *    edge not currently reachable — collapsed into the same disabled box with
+ *    no text, which is pixel-for-pixel what Jira's built-in string editor
+ *    looks like. The resolver now returns a blocker code and a sentence for
+ *    each (panel.js's SIGNING_BLOCKER) and this file always renders it.
+ *
+ * THE AFFIRMATION GATE. The code box is disabled, and the verification effect
+ * refuses to run, until the signer has ticked the statement of meaning. This
+ * is the same rule the two Custom UI signing surfaces apply (see the long
+ * note in frontend/src/panel/SignaturePanel.tsx); all three create rows in the
+ * same va_signature table and an auditor comparing them should not be able to
+ * tell that one route asked less of the signer than the others.
+ *
+ * The tick is cleared whenever the selected meaning changes. An affirmation
+ * is a declaration of ONE statement, and letting it survive a change of
+ * selection would attribute to the signer words they never read.
+ *
+ * WHY THE CODE IS VERIFIED ON THE 6TH DIGIT AND NOT ON SUBMIT. Atlassian
+ * documents the value as being submitted "when the user clicks outside the
+ * field or elsewhere on the dialog" — which, in practice, is the same click
+ * that presses the dialog's own submit button. Doing an async round trip to
+ * verify the code inside that blur handler races Jira's transition request.
+ * Verifying as soon as six digits are present means the signature already
+ * exists by the time the user reaches the button, and `onSubmit` only has to
+ * hand over a token it is already holding. The race is designed out rather
+ * than tuned around.
+ *
+ * The failure mode is safe either way: if no signature was created, the row
+ * simply isn't there, and src/gate.js denies the transition. Nothing here
+ * can produce a *false allow* — the worst it can do is make the user retry.
+ *
+ * Components used here are only ones verified present in
+ * node_modules/@forge/react/out/components/ui-kit-components.d.ts. UI Kit is
+ * not React-DOM: an unexported name resolves to undefined and throws at
+ * render, which on this surface is indistinguishable from the module not
+ * being wired up at all. Check the export list before adding one.
+ */
+import React, { useCallback, useEffect, useState } from 'react';
+import ForgeReconciler, {
+  Box, Checkbox, Heading, Inline, Lozenge, Select, SectionMessage, Spinner, Stack, Text, Textfield,
+  useProductContext
+} from '@forge/react';
+import { CustomFieldEdit } from '@forge/react/jira';
+import { invoke, view } from '@forge/bridge';
+
+const CODE_LENGTH = 6;
+const DIGITS_ONLY = /^\d*$/;
+
+/** One labelled line of work-item context. */
+const Detail = ({ label, value }) => (
+  <Inline space="space.075" alignBlock="start">
+    <Text weight="medium" color="color.text.subtle">{label}</Text>
+    <Text>{value}</Text>
+  </Inline>
+);
+
+const Edit = () => {
+  const context = useProductContext();
+  // jira:customField extensions get a JiraContext under platformContext —
+  // `issueKey` / `issueId` (node_modules/@forge/react/out/types/forge.d.ts,
+  // interface JiraContext). It is present here because this component only
+  // declares the `issue-transition` experience, where an issue already
+  // exists; on `issue-create` it would legitimately be undefined.
+  const issueKey = context?.extension?.issue?.key;
+
+  // Which surface Jira actually mounted this on. Documented for custom fields
+  // on the jira:customField reference ("Issue creation and issue transition
+  // dialog"): `const { extensionContext: { renderContext } } =
+  // useProductContext()`. Rendered below, because the single most useful fact
+  // when a signature never gets created is whether THIS component ran at all.
+  const renderContext = context?.extension?.renderContext;
+
+  const [issue, setIssue] = useState(null);
+  const [signerName, setSignerName] = useState(null);
+  const [options, setOptions] = useState(null);
+  const [blocker, setBlocker] = useState(null);
+  const [ctId, setCtId] = useState(null);
+  const [affirmed, setAffirmed] = useState(false);
+  const [code, setCode] = useState('');
+  const [token, setToken] = useState('');
+  const [status, setStatus] = useState({ kind: 'idle' });
+
+  // Which controlled transition is being signed? The field's context tells
+  // us the issue but not the destination status, so ask the same resolver
+  // the issue panel uses: every ACTIVE rule leaving the current status that
+  // Jira will actually accept right now. One rule (the common case) is
+  // resolved silently; more than one has to be an explicit choice, because
+  // WHICH statement of meaning is being attested to is the signature —
+  // guessing it on the signer's behalf would be exactly the wrong thing.
+  useEffect(() => {
+    // Previously `if (!issueKey) return;` — which left options null, ctId
+    // null, status 'idle' and every message below suppressed, so the
+    // component rendered a single disabled textbox and NOTHING else. Never
+    // fail silently here.
+    if (!issueKey) {
+      setOptions([]);
+      setStatus({
+        kind: 'error',
+        message: 'This signing field could not determine which work item it is on, so it cannot create a signature. Sign from the Electronic Signature panel on the work item instead.'
+      });
+      return;
+    }
+    let cancelled = false;
+    invoke('panel:getState', { issueKey })
+      .then((res) => {
+        if (cancelled) return;
+        if (!res?.issue) {
+          setOptions([]);
+          setStatus({ kind: 'error', message: res?.error ?? 'Could not load the signature requirement for this transition.' });
+          return;
+        }
+        setIssue(res.issue ?? null);
+        setSignerName(res.actorName ?? null);
+        
+        const opts = (res.transitions || []).map(t => ({
+          ctId: t.transitionId,
+          meaning: t.meaning,
+          requiredRole: t.requiredRole,
+          toStatusName: t.name,
+          toStatusId: t.toStatusId,
+          eligible: t.eligible
+        }));
+        
+        const eligible = opts.filter((o) => o.eligible);
+        
+        let blockerMsg = null;
+        if (opts.length === 0) blockerMsg = "No transition rules apply here. A signature is not required to move this item.";
+        else if (eligible.length === 0) blockerMsg = "You are not in the required approver role for this transition.";
+        
+        setBlocker(blockerMsg);
+        setOptions(eligible);
+        if (eligible.length === 1) setCtId(eligible[0].ctId);
+        setStatus({ kind: 'idle' });
+      })
+      .catch((e) => { if (!cancelled) setStatus({ kind: 'error', message: e.message }); });
+    return () => { cancelled = true; };
+  }, [issueKey]);
+
+  // Verify + create the PENDING signature the moment a full code is present.
+  // Keyed on [code, ctId] so one code is spent at most once: re-rendering
+  // does not re-fire it, and a wrong code is not retried automatically
+  // against the 3-attempt lockout in lib/totp.js.
+  //
+  // `affirmed` is part of the guard, not just of the box's disabled state.
+  // The affirmation is what makes this a signature rather than an
+  // authentication (21 CFR 11.50(a)(4), and see the long note in
+  // frontend/src/panel/SignaturePanel.tsx): a code verified without one
+  // records an identity check and calls it an attestation.
+  useEffect(() => {
+    if (!issueKey || !ctId || !affirmed || code.length !== CODE_LENGTH) return;
+    let cancelled = false;
+    setToken('');
+    setStatus({ kind: 'verifying' });
+    invoke('approval:submit', { issueKey, transitionId: ctId, decision: 'APPROVE', code, preauthorize: true })
+      .then((res) => {
+        if (cancelled) return;
+        if (res?.success) {
+          setToken(res.approvalId);
+          setStatus({ kind: 'ok', message: `Signed as ${res.printedName} — ${res.meaning}` });
+          // Submit as soon as it exists as well as on blur: Atlassian
+          // documents using the submit API outside onSubmit for exactly
+          // this, and it means the field already carries the token if the
+          // blur event is swallowed by the dialog's own submit handling.
+          view.submit(res.approvalId);
+        } else {
+          setToken('');
+          setStatus({ kind: 'error', message: res?.error ?? 'That code could not be verified.' });
+        }
+      })
+      .catch((e) => { if (!cancelled) setStatus({ kind: 'error', message: e.message }); });
+    return () => { cancelled = true; };
+  }, [issueKey, ctId, affirmed, code]);
+
+  // Changing WHICH statement is being signed withdraws the affirmation, and
+  // clears any code and token already gathered under the old one. An
+  // affirmation is a declaration of one specific meaning; carrying a tick
+  // across from "Approved for release" to "Reviewed for accuracy" would
+  // attribute to the signer a statement they never read.
+  useEffect(() => {
+    setAffirmed(false);
+    setCode('');
+    setToken('');
+    view.submit('');
+    setStatus({ kind: 'idle' });
+  }, [ctId]);
+
+  // Never submit the raw code as the field value — see the panel:preauthorize
+  // header. An empty string is submitted when there is no valid token, which
+  // gate.js reads as "nothing was signed on this screen" and denies.
+  const onSubmit = useCallback(() => { view.submit(token); }, [token]);
+
+  const onChange = useCallback((e) => {
+    const next = (e?.target?.value ?? '').trim();
+    if (DIGITS_ONLY.test(next) && next.length <= CODE_LENGTH) setCode(next);
+  }, []);
+
+  const selected = options?.find((o) => o.ctId === ctId) ?? null;
+  const signable = options !== null && options.length > 0;
+
+  return (
+    <CustomFieldEdit onSubmit={onSubmit} disableSubmitOnEnter>
+      <Stack space="space.150">
+        {/* An unmistakable signature that THIS component rendered. If the
+            transition dialog shows a bare 6-digit box with no heading, Jira is
+            using its built-in string editor, this file never ran, and no
+            amount of typing here will ever create a signature — the problem is
+            field registration, not signing logic. Worded to not repeat the
+            field's own name ("Electronic Signature (TOTP)") printed by Jira
+            immediately above this component. */}
+        <Heading as="h4">Review and sign this transition</Heading>
+
+        {options === null && (
+          <Inline space="space.075" alignBlock="center">
+            <Spinner size="small" />
+            <Text>Loading this work item…</Text>
+          </Inline>
+        )}
+
+        {/* WHAT IS BEING SIGNED. Shown before the code box, and shown even
+            when nothing is signable — someone who has landed here without
+            eligibility should still be able to see the item they were asked
+            to look at, and read the reason underneath it. */}
+        {issue && (
+          <Stack space="space.075">
+            <Inline space="space.100" alignBlock="center">
+              <Lozenge appearance="default">{issue.key}</Lozenge>
+              {issue.statusName && <Lozenge appearance="inprogress">{issue.statusName}</Lozenge>}
+              {issue.issueTypeName && <Text color="color.text.subtlest">{issue.issueTypeName}</Text>}
+            </Inline>
+
+            <Text weight="bold">{issue.summary || '(no summary)'}</Text>
+
+            <Detail label="Assignee:" value={issue.assignee?.displayName ?? 'Unassigned'} />
+            <Detail label="Reporter:" value={issue.reporter?.displayName ?? 'Unknown'} />
+
+            <Box>
+              <Text weight="medium" color="color.text.subtle">Description</Text>
+              {issue.descriptionEmpty
+                ? <Text color="color.text.subtlest">This work item has no description.</Text>
+                : <Text>{issue.description}</Text>}
+              {issue.descriptionTruncated && (
+                // Say so explicitly. A signer who does not know the text was
+                // cut may believe they read the whole record before signing
+                // it, which is the one misunderstanding this screen must not
+                // create.
+                <Text size="small" color="color.text.subtlest">
+                  Shortened to fit this dialog — open the work item to read it in full before signing.
+                </Text>
+              )}
+            </Box>
+          </Stack>
+        )}
+
+        {/* Why there is nothing to sign, in words, naming who fixes it. */}
+        {blocker && (
+          <SectionMessage appearance={signable ? 'warning' : 'information'}>
+            <Text>{blocker}</Text>
+          </SectionMessage>
+        )}
+
+        {options && options.length > 1 && (
+          <Select
+            appearance="default"
+            placeholder="What are you signing for?"
+            options={options.map((o) => ({
+              label: `${o.meaning} (${o.requiredRole} → ${o.toStatusName})`,
+              value: o.ctId
+            }))}
+            onChange={(e) => setCtId(e?.value ?? null)}
+          />
+        )}
+
+        {/* THE STATEMENT OF MEANING. This is the sentence the signature
+            attests to, and it is required to be shown — not implied by the
+            transition's name. */}
+        {/* Composed as sibling Text nodes, never Text nested inside Text.
+            UI Kit is not React-DOM and an unsupported composition throws at
+            render on a surface where a throw looks exactly like the module
+            never having been wired up. Plain is cheap; ambiguous is not. */}
+        {selected && (
+          <SectionMessage appearance="information">
+            <Text weight="bold">{selected.meaning}</Text>
+            <Text>
+              {`Signing this moves ${issue?.key ?? 'this work item'} to ${selected.toStatusName}.`}
+            </Text>
+          </SectionMessage>
+        )}
+
+        {/* THE AFFIRMATION. The code box stays disabled until this is ticked,
+            here and on both Custom UI signing surfaces, so that the three
+            routes to the same ledger entry demand the same act. `label` is a
+            plain string on purpose — see the Text-nesting caution above. */}
+        {selected && (
+          <Checkbox
+            isChecked={affirmed}
+            onChange={(e) => setAffirmed(e?.target?.checked ?? !affirmed)}
+            label={`I, ${signerName ?? 'the signer'}, have reviewed ${issue?.key ?? 'this work item'} and I declare: ${selected.meaning}. I am signing as ${selected.requiredRole} and I understand this electronic signature is the legally binding equivalent of my handwritten signature.`}
+          />
+        )}
+
+        {signable && (
+          <Stack space="space.075">
+            <Text weight="medium">Authenticator code</Text>
+            <Textfield
+              name="code"
+              placeholder="6-digit code"
+              value={code}
+              onChange={onChange}
+              isDisabled={!ctId || !affirmed}
+            />
+            {status.kind === 'idle' && ctId && affirmed && (
+              <Text size="small" color="color.text.subtlest">
+                Enter the current code from your authenticator app. It is checked here and never stored on this work item.
+              </Text>
+            )}
+            {status.kind === 'idle' && ctId && !affirmed && (
+              <Text size="small" color="color.text.subtlest">
+                Read and accept the statement above to enable the code box.
+              </Text>
+            )}
+            {status.kind === 'idle' && !ctId && (
+              <Text size="small" color="color.text.subtlest">
+                Choose what you are signing for above to continue.
+              </Text>
+            )}
+          </Stack>
+        )}
+
+        {status.kind === 'verifying' && (
+          <Inline space="space.075" alignBlock="center">
+            <Spinner size="small" />
+            <Text>Verifying…</Text>
+          </Inline>
+        )}
+        {status.kind === 'ok' && (
+          <SectionMessage appearance="success">
+            <Text>{status.message}</Text>
+            <Text size="small">Select the transition button below to complete it.</Text>
+          </SectionMessage>
+        )}
+        {status.kind === 'error' && (
+          <SectionMessage appearance="error">
+            <Text>{status.message}</Text>
+          </SectionMessage>
+        )}
+
+        {/* Where Jira mounted this, per the documented renderContext. Only
+            shown when the code has not been accepted yet, so a successful
+            signature stays clean. This is the one line that answers "is the
+            field even wired to the transition dialog?" without needing logs
+            or admin access. */}
+        {status.kind !== 'ok' && (
+          <Text size="small" color="color.text.subtlest">
+            Forge Signature · rendered on: {renderContext ?? 'unknown'} · item: {issueKey ?? 'unresolved'}
+          </Text>
+        )}
+      </Stack>
+    </CustomFieldEdit>
+  );
+};
+
+ForgeReconciler.render(<Edit />);

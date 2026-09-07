@@ -1,0 +1,149 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  project, changedFields, normaliseAdf, normaliseMulti, normaliseText,
+  withAlwaysControlled, inferFieldKind, FIELD_KIND
+} from '../src/lib/content.js';
+
+const F = (id, kind, store = false) => ({ field_id: id, field_kind: kind, store_values: store });
+
+test('the content hash is computed from digests alone, so toggling retention never invalidates a baseline', () => {
+  // This is the property that lets an administrator turn value retention on or
+  // off without every standing baseline on the site drifting against itself.
+  const fields = { summary: 'Ship the thing', description: null };
+  const off = project(fields, [F('summary', FIELD_KIND.TEXT, false)]);
+  const on = project(fields, [F('summary', FIELD_KIND.TEXT, true)]);
+
+  assert.equal(off.contentHash, on.contentHash);
+  assert.deepEqual(off.values, {});
+  assert.deepEqual(on.values, { summary: 'Ship the thing' });
+});
+
+test('values are stored only for fields that opted in — the compliance boundary', () => {
+  const result = project(
+    { summary: 'a', description: { type: 'doc', content: [] }, labels: ['x'] },
+    [
+      F('summary', FIELD_KIND.TEXT, true),
+      F('description', FIELD_KIND.ADF, false),
+      F('labels', FIELD_KIND.MULTI, false)
+    ]
+  );
+
+  assert.deepEqual(Object.keys(result.values), ['summary']);
+  assert.deepEqual(Object.keys(result.raw), ['summary']);
+  // Every field is still digested, so drift is still DETECTED for all three.
+  assert.deepEqual(Object.keys(result.digests).sort(), ['description', 'labels', 'summary']);
+});
+
+test('raw values are kept alongside normalised ones, because a restore must write raw', () => {
+  // Normalisation sorts multi-values; writing the sorted form back into Jira
+  // would be a silent second edit.
+  const result = project({ labels: ['zebra', 'apple'] }, [F('labels', FIELD_KIND.MULTI, true)]);
+  assert.deepEqual(result.values.labels, ['apple', 'zebra']);
+  assert.deepEqual(result.raw.labels, ['zebra', 'apple']);
+});
+
+test('ADF localId and version are volatile and never affect the hash', () => {
+  const a = { type: 'doc', version: 1, content: [{ type: 'paragraph', localId: 'x1' }] };
+  const b = { type: 'doc', version: 2, content: [{ type: 'paragraph', localId: 'x2' }] };
+  assert.deepEqual(normaliseAdf(a), normaliseAdf(b));
+});
+
+test('reordering a multi-value is not a change', () => {
+  assert.deepEqual(normaliseMulti(['b', 'a']), normaliseMulti(['a', 'b']));
+});
+
+test('trailing whitespace and line endings are normalised out of plain text', () => {
+  assert.equal(normaliseText('a  \r\nb'), 'a\nb');
+});
+
+test('summary, description, issuelinks, and subtasks are always controlled, and always added with retention ON', () => {
+  const result = withAlwaysControlled([]);
+  assert.strictEqual(result.length, 4);
+
+  const desc = result.find(f => f.field_id === 'description');
+  assert.strictEqual(desc.store_values, true);
+  assert.strictEqual(desc.state, 'ACTIVE');
+});
+
+test('withAlwaysControlled corrects field_kind but retains user preferences like store_values OFF', () => {
+  const declared = [{
+    field_id: 'description',
+    field_kind: 'TEXT',
+    store_values: false
+  }];
+  const result = withAlwaysControlled(declared);
+  const desc = result.find(f => f.field_id === 'description');
+
+  assert.strictEqual(desc.field_kind, 'ADF');
+  assert.strictEqual(desc.store_values, false);
+});
+
+test('changedFields reports exactly the fields whose digests moved', () => {
+  assert.deepEqual(changedFields({ a: '1', b: '2' }, { a: '1', b: '3' }), ['b']);
+  assert.deepEqual(changedFields({ a: '1' }, { a: '1', b: '2' }), ['b']);
+  assert.deepEqual(changedFields({ a: '1' }, { a: '1' }), []);
+});
+
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * DRIFT IS A FACT ABOUT ONE WORK ITEM, NOT ABOUT THE TRACKED SET.
+ *
+ * These pin the bug that put 302 phantom drift rows on BS-21 and 14 on BS-11,
+ * on work items nobody had touched — and then told the reviewer "this work item
+ * changed while you were reading it" when it had not.
+ *
+ * The cause was set arithmetic, not content. changedFields unioned the two key
+ * sets, so a baseline captured when 302 fields were tracked, compared against a
+ * projection over 4, reported the 298 missing keys as changed: `digest !== null`
+ * is true for every one of them. Every field an administrator excluded, and
+ * every field that left the issue type, arrived as drift on the issue.
+ *
+ * observe() has always passed the in-scope field ids as a third argument.
+ * changedFields accepted two and silently dropped it.
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+test('a field that left the tracked set is not drift on the work item', () => {
+  // The baseline covered `legacy`; the current scope does not. Nobody edited
+  // this item — the tracked set narrowed. That is a configuration change and
+  // belongs in the ledger, not on the reviewer's screen as a changed field.
+  assert.deepEqual(
+    changedFields({ summary: '1', legacy: '2' }, { summary: '1' }, ['summary']),
+    []
+  );
+});
+
+test('a newly tracked field is not drift until a baseline covers it', () => {
+  // `added` has no approved value to have drifted FROM. Counting it would mean
+  // that installing an app which adds a custom field marks every approved item
+  // in the tenant as drifted — which is the failure trackedFields.js was
+  // written to avoid.
+  assert.deepEqual(
+    changedFields({ summary: '1' }, { summary: '1', added: '9' }, ['summary', 'added']),
+    []
+  );
+});
+
+test('a real edit inside the scope is still drift', () => {
+  // The guard above must not be able to swallow the thing this app exists for.
+  assert.deepEqual(
+    changedFields({ summary: '1', legacy: '2' }, { summary: 'CHANGED' }, ['summary']),
+    ['summary']
+  );
+});
+
+test('scoping never widens the comparison beyond the scope it was given', () => {
+  // A digest pair that differs is still ignored when the field is out of scope,
+  // in both directions.
+  assert.deepEqual(
+    changedFields({ a: '1', b: '1' }, { a: '2', b: '2' }, ['b']),
+    ['b']
+  );
+});
+
+test('an unknown field schema infers a hashable kind rather than throwing', () => {
+  assert.equal(inferFieldKind({ type: 'doc' }), FIELD_KIND.ADF);
+  assert.equal(inferFieldKind({ type: 'array', items: 'option' }), FIELD_KIND.MULTI);
+  assert.equal(inferFieldKind({ type: 'something-new' }), FIELD_KIND.SCALAR);
+  assert.equal(inferFieldKind(undefined), FIELD_KIND.SCALAR);
+});

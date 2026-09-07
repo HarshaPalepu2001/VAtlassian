@@ -1,0 +1,700 @@
+ERROR   2026-09-07T09:28:22.022Z d38f12e1-bab8-48b9-b3f2-9bb858283089 Forge SQL Error: ForgeSQLAPIError [ForgeSQLError]: Unknown SQL execution error
+    at checkResponseError (webpack://vatlassian-alm/node_modules/@forge/sql/out/utils/error-handling.js:29:1)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async SqlClient.storageApi (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:29:1)
+    at async SqlClient.storageApiWithOptions (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:40:1)
+    at async executeQuery (webpack://vatlassian-alm/src/lib/db.js:23:20)
+    at async storageReport (webpack://vatlassian-alm/src/jobs/prune.js:121:18)
+    at async Promise.all (index 2)
+    at async <anonymous> (webpack://vatlassian-alm/src/usecases/fields.js:11:42)
+    at async runAdmin (webpack://vatlassian-alm/src/usecases/adminRuntime.js:56:20)
+    at async Object.handler (webpack://vatlassian-alm/node_modules/@forge/resolver/out/index.js:33:1) {
+  responseDetails: { status: 400, statusText: 'Bad Request', traceId: null },
+  code: 'SQL_EXECUTION_ERROR',
+  suggestion: 'There was an error while executing the given command. Find more information about the SQL execution error in "debug" field',
+  context: {
+    debug: {
+      message: "ERROR 1146 (42S02): Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist",
+      code: 'ER_NO_SUCH_TABLE',
+      errno: 1146,
+      sql: 'SELECT COUNT(DISTINCT issue_id) AS items,\n' +
+        '            COUNT(*) AS chunks,\n' +
+        '            SUM(raw_bytes) AS raw_bytes,\n' +
+        '            SUM(LENGTH(data)) AS stored_bytes\n' +
+        '     FROM bl_baseline_value',
+      sqlState: '42S02',
+      sqlMessage: "Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist"
+    },
+    queryType: 'select'
+  }
+} 
+Query: SELECT COUNT(DISTINCT issue_id) AS items,
+            COUNT(*) AS chunks,
+            SUM(raw_bytes) AS raw_bytes,
+            SUM(LENGTH(data)) AS stored_bytes
+     FROM bl_baseline_value
+ERROR   2026-09-07T09:28:25.065Z 57ad20d3-4b28-45b3-ba47-315d98331e8b Forge SQL Error: ForgeSQLAPIError [ForgeSQLError]: Unknown SQL execution error
+    at checkResponseError (webpack://vatlassian-alm/node_modules/@forge/sql/out/utils/error-handling.js:29:1)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async SqlClient.storageApi (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:29:1)
+    at async SqlClient.storageApiWithOptions (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:40:1)
+    at async executeQuery (webpack://vatlassian-alm/src/lib/db.js:23:20)
+    at async storageReport (webpack://vatlassian-alm/src/jobs/prune.js:121:18)
+    at async Promise.all (index 2)
+    at async <anonymous> (webpack://vatlassian-alm/src/usecases/fields.js:11:42)
+    at async runAdmin (webpack://vatlassian-alm/src/usecases/adminRuntime.js:56:20)
+    at async Object.handler (webpack://vatlassian-alm/node_modules/@forge/resolver/out/index.js:33:1) {
+  responseDetails: { status: 400, statusText: 'Bad Request', traceId: null },
+  code: 'SQL_EXECUTION_ERROR',
+  suggestion: 'There was an error while executing the given command. Find more information about the SQL execution error in "debug" field',
+  context: {
+    debug: {
+      message: "ERROR 1146 (42S02): Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist",
+      code: 'ER_NO_SUCH_TABLE',
+      errno: 1146,
+      sql: 'SELECT COUNT(DISTINCT issue_id) AS items,\n' +
+        '            COUNT(*) AS chunks,\n' +
+        '            SUM(raw_bytes) AS raw_bytes,\n' +
+        '            SUM(LENGTH(data)) AS stored_bytes\n' +
+        '     FROM bl_baseline_value',
+      sqlState: '42S02',
+      sqlMessage: "Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist"
+    },
+    queryType: 'select'
+  }
+} 
+Query: SELECT COUNT(DISTINCT issue_id) AS items,
+            COUNT(*) AS chunks,
+            SUM(raw_bytes) AS raw_bytes,
+            SUM(LENGTH(data)) AS stored_bytes
+     FROM bl_baseline_value
+ERROR   2026-09-07T09:28:27.185Z 0003757d-3a17-4c50-a0a5-a3c0c0d0c0a7 Forge SQL Error: ForgeSQLAPIError [ForgeSQLError]: Unknown SQL execution error
+    at checkResponseError (webpack://vatlassian-alm/node_modules/@forge/sql/out/utils/error-handling.js:29:1)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async SqlClient.storageApi (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:29:1)
+    at async SqlClient.storageApiWithOptions (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:40:1)
+    at async executeQuery (webpack://vatlassian-alm/src/lib/db.js:23:20)
+    at async storageReport (webpack://vatlassian-alm/src/jobs/prune.js:121:18)
+    at async Promise.all (index 2)
+    at async <anonymous> (webpack://vatlassian-alm/src/usecases/fields.js:11:42)
+    at async runAdmin (webpack://vatlassian-alm/src/usecases/adminRuntime.js:56:20)
+    at async Object.handler (webpack://vatlassian-alm/node_modules/@forge/resolver/out/index.js:33:1) {
+  responseDetails: { status: 400, statusText: 'Bad Request', traceId: null },
+  code: 'SQL_EXECUTION_ERROR',
+  suggestion: 'There was an error while executing the given command. Find more information about the SQL execution error in "debug" field',
+  context: {
+    debug: {
+      message: "ERROR 1146 (42S02): Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist",
+      code: 'ER_NO_SUCH_TABLE',
+      errno: 1146,
+      sql: 'SELECT COUNT(DISTINCT issue_id) AS items,\n' +
+        '            COUNT(*) AS chunks,\n' +
+        '            SUM(raw_bytes) AS raw_bytes,\n' +
+        '            SUM(LENGTH(data)) AS stored_bytes\n' +
+        '     FROM bl_baseline_value',
+      sqlState: '42S02',
+      sqlMessage: "Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist"
+    },
+    queryType: 'select'
+  }
+} 
+Query: SELECT COUNT(DISTINCT issue_id) AS items,
+            COUNT(*) AS chunks,
+            SUM(raw_bytes) AS raw_bytes,
+            SUM(LENGTH(data)) AS stored_bytes
+     FROM bl_baseline_value
+ERROR   2026-09-07T09:28:30.040Z 202b645b-6def-4cc1-bec5-2c4e54638f4c Forge SQL Error: ForgeSQLAPIError [ForgeSQLError]: Unknown SQL execution error
+    at checkResponseError (webpack://vatlassian-alm/node_modules/@forge/sql/out/utils/error-handling.js:29:1)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async SqlClient.storageApi (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:29:1)
+    at async SqlClient.storageApiWithOptions (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:40:1)
+    at async executeQuery (webpack://vatlassian-alm/src/lib/db.js:23:20)
+    at async storageReport (webpack://vatlassian-alm/src/jobs/prune.js:121:18)
+    at async Promise.all (index 2)
+    at async <anonymous> (webpack://vatlassian-alm/src/usecases/fields.js:11:42)
+    at async runAdmin (webpack://vatlassian-alm/src/usecases/adminRuntime.js:56:20)
+    at async Object.handler (webpack://vatlassian-alm/node_modules/@forge/resolver/out/index.js:33:1) {
+  responseDetails: { status: 400, statusText: 'Bad Request', traceId: null },
+  code: 'SQL_EXECUTION_ERROR',
+  suggestion: 'There was an error while executing the given command. Find more information about the SQL execution error in "debug" field',
+  context: {
+    debug: {
+      message: "ERROR 1146 (42S02): Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist",
+      code: 'ER_NO_SUCH_TABLE',
+      errno: 1146,
+      sql: 'SELECT COUNT(DISTINCT issue_id) AS items,\n' +
+        '            COUNT(*) AS chunks,\n' +
+        '            SUM(raw_bytes) AS raw_bytes,\n' +
+        '            SUM(LENGTH(data)) AS stored_bytes\n' +
+        '     FROM bl_baseline_value',
+      sqlState: '42S02',
+      sqlMessage: "Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist"
+    },
+    queryType: 'select'
+  }
+} 
+Query: SELECT COUNT(DISTINCT issue_id) AS items,
+            COUNT(*) AS chunks,
+            SUM(raw_bytes) AS raw_bytes,
+            SUM(LENGTH(data)) AS stored_bytes
+     FROM bl_baseline_value
+ERROR   2026-09-07T09:28:32.358Z c766678d-f051-40c8-8d8f-46856284ec24 Forge SQL Error: ForgeSQLAPIError [ForgeSQLError]: Unknown SQL execution error
+    at checkResponseError (webpack://vatlassian-alm/node_modules/@forge/sql/out/utils/error-handling.js:29:1)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async SqlClient.storageApi (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:29:1)
+    at async SqlClient.storageApiWithOptions (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:40:1)
+    at async executeQuery (webpack://vatlassian-alm/src/lib/db.js:23:20)
+    at async storageReport (webpack://vatlassian-alm/src/jobs/prune.js:121:18)
+    at async Promise.all (index 2)
+    at async <anonymous> (webpack://vatlassian-alm/src/usecases/fields.js:11:42)
+    at async runAdmin (webpack://vatlassian-alm/src/usecases/adminRuntime.js:56:20)
+    at async Object.handler (webpack://vatlassian-alm/node_modules/@forge/resolver/out/index.js:33:1) {
+  responseDetails: { status: 400, statusText: 'Bad Request', traceId: null },
+  code: 'SQL_EXECUTION_ERROR',
+  suggestion: 'There was an error while executing the given command. Find more information about the SQL execution error in "debug" field',
+  context: {
+    debug: {
+      message: "ERROR 1146 (42S02): Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist",
+      code: 'ER_NO_SUCH_TABLE',
+      errno: 1146,
+      sql: 'SELECT COUNT(DISTINCT issue_id) AS items,\n' +
+        '            COUNT(*) AS chunks,\n' +
+        '            SUM(raw_bytes) AS raw_bytes,\n' +
+        '            SUM(LENGTH(data)) AS stored_bytes\n' +
+        '     FROM bl_baseline_value',
+      sqlState: '42S02',
+      sqlMessage: "Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist"
+    },
+    queryType: 'select'
+  }
+} 
+Query: SELECT COUNT(DISTINCT issue_id) AS items,
+            COUNT(*) AS chunks,
+            SUM(raw_bytes) AS raw_bytes,
+            SUM(LENGTH(data)) AS stored_bytes
+     FROM bl_baseline_value
+ERROR   2026-09-07T09:37:50.771Z 7e715210-5793-4f6c-9119-f86523484686 Forge SQL Error: ForgeSQLAPIError [ForgeSQLError]: Unknown SQL execution error
+    at checkResponseError (webpack://vatlassian-alm/node_modules/@forge/sql/out/utils/error-handling.js:29:1)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async SqlClient.storageApi (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:29:1)
+    at async SqlClient.storageApiWithOptions (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:40:1)
+    at async executeQuery (webpack://vatlassian-alm/src/lib/db.js:23:20)
+    at async storageReport (webpack://vatlassian-alm/src/jobs/prune.js:121:18)
+    at async Promise.all (index 2)
+    at async <anonymous> (webpack://vatlassian-alm/src/usecases/fields.js:11:42)
+    at async runAdmin (webpack://vatlassian-alm/src/usecases/adminRuntime.js:56:20)
+    at async Object.handler (webpack://vatlassian-alm/node_modules/@forge/resolver/out/index.js:33:1) {
+  responseDetails: { status: 400, statusText: 'Bad Request', traceId: null },
+  code: 'SQL_EXECUTION_ERROR',
+  suggestion: 'There was an error while executing the given command. Find more information about the SQL execution error in "debug" field',
+  context: {
+    debug: {
+      message: "ERROR 1146 (42S02): Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist",
+      code: 'ER_NO_SUCH_TABLE',
+      errno: 1146,
+      sql: 'SELECT COUNT(DISTINCT issue_id) AS items,\n' +
+        '            COUNT(*) AS chunks,\n' +
+        '            SUM(raw_bytes) AS raw_bytes,\n' +
+        '            SUM(LENGTH(data)) AS stored_bytes\n' +
+        '     FROM bl_baseline_value',
+      sqlState: '42S02',
+      sqlMessage: "Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist"
+    },
+    queryType: 'select'
+  }
+} 
+Query: SELECT COUNT(DISTINCT issue_id) AS items,
+            COUNT(*) AS chunks,
+            SUM(raw_bytes) AS raw_bytes,
+            SUM(LENGTH(data)) AS stored_bytes
+     FROM bl_baseline_value
+ERROR   2026-09-07T09:37:57.556Z f0a69466-55e9-4952-9c2a-2355ac90fa6f Forge SQL Error: ForgeSQLAPIError [ForgeSQLError]: Unknown SQL execution error
+    at checkResponseError (webpack://vatlassian-alm/node_modules/@forge/sql/out/utils/error-handling.js:29:1)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async SqlClient.storageApi (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:29:1)
+    at async SqlClient.storageApiWithOptions (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:40:1)
+    at async executeQuery (webpack://vatlassian-alm/src/lib/db.js:23:20)
+    at async storageReport (webpack://vatlassian-alm/src/jobs/prune.js:121:18)
+    at async Promise.all (index 2)
+    at async <anonymous> (webpack://vatlassian-alm/src/usecases/fields.js:11:42)
+    at async runAdmin (webpack://vatlassian-alm/src/usecases/adminRuntime.js:56:20)
+    at async Object.handler (webpack://vatlassian-alm/node_modules/@forge/resolver/out/index.js:33:1) {
+  responseDetails: { status: 400, statusText: 'Bad Request', traceId: null },
+  code: 'SQL_EXECUTION_ERROR',
+  suggestion: 'There was an error while executing the given command. Find more information about the SQL execution error in "debug" field',
+  context: {
+    debug: {
+      message: "ERROR 1146 (42S02): Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist",
+      code: 'ER_NO_SUCH_TABLE',
+      errno: 1146,
+      sql: 'SELECT COUNT(DISTINCT issue_id) AS items,\n' +
+        '            COUNT(*) AS chunks,\n' +
+        '            SUM(raw_bytes) AS raw_bytes,\n' +
+        '            SUM(LENGTH(data)) AS stored_bytes\n' +
+        '     FROM bl_baseline_value',
+      sqlState: '42S02',
+      sqlMessage: "Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist"
+    },
+    queryType: 'select'
+  }
+} 
+Query: SELECT COUNT(DISTINCT issue_id) AS items,
+            COUNT(*) AS chunks,
+            SUM(raw_bytes) AS raw_bytes,
+            SUM(LENGTH(data)) AS stored_bytes
+     FROM bl_baseline_value
+ERROR   2026-09-07T09:38:02.097Z 8090ec92-18a4-4993-b5d0-d10a7047bc4b Forge SQL Error: ForgeSQLAPIError [ForgeSQLError]: Unknown SQL execution error
+    at checkResponseError (webpack://vatlassian-alm/node_modules/@forge/sql/out/utils/error-handling.js:29:1)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async SqlClient.storageApi (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:29:1)
+    at async SqlClient.storageApiWithOptions (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:40:1)
+    at async executeQuery (webpack://vatlassian-alm/src/lib/db.js:23:20)
+    at async storageReport (webpack://vatlassian-alm/src/jobs/prune.js:121:18)
+    at async Promise.all (index 2)
+    at async <anonymous> (webpack://vatlassian-alm/src/usecases/fields.js:11:42)
+    at async runAdmin (webpack://vatlassian-alm/src/usecases/adminRuntime.js:56:20)
+    at async Object.handler (webpack://vatlassian-alm/node_modules/@forge/resolver/out/index.js:33:1) {
+  responseDetails: { status: 400, statusText: 'Bad Request', traceId: null },
+  code: 'SQL_EXECUTION_ERROR',
+  suggestion: 'There was an error while executing the given command. Find more information about the SQL execution error in "debug" field',
+  context: {
+    debug: {
+      message: "ERROR 1146 (42S02): Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist",
+      code: 'ER_NO_SUCH_TABLE',
+      errno: 1146,
+      sql: 'SELECT COUNT(DISTINCT issue_id) AS items,\n' +
+        '            COUNT(*) AS chunks,\n' +
+        '            SUM(raw_bytes) AS raw_bytes,\n' +
+        '            SUM(LENGTH(data)) AS stored_bytes\n' +
+        '     FROM bl_baseline_value',
+      sqlState: '42S02',
+      sqlMessage: "Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist"
+    },
+    queryType: 'select'
+  }
+} 
+Query: SELECT COUNT(DISTINCT issue_id) AS items,
+            COUNT(*) AS chunks,
+            SUM(raw_bytes) AS raw_bytes,
+            SUM(LENGTH(data)) AS stored_bytes
+     FROM bl_baseline_value
+ERROR   2026-09-07T09:38:07.321Z d4d98b2e-28fb-4259-9bed-8b187002bc4b Forge SQL Error: ForgeSQLAPIError [ForgeSQLError]: Unknown SQL execution error
+    at checkResponseError (webpack://vatlassian-alm/node_modules/@forge/sql/out/utils/error-handling.js:29:1)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async SqlClient.storageApi (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:29:1)
+    at async SqlClient.storageApiWithOptions (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:40:1)
+    at async executeQuery (webpack://vatlassian-alm/src/lib/db.js:23:20)
+    at async storageReport (webpack://vatlassian-alm/src/jobs/prune.js:121:18)
+    at async Promise.all (index 2)
+    at async <anonymous> (webpack://vatlassian-alm/src/usecases/fields.js:11:42)
+    at async runAdmin (webpack://vatlassian-alm/src/usecases/adminRuntime.js:56:20)
+    at async Object.handler (webpack://vatlassian-alm/node_modules/@forge/resolver/out/index.js:33:1) {
+  responseDetails: { status: 400, statusText: 'Bad Request', traceId: null },
+  code: 'SQL_EXECUTION_ERROR',
+  suggestion: 'There was an error while executing the given command. Find more information about the SQL execution error in "debug" field',
+  context: {
+    debug: {
+      message: "ERROR 1146 (42S02): Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist",
+      code: 'ER_NO_SUCH_TABLE',
+      errno: 1146,
+      sql: 'SELECT COUNT(DISTINCT issue_id) AS items,\n' +
+        '            COUNT(*) AS chunks,\n' +
+        '            SUM(raw_bytes) AS raw_bytes,\n' +
+        '            SUM(LENGTH(data)) AS stored_bytes\n' +
+        '     FROM bl_baseline_value',
+      sqlState: '42S02',
+      sqlMessage: "Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist"
+    },
+    queryType: 'select'
+  }
+} 
+Query: SELECT COUNT(DISTINCT issue_id) AS items,
+            COUNT(*) AS chunks,
+            SUM(raw_bytes) AS raw_bytes,
+            SUM(LENGTH(data)) AS stored_bytes
+     FROM bl_baseline_value
+ERROR   2026-09-07T09:38:11.059Z 241dea00-a9be-47e0-b237-f57ad6c23432 Forge SQL Error: ForgeSQLAPIError [ForgeSQLError]: Unknown SQL execution error
+    at checkResponseError (webpack://vatlassian-alm/node_modules/@forge/sql/out/utils/error-handling.js:29:1)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async SqlClient.storageApi (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:29:1)
+    at async SqlClient.storageApiWithOptions (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:40:1)
+    at async executeQuery (webpack://vatlassian-alm/src/lib/db.js:23:20)
+    at async storageReport (webpack://vatlassian-alm/src/jobs/prune.js:121:18)
+    at async Promise.all (index 2)
+    at async <anonymous> (webpack://vatlassian-alm/src/usecases/fields.js:11:42)
+    at async runAdmin (webpack://vatlassian-alm/src/usecases/adminRuntime.js:56:20)
+    at async Object.handler (webpack://vatlassian-alm/node_modules/@forge/resolver/out/index.js:33:1) {
+  responseDetails: { status: 400, statusText: 'Bad Request', traceId: null },
+  code: 'SQL_EXECUTION_ERROR',
+  suggestion: 'There was an error while executing the given command. Find more information about the SQL execution error in "debug" field',
+  context: {
+    debug: {
+      message: "ERROR 1146 (42S02): Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist",
+      code: 'ER_NO_SUCH_TABLE',
+      errno: 1146,
+      sql: 'SELECT COUNT(DISTINCT issue_id) AS items,\n' +
+        '            COUNT(*) AS chunks,\n' +
+        '            SUM(raw_bytes) AS raw_bytes,\n' +
+        '            SUM(LENGTH(data)) AS stored_bytes\n' +
+        '     FROM bl_baseline_value',
+      sqlState: '42S02',
+      sqlMessage: "Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist"
+    },
+    queryType: 'select'
+  }
+} 
+Query: SELECT COUNT(DISTINCT issue_id) AS items,
+            COUNT(*) AS chunks,
+            SUM(raw_bytes) AS raw_bytes,
+            SUM(LENGTH(data)) AS stored_bytes
+     FROM bl_baseline_value
+ERROR   2026-09-07T09:38:13.926Z 3c94be81-5821-4668-898a-f8d76ddd9b75 Forge SQL Error: ForgeSQLAPIError [ForgeSQLError]: Unknown SQL execution error
+    at checkResponseError (webpack://vatlassian-alm/node_modules/@forge/sql/out/utils/error-handling.js:29:1)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async SqlClient.storageApi (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:29:1)
+    at async SqlClient.storageApiWithOptions (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:40:1)
+    at async executeQuery (webpack://vatlassian-alm/src/lib/db.js:23:20)
+    at async storageReport (webpack://vatlassian-alm/src/jobs/prune.js:121:18)
+    at async Promise.all (index 2)
+    at async <anonymous> (webpack://vatlassian-alm/src/usecases/fields.js:11:42)
+    at async runAdmin (webpack://vatlassian-alm/src/usecases/adminRuntime.js:56:20)
+    at async Object.handler (webpack://vatlassian-alm/node_modules/@forge/resolver/out/index.js:33:1) {
+  responseDetails: { status: 400, statusText: 'Bad Request', traceId: null },
+  code: 'SQL_EXECUTION_ERROR',
+  suggestion: 'There was an error while executing the given command. Find more information about the SQL execution error in "debug" field',
+  context: {
+    debug: {
+      message: "ERROR 1146 (42S02): Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist",
+      code: 'ER_NO_SUCH_TABLE',
+      errno: 1146,
+      sql: 'SELECT COUNT(DISTINCT issue_id) AS items,\n' +
+        '            COUNT(*) AS chunks,\n' +
+        '            SUM(raw_bytes) AS raw_bytes,\n' +
+        '            SUM(LENGTH(data)) AS stored_bytes\n' +
+        '     FROM bl_baseline_value',
+      sqlState: '42S02',
+      sqlMessage: "Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist"
+    },
+    queryType: 'select'
+  }
+} 
+Query: SELECT COUNT(DISTINCT issue_id) AS items,
+            COUNT(*) AS chunks,
+            SUM(raw_bytes) AS raw_bytes,
+            SUM(LENGTH(data)) AS stored_bytes
+     FROM bl_baseline_value
+ERROR   2026-09-07T09:38:17.462Z 422e291b-cd0a-4da5-9f5b-a4ca5d9b0b7c Forge SQL Error: ForgeSQLAPIError [ForgeSQLError]: Unknown SQL execution error
+    at checkResponseError (webpack://vatlassian-alm/node_modules/@forge/sql/out/utils/error-handling.js:29:1)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async SqlClient.storageApi (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:29:1)
+    at async SqlClient.storageApiWithOptions (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:40:1)
+    at async executeQuery (webpack://vatlassian-alm/src/lib/db.js:23:20)
+    at async storageReport (webpack://vatlassian-alm/src/jobs/prune.js:121:18)
+    at async Promise.all (index 2)
+    at async <anonymous> (webpack://vatlassian-alm/src/usecases/fields.js:11:42)
+    at async runAdmin (webpack://vatlassian-alm/src/usecases/adminRuntime.js:56:20)
+    at async Object.handler (webpack://vatlassian-alm/node_modules/@forge/resolver/out/index.js:33:1) {
+  responseDetails: { status: 400, statusText: 'Bad Request', traceId: null },
+  code: 'SQL_EXECUTION_ERROR',
+  suggestion: 'There was an error while executing the given command. Find more information about the SQL execution error in "debug" field',
+  context: {
+    debug: {
+      message: "ERROR 1146 (42S02): Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist",
+      code: 'ER_NO_SUCH_TABLE',
+      errno: 1146,
+      sql: 'SELECT COUNT(DISTINCT issue_id) AS items,\n' +
+        '            COUNT(*) AS chunks,\n' +
+        '            SUM(raw_bytes) AS raw_bytes,\n' +
+        '            SUM(LENGTH(data)) AS stored_bytes\n' +
+        '     FROM bl_baseline_value',
+      sqlState: '42S02',
+      sqlMessage: "Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist"
+    },
+    queryType: 'select'
+  }
+} 
+Query: SELECT COUNT(DISTINCT issue_id) AS items,
+            COUNT(*) AS chunks,
+            SUM(raw_bytes) AS raw_bytes,
+            SUM(LENGTH(data)) AS stored_bytes
+     FROM bl_baseline_value
+ERROR   2026-09-07T09:38:20.311Z 5adf9fef-2b8b-49a2-a716-68e05964d4a4 Forge SQL Error: ForgeSQLAPIError [ForgeSQLError]: Unknown SQL execution error
+    at checkResponseError (webpack://vatlassian-alm/node_modules/@forge/sql/out/utils/error-handling.js:29:1)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async SqlClient.storageApi (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:29:1)
+    at async SqlClient.storageApiWithOptions (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:40:1)
+    at async executeQuery (webpack://vatlassian-alm/src/lib/db.js:23:20)
+    at async storageReport (webpack://vatlassian-alm/src/jobs/prune.js:121:18)
+    at async Promise.all (index 2)
+    at async <anonymous> (webpack://vatlassian-alm/src/usecases/fields.js:11:42)
+    at async runAdmin (webpack://vatlassian-alm/src/usecases/adminRuntime.js:56:20)
+    at async Object.handler (webpack://vatlassian-alm/node_modules/@forge/resolver/out/index.js:33:1) {
+  responseDetails: { status: 400, statusText: 'Bad Request', traceId: null },
+  code: 'SQL_EXECUTION_ERROR',
+  suggestion: 'There was an error while executing the given command. Find more information about the SQL execution error in "debug" field',
+  context: {
+    debug: {
+      message: "ERROR 1146 (42S02): Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist",
+      code: 'ER_NO_SUCH_TABLE',
+      errno: 1146,
+      sql: 'SELECT COUNT(DISTINCT issue_id) AS items,\n' +
+        '            COUNT(*) AS chunks,\n' +
+        '            SUM(raw_bytes) AS raw_bytes,\n' +
+        '            SUM(LENGTH(data)) AS stored_bytes\n' +
+        '     FROM bl_baseline_value',
+      sqlState: '42S02',
+      sqlMessage: "Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist"
+    },
+    queryType: 'select'
+  }
+} 
+Query: SELECT COUNT(DISTINCT issue_id) AS items,
+            COUNT(*) AS chunks,
+            SUM(raw_bytes) AS raw_bytes,
+            SUM(LENGTH(data)) AS stored_bytes
+     FROM bl_baseline_value
+ERROR   2026-09-07T09:38:40.011Z a3fbd99b-1eb1-4117-9b0a-88e5bf48264e Forge SQL Error: ForgeSQLAPIError [ForgeSQLError]: Unknown SQL execution error
+    at checkResponseError (webpack://vatlassian-alm/node_modules/@forge/sql/out/utils/error-handling.js:29:1)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async SqlClient.storageApi (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:29:1)
+    at async SqlClient.storageApiWithOptions (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:40:1)
+    at async executeQuery (webpack://vatlassian-alm/src/lib/db.js:23:20)
+    at async storageReport (webpack://vatlassian-alm/src/jobs/prune.js:121:18)
+    at async Promise.all (index 2)
+    at async <anonymous> (webpack://vatlassian-alm/src/usecases/fields.js:11:42)
+    at async runAdmin (webpack://vatlassian-alm/src/usecases/adminRuntime.js:56:20)
+    at async Object.handler (webpack://vatlassian-alm/node_modules/@forge/resolver/out/index.js:33:1) {
+  responseDetails: { status: 400, statusText: 'Bad Request', traceId: null },
+  code: 'SQL_EXECUTION_ERROR',
+  suggestion: 'There was an error while executing the given command. Find more information about the SQL execution error in "debug" field',
+  context: {
+    debug: {
+      message: "ERROR 1146 (42S02): Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist",
+      code: 'ER_NO_SUCH_TABLE',
+      errno: 1146,
+      sql: 'SELECT COUNT(DISTINCT issue_id) AS items,\n' +
+        '            COUNT(*) AS chunks,\n' +
+        '            SUM(raw_bytes) AS raw_bytes,\n' +
+        '            SUM(LENGTH(data)) AS stored_bytes\n' +
+        '     FROM bl_baseline_value',
+      sqlState: '42S02',
+      sqlMessage: "Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist"
+    },
+    queryType: 'select'
+  }
+} 
+Query: SELECT COUNT(DISTINCT issue_id) AS items,
+            COUNT(*) AS chunks,
+            SUM(raw_bytes) AS raw_bytes,
+            SUM(LENGTH(data)) AS stored_bytes
+     FROM bl_baseline_value
+ERROR   2026-09-07T09:38:42.921Z bea5307b-4029-4b6a-8122-6f5b8afc5f08 Forge SQL Error: ForgeSQLAPIError [ForgeSQLError]: Unknown SQL execution error
+    at checkResponseError (webpack://vatlassian-alm/node_modules/@forge/sql/out/utils/error-handling.js:29:1)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async SqlClient.storageApi (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:29:1)
+    at async SqlClient.storageApiWithOptions (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:40:1)
+    at async executeQuery (webpack://vatlassian-alm/src/lib/db.js:23:20)
+    at async storageReport (webpack://vatlassian-alm/src/jobs/prune.js:121:18)
+    at async Promise.all (index 2)
+    at async <anonymous> (webpack://vatlassian-alm/src/usecases/fields.js:11:42)
+    at async runAdmin (webpack://vatlassian-alm/src/usecases/adminRuntime.js:56:20)
+    at async Object.handler (webpack://vatlassian-alm/node_modules/@forge/resolver/out/index.js:33:1) {
+  responseDetails: { status: 400, statusText: 'Bad Request', traceId: null },
+  code: 'SQL_EXECUTION_ERROR',
+  suggestion: 'There was an error while executing the given command. Find more information about the SQL execution error in "debug" field',
+  context: {
+    debug: {
+      message: "ERROR 1146 (42S02): Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist",
+      code: 'ER_NO_SUCH_TABLE',
+      errno: 1146,
+      sql: 'SELECT COUNT(DISTINCT issue_id) AS items,\n' +
+        '            COUNT(*) AS chunks,\n' +
+        '            SUM(raw_bytes) AS raw_bytes,\n' +
+        '            SUM(LENGTH(data)) AS stored_bytes\n' +
+        '     FROM bl_baseline_value',
+      sqlState: '42S02',
+      sqlMessage: "Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist"
+    },
+    queryType: 'select'
+  }
+} 
+Query: SELECT COUNT(DISTINCT issue_id) AS items,
+            COUNT(*) AS chunks,
+            SUM(raw_bytes) AS raw_bytes,
+            SUM(LENGTH(data)) AS stored_bytes
+     FROM bl_baseline_value
+ERROR   2026-09-07T09:38:45.566Z 352b5bb4-2ac3-460f-97c4-3f89b208a88b Forge SQL Error: ForgeSQLAPIError [ForgeSQLError]: Unknown SQL execution error
+    at checkResponseError (webpack://vatlassian-alm/node_modules/@forge/sql/out/utils/error-handling.js:29:1)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async SqlClient.storageApi (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:29:1)
+    at async SqlClient.storageApiWithOptions (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:40:1)
+    at async executeQuery (webpack://vatlassian-alm/src/lib/db.js:23:20)
+    at async storageReport (webpack://vatlassian-alm/src/jobs/prune.js:121:18)
+    at async Promise.all (index 2)
+    at async <anonymous> (webpack://vatlassian-alm/src/usecases/fields.js:11:42)
+    at async runAdmin (webpack://vatlassian-alm/src/usecases/adminRuntime.js:56:20)
+    at async Object.handler (webpack://vatlassian-alm/node_modules/@forge/resolver/out/index.js:33:1) {
+  responseDetails: { status: 400, statusText: 'Bad Request', traceId: null },
+  code: 'SQL_EXECUTION_ERROR',
+  suggestion: 'There was an error while executing the given command. Find more information about the SQL execution error in "debug" field',
+  context: {
+    debug: {
+      message: "ERROR 1146 (42S02): Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist",
+      code: 'ER_NO_SUCH_TABLE',
+      errno: 1146,
+      sql: 'SELECT COUNT(DISTINCT issue_id) AS items,\n' +
+        '            COUNT(*) AS chunks,\n' +
+        '            SUM(raw_bytes) AS raw_bytes,\n' +
+        '            SUM(LENGTH(data)) AS stored_bytes\n' +
+        '     FROM bl_baseline_value',
+      sqlState: '42S02',
+      sqlMessage: "Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist"
+    },
+    queryType: 'select'
+  }
+} 
+Query: SELECT COUNT(DISTINCT issue_id) AS items,
+            COUNT(*) AS chunks,
+            SUM(raw_bytes) AS raw_bytes,
+            SUM(LENGTH(data)) AS stored_bytes
+     FROM bl_baseline_value
+ERROR   2026-09-07T09:38:47.910Z 5a729c7a-0337-4137-9b85-b7823fa38efa Forge SQL Error: ForgeSQLAPIError [ForgeSQLError]: Unknown SQL execution error
+    at checkResponseError (webpack://vatlassian-alm/node_modules/@forge/sql/out/utils/error-handling.js:29:1)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async SqlClient.storageApi (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:29:1)
+    at async SqlClient.storageApiWithOptions (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:40:1)
+    at async executeQuery (webpack://vatlassian-alm/src/lib/db.js:23:20)
+    at async storageReport (webpack://vatlassian-alm/src/jobs/prune.js:121:18)
+    at async Promise.all (index 2)
+    at async <anonymous> (webpack://vatlassian-alm/src/usecases/fields.js:11:42)
+    at async runAdmin (webpack://vatlassian-alm/src/usecases/adminRuntime.js:56:20)
+    at async Object.handler (webpack://vatlassian-alm/node_modules/@forge/resolver/out/index.js:33:1) {
+  responseDetails: { status: 400, statusText: 'Bad Request', traceId: null },
+  code: 'SQL_EXECUTION_ERROR',
+  suggestion: 'There was an error while executing the given command. Find more information about the SQL execution error in "debug" field',
+  context: {
+    debug: {
+      message: "ERROR 1146 (42S02): Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist",
+      code: 'ER_NO_SUCH_TABLE',
+      errno: 1146,
+      sql: 'SELECT COUNT(DISTINCT issue_id) AS items,\n' +
+        '            COUNT(*) AS chunks,\n' +
+        '            SUM(raw_bytes) AS raw_bytes,\n' +
+        '            SUM(LENGTH(data)) AS stored_bytes\n' +
+        '     FROM bl_baseline_value',
+      sqlState: '42S02',
+      sqlMessage: "Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist"
+    },
+    queryType: 'select'
+  }
+} 
+Query: SELECT COUNT(DISTINCT issue_id) AS items,
+            COUNT(*) AS chunks,
+            SUM(raw_bytes) AS raw_bytes,
+            SUM(LENGTH(data)) AS stored_bytes
+     FROM bl_baseline_value
+ERROR   2026-09-07T09:38:50.463Z 492dbd89-dcde-437b-a8b6-7710f8d4292d Forge SQL Error: ForgeSQLAPIError [ForgeSQLError]: Unknown SQL execution error
+    at checkResponseError (webpack://vatlassian-alm/node_modules/@forge/sql/out/utils/error-handling.js:29:1)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async SqlClient.storageApi (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:29:1)
+    at async SqlClient.storageApiWithOptions (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:40:1)
+    at async executeQuery (webpack://vatlassian-alm/src/lib/db.js:23:20)
+    at async storageReport (webpack://vatlassian-alm/src/jobs/prune.js:121:18)
+    at async Promise.all (index 2)
+    at async <anonymous> (webpack://vatlassian-alm/src/usecases/fields.js:11:42)
+    at async runAdmin (webpack://vatlassian-alm/src/usecases/adminRuntime.js:56:20)
+    at async Object.handler (webpack://vatlassian-alm/node_modules/@forge/resolver/out/index.js:33:1) {
+  responseDetails: { status: 400, statusText: 'Bad Request', traceId: null },
+  code: 'SQL_EXECUTION_ERROR',
+  suggestion: 'There was an error while executing the given command. Find more information about the SQL execution error in "debug" field',
+  context: {
+    debug: {
+      message: "ERROR 1146 (42S02): Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist",
+      code: 'ER_NO_SUCH_TABLE',
+      errno: 1146,
+      sql: 'SELECT COUNT(DISTINCT issue_id) AS items,\n' +
+        '            COUNT(*) AS chunks,\n' +
+        '            SUM(raw_bytes) AS raw_bytes,\n' +
+        '            SUM(LENGTH(data)) AS stored_bytes\n' +
+        '     FROM bl_baseline_value',
+      sqlState: '42S02',
+      sqlMessage: "Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist"
+    },
+    queryType: 'select'
+  }
+} 
+Query: SELECT COUNT(DISTINCT issue_id) AS items,
+            COUNT(*) AS chunks,
+            SUM(raw_bytes) AS raw_bytes,
+            SUM(LENGTH(data)) AS stored_bytes
+     FROM bl_baseline_value
+ERROR   2026-09-07T09:38:52.705Z 644990f1-4f7c-42d2-9ea8-79adde12de6d Forge SQL Error: ForgeSQLAPIError [ForgeSQLError]: Unknown SQL execution error
+    at checkResponseError (webpack://vatlassian-alm/node_modules/@forge/sql/out/utils/error-handling.js:29:1)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async SqlClient.storageApi (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:29:1)
+    at async SqlClient.storageApiWithOptions (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:40:1)
+    at async executeQuery (webpack://vatlassian-alm/src/lib/db.js:23:20)
+    at async storageReport (webpack://vatlassian-alm/src/jobs/prune.js:121:18)
+    at async Promise.all (index 2)
+    at async <anonymous> (webpack://vatlassian-alm/src/usecases/fields.js:11:42)
+    at async runAdmin (webpack://vatlassian-alm/src/usecases/adminRuntime.js:56:20)
+    at async Object.handler (webpack://vatlassian-alm/node_modules/@forge/resolver/out/index.js:33:1) {
+  responseDetails: { status: 400, statusText: 'Bad Request', traceId: null },
+  code: 'SQL_EXECUTION_ERROR',
+  suggestion: 'There was an error while executing the given command. Find more information about the SQL execution error in "debug" field',
+  context: {
+    debug: {
+      message: "ERROR 1146 (42S02): Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist",
+      code: 'ER_NO_SUCH_TABLE',
+      errno: 1146,
+      sql: 'SELECT COUNT(DISTINCT issue_id) AS items,\n' +
+        '            COUNT(*) AS chunks,\n' +
+        '            SUM(raw_bytes) AS raw_bytes,\n' +
+        '            SUM(LENGTH(data)) AS stored_bytes\n' +
+        '     FROM bl_baseline_value',
+      sqlState: '42S02',
+      sqlMessage: "Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist"
+    },
+    queryType: 'select'
+  }
+} 
+Query: SELECT COUNT(DISTINCT issue_id) AS items,
+            COUNT(*) AS chunks,
+            SUM(raw_bytes) AS raw_bytes,
+            SUM(LENGTH(data)) AS stored_bytes
+     FROM bl_baseline_value
+ERROR   2026-09-07T09:38:55.179Z 402cf657-baa0-40ff-854e-772db8332eb1 Forge SQL Error: ForgeSQLAPIError [ForgeSQLError]: Unknown SQL execution error
+    at checkResponseError (webpack://vatlassian-alm/node_modules/@forge/sql/out/utils/error-handling.js:29:1)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async SqlClient.storageApi (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:29:1)
+    at async SqlClient.storageApiWithOptions (webpack://vatlassian-alm/node_modules/@forge/sql/out/sql.js:40:1)
+    at async executeQuery (webpack://vatlassian-alm/src/lib/db.js:23:20)
+    at async storageReport (webpack://vatlassian-alm/src/jobs/prune.js:121:18)
+    at async Promise.all (index 2)
+    at async <anonymous> (webpack://vatlassian-alm/src/usecases/fields.js:11:42)
+    at async runAdmin (webpack://vatlassian-alm/src/usecases/adminRuntime.js:56:20)
+    at async Object.handler (webpack://vatlassian-alm/node_modules/@forge/resolver/out/index.js:33:1) {
+  responseDetails: { status: 400, statusText: 'Bad Request', traceId: null },
+  code: 'SQL_EXECUTION_ERROR',
+  suggestion: 'There was an error while executing the given command. Find more information about the SQL execution error in "debug" field',
+  context: {
+    debug: {
+      message: "ERROR 1146 (42S02): Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist",
+      code: 'ER_NO_SUCH_TABLE',
+      errno: 1146,
+      sql: 'SELECT COUNT(DISTINCT issue_id) AS items,\n' +
+        '            COUNT(*) AS chunks,\n' +
+        '            SUM(raw_bytes) AS raw_bytes,\n' +
+        '            SUM(LENGTH(data)) AS stored_bytes\n' +
+        '     FROM bl_baseline_value',
+      sqlState: '42S02',
+      sqlMessage: "Table 'b3205566379484b52ab67a135a8b7fff_forge_redacted.bl_baseline_value' doesn't exist"
+    },
+    queryType: 'select'
+  }
+} 
+Query: SELECT COUNT(DISTINCT issue_id) AS items,
+            COUNT(*) AS chunks,
+            SUM(raw_bytes) AS raw_bytes,
+            SUM(LENGTH(data)) AS stored_bytes
+     FROM bl_baseline_value

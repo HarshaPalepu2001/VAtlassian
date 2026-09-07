@@ -1,0 +1,909 @@
+/**
+ * Design tokens and base element styles for every Custom UI surface.
+ *
+ * Imported once, from main.tsx, immediately after @atlaskit/css-reset. Every
+ * surface in this app (panel, queue, admin console, personal settings) draws
+ * from this file so that a signer who meets the product on an issue panel and
+ * an auditor who meets it in the admin console are looking at the same thing.
+ *
+ * The palette tracks Atlassian's, because these surfaces are embedded in Jira
+ * chrome and anything else reads as a bolted-on third-party app — which is
+ * exactly the impression a signing control should not give.
+ *
+ * DARK MODE IS DRIVEN BY data-color-mode, NOT prefers-color-scheme. Jira's
+ * light/dark theme is a per-user setting inside Jira, independent of the
+ * browser/OS preference — someone can run an OS in light mode and Jira in
+ * dark mode, or vice versa. A Custom UI app lives in its own iframe, so it
+ * never sees Jira's setting unless it asks: main.tsx calls the Forge bridge's
+ * `view.theme.enable()`, which is Atlassian's documented mechanism for
+ * syncing a Custom UI iframe to the host's actual theme, and which sets this
+ * attribute on the iframe's own <html> element (falling back to
+ * prefers-color-scheme itself, in main.tsx, only when that bridge call fails
+ * — e.g. running the Vite dev server standalone, outside any Jira page).
+ * Reacting to prefers-color-scheme directly here, as before, meant this app
+ * silently disagreed with Jira any time the two settings differed.
+ */
+
+:root {
+  /* Surfaces */
+  --va-bg: #ffffff;
+  --va-surface: #ffffff;
+  --va-surface-sunken: #f7f8f9;
+  --va-surface-raised: #ffffff;
+  --va-surface-hover: #f1f2f4;
+
+  /* Ink */
+  --va-text: #172b4d;
+  --va-text-subtle: #626f86;
+  --va-text-subtlest: #8590a2;
+  --va-text-inverse: #ffffff;
+
+  /* Lines */
+  --va-border: #dfe1e6;
+  --va-border-strong: #b3b9c4;
+  --va-focus: #4c9aff;
+
+  /* Accents. `-bg` is the tint behind a badge or callout of that tone,
+     `-text` is legible ink on that tint, `-line` its border. */
+  --va-brand: #0c66e4;
+  --va-brand-hover: #0055cc;
+  --va-brand-bg: #e9f2ff;
+  --va-brand-text: #0055cc;
+  --va-brand-line: #cce0ff;
+
+  --va-success-bg: #dcfff1;
+  --va-success-text: #216e4e;
+  --va-success-line: #b3dfc9;
+
+  --va-warning-bg: #fff7d6;
+  --va-warning-text: #a54800;
+  --va-warning-line: #f5e08d;
+
+  --va-danger-bg: #ffecea;
+  --va-danger-text: #ae2e24;
+  --va-danger-line: #ffd2cc;
+
+  --va-neutral-bg: #f1f2f4;
+  --va-neutral-text: #44546f;
+  --va-neutral-line: #dfe1e6;
+
+  /* Elevation */
+  --va-shadow-raised: 0 1px 1px rgba(9, 30, 66, 0.25),
+    0 0 1px rgba(9, 30, 66, 0.31);
+  --va-shadow-overlay: 0 8px 12px rgba(9, 30, 66, 0.15),
+    0 0 1px rgba(9, 30, 66, 0.31);
+
+  /* Shape and rhythm */
+  --va-radius: 6px;
+  --va-radius-lg: 10px;
+  --va-radius-pill: 999px;
+
+  --va-font: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    Roboto, 'Helvetica Neue', sans-serif;
+  --va-font-mono: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+}
+
+:root[data-color-mode='dark'] {
+  --va-bg: #1d2125;
+  --va-surface: #22272b;
+  --va-surface-sunken: #1d2125;
+  --va-surface-raised: #282e33;
+  --va-surface-hover: #2c333a;
+
+  --va-text: #b6c2cf;
+  --va-text-subtle: #9fadbc;
+  --va-text-subtlest: #8c9bab;
+  --va-text-inverse: #1d2125;
+
+  --va-border: #38414a;
+  --va-border-strong: #596773;
+  --va-focus: #579dff;
+
+  --va-brand: #579dff;
+  --va-brand-hover: #85b8ff;
+  --va-brand-bg: #1c2b41;
+  --va-brand-text: #85b8ff;
+  --va-brand-line: #09326c;
+
+  --va-success-bg: #1c3329;
+  --va-success-text: #7ee2b8;
+  --va-success-line: #216e4e;
+
+  --va-warning-bg: #332e1b;
+  --va-warning-text: #f5cd47;
+  --va-warning-line: #7f5f01;
+
+  --va-danger-bg: #42221f;
+  --va-danger-text: #fd9891;
+  --va-danger-line: #ae2e24;
+
+  --va-neutral-bg: #2c333a;
+  --va-neutral-text: #9fadbc;
+  --va-neutral-line: #38414a;
+
+  --va-shadow-raised: 0 1px 1px rgba(3, 4, 4, 0.5), 0 0 1px rgba(3, 4, 4, 0.6);
+  --va-shadow-overlay: 0 8px 12px rgba(3, 4, 4, 0.36),
+    0 0 1px rgba(3, 4, 4, 0.5);
+}
+
+body {
+  margin: 0;
+  background: var(--va-bg);
+  color: var(--va-text);
+  font-family: var(--va-font);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------------------------------------------------------------------------
+   Layout
+   --------------------------------------------------------------------------- */
+
+/* Full-page surfaces (global page, admin console, personal settings). */
+.va-page {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 32px 24px 64px;
+  box-sizing: border-box;
+}
+
+/* The issue panel is a narrow column inside Jira's own chrome and must not
+   add page padding on top of it. */
+.va-page--panel {
+  max-width: none;
+  padding: 4px 0 8px;
+}
+
+.va-page__header {
+  margin-bottom: 28px;
+}
+
+.va-page__eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--va-text-subtlest);
+  margin: 0 0 6px;
+}
+
+.va-page__title {
+  font-size: 24px;
+  line-height: 1.25;
+  font-weight: 600;
+  color: var(--va-text);
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.va-page__lead {
+  margin: 8px 0 0;
+  color: var(--va-text-subtle);
+  max-width: 68ch;
+}
+
+.va-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.va-stack--tight {
+  gap: 8px;
+}
+
+.va-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.va-spacer {
+  flex: 1 1 auto;
+}
+
+/* Available to assistive technology, absent from the visual design. Used for
+   column headers whose cells hold only actions. */
+.va-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   Card
+   --------------------------------------------------------------------------- */
+
+.va-card {
+  background: var(--va-surface);
+  border: 1px solid var(--va-border);
+  border-radius: var(--va-radius-lg);
+  padding: 20px;
+  box-sizing: border-box;
+}
+
+.va-card--sunken {
+  background: var(--va-surface-sunken);
+}
+
+.va-card--flush {
+  padding: 0;
+  overflow: hidden;
+}
+
+.va-card__header {
+  margin-bottom: 14px;
+}
+
+.va-card__title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--va-text);
+  margin: 0;
+}
+
+.va-card__subtitle {
+  font-size: 13px;
+  color: var(--va-text-subtle);
+  margin: 4px 0 0;
+}
+
+/* ---------------------------------------------------------------------------
+   Section heading, used to break a long page into named parts
+   --------------------------------------------------------------------------- */
+
+.va-section {
+  margin-top: 36px;
+}
+
+.va-section__title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--va-text-subtlest);
+  margin: 0 0 12px;
+}
+
+/* ---------------------------------------------------------------------------
+   Table
+   --------------------------------------------------------------------------- */
+
+.va-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.va-table th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--va-text-subtlest);
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--va-border);
+  white-space: nowrap;
+}
+
+.va-table td {
+  padding: 12px;
+  border-bottom: 1px solid var(--va-border);
+  vertical-align: top;
+  color: var(--va-text);
+}
+
+.va-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.va-table tbody tr:hover {
+  background: var(--va-surface-hover);
+}
+
+/* An expanded row and the row that opened it are one unit; neither should
+   take the hover tint independently. */
+.va-table tbody tr.va-row--open,
+.va-table tbody tr.va-row--open:hover,
+.va-table tbody tr.va-row--expansion,
+.va-table tbody tr.va-row--expansion:hover {
+  background: var(--va-surface-sunken);
+}
+
+.va-table__num {
+  text-align: right;
+}
+
+.va-table__actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------------------
+   Primary/secondary text pairing used in table cells
+   --------------------------------------------------------------------------- */
+
+.va-primary {
+  font-weight: 600;
+  color: var(--va-text);
+}
+
+.va-secondary {
+  font-size: 12px;
+  color: var(--va-text-subtle);
+  margin-top: 2px;
+}
+
+.va-muted {
+  color: var(--va-text-subtle);
+}
+
+/* Used wherever a name could not be resolved. Deliberately italic and grey:
+   it should read as an absence, not as a value. */
+.va-unknown {
+  font-style: italic;
+  color: var(--va-text-subtlest);
+}
+
+/* ---------------------------------------------------------------------------
+   Badge
+   --------------------------------------------------------------------------- */
+
+.va-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: var(--va-radius-pill);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.va-badge--neutral {
+  background: var(--va-neutral-bg);
+  color: var(--va-neutral-text);
+  border-color: var(--va-neutral-line);
+}
+.va-badge--brand {
+  background: var(--va-brand-bg);
+  color: var(--va-brand-text);
+  border-color: var(--va-brand-line);
+}
+.va-badge--success {
+  background: var(--va-success-bg);
+  color: var(--va-success-text);
+  border-color: var(--va-success-line);
+}
+.va-badge--warning {
+  background: var(--va-warning-bg);
+  color: var(--va-warning-text);
+  border-color: var(--va-warning-line);
+}
+.va-badge--danger {
+  background: var(--va-danger-bg);
+  color: var(--va-danger-text);
+  border-color: var(--va-danger-line);
+}
+
+.va-count {
+  background: var(--va-brand);
+  color: #fff;
+  border-radius: var(--va-radius-pill);
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 20px;
+  min-width: 20px;
+  text-align: center;
+  display: inline-block;
+}
+
+/* ---------------------------------------------------------------------------
+   Person
+   --------------------------------------------------------------------------- */
+
+.va-person {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.va-person__avatar {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #fff;
+  user-select: none;
+}
+
+.va-person__body {
+  min-width: 0;
+}
+
+.va-person__name {
+  font-weight: 600;
+  color: var(--va-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.va-person__meta {
+  font-size: 12px;
+  color: var(--va-text-subtle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------------------
+   Definition list — label/value pairs for record context
+   --------------------------------------------------------------------------- */
+
+.va-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 20px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.va-facts dt {
+  color: var(--va-text-subtle);
+  white-space: nowrap;
+}
+
+.va-facts dd {
+  margin: 0;
+  color: var(--va-text);
+}
+
+/* ---------------------------------------------------------------------------
+   Empty state
+   --------------------------------------------------------------------------- */
+
+.va-empty {
+  text-align: center;
+  padding: 40px 24px;
+  color: var(--va-text-subtle);
+}
+
+.va-empty__title {
+  font-weight: 600;
+  color: var(--va-text);
+  margin: 0 0 4px;
+}
+
+.va-empty__body {
+  margin: 0;
+  font-size: 13px;
+  max-width: 46ch;
+  margin-inline: auto;
+}
+
+/* ---------------------------------------------------------------------------
+   Form controls
+   --------------------------------------------------------------------------- */
+
+.va-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.va-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--va-text-subtle);
+}
+
+.va-hint {
+  font-size: 12px;
+  color: var(--va-text-subtle);
+}
+
+.va-select {
+  appearance: none;
+  font: inherit;
+  font-size: 14px;
+  color: var(--va-text);
+  background: var(--va-surface);
+  border: 1px solid var(--va-border-strong);
+  border-radius: var(--va-radius);
+  padding: 7px 30px 7px 10px;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 16px) 52%, calc(100% - 11px) 52%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+.va-select:focus-visible,
+.va-input:focus-visible {
+  outline: 2px solid var(--va-focus);
+  outline-offset: 1px;
+  border-color: var(--va-focus);
+}
+
+.va-select:disabled {
+  background: var(--va-surface-sunken);
+  color: var(--va-text-subtlest);
+  cursor: not-allowed;
+}
+
+/* Grid for the multi-control configuration forms in the admin console. Each
+   control gets a real label rather than a placeholder standing in for one —
+   a placeholder disappears the moment a value is chosen, which is when an
+   admin reviewing a half-filled rule most needs to know what the field was. */
+.va-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 16px;
+}
+
+.va-form-grid--wide {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.va-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--va-border);
+}
+
+/* ---------------------------------------------------------------------------
+   Typeahead (user picker)
+   --------------------------------------------------------------------------- */
+
+.va-typeahead {
+  position: relative;
+}
+
+.va-typeahead__menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: var(--va-surface-raised);
+  border: 1px solid var(--va-border);
+  border-radius: var(--va-radius);
+  box-shadow: var(--va-shadow-overlay);
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.va-typeahead__option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  font: inherit;
+  padding: 8px;
+  border-radius: var(--va-radius);
+  cursor: pointer;
+  color: var(--va-text);
+}
+
+.va-typeahead__option:hover,
+.va-typeahead__option:focus-visible {
+  background: var(--va-surface-hover);
+  outline: none;
+}
+
+.va-typeahead__selected {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border: 1px solid var(--va-border);
+  border-radius: var(--va-radius);
+  background: var(--va-surface-sunken);
+}
+
+/* ---------------------------------------------------------------------------
+   Attestation — the signing moment
+   --------------------------------------------------------------------------- */
+
+.va-attest {
+  border: 1px solid var(--va-brand-line);
+  border-radius: var(--va-radius-lg);
+  background: var(--va-surface);
+  overflow: hidden;
+}
+
+.va-attest--decline {
+  border-color: var(--va-danger-line);
+}
+
+.va-attest__banner {
+  background: var(--va-brand-bg);
+  color: var(--va-brand-text);
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--va-brand-line);
+}
+
+.va-attest--decline .va-attest__banner {
+  background: var(--va-danger-bg);
+  color: var(--va-danger-text);
+  border-bottom-color: var(--va-danger-line);
+}
+
+.va-attest__eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.85;
+  margin: 0 0 2px;
+}
+
+/* The statement of meaning. This is the sentence the signer is attesting to,
+   so it is the largest text in the block — larger than the page title. */
+.va-attest__meaning {
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 0;
+}
+
+.va-attest__body {
+  padding: 20px;
+}
+
+.va-attest__consequence {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: var(--va-text-subtle);
+  padding: 12px 14px;
+  background: var(--va-surface-sunken);
+  border-radius: var(--va-radius);
+  margin-bottom: 16px;
+}
+
+.va-arrow {
+  color: var(--va-text-subtlest);
+}
+
+/* The explicit affirmation. 21 CFR 11.50(a) wants the meaning associated with
+   the signature; a checkbox the signer has to tick is the difference between
+   "typed six digits into a box" and "declared something". */
+.va-affirm {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 14px;
+  border: 1px solid var(--va-border);
+  border-radius: var(--va-radius);
+  cursor: pointer;
+  margin-bottom: 16px;
+  background: var(--va-surface);
+}
+
+.va-affirm:hover {
+  background: var(--va-surface-hover);
+}
+
+.va-affirm--checked {
+  border-color: var(--va-brand);
+  background: var(--va-brand-bg);
+}
+
+.va-affirm input {
+  margin: 2px 0 0;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  accent-color: var(--va-brand);
+  cursor: pointer;
+}
+
+.va-affirm__text {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--va-text);
+}
+
+/* The 6-digit code box. Monospace and letter-spaced so the digits read as a
+   credential being entered rather than as free text. */
+.va-code {
+  font-family: var(--va-font-mono);
+  font-size: 20px;
+  letter-spacing: 0.35em;
+  text-indent: 0.35em;
+  text-align: center;
+  width: 100%;
+  max-width: 190px;
+  box-sizing: border-box;
+  padding: 9px 10px;
+  border: 1px solid var(--va-border-strong);
+  border-radius: var(--va-radius);
+  background: var(--va-surface);
+  color: var(--va-text);
+}
+
+.va-code::placeholder {
+  color: var(--va-text-subtlest);
+  letter-spacing: 0.35em;
+}
+
+/* ---------------------------------------------------------------------------
+   Record summary — what is being signed
+   --------------------------------------------------------------------------- */
+
+.va-record {
+  border: 1px solid var(--va-border);
+  border-radius: var(--va-radius-lg);
+  background: var(--va-surface-sunken);
+  padding: 16px;
+}
+
+.va-record__breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--va-text-subtle);
+  margin-bottom: 6px;
+}
+
+.va-record__summary {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--va-text);
+  margin: 0 0 10px;
+}
+
+.va-record__description {
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  color: var(--va-text);
+  margin: 10px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--va-border);
+}
+
+/* ---------------------------------------------------------------------------
+   Diff (content drift review)
+   --------------------------------------------------------------------------- */
+
+.va-diff {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  font-size: 13px;
+}
+
+@media (max-width: 720px) {
+  .va-diff {
+    grid-template-columns: 1fr;
+  }
+}
+
+.va-diff__side {
+  border-radius: var(--va-radius);
+  padding: 10px 12px;
+  border: 1px solid transparent;
+}
+
+.va-diff__side--before {
+  background: var(--va-danger-bg);
+  border-color: var(--va-danger-line);
+}
+
+.va-diff__side--after {
+  background: var(--va-success-bg);
+  border-color: var(--va-success-line);
+}
+
+.va-diff__label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.75;
+  margin-bottom: 4px;
+}
+
+.va-diff__side--before .va-diff__label {
+  color: var(--va-danger-text);
+}
+.va-diff__side--after .va-diff__label {
+  color: var(--va-success-text);
+}
+
+.va-diff__value {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--va-text);
+}
+
+/* ---------------------------------------------------------------------------
+   Links
+   --------------------------------------------------------------------------- */
+
+.va-link {
+  color: var(--va-brand);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.va-link:hover {
+  text-decoration: underline;
+}
+
+/* ---------------------------------------------------------------------------
+   Loading
+   --------------------------------------------------------------------------- */
+
+.va-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 48px 24px;
+  color: var(--va-text-subtle);
+  font-size: 13px;
+}
+
+/* ---------------------------------------------------------------------------
+   QR enrolment
+   --------------------------------------------------------------------------- */
+
+.va-qr {
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: #ffffff; /* a QR code must stay black-on-white to scan */
+  border: 1px solid var(--va-border);
+  border-radius: var(--va-radius);
+  width: fit-content;
+  margin: 0 auto;
+}
+
+.va-steps {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 13px;
+  color: var(--va-text);
+}
+
+.va-steps li {
+  margin-bottom: 6px;
+}

@@ -1,0 +1,22 @@
+import ForgeResolver from '@forge/resolver';
+import * as panel from '../usecases/panel.js';
+import * as approval from '../usecases/approval.js';
+import * as drift from '../usecases/drift.js';
+import * as restore from '../usecases/restore.js';
+import * as queue from '../usecases/queue.js';
+import * as report from '../usecases/report.js';
+
+const Resolver = ForgeResolver.default ?? ForgeResolver;
+const resolver = new Resolver();
+resolver.define('panel:getState', ({ payload, context }) => panel.getState({ payload, context }));
+resolver.define('panel:getGlanceState', ({ payload, context }) => panel.getGlanceState({ payload, context }));
+resolver.define('approval:submit', ({ payload, context }) => approval.submit({ payload, context }));
+resolver.define('approval:retryTransition', ({ payload, context }) => approval.retryTransition({ payload, context }));
+resolver.define('drift:getState', ({ payload, context }) => drift.getState({ payload, context }));
+resolver.define('drift:getDiff', ({ payload, context }) => drift.getDiff({ payload, context }));
+resolver.define('restore:getState', ({ payload, context }) => restore.getState({ payload, context }));
+resolver.define('restore:retry', ({ payload, context }) => restore.retry({ payload, context }));
+resolver.define('queue:list', ({ payload, context }) => queue.list({ payload, context }));
+resolver.define('report:get', ({ payload, context }) => report.get({ payload, context }));
+resolver.define('report:generate', ({ payload, context }) => report.generate({ payload, context }));
+export const handler = resolver.getDefinitions();

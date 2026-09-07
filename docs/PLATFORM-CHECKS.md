@@ -1,0 +1,7 @@
+# Platform preflight, checked 2026-09-07
+
+- `edit.experience: [issue-transition]` and `view.experience: [issue-view]` are supported by the published [custom field reference](https://developer.atlassian.com/platform/forge/manifest-reference/modules/jira-custom-field/). Both are pinned by manifest tests. A CSV formatter prevents approval tokens being displayed as record content.
+- The [LLM manifest reference](https://developer.atlassian.com/platform/forge/manifest-reference/modules/llm/) specifies one module with `model: [claude]` and says adding it requires a major version upgrade.
+- Atlassian states its hosted LLMs have no data egress and apps using them can qualify for the badge in [its Forge LLM announcement](https://www.atlassian.com/blog/development/forge-llms-preview). Eligibility remains subject to the installed app's full configuration and the [Runs on Atlassian eligibility check](https://developer.atlassian.com/platform/forge/runs-on-atlassian-apps/); run `forge eligibility` after registration/deployment.
+- No code requires Confluence or project management scope. The manifest grants five scopes: app storage, Jira work read/write, user read, Jira configuration management.
+- Workflow validators and personal settings remain platform-dependent surfaces. Local source checks cannot prove the Jira transition dialog mounts the custom field renderer, nor measure deployed validator p99 latency. Follow LIVE-ACCEPTANCE.md on a new development installation.

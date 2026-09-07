@@ -1,0 +1,23 @@
+{
+  "name": "vatlassian-alm",
+  "version": "0.1.0",
+  "description": "Unified approvals, baselines and drift evidence for Jira",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "smoke": "node test/smoke.mjs",
+    "verify": "npm run test && npm run smoke && npm run build:ui",
+    "build:ui": "npm --prefix frontend run build",
+    "deploy": "npm run verify && forge deploy"
+  },
+  "dependencies": {
+    "@forge/api": "^5.0.0",
+    "@forge/bridge": "^6.3.0",
+    "@forge/react": "^12.1.2",
+    "@forge/resolver": "^1.6.0",
+    "@forge/sql": "^2.0.0",
+    "react": "^18.3.1",
+    "@forge/llm": "^1.0.0"
+  }
+}

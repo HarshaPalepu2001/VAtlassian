@@ -1,0 +1,18 @@
+import { useEffect,useState } from 'react';
+import { invoke } from '../../lib/bridge';
+import Button from '@atlaskit/button';
+import { Affirmation,Badge,Card,Loading } from '../../ui/primitives';
+import { Notice } from '../../ui/feedback';
+import { assertResult,errorMessage } from '../../lib/result';
+import type { Result } from '../../lib/result';
+import type { ClassifiedField } from '../types';
+import { classificationPayload,moveField } from '../classificationModel';
+export default function FieldClassification({projectId,onClose,onSaved}:{projectId:string;onClose:()=>void;onSaved:(note:string)=>void}){
+ const [fields,setFields]=useState<ClassifiedField[]>([]);const [loading,setLoading]=useState(true);const [busy,setBusy]=useState(false);const [confirmed,setConfirmed]=useState(false);const [error,setError]=useState('');const [fallback,setFallback]=useState('');
+ useEffect(()=>{let active=true;invoke<Result&{fields:ClassifiedField[];degraded?:boolean;degradedReason?:string}>('admin:classifyFieldsForBaseline',{projectId,issueTypeId:'*'}).then(assertResult).then(r=>{if(active){setFields(r.fields);if(r.degraded)setFallback(r.degradedReason??'AI unavailable');}}).catch(e=>{if(active)setError(errorMessage(e));}).finally(()=>{if(active)setLoading(false);});return()=>{active=false;};},[projectId]);
+ async function save(){if(!confirmed||!fields.length)return;setBusy(true);setError('');try{const r=assertResult(await invoke<Result>('admin:saveControlledFieldsBaseline',{projectId,issueTypeId:'*',...classificationPayload(fields)}));onSaved(r.note??'Controlled-field baseline saved.');}catch(e){setError(errorMessage(e));}finally{setBusy(false);}}
+ return <Card title="Review field classification"><div className="va-stack"><Notice>Review the suggestions before saving. These selections determine which fields are included in future approved baselines.</Notice>{fallback&&<Notice>Rule-based suggestions · {fallback}</Notice>}{error&&<Notice danger>{error}</Notice>}{loading?<Loading label="Classifying fields…"/>:<>
+  {['GXP_CANDIDATE','NON_GXP_CANDIDATE'].map(decision=><section key={decision}><h3>{decision==='GXP_CANDIDATE'?'Controlled fields':'Excluded fields'}</h3>{fields.filter(f=>(f.pinned?'GXP_CANDIDATE':f.decision)===decision).map(f=><div className="va-record-field" key={f.fieldId}><div className="va-row"><strong>{f.fieldName}</strong><Badge>{f.fieldKind}</Badge><span className="va-spacer"/>{f.pinned?<Badge>Always tracked</Badge>:<Button isDisabled={busy} onClick={()=>{setFields(moveField(fields,f.fieldId,decision==='GXP_CANDIDATE'?'NON_GXP_CANDIDATE':'GXP_CANDIDATE'));setConfirmed(false);}}>{decision==='GXP_CANDIDATE'?'Exclude':'Include'}</Button>}</div><p className="va-muted">{f.rationale??'No rationale supplied'}</p></div>)}</section>)}
+  <Affirmation checked={confirmed} onChange={setConfirmed} disabled={busy}>I have reviewed these selections and confirm the controlled-field baseline for all work item types.</Affirmation>
+ </>}<div className="va-row"><Button isDisabled={busy} onClick={onClose}>Cancel</Button><Button appearance="primary" isDisabled={loading||busy||!confirmed||!fields.length} onClick={save}>{busy?'Saving…':'Save field baseline'}</Button></div></div></Card>;
+}

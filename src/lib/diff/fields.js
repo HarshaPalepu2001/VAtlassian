@@ -1,0 +1,350 @@
+import { FIELD_KIND } from '../content.js';
+import { diffAdf, describeAdfDiff } from './adf.js';
+import { diffText, isWhitespaceOnly, magnitude as textMagnitude, coalesce, OP } from './text.js';
+import { adfPlainText } from '../valuestore.js';
+
+/**
+ * Per-field-kind diffing, and the honest answer to "could a rejection put this
+ * back?".
+ *
+ * Every differ here returns the same shape, so the panel, the AI payload and
+ * the restore planner all read one structure regardless of what kind of field
+ * produced it. An unknown custom-field kind degrades to a structural
+ * comparison rather than rendering nothing — a reviewer seeing LESS than the
+ * record contains is the failure that matters.
+ */
+
+export const DIFF_KIND = {
+  ADF: 'adf',
+  TEXT: 'text',
+  SCALAR: 'scalar',
+  MULTI: 'multi',
+  LINKS: 'links',
+  ATTACHMENTS: 'attachments',
+  UNKNOWN: 'unknown'
+};
+
+/** Can a rejection actually write this field back? */
+export const RESTORABLE = {
+  /** A plain field write on PUT /issue/{key}. */
+  YES: 'YES',
+  /** Needs a dedicated handler — links, sprint, parent, status. */
+  SPECIAL: 'SPECIAL',
+  /** Jira cannot undo it: deleted attachments, other people's comments. */
+  NO: 'NO',
+  /** We never stored the value, so there is nothing to write back. */
+  NOT_RETAINED: 'NOT_RETAINED'
+};
+
+/**
+ * Fields that a PUT can never restore, with the reason a reviewer is shown.
+ *
+ * NAMED HERE, AND SURFACED BEFORE THE REVIEWER CONFIRMS. The reject dialog
+ * lists these under "cannot be restored" so that nobody clicks Reject and
+ * discovers afterwards that two fields were quietly left drifted. An app that
+ * promises to put things back has to be exact about what it cannot put back.
+ */
+const IRREVERSIBLE = {
+  attachment: 'Deleted attachments cannot be re-uploaded by an app. Ask whoever removed them to add them back.',
+  comment: 'Comments are append-only. Baseline never deletes or rewrites what somebody wrote.',
+  worklog: 'Work logs belong to the person who recorded them and are not restored.'
+};
+
+/** Fields that need their own API call rather than a field write. */
+const SPECIAL_HANDLERS = {
+  issuelinks: 'links',
+  parent: 'parent',
+  status: 'transition',
+  sprint: 'sprint'
+};
+
+/**
+ * Diff one field.
+ *
+ * @param field    { field_id, field_name, field_kind, store_values, writable }
+ * @param before   the baseline's retained value, or undefined if not retained
+ * @param after    the live value
+ * @param retained whether this field's contents were stored at all
+ */
+export function diffField({ field, before, after, retained, digestChanged = true }) {
+  const base = {
+    fieldId: field.field_id,
+    fieldName: field.field_name ?? field.field_id,
+    fieldKind: field.field_kind,
+    restorable: restorability(field, retained),
+    restorableReason: restorabilityReason(field, retained)
+  };
+
+  // THE HONEST DEGRADATION. The digest said this field changed, but its
+  // contents were never retained, so there is no before to show and no value to
+  // write back. The panel renders "changed — contents not retained", which is
+  // the truthful consequence of the per-field retention boundary and is never
+  // dressed up as an empty diff.
+  if (!retained) {
+    return {
+      ...base,
+      kind: DIFF_KIND.UNKNOWN,
+      changed: digestChanged,
+      semanticChange: digestChanged,
+      retained: false,
+      before: null,
+      after: null,
+      ops: [],
+      summary: digestChanged ? 'changed (contents not retained)' : 'unchanged',
+      magnitude: 0
+    };
+  }
+
+  switch (field.field_kind) {
+    case FIELD_KIND.ADF: return diffAdfField(base, before, after);
+    case FIELD_KIND.TEXT: return diffTextField(base, before, after);
+    case FIELD_KIND.SCALAR: return diffScalarField(base, before, after);
+    case FIELD_KIND.MULTI: return diffMultiField(base, before, after);
+    case FIELD_KIND.LINKS: return diffLinksField(base, before, after);
+    case FIELD_KIND.ATTACHMENTS: return diffAttachmentsField(base, before, after);
+    default: return diffUnknownField(base, before, after);
+  }
+}
+
+function diffAdfField(base, before, after) {
+  const result = diffAdf(before, after);
+  const beforeText = adfPlainText(before);
+  const afterText = adfPlainText(after);
+
+  return {
+    ...base,
+    kind: DIFF_KIND.ADF,
+    retained: true,
+    changed: result.blocks.some((b) => b.op !== 'equal'),
+    semanticChange: result.semanticChange,
+    before,
+    after,
+    blocks: result.blocks,
+    // Flat word-level ops over the whole document, for the AI payload and for
+    // any surface that wants a simple rendering. The block structure above is
+    // what the panel actually draws.
+    ops: coalesce(diffText(beforeText, afterText)),
+    summary: describeAdfDiff(result),
+    magnitude: result.magnitude
+  };
+}
+
+function diffTextField(base, before, after) {
+  const ops = coalesce(diffText(before, after));
+  const changed = ops.some((o) => o.op !== OP.EQUAL);
+  return {
+    ...base,
+    kind: DIFF_KIND.TEXT,
+    retained: true,
+    changed,
+    semanticChange: changed && !isWhitespaceOnly(before, after),
+    before: before ?? null,
+    after: after ?? null,
+    ops,
+    summary: changed ? `“${short(before)}” → “${short(after)}”` : 'unchanged',
+    magnitude: textMagnitude(ops)
+  };
+}
+
+function diffScalarField(base, before, after) {
+  const b = scalarLabel(before);
+  const a = scalarLabel(after);
+  const changed = b !== a;
+  return {
+    ...base,
+    kind: DIFF_KIND.SCALAR,
+    retained: true,
+    changed,
+    semanticChange: changed,
+    before: before ?? null,
+    after: after ?? null,
+    ops: changed ? [{ op: OP.DELETE, text: b }, { op: OP.INSERT, text: a }] : [],
+    summary: changed ? `${b || '(empty)'} → ${a || '(empty)'}` : 'unchanged',
+    // A scalar either changed or it did not; there is no partial magnitude, and
+    // pretending otherwise would let a priority change sort below a typo.
+    magnitude: changed ? 1 : 0
+  };
+}
+
+/**
+ * Set semantics. Labels, components, versions, multi-selects.
+ *
+ * Reported as added/removed rather than as a before/after pair, because that is
+ * what a person did: they added a label, they did not replace a list.
+ */
+function diffMultiField(base, before, after) {
+  const b = toSet(before);
+  const a = toSet(after);
+  const added = [...a].filter((x) => !b.has(x)).sort();
+  const removed = [...b].filter((x) => !a.has(x)).sort();
+  const changed = added.length > 0 || removed.length > 0;
+
+  const parts = [];
+  if (added.length) parts.push(`+${added.join(', +')}`);
+  if (removed.length) parts.push(`−${removed.join(', −')}`);
+
+  return {
+    ...base,
+    kind: DIFF_KIND.MULTI,
+    retained: true,
+    changed,
+    semanticChange: changed,
+    before: [...b].sort(),
+    after: [...a].sort(),
+    added,
+    removed,
+    ops: [
+      ...removed.map((item) => ({ op: 'removed', item })),
+      ...added.map((item) => ({ op: 'added', item }))
+    ],
+    summary: changed ? parts.join('  ') : 'unchanged',
+    magnitude: b.size + a.size === 0 ? 0 : Math.min(1, (added.length + removed.length) / Math.max(1, b.size + a.size))
+  };
+}
+
+function diffLinksField(base, before, after) {
+  const key = (l) => `${l.type ?? '?'}:${l.inward ?? ''}:${l.outward ?? ''}`;
+  const b = new Map((before ?? []).map((l) => [key(l), l]));
+  const a = new Map((after ?? []).map((l) => [key(l), l]));
+  const added = [...a.keys()].filter((k) => !b.has(k));
+  const removed = [...b.keys()].filter((k) => !a.has(k));
+  const changed = added.length > 0 || removed.length > 0;
+
+  return {
+    ...base,
+    kind: DIFF_KIND.LINKS,
+    retained: true,
+    changed,
+    semanticChange: changed,
+    before: before ?? [],
+    after: after ?? [],
+    added: added.map((k) => a.get(k)),
+    removed: removed.map((k) => b.get(k)),
+    ops: [
+      ...removed.map((k) => ({ op: 'removed', item: k })),
+      ...added.map((k) => ({ op: 'added', item: k }))
+    ],
+    summary: changed
+      ? `${added.length} link(s) added, ${removed.length} removed`
+      : 'unchanged',
+    magnitude: changed ? 1 : 0
+  };
+}
+
+function diffAttachmentsField(base, before, after) {
+  const b = new Map((before ?? []).map((x) => [x.id, x]));
+  const a = new Map((after ?? []).map((x) => [x.id, x]));
+  const added = [...a.values()].filter((x) => !b.has(x.id));
+  const removed = [...b.values()].filter((x) => !a.has(x.id));
+
+  // Same id, different bytes. content.js hashes attachments by content for
+  // exactly this case: a file swapped under the same name is the change most
+  // worth catching and the one a filename comparison misses entirely.
+  const replaced = [...a.values()].filter((x) => {
+    const prior = b.get(x.id);
+    return prior && prior.contentHash && x.contentHash && prior.contentHash !== x.contentHash;
+  });
+
+  const changed = added.length > 0 || removed.length > 0 || replaced.length > 0;
+  const parts = [];
+  if (added.length) parts.push(`${added.length} added`);
+  if (removed.length) parts.push(`${removed.length} removed`);
+  if (replaced.length) parts.push(`${replaced.length} replaced in place`);
+
+  return {
+    ...base,
+    kind: DIFF_KIND.ATTACHMENTS,
+    retained: true,
+    changed,
+    semanticChange: changed,
+    before: before ?? [],
+    after: after ?? [],
+    added,
+    removed,
+    replaced,
+    ops: [
+      ...removed.map((x) => ({ op: 'removed', item: x.filename })),
+      ...added.map((x) => ({ op: 'added', item: x.filename }))
+    ],
+    summary: changed ? parts.join(', ') : 'unchanged',
+    magnitude: changed ? 1 : 0
+  };
+}
+
+/**
+ * The fallback for a custom-field type nobody taught this app about.
+ *
+ * Compares canonical JSON. Crude, correct, and never silent — a field whose
+ * schema we do not recognise still reports that it changed, which is far better
+ * than omitting it from the diff and letting a reviewer believe nothing
+ * happened.
+ */
+function diffUnknownField(base, before, after) {
+  const b = JSON.stringify(before ?? null);
+  const a = JSON.stringify(after ?? null);
+  const changed = b !== a;
+  return {
+    ...base,
+    kind: DIFF_KIND.UNKNOWN,
+    retained: true,
+    changed,
+    semanticChange: changed,
+    before: before ?? null,
+    after: after ?? null,
+    ops: changed ? [{ op: OP.DELETE, text: short(b) }, { op: OP.INSERT, text: short(a) }] : [],
+    summary: changed ? `${short(b)} → ${short(a)}` : 'unchanged',
+    magnitude: changed ? 1 : 0
+  };
+}
+
+// ── Restorability ────────────────────────────────────────────────────────────
+
+export function restorability(field, retained) {
+  if (IRREVERSIBLE[field.field_id]) return RESTORABLE.NO;
+  if (!retained) return RESTORABLE.NOT_RETAINED;
+  if (SPECIAL_HANDLERS[field.field_id]) return RESTORABLE.SPECIAL;
+  // `writable` is populated from editmeta at capture time. A false here means
+  // Jira would refuse a write to this field on this project's screens, which
+  // the reviewer needs to know BEFORE they press Reject, not after.
+  if (field.writable === false) return RESTORABLE.NO;
+  return RESTORABLE.YES;
+}
+
+export function restorabilityReason(field, retained) {
+  if (IRREVERSIBLE[field.field_id]) return IRREVERSIBLE[field.field_id];
+  if (!retained) {
+    return 'This field\'s contents are not retained, so its previous value is not stored and cannot be written back. An administrator can turn retention on for it in Baseline\'s field settings.';
+  }
+  if (field.writable === false) {
+    return 'Jira does not allow this field to be edited on this project\'s screens, so it cannot be written back.';
+  }
+  if (SPECIAL_HANDLERS[field.field_id]) {
+    return 'Restored through a dedicated Jira API rather than a field update.';
+  }
+  return null;
+}
+
+export function specialHandlerFor(fieldId) {
+  return SPECIAL_HANDLERS[fieldId] ?? null;
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function toSet(v) {
+  if (v == null) return new Set();
+  const arr = Array.isArray(v) ? v : [v];
+  return new Set(arr.map((x) => (x && typeof x === 'object' ? String(x.name ?? x.value ?? x.id) : String(x))));
+}
+
+function scalarLabel(v) {
+  if (v == null) return '';
+  if (typeof v === 'object') return String(v.name ?? v.value ?? v.displayName ?? v.key ?? v.id ?? '');
+  return String(v);
+}
+
+function short(s, max = 80) {
+  if (s == null) return '';
+  const str = typeof s === 'string' ? s : String(s);
+  const flat = str.replace(/\s+/g, ' ').trim();
+  return flat.length <= max ? flat : `${flat.slice(0, max - 1)}…`;
+}

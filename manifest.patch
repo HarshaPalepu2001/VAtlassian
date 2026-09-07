@@ -1,0 +1,11 @@
+--- manifest.yml.old
++++ manifest.yml
+@@ -37,6 +37,8 @@
+       description: Confirm this transition in the VAtlassian approval form. Never
+         enter an authenticator code in a plain Jira text field.
+       type: string
++      resolver:
++        function: panel-resolver
+       view:
+         resource: ui-kit-approval-view
+         render: native

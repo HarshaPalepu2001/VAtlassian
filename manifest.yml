@@ -1,0 +1,172 @@
+# Run `forge register` before the first deploy. Never reuse either source app ID.
+app:
+  id: ari:cloud:ecosystem::app/1d49ae3f-e976-438c-893c-806c8b249351
+  runtime:
+    name: nodejs22.x
+modules:
+  sql:
+    - key: main
+      engine: mysql
+  llm:
+    - key: va-llm
+      model: [ claude ]
+  jira:issuePanel:
+    - key: va-panel
+      icon: https://developer.atlassian.com/platform/forge/images/issue-panel-icon.svg
+      resource: main-ui
+      title: Approval & Baseline
+  jira:issueContext:
+    - key: va-context
+      resource: main-ui
+      title: Approval & Baseline
+      label: Baseline status
+  jira:globalPage:
+    - key: va-worklist
+      resource: main-ui
+      title: My approvals
+      layout: blank
+  jira:personalSettingsPage:
+    - key: va-authenticator
+      resource: main-ui
+      resolver:
+        function: totp-resolver
+      title: VAtlassian authenticator
+  jira:workflowValidator:
+    - key: va-gate
+      name: VAtlassian approval required
+      description: Requires an eligible approval for this transition and its
+        configured assurance level, with no unresolved blocking drift.
+      function: gate
+      projectTypes: [ company-managed ]
+      configurationDescription:
+        expression: "'VAtlassian approval: ' + (config['configuredIn'] == 'admin' ?
+          'Configured in VAtlassian' : 'Configure this edge in VAtlassian
+          administration')"
+      resolver:
+        function: admin-resolver
+      create:
+        resource: main-ui
+      edit:
+        resource: main-ui
+      view:
+        resource: main-ui
+  jira:customField:
+    - key: va-approval-field
+      name: VAtlassian Approval
+      description: Confirm this transition in the VAtlassian approval form. Never
+        enter an authenticator code in a plain Jira text field.
+      type: string
+      resolver:
+        function: panel-resolver
+      view:
+        resource: ui-kit-approval-view
+        render: native
+        experience: [ issue-view ]
+        formatter:
+          expression: "value == null || value == '' ? 'Not approved' : 'Approval recorded
+            — see Approval & Baseline'"
+          export: true
+      edit:
+        resource: ui-kit-approval-edit
+        render: native
+        experience: [ issue-transition ]
+  jira:adminPage:
+    - key: va-admin
+      resource: main-ui
+      resolver:
+        function: admin-resolver
+      title: VAtlassian
+      layout: blank
+      sections:
+        - header: Setup
+          pages:
+            - title: Administrators
+              route: admins
+            - title: Approver roles
+              route: roles
+            - title: Controlled transitions
+              route: transitions
+            - title: Controlled fields
+              route: fields
+        - header: Evidence
+          pages:
+            - title: Audit ledger
+              route: ledger
+            - title: Export & retention
+              route: retention
+            - title: Content changes
+              route: content-review
+        - header: Operations
+          pages:
+            - title: Credentials & recovery
+              route: credentials
+            - title: Control health
+              route: health
+    - key: va-admin-configure
+      resource: main-ui
+      resolver:
+        function: admin-resolver
+      title: VAtlassian configuration
+      useAsConfig: true
+  trigger:
+    - key: va-on-issue-updated
+      function: on-issue-updated
+      events: [ avi:jira:updated:issue ]
+    - key: va-on-issue-transitioned
+      function: on-issue-transitioned
+      events: [ avi:jira:transitioned:issue ]
+    - key: va-on-issue-deleted
+      function: on-issue-deleted
+      events: [ avi:jira:deleted:issue ]
+    - key: va-on-issue-link
+      function: on-issue-link
+      events: [ avi:jira:created:issuelink, avi:jira:deleted:issuelink ]
+  scheduledTrigger:
+    - key: trigger-five-minute
+      function: runner-five-minute
+      interval: fiveMinute
+    - key: trigger-hourly
+      function: runner-hourly
+      interval: hour
+    - key: trigger-daily
+      function: runner-daily
+      interval: day
+  function:
+    - key: panel-resolver
+      handler: resolvers/panel.handler
+    - key: admin-resolver
+      handler: resolvers/admin.handler
+    - key: totp-resolver
+      handler: resolvers/totp.handler
+    - key: gate
+      handler: gate.validate
+    - key: on-issue-updated
+      handler: triggers/issue-updated.run
+    - key: on-issue-transitioned
+      handler: triggers/issue-transitioned.run
+    - key: on-issue-deleted
+      handler: triggers/issue-deleted.run
+    - key: on-issue-link
+      handler: triggers/issue-link.run
+    - key: runner-five-minute
+      handler: jobs/runner.runFiveMinute
+    - key: runner-hourly
+      handler: jobs/runner.runHourly
+    - key: runner-daily
+      handler: jobs/runner.runDaily
+resources:
+  - key: main-ui
+    path: frontend/dist
+  - key: ui-kit-approval-view
+    path: src/ui-kit/view.jsx
+  - key: ui-kit-approval-edit
+    path: src/ui-kit/edit.jsx
+permissions:
+  scopes:
+    - storage:app
+    - read:jira-work
+    - write:jira-work
+    - read:jira-user
+    - manage:jira-configuration
+  content:
+    styles: [ unsafe-inline ]
