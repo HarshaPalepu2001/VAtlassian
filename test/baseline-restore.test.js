@@ -113,18 +113,6 @@ test('the preflight names what cannot be restored, with a reason', () => {
   assert.equal(canRestoreAnything(plan), true);
 });
 
-test('a formatting-only change is left alone by a restore', () => {
-  // Reverting a bolded word is not what "restore the approved state" means to
-  // anybody, and doing it would fill the item's history with uninvited edits.
-  const plan = planRestore({
-    diff: diffOf([{ fieldId: 'description', fieldName: 'Description', semanticChange: false, restorable: RESTORABLE.YES }]),
-    baselineValues: { description: {} },
-    controlledFields: [{ field_id: 'description', field_kind: FIELD_KIND.ADF }],
-    editmeta: {}
-  });
-  assert.equal(plan.steps.length, 0);
-  assert.equal(canRestoreAnything(plan), false);
-});
 
 test('a plan that can restore nothing is reported as such, so the button can be disabled', () => {
   const plan = planRestore({
@@ -262,4 +250,65 @@ test('no rows means "never retained", which is different from "empty"', () => {
 test('a tiny value is stored uncompressed rather than made bigger by gzip', () => {
   const { encoding } = encodeValue('a');
   assert.equal(encoding, 'PLAIN_B64');
+});
+
+test('a formatting-only difference is still restored', () => {
+  const plan = planRestore({
+    diff: {
+      issueId: 1, baselineId: 'b', baselineVersion: 1,
+      fields: [{
+        fieldId: 'summary', fieldName: 'Summary',
+        changed: true, semanticChange: false,
+        restorable: RESTORABLE.YES, restorableReason: null
+      }]
+    },
+    baselineValues: { summary: 'hello' },
+    controlledFields: [{ field_id: 'summary', field_kind: FIELD_KIND.TEXT }],
+    editmeta: { summary: { schema: { type: 'string' } } }
+  });
+  assert.equal(plan.fieldWrites.summary, 'hello', 'integrity drift must be written back even when the diff calls it cosmetic');
+  assert.deepEqual(plan.preflight.formattingOnly, ['Summary']);
+  assert.equal(plan.steps.length, 1);
+});
+
+test('the summary still tells the reviewer a change was formatting only', () => {
+  const plan = planRestore({
+    diff: {
+      issueId: 1, baselineId: 'b', baselineVersion: 1,
+      fields: [{
+        fieldId: 'summary', fieldName: 'Summary',
+        changed: true, semanticChange: false,
+        restorable: RESTORABLE.YES, restorableReason: null
+      }]
+    },
+    baselineValues: { summary: 'hello' },
+    controlledFields: [{ field_id: 'summary', field_kind: FIELD_KIND.TEXT }],
+    editmeta: { summary: { schema: { type: 'string' } } }
+  });
+  assert.match(plan.summary, /formatting/i);
+});
+
+test('an adapter refusal becomes a named cannot-restore rather than a bad write', () => {
+  const plan = planRestore({
+    diff: {
+      issueId: 1, baselineId: 'b', baselineVersion: 1,
+      fields: [{
+        fieldId: 'customfield_9', fieldName: 'Odd field',
+        changed: true, semanticChange: true,
+        restorable: RESTORABLE.YES, restorableReason: null
+      }]
+    },
+    baselineValues: { customfield_9: { some: 'object' } },
+    controlledFields: [{ field_id: 'customfield_9', field_kind: FIELD_KIND.TEXT }],
+    editmeta: { customfield_9: { schema: { type: 'string', custom: 'x:textfield' } } }
+  });
+  assert.equal(plan.fieldWrites.customfield_9, undefined, 'a refused shape must never reach the PUT payload');
+  assert.equal(plan.steps[0].strategy, 'none');
+  assert.equal(plan.preflight.cannotRestore.length, 1);
+  assert.match(plan.preflight.cannotRestore[0].reason, /plain text/i);
+});
+
+test('the plan records which adapter version produced it', () => {
+  const plan = planRestore({ diff: { issueId: 1, baselineId: 'b', baselineVersion: 1, fields: [] } });
+  assert.equal(typeof plan.adapterVersion, 'number');
 });

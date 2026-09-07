@@ -56,12 +56,17 @@ export function planRestore({ diff, baselineValues = {}, controlledFields = [], 
   const willRestore = [];
   const needsHandler = [];
   const cannotRestore = [];
+  const formattingOnly = [];
 
   for (const fieldDiff of diff.fields) {
-    // Formatting-only changes are left alone. Reverting a bolded word is not
-    // what "restore the approved state" means to anybody, and doing it would
-    // fill the item's history with edits nobody asked for.
-    if (!fieldDiff.semanticChange) continue;
+    // EVERY entry in diff.fields is integrity drift: lib/diff/index.js only
+    // pushes a field whose normalised value differs from the baseline. A
+    // formatting-only change is still a change to the record, so it is still
+    // restored — `semanticChange` decides what the reviewer is TOLD, never
+    // what is written. Skipping here is how a restore reported COMPLETE while
+    // a tracked field was still wrong.
+    if (fieldDiff.changed === false) continue;
+    if (fieldDiff.semanticChange === false) formattingOnly.push(fieldDiff.fieldName);
 
     const field = byId.get(fieldDiff.fieldId);
     if (!field) continue;
@@ -72,46 +77,46 @@ export function planRestore({ diff, baselineValues = {}, controlledFields = [], 
 
     if (restorable === RESTORABLE.NO || restorable === RESTORABLE.NOT_RETAINED) {
       steps.push({
-        fieldId: fieldDiff.fieldId,
-        fieldName: fieldDiff.fieldName,
-        strategy: 'none',
-        targetValue: null,
-        restorable,
-        reason
+        fieldId: fieldDiff.fieldId, fieldName: fieldDiff.fieldName,
+        strategy: 'none', targetValue: null, restorable, reason
       });
       cannotRestore.push({ fieldName: fieldDiff.fieldName, reason });
       continue;
     }
 
-    // The RAW stored value, not the normalised one the differ compared. This is
-    // the single most important line in the module: normalisation sorts
-    // multi-values and strips ADF node ids, so writing the normalised form back
-    // would be a silent, uninvited second edit to a field we are supposed to be
-    // returning to exactly how it was.
+    // The RAW stored value, not the normalised one the differ compared:
+    // normalisation sorts multi-values and strips ADF node ids, so writing the
+    // normalised form back would be a silent, uninvited second edit.
     const target = baselineValues[fieldDiff.fieldId];
 
     if (handler) {
       steps.push({
-        fieldId: fieldDiff.fieldId,
-        fieldName: fieldDiff.fieldName,
-        strategy: handler,
-        targetValue: target,
-        restorable: RESTORABLE.SPECIAL,
-        reason
+        fieldId: fieldDiff.fieldId, fieldName: fieldDiff.fieldName,
+        strategy: handler, targetValue: target,
+        restorable: RESTORABLE.SPECIAL, reason
       });
       needsHandler.push(fieldDiff.fieldName);
       continue;
     }
 
-    const shaped = writeShape({ field, value: target, editmeta });
-    fieldWrites[fieldDiff.fieldId] = shaped;
+    const shaped = shapeFor({ field, value: target, editmeta });
+    if (!shaped.ok) {
+      // The adapter refused rather than coercing. Named here so the reviewer
+      // reads it in the confirmation dialog, not afterwards in a failure list.
+      steps.push({
+        fieldId: fieldDiff.fieldId, fieldName: fieldDiff.fieldName,
+        strategy: 'none', targetValue: null,
+        restorable: RESTORABLE.NO, reason: shaped.reason
+      });
+      cannotRestore.push({ fieldName: fieldDiff.fieldName, reason: shaped.reason });
+      continue;
+    }
+
+    fieldWrites[fieldDiff.fieldId] = shaped.value;
     steps.push({
-      fieldId: fieldDiff.fieldId,
-      fieldName: fieldDiff.fieldName,
-      strategy: 'field',
-      targetValue: shaped,
-      restorable: RESTORABLE.YES,
-      reason: null
+      fieldId: fieldDiff.fieldId, fieldName: fieldDiff.fieldName,
+      strategy: 'field', targetValue: shaped.value,
+      restorable: RESTORABLE.YES, reason: null, adapter: shaped.adapter
     });
     willRestore.push(fieldDiff.fieldName);
   }
@@ -120,25 +125,29 @@ export function planRestore({ diff, baselineValues = {}, controlledFields = [], 
     issueId: diff.issueId,
     baselineId: diff.baselineId,
     baselineVersion: diff.baselineVersion,
+    adapterVersion: ADAPTER_VERSION,
     steps,
     fieldWrites,
-    preflight: { willRestore, needsHandler, cannotRestore },
-    // Shown as the dialog's headline. A reviewer deciding whether to reject
-    // needs the shape of the outcome in one glance, not a list to count.
-    summary: describePlan(willRestore, needsHandler, cannotRestore)
+    preflight: { willRestore, needsHandler, cannotRestore, formattingOnly },
+    summary: describePlan(willRestore, needsHandler, cannotRestore, formattingOnly)
   };
 }
 
-function describePlan(willRestore, needsHandler, cannotRestore) {
+function describePlan(willRestore, needsHandler, cannotRestore, formattingOnly = []) {
   const parts = [];
   const restorable = willRestore.length + needsHandler.length;
   if (restorable > 0) {
     parts.push(`${restorable} field${restorable === 1 ? '' : 's'} will be returned to the approved value`);
   }
+  if (formattingOnly.length > 0) {
+    // Said out loud rather than silently skipped. The field IS being written —
+    // the reviewer just deserves to know the visible difference is small.
+    parts.push(`${formattingOnly.length} of them differ only in formatting`);
+  }
   if (cannotRestore.length > 0) {
     parts.push(`${cannotRestore.length} cannot be restored`);
   }
-  if (parts.length === 0) return 'Nothing to restore — every change is formatting only.';
+  if (parts.length === 0) return 'Nothing to restore — this work item matches its approved values.';
   return `${parts.join(', ')}.`;
 }
 
