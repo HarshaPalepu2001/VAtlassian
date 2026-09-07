@@ -45,6 +45,9 @@ resolver.define('admin:setRetention', req => admin.setRetention(req));
 resolver.define('admin:saveConfig', req => admin.saveConfig(req));
 resolver.define('admin:getConfig', req => admin.getConfig(req));
 
+import * as diagnostics from '../usecases/diagnostics.js';
+resolver.define('diagnostics:write-identity', () => diagnostics.checkWriteIdentity());
+
 resolver.define('admin:listCredentials', req => admin.listCredentials(req));
 resolver.define('admin:reconcileDirectory', req => admin.reconcileDirectory(req));
 
