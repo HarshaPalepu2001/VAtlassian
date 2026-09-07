@@ -20,7 +20,8 @@ import { getReview } from '../db/itemStateStore.js';
  * that fails permanently would be retried forever, burning invocations and
  * filling the logs with the same error.
  */
-export async function run(event) {
+export async function run(event, suppliedDeps = null) {
+  const deps = suppliedDeps ?? await (await import('./runtime.js')).triggerRuntime();
   const issue = event?.issue;
   const changelog = event?.changelog;
 
@@ -98,6 +99,12 @@ export async function run(event) {
       reason: result.reason,
       ...(result.lookup ? { lookup: result.lookup } : {})
     }));
+
+    if (result.reason === 'NO_APPROVAL' || result.reason === 'INSUFFICIENT_ASSURANCE') {
+      if (deps.recordIncident) {
+        await deps.recordIncident(issueId, actorAccountId, 'UNAUTHORIZED_TRANSITION', now);
+      }
+    }
 
     // The item moved somewhere that is not a gate. If it is being tracked, hand
     // it to the collector: moving INTO a review status is what disarms a

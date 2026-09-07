@@ -350,4 +350,13 @@ export const MIGRATIONS = [
   // reviewer's signature instead of silently re-signing today's content.
   { id: 'v021_restore_candidate', sql:
     `ALTER TABLE va_restore ADD COLUMN candidate_digests MEDIUMTEXT NULL` },
+  { id: 'v022_incident', sql: `CREATE TABLE IF NOT EXISTS va_incident (
+    incident_id BINARY(16) NOT NULL,
+    issue_id BIGINT NOT NULL,
+    account_id VARCHAR(255) NULL,
+    event_type VARCHAR(64) NOT NULL,
+    occurred_at BIGINT NOT NULL,
+    PRIMARY KEY (incident_id),
+    KEY idx_incident_issue (issue_id, occurred_at)
+  )` },
 ];
