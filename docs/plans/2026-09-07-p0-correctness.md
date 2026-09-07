@@ -72,7 +72,9 @@ Expected: `pass 453`, `fail 0`.
 Run each check and confirm the expected output before deleting anything:
 
 ```bash
-grep -c "resolver:" manifest.yml                      # expect 6 — fix_manifest.js applied
+grep -c "resolver:" manifest.yml                      # expect 5 — fix_manifest.js applied
+                                                      # (va-authenticator, va-approval-field,
+                                                      #  va-gate, va-admin, va-admin-configure)
 grep -c "CAPTURE_DISABLED" src/usecases/drift.js      # expect 1 — patch_drift.js applied
 diff <(grep -c "" manifest.yml.orig) <(grep -c "" manifest.yml)  # differ; .orig is the pre-patch copy
 ```
