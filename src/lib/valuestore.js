@@ -88,15 +88,22 @@ export function decodeValue(rows) {
   if (!rows || rows.length === 0) return { present: false, value: null };
 
   const ordered = [...rows].sort((a, b) => a.seq - b.seq);
+  const encoding = ordered[0].encoding;
+  if (!Object.values(ENCODING).includes(encoding)) throw new Error('BASELINE_VALUE_ENCODING');
+  if (ordered.some((row, index) => Number(row.seq) !== index || row.encoding !== encoding)) {
+    throw new Error('BASELINE_VALUE_INCOMPLETE');
+  }
   const b64 = ordered.map((r) => r.data ?? '').join('');
   if (b64.length === 0) return { present: true, value: null };
 
-  const encoding = ordered[0].encoding;
   const buffer = Buffer.from(b64, 'base64');
   const json = encoding === ENCODING.GZIP_B64
     ? gunzipSync(buffer).toString('utf8')
     : buffer.toString('utf8');
 
+  if (ordered[0].raw_bytes != null && Buffer.byteLength(json, 'utf8') !== Number(ordered[0].raw_bytes)) {
+    throw new Error('BASELINE_VALUE_INCOMPLETE');
+  }
   return { present: true, value: JSON.parse(json) };
 }
 

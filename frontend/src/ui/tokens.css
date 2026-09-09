@@ -73,14 +73,63 @@
   --va-shadow-overlay: 0 8px 12px rgba(9, 30, 66, 0.15),
     0 0 1px rgba(9, 30, 66, 0.31);
 
+  /* Materiality — an ordinal scale, not three unrelated badge colours.
+     Used as the spine down the left of a changed field, where weight and
+     hue together say how much attention the change is owed. */
+  --va-mat-critical: #c9372c;
+  --va-mat-major: #b65c02;
+  --va-mat-minor: #0c66e4;
+  --va-mat-cosmetic: #8590a2;
+
+  /* Diff. Deliberately quieter fills than the badge tints above, because a
+     long description diff is mostly fill and a saturated one is unreadable;
+     the rule down the side carries the signal instead. */
+  --va-del-bg: #ffeceb;
+  --va-del-line: #f5928a;
+  --va-del-ink: #ae2e24;
+  --va-ins-bg: #dffcef;
+  --va-ins-line: #7ee2b8;
+  --va-ins-ink: #216e4e;
+
   /* Shape and rhythm */
   --va-radius: 6px;
   --va-radius-lg: 10px;
   --va-radius-pill: 999px;
 
+  /* Type scale, minor third. Sizes are named for their job so a call site
+     cannot invent a fourth "small". */
+  --va-size-micro: 11px;
+  --va-size-meta: 12px;
+  --va-size-dense: 13px;
+  --va-size-body: 14px;
+  --va-size-lead: 16px;
+  --va-size-title: 20px;
+  --va-size-display: 24px;
+
   --va-font: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI',
     Roboto, 'Helvetica Neue', sans-serif;
   --va-font-mono: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+}
+
+/**
+ * Figures line up in columns everywhere.
+ *
+ * This is the single typographic decision that makes the app read as an
+ * instrument rather than a web page: a column of timestamps, versions, counts
+ * and identifiers in proportional figures wobbles, and a reader comparing two
+ * of them has to actually read both. Tabular figures let the eye compare shape.
+ */
+time,
+code,
+.va-count,
+.va-table td,
+.va-table th,
+.va-facts dd,
+.va-hash,
+.va-chip__id,
+.va-trace-row,
+.va-ledger__meta {
+  font-variant-numeric: tabular-nums;
 }
 
 :root[data-color-mode='dark'] {
@@ -124,6 +173,18 @@
   --va-shadow-raised: 0 1px 1px rgba(3, 4, 4, 0.5), 0 0 1px rgba(3, 4, 4, 0.6);
   --va-shadow-overlay: 0 8px 12px rgba(3, 4, 4, 0.36),
     0 0 1px rgba(3, 4, 4, 0.5);
+
+  --va-mat-critical: #f87168;
+  --va-mat-major: #e2b203;
+  --va-mat-minor: #579dff;
+  --va-mat-cosmetic: #8c9bab;
+
+  --va-del-bg: #42221f;
+  --va-del-line: #ae2e24;
+  --va-del-ink: #fd9891;
+  --va-ins-bg: #1c3329;
+  --va-ins-line: #216e4e;
+  --va-ins-ink: #7ee2b8;
 }
 
 body {
@@ -159,19 +220,21 @@ body {
   margin-bottom: 28px;
 }
 
+/* Sentence case, at reading size. This was a tracked-out uppercase eyebrow —
+   the kind of label that decorates a heading rather than telling anyone
+   anything. It names the product area, so it should be legible, not shouted. */
 .va-page__eyebrow {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--va-text-subtlest);
-  margin: 0 0 6px;
+  font-size: var(--va-size-meta);
+  font-weight: 500;
+  color: var(--va-text-subtle);
+  margin: 0 0 4px;
 }
 
 .va-page__title {
-  font-size: 24px;
-  line-height: 1.25;
+  font-size: var(--va-size-display);
+  line-height: 1.2;
   font-weight: 600;
+  letter-spacing: -0.015em;
   color: var(--va-text);
   margin: 0;
   display: flex;
@@ -267,12 +330,12 @@ body {
 }
 
 .va-section__title {
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--va-text-subtlest);
+  font-size: var(--va-size-dense);
+  font-weight: 600;
+  color: var(--va-text-subtle);
   margin: 0 0 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--va-border);
 }
 
 /* ---------------------------------------------------------------------------
@@ -287,18 +350,17 @@ body {
 
 .va-table th {
   text-align: left;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--va-text-subtlest);
-  padding: 10px 12px;
+  font-size: var(--va-size-meta);
+  font-weight: 600;
+  color: var(--va-text-subtle);
+  padding: 12px 16px;
+  background: var(--va-surface-sunken);
   border-bottom: 1px solid var(--va-border);
   white-space: nowrap;
 }
 
 .va-table td {
-  padding: 12px;
+  padding: 14px 16px;
   border-bottom: 1px solid var(--va-border);
   vertical-align: top;
   color: var(--va-text);
@@ -636,15 +698,20 @@ body {
    Attestation — the signing moment
    --------------------------------------------------------------------------- */
 
+/* The one elevated thing in the product.
+   Everything else is ruled; a shadow here means "this is the act". */
 .va-attest {
   border: 1px solid var(--va-brand-line);
+  border-top: 3px solid var(--va-brand);
   border-radius: var(--va-radius-lg);
   background: var(--va-surface);
+  box-shadow: var(--va-shadow-raised);
   overflow: hidden;
 }
 
 .va-attest--decline {
   border-color: var(--va-danger-line);
+  border-top-color: var(--va-danger-text);
 }
 
 .va-attest__banner {
@@ -661,11 +728,9 @@ body {
 }
 
 .va-attest__eyebrow {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  opacity: 0.85;
+  font-size: var(--va-size-meta);
+  font-weight: 500;
+  opacity: 0.9;
   margin: 0 0 2px;
 }
 
@@ -833,11 +898,9 @@ body {
 }
 
 .va-diff__label {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  opacity: 0.75;
+  font-size: var(--va-size-meta);
+  font-weight: 600;
+  opacity: 0.85;
   margin-bottom: 4px;
 }
 

@@ -2,9 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createApprovalUsecases } from '../src/usecases/approval.js';
 import crypto from 'node:crypto';
+import { createGate } from '../src/gate.js';
 
 function fixture() {
   const rows = [], events = [];
+  const challenges = new Map();
   const issue = { issueId: 10, issueKey: 'T-10', projectId: 1, issueTypeId: '1', statusId: '1' };
   const deps = {
     now: () => 1700000000000, issue: async () => issue, actor: async id => ({ accountId: id, displayName: 'Name' }),
@@ -13,11 +15,23 @@ function fixture() {
     prepare: async () => ({ contentHash: 'a'.repeat(64), evidenceHash: 'e'.repeat(64), baselineVersion: 1, driftCount: 0 }),
     apply: async () => ({ success: true }), record: async row => rows.push(row), audit: async event => events.push(event),
     activate: async ({ approvalId, state }) => { rows.find(r => r.approval_id.equals(approvalId)).state = state; return true; },
-    performTransition: async () => ({ transitioned: true }),
+    performTransition: async (_issue, _transition, row) => { row.state = 'CONSUMED'; return { transitioned: true }; },
     byId: async id => rows.find(r => r.approval_id.equals(id)),
     totpDeps: {
       now: () => 1700000000000,
       consume: async () => true, fail: async () => true, audit: async () => {}, alert: async () => {}, activate: async () => true
+    },
+    writeChallenge: async row => {
+      const challengeId = Buffer.alloc(16, 4);
+      challenges.set(challengeId.toString('hex'), { ...row, challenge_id: challengeId });
+      return challengeId;
+    },
+    getChallenge: async challengeId => challenges.get(challengeId.toString('hex')) ?? null,
+    markChallengeConsumed: async challengeId => {
+      const row = challenges.get(challengeId.toString('hex'));
+      if (!row || row.state !== 'PENDING') return false;
+      row.state = 'CONSUMED';
+      return true;
     }
   };
   const request = { context: { accountId: 'trusted' }, payload: { issueKey: 'T-10', transitionId: '5', decision: 'APPROVE', confirmed: true, preauthorize: true, accountId: 'spoof', code: '007787' } };
@@ -35,8 +49,99 @@ function fixture() {
     return { state: 'ACTIVE', algo: 'TOTP-SHA1', digits: 6, period_seconds: 30, key_version: 1, version: 1, ciphertext, iv, tag };
   };
   
-  return { deps, rows, events, request };
+  return { deps, rows, events, request, challenges };
 }
+test('challenge response contains the nonce, meaning and expiry the UI must display', async () => {
+  const f = fixture();
+  const result = await createApprovalUsecases(f.deps).challenge(f.request);
+  assert.equal(result.success, true);
+  assert.equal(result.challengeId, '04'.repeat(16));
+  assert.match(result.nonce, /^[a-f0-9]{64}$/);
+  assert.equal(result.meaning, 'Approve');
+  assert.equal(result.expiresAt, 1700000300000);
+  const stored = f.challenges.get(result.challengeId);
+  assert.equal(stored.issue_id, 10);
+  assert.equal(stored.signer_account_id, 'trusted');
+  assert.equal(stored.candidate_hash, 'a'.repeat(64));
+});
+test('electronic signature challenge completes with an authenticator code and no preauthorize shortcut', async () => {
+  const f = fixture(), api = createApprovalUsecases(f.deps);
+  const challenge = await api.challenge(f.request);
+  const result = await api.submit({ context: { accountId: 'trusted' }, payload: { issueKey: 'T-10', challengeId: challenge.challengeId, confirmed: true, code: '007787' } });
+  assert.equal(result.success, true);
+  assert.equal(f.rows[0].state, 'CONSUMED');
+});
+test('challenge submit rejects content that changed after the challenge was created', async () => {
+  const f = fixture(), api = createApprovalUsecases(f.deps);
+  const challenge = await api.challenge(f.request);
+  f.deps.prepare = async () => ({ contentHash: 'b'.repeat(64), evidenceHash: 'f'.repeat(64), baselineVersion: 1, driftCount: 0 });
+  let consumed = false;
+  f.deps.markChallengeConsumed = async () => { consumed = true; return true; };
+  const result = await api.submit({ context: { accountId: 'trusted' }, payload: { issueKey: 'T-10', challengeId: challenge.challengeId, confirmed: true } });
+  assert.equal(result.success, false);
+  assert.equal(result.reason, 'CONTENT_CHANGED');
+  assert.equal(f.rows.length, 0);
+  assert.equal(consumed, false);
+});
+test('a transition without baseline capture cannot bypass blocking drift', async () => {
+  const f = fixture(), api = createApprovalUsecases(f.deps);
+  const edge = await f.deps.edge();
+  f.deps.edge = async () => ({ ...edge, capture_baseline: false });
+  const challenge = await api.challenge(f.request);
+  f.deps.prepare = async () => ({ contentHash: 'a'.repeat(64), evidenceHash: 'e'.repeat(64), baselineVersion: 1, driftCount: 1 });
+  let consumed = false;
+  f.deps.markChallengeConsumed = async () => { consumed = true; return true; };
+  const result = await api.submit({ context: { accountId: 'trusted' }, payload: { issueKey: 'T-10', challengeId: challenge.challengeId, confirmed: true } });
+  assert.equal(result.success, false);
+  assert.equal(result.reason, 'UNDECIDED_DRIFT');
+  assert.equal(f.rows.length, 0);
+  assert.equal(consumed, false);
+});
+test('lost challenge consumption race cannot mint an approval', async () => {
+  const f = fixture();
+  f.deps.markChallengeConsumed = async () => false;
+  const api = createApprovalUsecases(f.deps);
+  const challenge = await api.challenge(f.request);
+  const result = await api.submit({ context: { accountId: 'trusted' }, payload: { issueKey: 'T-10', challengeId: challenge.challengeId, confirmed: true, code: '007787' } });
+  assert.equal(result.success, false);
+  assert.equal(result.reason, 'NO_DECISION');
+  assert.equal(f.rows.length, 0);
+});
+test('challenge submit accepts an expired operation lock after challenge preparation allowed it', async () => {
+  const f = fixture(), api = createApprovalUsecases(f.deps);
+  f.deps.prepare = async () => ({
+    contentHash: 'a'.repeat(64),
+    evidenceHash: 'e'.repeat(64),
+    baselineVersion: 1,
+    driftCount: 0,
+    baseline: { baseline_id: Buffer.alloc(16, 1), content_hash: 'b'.repeat(64) },
+    review: { state: 'DECIDING', last_checked_at: f.deps.now() - 61000 }
+  });
+
+  const challenge = await api.challenge(f.request);
+  const result = await api.submit({
+    context: { accountId: 'trusted' },
+    payload: { issueKey: 'T-10', challengeId: challenge.challengeId, confirmed: true, code: '007787' }
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(f.rows[0].state, 'CONSUMED');
+});
+test('approval notes allow the same four thousand characters the panel accepts', async () => {
+  const f = fixture();
+  f.request.payload.note = 'x'.repeat(4000);
+  const result = await createApprovalUsecases(f.deps).submit(f.request);
+  assert.equal(result.success, true);
+  assert.equal(f.rows[0].note.length, 4000);
+});
+test('challenge submit refuses notes longer than the panel limit before recording', async () => {
+  const f = fixture(), api = createApprovalUsecases(f.deps);
+  const challenge = await api.challenge(f.request);
+  const result = await api.submit({ context: { accountId: 'trusted' }, payload: { issueKey: 'T-10', challengeId: challenge.challengeId, confirmed: true, code: '007787', note: 'x'.repeat(4001) } });
+  assert.equal(result.success, false);
+  assert.equal(result.reason, 'NOT_CONFIGURED');
+  assert.equal(f.rows.length, 0);
+});
 test('only resolver identity enters the persisted approval and audit precedes usable capability', async () => {
   const f = fixture();
   f.deps.audit = async () => assert.equal(f.rows[0].state, 'VOID');
@@ -67,10 +172,101 @@ test('rejection applies baseline restoration then becomes consumed, never pendin
   assert.equal((await createApprovalUsecases(f.deps).submit(f.request)).success, true);
   assert.equal(applied, true); assert.equal(f.rows[0].state, 'CONSUMED');
 });
+test('a busy restore returns a recovery message instead of the raw lock code', async () => {
+  const f = fixture();
+  f.request.payload.decision = 'REJECT';
+  f.deps.apply = async () => { const error = new Error('ALREADY_DECIDING'); error.reason = 'ALREADY_DECIDING'; throw error; };
+  const result = await createApprovalUsecases(f.deps).submit(f.request);
+  assert.equal(result.success, false);
+  assert.match(result.error, /restore is already in progress/i);
+  assert.match(result.error, /Retry restore/i);
+});
 test('retry cannot use another actor approval or mint new capability', async () => {
   const f = fixture(), api = createApprovalUsecases(f.deps);
   const result = await api.submit(f.request);
   assert.equal(result.success, true);
   const retry = await api.retryTransition({ context: { accountId: 'intruder' }, payload: { issueKey: 'T-10', approvalId: result.approvalId, transitionId: '5' } });
   assert.equal(retry.success, false); assert.equal(f.rows.length, 1);
+});
+
+test('initial transition makes the audited approval available to the real gate before Jira executes it', async () => {
+  const f = fixture();
+  f.request.payload.preauthorize = false;
+  f.deps.activate = async ({ approvalId, state }) => {
+    const row = f.rows.find(r => r.approval_id.equals(approvalId));
+    if (row.state !== 'VOID') return false;
+    row.state = state;
+    return true;
+  };
+  const gate = createGate({
+    now: f.deps.now, log: () => {}, audit: async () => {}, eligible: async () => true,
+    load: async () => ({ ...await f.deps.prepare(), issueId: 10, projectId: 1, issueTypeId: '1', ct: await f.deps.edge() }),
+    pending: async () => f.rows.find(r => r.state === 'PENDING'),
+    consume: async ({ approvalId }) => {
+      const row = f.rows.find(r => r.approval_id.equals(approvalId));
+      if (row.state !== 'PENDING') return { consumed: false };
+      row.state = 'CONSUMED'; return { consumed: true };
+    },
+    voidOthers: async () => {}
+  });
+  f.deps.performTransition = async () => ({ transitioned: (await gate({ issue: { key: 'T-10' }, transition: { from: { id: '1' }, to: { id: '2' } } })).result });
+  const result = await createApprovalUsecases(f.deps).submit(f.request);
+  assert.equal(result.success, true);
+  assert.equal(result.transitioned, true);
+  assert.equal(f.rows[0].state, 'CONSUMED');
+});
+
+test('challenge refuses a different attestation meaning before spending the code', async () => {
+  const f = fixture(), api = createApprovalUsecases(f.deps);
+  const challenge = await api.challenge(f.request);
+  const edge = await f.deps.edge();
+  f.deps.edge = async () => ({ ...edge, meaning: 'Release to production' });
+  const result = await api.submit({ context: f.request.context, payload: { ...f.request.payload, challengeId: challenge.challengeId } });
+  assert.equal(result.success, false);
+  assert.equal(f.rows.length, 0);
+});
+
+test('challenge refuses a changed baseline even when the candidate content is identical', async () => {
+  const f = fixture(), api = createApprovalUsecases(f.deps);
+  const challenge = await api.challenge(f.request);
+  const prepared = await f.deps.prepare();
+  f.deps.prepare = async () => ({ ...prepared, baselineVersion: 2 });
+  const result = await api.submit({ context: f.request.context, payload: { ...f.request.payload, challengeId: challenge.challengeId } });
+  assert.equal(result.success, false);
+  assert.equal(f.rows.length, 0);
+});
+
+test('electronic signature requires explicit affirmation before spending the code', async () => {
+  const f = fixture();
+  f.request.payload.confirmed = false;
+  f.request.payload.preauthorize = false;
+  const result = await createApprovalUsecases(f.deps).submit(f.request);
+  assert.equal(result.success, false);
+  assert.equal(f.rows.length, 0);
+});
+
+for (const viaChallenge of [true, false]) {
+  test(`signed drift approval reaches baseline capture (${viaChallenge ? 'panel challenge' : 'direct resolver'})`, async () => {
+    const f = fixture();
+    const prepared = await f.deps.prepare();
+    f.deps.prepare = async () => ({ ...prepared, driftCount: 3, review: { state: 'DRIFTED' } });
+    const api = createApprovalUsecases(f.deps);
+    const payload = { ...f.request.payload, preauthorize: false };
+    if (viaChallenge) payload.challengeId = (await api.challenge(f.request)).challengeId;
+    const result = await api.submit({ context: f.request.context, payload });
+    assert.equal(result.success, true, JSON.stringify(result));
+    assert.equal(result.transitioned, true);
+    assert.equal(f.rows[0].drift_count, 3);
+  });
+}
+test('Jira preauthorization cannot substitute for the signer affirming the declaration', async () => {
+  const f = fixture();
+  f.request.payload.confirmed = false;
+  f.request.payload.preauthorize = true;
+  let spentCode = false;
+  f.deps.totpDeps.consume = async () => { spentCode = true; return true; };
+  const result = await createApprovalUsecases(f.deps).submit(f.request);
+  assert.equal(result.success, false);
+  assert.equal(f.rows.length, 0);
+  assert.equal(spentCode, false);
 });

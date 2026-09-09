@@ -34,7 +34,6 @@ export async function retry(args) { return respond(async () => {
   });
   if (!check.ok) fail(check.reason);
 
-  // `resuming` is the only place this flag is ever set, and only after
-  // resumable() above has proved the item is still on the signed path.
-  return applyApproval({ issue: prepared.issue, actor: prepared.actor, approval, prepared, resuming: true });
+  const result = await applyApproval({ issue: prepared.issue, actor: prepared.actor, approval, prepared, resuming: true });
+  return { success: true, ...result };
 }); }

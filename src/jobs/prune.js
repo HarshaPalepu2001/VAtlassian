@@ -1,5 +1,4 @@
 import { executeQuery } from '../lib/db.js';
-import { pruneSupersededValues } from '../db/baselineStore.js';
 import { pruneReports } from '../db/reportStore.js';
 import { pruneSuppressions } from '../db/restoreStore.js';
 import { limitClause } from '../lib/db.js';
@@ -53,29 +52,9 @@ export async function run({ now = Date.now() } = {}) {
   let valuesPruned = 0;
   let itemsExamined = 0;
 
-  try {
-    // Items with more than KEEP_VERSIONS baselines are the only ones that can
-    // have anything to prune. Asking the database that question is far cheaper
-    // than walking every baselined item and finding nothing.
-    const result = await executeQuery(
-      `SELECT issue_id FROM va_baseline
-       GROUP BY issue_id HAVING COUNT(*) > ?
-       ORDER BY issue_id ASC LIMIT ${limitClause(BATCH)}`,
-      [KEEP_VERSIONS]
-    );
-
-    if (result.result) {
-      for (const row of result.data) {
-        valuesPruned += await pruneSupersededValues({
-          issueId: row.issue_id,
-          keepVersions: KEEP_VERSIONS
-        });
-        itemsExamined++;
-      }
-    }
-  } catch (e) {
-    console.error('prune: baseline values failed', e);
-  }
+  // Retained baseline contents are part of the signed record. The current
+  // export explicitly omits values, so no verified archival coverage exists
+  // that would authorize deleting them. Keep all versions until it does.
 
   let reportsPruned = 0;
   try {

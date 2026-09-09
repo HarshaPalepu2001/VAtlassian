@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  decide, canDecide, stateAfter, countersAfter, restoreComment, needsConfirmation,
+  decide, canDecide, stateAfter, countersAfter, undecidedCounters, restoreComment, needsConfirmation,
   DECISION, REFUSE
 } from '../src/lib/decision.js';
 import { REVIEW_STATE } from '../src/lib/interception.js';
@@ -118,13 +118,13 @@ test('a reject with nothing restorable is refused rather than silently doing not
   assert.equal(result.reason, REFUSE.NOTHING_RESTORABLE);
 });
 
-test('rejecting a cosmetic-only diff is refused — there is nothing to put back', () => {
+test('rejecting a diff with no restorable steps explains the restore limitation', () => {
   const result = decide({
     decision: DECISION.REJECT,
     diff: diff({ materialFieldCount: 0 }),
     plan: { steps: [] }
   });
-  assert.equal(result.reason, REFUSE.NO_DRIFT);
+  assert.equal(result.reason, REFUSE.NOTHING_RESTORABLE);
 });
 
 // ─── Where the item lands ────────────────────────────────────────────────────
@@ -146,6 +146,31 @@ test('counters zero on approve and on a complete restore, and persist on a parti
     { driftCount: 0, driftedFieldCount: 0, maxMateriality: null }
   );
   assert.equal(countersAfter({ decision: DECISION.REJECT, restoreState: 'PARTIAL', diff: d }).driftCount, 3);
+});
+
+// `drifted_field_count` is read back as `materialCount` by the glance view and
+// the reviewer queue. Writing the total changed count into it over-reports how
+// much of the drift actually needs a decision, so the one shape both writers
+// build is defined once here rather than spelled out at each call site.
+test('undecided counters separate what changed from what needs deciding', () => {
+  assert.deepEqual(undecidedCounters(diff()),
+    { driftCount: 3, driftedFieldCount: 2, maxMateriality: MATERIALITY.MAJOR });
+});
+
+test('a diff of formatting-only changes leaves nothing needing a decision', () => {
+  assert.equal(undecidedCounters(diff({ materialFieldCount: 0, maxMateriality: null })).driftedFieldCount, 0);
+});
+
+test('undecided counters are safe on a work item with no diff at all', () => {
+  assert.deepEqual(undecidedCounters(null),
+    { driftCount: 0, driftedFieldCount: 0, maxMateriality: null });
+});
+
+test('countersAfter keeps carrying the undecided counters on a partial restore', () => {
+  assert.deepEqual(
+    countersAfter({ decision: DECISION.REJECT, restoreState: 'PARTIAL', diff: diff() }),
+    undecidedCounters(diff())
+  );
 });
 
 // ─── The comment ─────────────────────────────────────────────────────────────

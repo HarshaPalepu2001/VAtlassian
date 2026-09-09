@@ -1,5 +1,5 @@
 import { FIELD_KIND } from '../content.js';
-import { RESTORABLE, specialHandlerFor } from '../diff/fields.js';
+import { RESTORABLE, specialHandlerFor, restorability, restorabilityReason } from '../diff/fields.js';
 import { shapeFor, ADAPTER_VERSION } from './adapters.js';
 
 export { ADAPTER_VERSION };
@@ -71,8 +71,13 @@ export function planRestore({ diff, baselineValues = {}, controlledFields = [], 
     const field = byId.get(fieldDiff.fieldId);
     if (!field) continue;
 
-    const restorable = fieldDiff.restorable;
-    const reason = fieldDiff.restorableReason;
+    // Capture-time editability is advisory. Re-evaluate it using the current
+    // restore metadata, while preserving irreversible and unretained refusals.
+    const currentWritable = field.writable === false && Object.hasOwn(editmeta, fieldDiff.fieldId);
+    const currentField = { ...field, writable: true };
+    const retained = Object.hasOwn(baselineValues, fieldDiff.fieldId) && baselineValues[fieldDiff.fieldId] !== undefined;
+    const restorable = currentWritable ? restorability(currentField, retained) : fieldDiff.restorable;
+    const reason = currentWritable ? restorabilityReason(currentField, retained) : fieldDiff.restorableReason;
     const handler = specialHandlerFor(fieldDiff.fieldId);
 
     if (restorable === RESTORABLE.NO || restorable === RESTORABLE.NOT_RETAINED) {
@@ -88,6 +93,21 @@ export function planRestore({ diff, baselineValues = {}, controlledFields = [], 
     // normalisation sorts multi-values and strips ADF node ids, so writing the
     // normalised form back would be a silent, uninvited second edit.
     const target = baselineValues[fieldDiff.fieldId];
+
+    let refusal = null;
+    if (!Object.hasOwn(baselineValues, fieldDiff.fieldId) || target === undefined) {
+      refusal = 'The approved raw value is missing from storage. Restore cannot infer an empty value from missing data.';
+    } else if ((!handler || handler === 'parent' || handler === 'sprint')
+        && (!Object.hasOwn(editmeta, fieldDiff.fieldId)
+          || (editmeta[fieldDiff.fieldId]?.operations && !editmeta[fieldDiff.fieldId].operations.includes('set')))) {
+      refusal = 'Jira does not currently permit setting this field through its edit screen. Check field configuration and permissions.';
+    }
+    if (refusal) {
+      steps.push({ fieldId: fieldDiff.fieldId, fieldName: fieldDiff.fieldName,
+        strategy: 'none', targetValue: null, restorable: RESTORABLE.NO, reason: refusal });
+      cannotRestore.push({ fieldName: fieldDiff.fieldName, reason: refusal });
+      continue;
+    }
 
     if (handler) {
       steps.push({

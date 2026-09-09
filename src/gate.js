@@ -1,5 +1,5 @@
 import { DENY, FailClosed } from './lib/errors.js';
-import { meetsAssurance, isAssuranceLevel } from './lib/approval/levels.js';
+import { meetsAssurance, isAssuranceLevel, effectiveAssurance } from './lib/approval/levels.js';
 import { validEvidence } from './lib/approval/record.js';
 import { normalizeCode } from './lib/totp.js';
 
@@ -37,9 +37,9 @@ export function createGate(deps) {
       const { ct, item, issueId, projectId, issueTypeId, contentHash, driftCount } = snapshot;
       if (!ct || !isAssuranceLevel(ct.required_assurance) || !ct.required_role || !ct.meaning
           || ![true, false, 0, 1, '0', '1'].includes(ct.block_on_drift)) return deny('NOT_CONFIGURED', 'INVALID_EDGE_POLICY');
-      if (item?.state === 'RESTORING' || item?.state === 'DECIDING' || item?.lock_token) return deny('RESTORE_IN_PROGRESS', 'ITEM_BUSY');
+      if (['RESTORING', 'DECIDING', 'ERROR'].includes(item?.state) || item?.lock_token) return deny('RESTORE_IN_PROGRESS', 'ITEM_BUSY');
       if (item?.state === 'LOCKED') return deny('RECORD_LOCKED', 'ITEM_LOCKED');
-      if ([true, 1, '1'].includes(ct.block_on_drift) && (!Number.isSafeInteger(driftCount) || driftCount > 0)) return deny('UNDECIDED_DRIFT', 'DRIFT_OUTSTANDING');
+      if (!Number.isSafeInteger(driftCount) || driftCount > 0) return deny('UNDECIDED_DRIFT', 'DRIFT_OUTSTANDING');
       const approval = await deps.pending({ issueId, fromStatusId, toStatusId, now: deps.now(), approvalId: token });
       if (!approval || approval.state !== 'PENDING' || approval.decision !== 'APPROVE') return deny('NO_DECISION', 'NO_CANDIDATE_ROW');
       if (token && approval.approval_id.toString('hex') !== token) return deny('NO_DECISION', 'TRANSITION_SCREEN_TOKEN_MISMATCH');
@@ -47,8 +47,9 @@ export function createGate(deps) {
       if (String(approval.issue_id) !== String(issueId) || String(approval.project_id) !== String(projectId)
           || String(approval.issue_type_id) !== String(issueTypeId) || approval.from_status_id !== fromStatusId
           || approval.to_status_id !== toStatusId) return deny('NO_DECISION', 'EDGE_BINDING_MISMATCH');
-      if (!meetsAssurance(approval.assurance_level, ct.required_assurance)) return deny('INSUFFICIENT_ASSURANCE', 'ASSURANCE_FLOOR', { obtained: approval.assurance_level, required: ct.required_assurance });
-      if (!validEvidence(approval) || approval.content_hash !== contentHash) { deps.log({ event: 'debug_hash', approvalHash: approval.content_hash, computedHash: contentHash, validEvidence: validEvidence(approval) }); return deny('CONTENT_CHANGED', 'CONTENT_OR_EVIDENCE_CHANGED'); }
+      const required = effectiveAssurance(ct.required_assurance);
+      if (!meetsAssurance(approval.assurance_level, required)) return deny('INSUFFICIENT_ASSURANCE', 'ASSURANCE_FLOOR', { obtained: approval.assurance_level, required });
+      if (!validEvidence(approval) || approval.content_hash !== contentHash) return deny('CONTENT_CHANGED', 'CONTENT_OR_EVIDENCE_CHANGED');
       if (approval.signer_role !== ct.required_role || approval.meaning !== ct.meaning) return deny('NOT_CONFIGURED', 'POLICY_CHANGED');
       if (!await deps.eligible({ accountId: approval.account_id, issueTypeId, projectId, role: ct.required_role })) return deny('ELIGIBILITY_REVOKED', 'ELIGIBILITY_REVOKED');
       const result = await deps.consume({ approvalId: approval.approval_id, now: deps.now() });

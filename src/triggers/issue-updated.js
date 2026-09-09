@@ -1,5 +1,6 @@
 import { collect, DETECTED_VIA } from '../lib/collect.js';
 import { executeQuery } from '../lib/db.js';
+import { retryEvent, eventTime } from './retry.js';
 
 /**
  * avi:jira:updated:issue — the fast path for drift detection.
@@ -16,7 +17,7 @@ import { executeQuery } from '../lib/db.js';
  *
  * NEVER THROWS.
  */
-export async function run(event) {
+export async function run(event, deps = { collect, recordReceipt }) {
   const issue = event?.issue;
   if (!issue?.id || !issue?.key) return;
 
@@ -30,18 +31,20 @@ export async function run(event) {
     ?? null;
 
   try {
-    const result = await collect({
+    const result = await deps.collect({
       issueId,
       issueKey,
       detectedVia: DETECTED_VIA.EVENT,
       actorAccountId,
+      eventId, eventAt: eventTime(event),
       now
     });
+    if (['ERROR', 'UNREADABLE', 'BUSY'].includes(result.outcome)) return retryEvent(event, result.outcome);
 
     // Not required for correctness — the hash comparison is already idempotent
     // — but the audit trail should be able to say WHY a check ran and whether
     // an event was seen twice. Pruned by the daily job after 30 days.
-    if (eventId) await recordReceipt(eventId, issueId, now, result.outcome);
+    if (eventId) await deps.recordReceipt(eventId, issueId, now, result.outcome);
 
     // NO_CHANGE is the overwhelming majority of these events (comments,
     // worklogs, sprint moves) and logging it would drown everything useful.
@@ -54,7 +57,8 @@ export async function run(event) {
       }));
     }
   } catch (e) {
-    console.error('updated: handler failed', JSON.stringify({ issueKey }), e);
+    console.error('updated: handler failed', JSON.stringify({ issueKey }));
+    return retryEvent(event, 'COLLECTION_FAILED');
   }
 }
 

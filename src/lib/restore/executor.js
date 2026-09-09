@@ -97,7 +97,7 @@ export async function executeRestore({
   }
 
   const client = actAs === 'user' ? api.asUser() : api.asApp();
-  const query = notifyUsers ? '' : '?notifyUsers=false';
+  const write = { notifyUsers, override: actAs !== 'user' };
 
   // ── Phase 1: one bulk PUT ─────────────────────────────────────────────────
   //
@@ -106,7 +106,7 @@ export async function executeRestore({
   // separate edits a second apart.
   let bulkErrors = null;
   if (writeIds.length > 0) {
-    const res = await put(client, issueKey, true, { fields: writes });
+    const res = await put(client, issueKey, write, { fields: writes });
     if (res.ok) {
       for (const fieldId of writeIds) {
         detail.set(fieldId, {
@@ -141,7 +141,7 @@ export async function executeRestore({
       let ok = false;
 
       for (let attempt = 0; attempt <= perFieldRetries && !ok; attempt++) {
-        const res = await put(client, issueKey, true, { fields: { [fieldId]: writes[fieldId] } });
+        const res = await put(client, issueKey, write, { fields: { [fieldId]: writes[fieldId] } });
         if (res.ok) { ok = true; break; }
         lastError = res.errors?.[fieldId] ?? res.messages?.[0] ?? `HTTP ${res.status}`;
         // Only retry on a transient status. A 400 is a rejected VALUE and will
@@ -163,7 +163,7 @@ export async function executeRestore({
   // ── Phase 2b: special handlers ────────────────────────────────────────────
   for (const step of plan.steps.filter((s) => s.strategy !== 'field' && s.strategy !== 'none')) {
     const result = await runHandler(client, {
-      strategy: step.strategy, issueKey, step
+      strategy: step.strategy, issueKey, step, write
     });
     detail.set(step.fieldId, {
       fieldId: step.fieldId,
@@ -184,8 +184,17 @@ export async function executeRestore({
  * outcome per field. Jira's per-field `errors` map is the useful part — "Labels
  * is not on the appropriate screen" tells an admin exactly what to fix;
  * "restore failed" tells them nothing.
+ *
+ * THE OVERRIDE IS WHY A 100-FIELD BASELINE CAN ACTUALLY REVERT. The tracked set
+ * is every field the administrator declared (see lib/trackedFields.js), and a
+ * declared field is not necessarily on this issue type's edit screen. Without
+ * overrideScreenSecurity those fields are baselined, diffed and shown to the
+ * reviewer — and then silently refused at the one moment the reviewer asked for
+ * them back. Both parameters require Jira administrator permission, so they are
+ * sent ONLY on the app-attributed path; asUser() would take a 403 for a
+ * reviewer who is not an admin, which is worse than not asking.
  */
-async function put(client, issueKey, overrideSecurity, body) {
+async function put(client, issueKey, { notifyUsers, override }, body) {
   let res;
   try {
     const opts = {
@@ -193,7 +202,14 @@ async function put(client, issueKey, overrideSecurity, body) {
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify(body)
     };
-    if (overrideSecurity) {
+    // Written out rather than assembled: route`` percent-encodes every
+    // substitution, so an interpolated query string arrives as literal
+    // "%3FnotifyUsers%3Dfalse" and Jira reads none of it.
+    if (notifyUsers && override) {
+      res = await client.requestJira(route`/rest/api/3/issue/${issueKey}?overrideScreenSecurity=true&overrideEditableFlag=true`, opts);
+    } else if (notifyUsers) {
+      res = await client.requestJira(route`/rest/api/3/issue/${issueKey}`, opts);
+    } else if (override) {
       res = await client.requestJira(route`/rest/api/3/issue/${issueKey}?notifyUsers=false&overrideScreenSecurity=true&overrideEditableFlag=true`, opts);
     } else {
       res = await client.requestJira(route`/rest/api/3/issue/${issueKey}?notifyUsers=false`, opts);
@@ -225,29 +241,24 @@ async function put(client, issueKey, overrideSecurity, body) {
  * which is why the planner marks them SPECIAL and the dialog says so, rather
  * than letting a reviewer believe issue links restore as cleanly as a summary.
  */
-async function runHandler(client, { strategy, issueKey, step }) {
+async function runHandler(client, { strategy, issueKey, step, write }) {
   switch (strategy) {
     case 'parent': {
-      const key = step.targetValue?.key ?? step.targetValue?.id ?? step.targetValue;
-      if (!key) return { ok: false, skipped: true, reason: 'No baselined parent to restore to.' };
-      const res = await put(client, issueKey, false, {
-        fields: { parent: { key: String(key) } }
-      });
+      const value = step.targetValue;
+      let parent = null;
+      if (value !== null) {
+        if (value?.id != null) parent = { id: String(value.id) };
+        else if (value?.key != null) parent = { key: String(value.key) };
+        else if (typeof value === 'string' || typeof value === 'number') {
+          parent = /^\d+$/.test(String(value)) ? { id: String(value) } : { key: String(value) };
+        } else return { ok: false, reason: 'The approved parent is missing its issue id or key.' };
+      }
+      const res = await put(client, issueKey, write, { fields: { parent } });
       return res.ok ? { ok: true } : { ok: false, reason: describe(res) };
     }
 
     case 'links':
-      // Issue links are add/remove operations against a separate endpoint, and
-      // restoring them exactly means both deleting links added since approval
-      // and recreating ones removed. Deleting a link somebody deliberately made
-      // is a materially different act from resetting a field value, and doing
-      // it silently inside a bulk restore is not something this app should do
-      // without the reviewer having asked for it specifically.
-      return {
-        ok: false,
-        skipped: true,
-        reason: 'Issue links are not restored automatically. The diff lists exactly which links were added and removed so they can be corrected deliberately.'
-      };
+      return restoreLinks(client, issueKey, step.targetValue);
 
     case 'transition':
       // Status is restored by moving the item, not by writing a field, and the
@@ -264,7 +275,7 @@ async function runHandler(client, { strategy, issueKey, step }) {
     case 'sprint': {
       const sprintId = Array.isArray(step.targetValue) ? step.targetValue[0] : step.targetValue;
       if (sprintId == null) return { ok: false, skipped: true, reason: 'No baselined sprint to restore to.' };
-      const res = await put(client, issueKey, false, {
+      const res = await put(client, issueKey, write, {
         fields: { [step.fieldId]: Number(sprintId) }
       });
       return res.ok ? { ok: true } : { ok: false, reason: describe(res) };
@@ -289,3 +300,54 @@ function nameOf(byId, fieldId) {
 // this file. They are the two pieces of restore logic a test most needs to
 // reach, and they cannot live here: this module imports @forge/api, which does
 // not resolve outside the Forge runtime.
+
+/** Reconcile Jira issue links by type, direction and linked issue identity.
+ * API: https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-links/
+ * Link IDs are ephemeral; recreated relationships acquire a new ID.
+ */
+async function restoreLinks(client, issueKey, target) {
+  try {
+    if (!Array.isArray(target)) return { ok: false, reason: 'The stored issue links are not a complete raw link list.' };
+    const read = await client.requestJira(route`/rest/api/3/issue/${issueKey}?fields=issuelinks`);
+    if (!read.ok) return { ok: false, reason: `Issue links could not be read (HTTP ${read.status}).` };
+    const current = (await read.json())?.fields?.issuelinks;
+    if (!Array.isArray(current)) return { ok: false, reason: 'Jira omitted the current issue links; no links were changed.' };
+    // Validate both complete lists before any mutation. A malformed stored
+    // entry must never become permission to delete a real relationship.
+    const desired = new Map(target.map(link => [linkIdentity(link), link]));
+    const existing = new Map(current.map(link => [linkIdentity(link), link]));
+    const additions = [...desired].filter(([key]) => !existing.has(key));
+    const removals = [...existing].filter(([key]) => !desired.has(key));
+    if (removals.some(([, link]) => !link.id)) return { ok: false, reason: 'A current issue link has no deletion id; the link set cannot be restored exactly.' };
+    // Add first: a refused missing relationship leaves existing links intact.
+    for (const [, link] of additions) {
+      const direction = link.inwardIssue ? 'inwardIssue' : 'outwardIssue';
+      const opposite = direction === 'inwardIssue' ? 'outwardIssue' : 'inwardIssue';
+      const other = link[direction];
+      const body = { type: link.type.id != null ? { id: String(link.type.id) } : { name: link.type.name },
+        [direction]: other.id != null ? { id: String(other.id) } : { key: other.key },
+        [opposite]: { key: issueKey } };
+      const res = await client.requestJira(route`/rest/api/3/issueLink`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(body)
+      });
+      if (!res.ok) return { ok: false, reason: `An approved issue link could not be recreated (HTTP ${res.status}).` };
+    }
+    for (const [, link] of removals) {
+      const res = await client.requestJira(route`/rest/api/3/issueLink/${link.id}`, { method: 'DELETE' });
+      if (!res.ok && res.status !== 404) return { ok: false, reason: `An added issue link could not be removed (HTTP ${res.status}).` };
+    }
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, reason: `Issue links could not be restored: ${error.message ?? error}` };
+  }
+}
+
+function linkIdentity(link) {
+  const direction = link?.inwardIssue ? 'inwardIssue' : 'outwardIssue';
+  const other = link?.[direction];
+  const type = link?.type?.id ?? link?.type?.name;
+  if (!type || !other || !(other.id ?? other.key) || (link.inwardIssue && link.outwardIssue)) {
+    throw new Error('A link is missing its type, direction or linked issue identity.');
+  }
+  return JSON.stringify([String(type), direction, String(other.id ?? other.key)]);
+}

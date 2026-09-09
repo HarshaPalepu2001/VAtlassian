@@ -2,6 +2,7 @@ import { executeQuery, toBinaryParam, fromBinaryColumn, limitClause } from '../l
 import { newId, throwing } from './store.js';
 import { withAlwaysControlled } from '../lib/content.js';
 import { effectiveAssurance } from '../lib/approval/levels.js';
+import { memo } from '../lib/cache.js';
 
 /**
  * va_config, va_controlled_transition, va_controlled_field, va_eligibility.
@@ -16,18 +17,20 @@ const ACTIVE = 'ACTIVE';
 // ── va_config ────────────────────────────────────────────────────────────────
 
 export async function getConfig(key, fallback = null) {
-  const rows = await throwing('SELECT cfg_value FROM va_config WHERE cfg_key = ?', [key]);
-  if (rows.length === 0) return fallback;
-  try {
-    return JSON.parse(rows[0].cfg_value);
-  } catch {
-    // A config row that will not parse is a corrupt row, not a reason to take
-    // the app down. Falling back to the default means the app runs on its
-    // documented defaults rather than refusing to start, and the admin console
-    // shows the row as unreadable so somebody can fix it.
-    console.error('config: unparseable value for', key);
-    return fallback;
-  }
+  return memo(`config:${key}`, async () => {
+    const rows = await throwing('SELECT cfg_value FROM va_config WHERE cfg_key = ?', [key]);
+    if (rows.length === 0) return fallback;
+    try {
+      return JSON.parse(rows[0].cfg_value);
+    } catch {
+      // A config row that will not parse is a corrupt row, not a reason to take
+      // the app down. Falling back to the default means the app runs on its
+      // documented defaults rather than refusing to start, and the admin console
+      // shows the row as unreadable so somebody can fix it.
+      console.error('config: unparseable value for', key);
+      return fallback;
+    }
+  });
 }
 
 export async function setConfig(key, value, updatedBy, now) {
@@ -43,7 +46,41 @@ export async function setConfig(key, value, updatedBy, now) {
  * Merged rather than inherited-by-reference so that a project which has never
  * been configured behaves identically to one configured with the defaults —
  * there is no "unset" state that behaves differently from an explicit choice.
+ *
+ * TWO QUERIES MERGED INTO ONE. The original fetched 'site' and
+ * 'project:<id>' with two separate round trips; this fetches both rows in a
+ * single WHERE cfg_key IN (?, ?) statement and splits them in JS. For a panel
+ * load that calls projectConfig() once (and snapshot() calls it again via
+ * panelAccess), the memo on getConfig catches the individual keys anyway —
+ * but issuing one query is strictly better than two, and makes the savings
+ * visible even before the memo warms.
  */
+export async function projectConfig(projectId) {
+  return memo(`projectConfig:${projectId}`, async () => {
+    const projectKey = `project:${projectId}`;
+    const rows = await throwing(
+      'SELECT cfg_key, cfg_value FROM va_config WHERE cfg_key IN (?, ?)',
+      ['site', projectKey]
+    );
+    let site = {}, project = {};
+    for (const row of rows) {
+      try {
+        const parsed = JSON.parse(row.cfg_value);
+        if (row.cfg_key === 'site') site = parsed ?? {};
+        else project = parsed ?? {};
+      } catch {
+        console.error('config: unparseable value for', row.cfg_key);
+      }
+    }
+    return deepMerge(deepMerge(DEFAULT_PROJECT_CONFIG, site), project);
+  });
+}
+
+export async function isStrictMode(projectId) {
+  const config = await projectConfig(projectId);
+  return config?.policy?.mode === 'STRICT';
+}
+
 export const DEFAULT_PROJECT_CONFIG = {
   enabled: true,
   /** Status ids that count as "in review". Transitions OUT of these are gated. */
@@ -78,18 +115,6 @@ export const DEFAULT_PROJECT_CONFIG = {
   }
 };
 
-export async function projectConfig(projectId) {
-  const [site, project] = await Promise.all([
-    getConfig('site', {}),
-    getConfig(`project:${projectId}`, {})
-  ]);
-  return deepMerge(deepMerge(DEFAULT_PROJECT_CONFIG, site ?? {}), project ?? {});
-}
-
-export async function isStrictMode(projectId) {
-  const config = await projectConfig(projectId);
-  return config?.policy?.mode === 'STRICT';
-}
 
 function deepMerge(base, over) {
   const out = { ...base };
@@ -129,46 +154,54 @@ function deepMerge(base, over) {
  * which is the ordinary case for most transitions and is not even logged.
  */
 export async function gatedTransition({ projectId, issueTypeId, fromStatusId, toStatusId }) {
-  const rows = await throwing(
-    `SELECT TO_BASE64(ct_id) AS ct_id, required_role, meaning, require_decision, block_on_drift, required_assurance, capture_baseline
-     FROM va_controlled_transition
-     WHERE project_id = ?
-       AND (issue_type_id = ? OR issue_type_id = '*')
-       AND (from_status_id = ? OR from_status_id = '*')
-       AND (to_status_id = ? OR to_status_id = '*')
-       AND state = ?
-     ORDER BY issue_type_id DESC, from_status_id DESC, to_status_id DESC
-     LIMIT 1`,
-    [projectId, issueTypeId, fromStatusId, toStatusId, ACTIVE]
-  );
-  if (rows.length === 0) return null;
-  const r = rows[0];
-  return {
-    ct_id: fromBinaryColumn(r.ct_id),
-    required_role: r.required_role,
-    meaning: r.meaning,
-    // Forge SQL returns BOOLEAN as 0/1. Coerced here so no caller has to
-    // remember that `if (row.require_decision)` is true for the string "0".
-    require_decision: !!Number(r.require_decision),
-    block_on_drift: !!Number(r.block_on_drift),
-    required_assurance: r.required_assurance,
-    capture_baseline: !!Number(r.capture_baseline)
-  };
+  return memo(`gatedTransition:${projectId}:${issueTypeId}:${fromStatusId}:${toStatusId}`, async () => {
+    const rows = await throwing(
+      `SELECT TO_BASE64(ct_id) AS ct_id, required_role, meaning, require_decision, block_on_drift, required_assurance, capture_baseline
+       FROM va_controlled_transition
+       WHERE project_id = ?
+         AND (issue_type_id = ? OR issue_type_id = '*')
+         AND (from_status_id = ? OR from_status_id = '*')
+         AND (to_status_id = ? OR to_status_id = '*')
+         AND state = ?
+       ORDER BY issue_type_id DESC, from_status_id DESC, to_status_id DESC
+       LIMIT 1`,
+      [projectId, issueTypeId, fromStatusId, toStatusId, ACTIVE]
+    );
+    if (rows.length === 0) return null;
+    const r = rows[0];
+    return {
+      ct_id: fromBinaryColumn(r.ct_id),
+      required_role: r.required_role,
+      meaning: r.meaning,
+      // Forge SQL returns BOOLEAN as 0/1. Coerced here so no caller has to
+      // remember that `if (row.require_decision)` is true for the string "0".
+      require_decision: !!Number(r.require_decision),
+      block_on_drift: !!Number(r.block_on_drift),
+      required_assurance: r.required_assurance,
+      capture_baseline: !!Number(r.capture_baseline)
+    };
+  });
 }
 
 
 export async function gateActiveOutOf({ projectId, issueTypeId, fromStatusId }) {
-  const rows = await throwing(
-    `SELECT required_role, meaning, required_assurance, capture_baseline, block_on_drift FROM va_controlled_transition
-     WHERE project_id = ?
-       AND (issue_type_id = ? OR issue_type_id = '*')
-       AND (from_status_id = ? OR from_status_id = '*')
-       AND state = ?
-     ORDER BY issue_type_id DESC, from_status_id DESC
-     LIMIT 1`,
-    [projectId, issueTypeId, fromStatusId, ACTIVE]
-  );
-  return rows.length > 0 ? { gated: true, required_role: rows[0].required_role, required_assurance: rows[0].required_assurance, capture_baseline: !!Number(rows[0].capture_baseline), block_on_drift: !!Number(rows[0].block_on_drift), meaning: rows[0].meaning } : { gated: false, required_role: null };
+  return memo(`gateActiveOutOf:${projectId}:${issueTypeId}:${fromStatusId}`, async () => {
+    const rows = await throwing(
+      `SELECT required_role, meaning, required_assurance, capture_baseline, block_on_drift FROM va_controlled_transition
+       WHERE project_id = ?
+         AND (issue_type_id = ? OR issue_type_id = '*')
+         AND (from_status_id = ? OR from_status_id = '*')
+         AND state = ?
+       ORDER BY issue_type_id DESC, from_status_id DESC
+       LIMIT 1`,
+      [projectId, issueTypeId, fromStatusId, ACTIVE]
+    );
+    return rows.length > 0
+      ? { gated: true, required_role: rows[0].required_role, required_assurance: rows[0].required_assurance,
+          capture_baseline: !!Number(rows[0].capture_baseline), block_on_drift: !!Number(rows[0].block_on_drift),
+          meaning: rows[0].meaning }
+      : { gated: false, required_role: null };
+  });
 }
 
 /** Back-compat name for the panel's `authRequired` flag. Same question now. */
@@ -352,33 +385,35 @@ export async function roleHolderCounts(projectId) {
  * means.
  */
 export async function controlledFields({ projectId, issueTypeId }) {
-  const rows = await throwing(
-    `SELECT TO_BASE64(cf_id) AS cf_id, field_id, field_name, field_kind, schema_type,
-            store_values, writable, materiality
-     FROM va_controlled_field
-     WHERE project_id = ?
-       AND (issue_type_id = ? OR issue_type_id = '*')
-       AND state = ?
-     ORDER BY issue_type_id DESC`,
-    [projectId, issueTypeId, ACTIVE]
-  );
-  // ORDER BY issue_type_id DESC puts an exact-issue-type row ahead of the '*'
-  // row for the same field, and the Map keeps the first of each field_id — so a
-  // per-type override wins over the project-wide default rather than appearing
-  // beside it as a duplicate.
-  const byField = new Map();
-  for (const r of rows) if (!byField.has(r.field_id)) byField.set(r.field_id, r);
-  const declared = [...byField.values()].map((r) => ({
-    cf_id: fromBinaryColumn(r.cf_id).toString('hex'),
-    field_id: r.field_id,
-    field_name: r.field_name,
-    field_kind: r.field_kind,
-    schema_type: r.schema_type,
-    store_values: !!Number(r.store_values),
-    writable: r.writable == null ? null : !!Number(r.writable),
-    materiality: r.materiality
-  }));
-  return withAlwaysControlled(declared);
+  return memo(`controlledFields:${projectId}:${issueTypeId}`, async () => {
+    const rows = await throwing(
+      `SELECT TO_BASE64(cf_id) AS cf_id, field_id, field_name, field_kind, schema_type,
+              store_values, writable, materiality
+       FROM va_controlled_field
+       WHERE project_id = ?
+         AND (issue_type_id = ? OR issue_type_id = '*')
+         AND state = ?
+       ORDER BY issue_type_id DESC`,
+      [projectId, issueTypeId, ACTIVE]
+    );
+    // ORDER BY issue_type_id DESC puts an exact-issue-type row ahead of the '*'
+    // row for the same field, and the Map keeps the first of each field_id — so a
+    // per-type override wins over the project-wide default rather than appearing
+    // beside it as a duplicate.
+    const byField = new Map();
+    for (const r of rows) if (!byField.has(r.field_id)) byField.set(r.field_id, r);
+    const declared = [...byField.values()].map((r) => ({
+      cf_id: fromBinaryColumn(r.cf_id).toString('hex'),
+      field_id: r.field_id,
+      field_name: r.field_name,
+      field_kind: r.field_kind,
+      schema_type: r.schema_type,
+      store_values: !!Number(r.store_values),
+      writable: r.writable == null ? null : !!Number(r.writable),
+      materiality: r.materiality
+    }));
+    return withAlwaysControlled(declared);
+  });
 }
 
 export async function deleteControlledField({ projectId, issueTypeId, fieldId }) {

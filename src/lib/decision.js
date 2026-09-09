@@ -47,12 +47,21 @@ export const REFUSE_MESSAGE = {
 };
 
 
-export function canDecide({ review, baseline, isEligible, authRequired = false, authVerified = false }) {
+export const LOCK_TTL_MS = 60 * 1000;
+
+export function canDecide({ review, baseline, isEligible, authRequired = false, authVerified = false, now = Date.now(), lockTtlMs = LOCK_TTL_MS }) {
   if (!baseline) return { allow: false, reason: REFUSE.NO_BASELINE };
   if (!isEligible) return { allow: false, reason: REFUSE.NOT_ELIGIBLE };
-  if (review?.state === REVIEW_STATE.DECIDING || review?.state === REVIEW_STATE.RESTORING) {
+  if (review?.state === REVIEW_STATE.LOCKED) {
     return { allow: false, reason: REFUSE.ALREADY_DECIDING };
   }
+  if ([REVIEW_STATE.DECIDING, REVIEW_STATE.RESTORING].includes(review?.state)) {
+    const isStale = review?.last_checked_at != null && (now - Number(review.last_checked_at) > lockTtlMs);
+    if (!isStale) {
+      return { allow: false, reason: REFUSE.ALREADY_DECIDING };
+    }
+  }
+
   if (authRequired && !authVerified) {
     return { allow: false, reason: REFUSE.AUTH_REQUIRED };
   }
@@ -80,9 +89,8 @@ export function decide({ decision, diff, plan = null, evidenceHash = null }) {
     return { allow: false, reason: REFUSE.STALE_EVIDENCE };
   }
 
-  if (diff.materialFieldCount === 0 && decision === DECISION.REJECT) {
-    // Approving a cosmetic-only diff is meaningful — it clears the queue and
-    // cuts a new baseline. Rejecting one is not: there is nothing to put back.
+  if (diff.changedFieldCount === 0 && decision === DECISION.REJECT) {
+    // Formatting changes are still changes to the signed record.
     return { allow: false, reason: REFUSE.NO_DRIFT };
   }
 
@@ -153,10 +161,25 @@ export function countersAfter({ decision, restoreState, diff }) {
   if (decision === DECISION.APPROVE || restoreState === 'COMPLETE') {
     return { driftCount: 0, driftedFieldCount: 0, maxMateriality: null };
   }
+  return undecidedCounters(diff);
+}
+
+/**
+ * The counters for an item that still has drift nobody has decided.
+ *
+ * `drift_count` is everything that changed; `drifted_field_count` is the subset
+ * that a reader would notice, and both the glance view and the reviewer queue
+ * read the second one back as `materialCount`. Writing the total into it says
+ * more of the drift needs a decision than actually does.
+ *
+ * Defined once because it is built in more than one place, and the copy in
+ * usecases/drift.js had already diverged.
+ */
+export function undecidedCounters(diff) {
   return {
-    driftCount: diff.changedFieldCount,
-    driftedFieldCount: diff.materialFieldCount,
-    maxMateriality: diff.maxMateriality
+    driftCount: diff?.changedFieldCount ?? 0,
+    driftedFieldCount: diff?.materialFieldCount ?? 0,
+    maxMateriality: diff?.maxMateriality ?? null
   };
 }
 

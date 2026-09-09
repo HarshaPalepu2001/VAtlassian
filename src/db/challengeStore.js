@@ -1,4 +1,4 @@
-import { executeQuery, toBinaryParam, fromBinaryColumn } from '../lib/db.js';
+import { affectedRows, executeQuery, toBinaryParam, fromBinaryColumn } from '../lib/db.js';
 import { newId, throwing } from './store.js';
 
 export async function writeChallenge(challenge) {
@@ -8,7 +8,7 @@ export async function writeChallenge(challenge) {
      VALUES (FROM_BASE64(?), ?, ?, ?, ?, ?, FROM_BASE64(?), ?, ?, ?, ?, ?, ?, ?)`,
     [
       toBinaryParam(challengeId), challenge.tenant_id, challenge.issue_id, challenge.signer_account_id,
-      challenge.decision, challenge.meaning, toBinaryParam(challenge.baseline_id),
+      challenge.decision, challenge.meaning, challenge.baseline_id != null ? toBinaryParam(challenge.baseline_id) : null,
       challenge.candidate_hash, challenge.transition_id ?? null, challenge.operation_plan_hash ?? null,
       challenge.nonce, challenge.state ?? 'PENDING', challenge.created_at, challenge.expires_at
     ]
@@ -33,8 +33,9 @@ export async function getChallenge(challengeId) {
 }
 
 export async function markChallengeConsumed(challengeId) {
-  await executeQuery(
+  const result = await executeQuery(
     `UPDATE va_challenge SET state = 'CONSUMED' WHERE challenge_id = FROM_BASE64(?) AND state = 'PENDING'`,
     [toBinaryParam(challengeId)]
   );
+  return affectedRows(result) === 1;
 }

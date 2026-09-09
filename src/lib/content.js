@@ -241,6 +241,9 @@ export function normaliseAdf(node) {
 /** Plain text: normalise line endings and trailing whitespace only. */
 export function normaliseText(v) {
   if (v === null || v === undefined) return null;
+  // Older field configurations may classify Jira textarea documents as TEXT.
+  // Never collapse every document to the same '[object Object]' digest.
+  if (typeof v === 'object') return canonical(normaliseAdf(v));
   return String(v).replace(/\r\n/g, '\n').replace(/[ \t]+$/gm, '');
 }
 
@@ -252,7 +255,7 @@ export function normaliseMulti(v) {
   if (v === null || v === undefined) return [];
   const arr = Array.isArray(v) ? v : [v];
   return arr
-    .map((x) => (x && typeof x === 'object' ? (x.id ?? x.value ?? x.name ?? canonical(x)) : x))
+    .map((x) => (x && typeof x === 'object' ? (x.accountId ?? x.id ?? x.value ?? x.name ?? canonical(x)) : x))
     .map(String)
     .sort();
 }
@@ -303,7 +306,11 @@ export function normaliseField(kind, value) {
     case FIELD_KIND.SUBTASKS: return normaliseSubtasks(value);
     case FIELD_KIND.SCALAR:
       if (value === undefined) return null;
-      if (value && typeof value === 'object') return value.id ?? value.value ?? value.name ?? canonical(value);
+      if (value && typeof value === 'object') {
+        if (value.child != null) return canonical({ parent: value.id ?? value.value ?? null,
+          child: value.child.id ?? value.child.value ?? value.child });
+        return value.accountId ?? value.id ?? value.value ?? value.name ?? canonical(value);
+      }
       return value;
     default:
       throw new TypeError(`unknown controlled field kind: ${kind}`);

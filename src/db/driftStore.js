@@ -125,7 +125,7 @@ export async function driftSummary(issueId, baselineVersion) {
             MAX(occurred_at) AS last_at
      FROM va_drift
      WHERE issue_id = ? AND baseline_version = ? AND approval_id IS NULL
-       AND materiality <> 'COSMETIC'`,
+       AND source <> 'BASELINE'`,
     [issueId, baselineVersion]
   );
   const r = rows[0] ?? {};

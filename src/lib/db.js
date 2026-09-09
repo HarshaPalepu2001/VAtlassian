@@ -8,6 +8,34 @@ import { sql } from '@forge/sql';
  * it.
  */
 
+function scrubErrorMessage(message) {
+  if (typeof message !== 'string' || !message) return undefined;
+  return message
+    .split('\n')[0]
+    .replace(/'(?:[^'\\]|\\.)*'/g, "'[redacted]'")
+    .replace(/"(?:[^"\\]|\\.)*"/g, '"[redacted]"')
+    .replace(/\b(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP)\b[\s\S]*/i, '[sql omitted]')
+    .slice(0, 300);
+}
+
+export function sqlErrorSummary(error) {
+  return {
+    name: typeof error?.name === 'string' ? error.name : 'Error',
+    code: error?.code ?? error?.context?.debug?.code,
+    status: error?.status ?? error?.context?.status ?? error?.context?.debug?.status,
+    message: scrubErrorMessage(error?.message)
+  };
+}
+
+export function sqlStatementSummary(statement) {
+  const text = typeof statement === 'string' ? statement.trim().replace(/\s+/g, ' ') : '';
+  const operation = text.match(/^([a-z]+)/i)?.[1]?.toUpperCase() ?? 'UNKNOWN';
+  const tables = new Set();
+  const tablePattern = /\b(?:FROM|INTO|UPDATE|JOIN|TABLE)\s+([a-zA-Z0-9_]+)/gi;
+  for (let match; (match = tablePattern.exec(text));) tables.add(match[1]);
+  return { operation, tables: [...tables], placeholders: (text.match(/\?/g) ?? []).length };
+}
+
 /**
  * Executes a Forge SQL query with parameter binding.
  * Fails closed upon encountering exceptions.
@@ -27,7 +55,7 @@ export async function executeQuery(queryText, params = []) {
       meta: result.metadata,
     };
   } catch (error) {
-    console.error('Forge SQL Error:', error, '\nQuery:', queryText);
+    console.error('Forge SQL Error:', sqlErrorSummary(error), 'Statement:', sqlStatementSummary(queryText));
     return {
       result: false,
       error,
@@ -119,7 +147,7 @@ export async function executeDDL(ddlStatement) {
     await sql.executeDDL(ddlStatement);
     return { result: true };
   } catch (error) {
-    console.error('Forge SQL DDL Error:', error, '\nStatement:', ddlStatement);
+    console.error('Forge SQL DDL Error:', sqlErrorSummary(error), 'Statement:', sqlStatementSummary(ddlStatement));
     return {
       result: false,
       error,

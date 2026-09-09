@@ -1,5 +1,5 @@
 import { collect, DETECTED_VIA } from '../lib/collect.js';
-import { dueForReconcile } from '../db/itemStateStore.js';
+import { dueForReconcile, recoverStaleLocks } from '../db/itemStateStore.js';
 import { expireStale } from '../db/approvalStore.js';
 
 /** Event gap-fill using the same collector as the issue trigger. Bounded and
@@ -30,6 +30,7 @@ export async function run(options = {}) {
   const result = await sweep(options);
   try {
     result.expiredApprovals = await expireStale(options.now ?? Date.now());
+    result.recoveredLocks = await recoverStaleLocks(options.now ?? Date.now());
   } catch (error) {
     result.ok = false;
     result.housekeepingError = String(error?.message ?? error);

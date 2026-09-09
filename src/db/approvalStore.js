@@ -40,6 +40,23 @@ export async function pendingApprovalFor({ issueId, fromStatusId, toStatusId, no
     ORDER BY decided_at DESC LIMIT 1`, params);
   return decode(result.data[0]);
 }
+/**
+ * The approval this reviewer signed whose transition never landed.
+ *
+ * Scoped to the signer and to the status the item is actually in, because those
+ * are two of the preconditions usecases/approval.js retryTransition enforces
+ * (`row.account_id === accountId`, `row.from_status_id === issue.statusId`).
+ * Reading it any wider would let the panel offer a retry the resolver is
+ * certain to refuse. The to-status is deliberately left open: the caller
+ * matches it against the transitions Jira is currently offering.
+ */
+export async function pendingApprovalForActor({ issueId, accountId, fromStatusId, now = Date.now() }) {
+  if (!accountId) return null;
+  const result = await query(`SELECT ${selection} FROM va_approval WHERE issue_id = ?
+    AND state = 'PENDING' AND decision = 'APPROVE' AND account_id = ? AND from_status_id = ? AND expires_at > ?
+    ORDER BY decided_at DESC LIMIT 1`, [issueId, accountId, fromStatusId, now]);
+  return decode(result.data[0]);
+}
 export async function casConsume({ approvalId, now }) {
   const result = await query(`UPDATE va_approval SET state = 'CONSUMED', consumed_at = ?
     WHERE approval_id = FROM_BASE64(?) AND state = 'PENDING' AND decision = 'APPROVE' AND expires_at > ?`,

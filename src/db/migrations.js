@@ -413,5 +413,18 @@ export const MIGRATIONS = [
     updated_at BIGINT NOT NULL,
     PRIMARY KEY (operation_id),
     KEY idx_operation_issue (issue_id, state)
+  )` },
+  { id: 'v026_challenge_baseline_nullable', sql: `ALTER TABLE va_challenge MODIFY baseline_id BINARY(16) NULL` },
+  { id: 'v027_observation', sql: `CREATE TABLE IF NOT EXISTS va_observation (
+    observation_id CHAR(64) NOT NULL, issue_id BIGINT NOT NULL, baseline_id BINARY(16) NOT NULL,
+    baseline_version INT NOT NULL, content_hash CHAR(64) NOT NULL, field_digests MEDIUMTEXT NOT NULL,
+    matches_baseline BOOLEAN NOT NULL, event_id VARCHAR(128) NULL, event_at BIGINT NULL,
+    observed_at BIGINT NOT NULL, actor_account_id VARCHAR(128) NULL, detected_via VARCHAR(16) NOT NULL,
+    state VARCHAR(16) NOT NULL, PRIMARY KEY (observation_id), KEY idx_observation_issue (issue_id, observed_at)
+  )` },
+  { id: 'v028_observation_value', sql: `CREATE TABLE IF NOT EXISTS va_observation_value (
+    observation_id CHAR(64) NOT NULL, field_id VARCHAR(64) NOT NULL, seq INT NOT NULL,
+    encoding VARCHAR(16) NOT NULL, raw_bytes INT NOT NULL, data MEDIUMTEXT NOT NULL,
+    PRIMARY KEY (observation_id, field_id, seq)
   )` }
 ];

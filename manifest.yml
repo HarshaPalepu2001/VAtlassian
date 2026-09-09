@@ -14,15 +14,23 @@ modules:
     - key: va-panel
       icon: https://developer.atlassian.com/platform/forge/images/issue-panel-icon.svg
       resource: main-ui
+      resolver:
+        function: panel-resolver
       title: Approval & Baseline
   jira:issueContext:
     - key: va-context
       resource: main-ui
+      resolver:
+        function: panel-resolver
       title: Approval & Baseline
       label: Baseline status
+      dynamicProperties:
+        function: issue-status
   jira:globalPage:
     - key: va-worklist
       resource: main-ui
+      resolver:
+        function: panel-resolver
       title: My approvals
       layout: blank
   jira:personalSettingsPage:
@@ -132,6 +140,8 @@ modules:
       function: runner-daily
       interval: day
   function:
+    - key: issue-status
+      handler: resolvers/issueStatus.handler
     - key: panel-resolver
       handler: resolvers/panel.handler
     - key: admin-resolver

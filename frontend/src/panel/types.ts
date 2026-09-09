@@ -9,4 +9,5 @@ export type PanelState = {
  eligibility:{eligible:boolean;reason?:string}; approval:{requiredAssurance:AssuranceLevel;meaning?:string;pending?:PendingApproval|null};
  record:BaselineRecordData|null; drift:{count:number;materialCount:number;evidenceHash?:string;fields?:DiffField[]};
  transitions:Transition[];credentialEnrolled?:boolean;
+ controls?:{unavailable?:boolean;incidents:{event_type:string;occurred_at:number}[];gateFindings:{finding_type:string;detail:string;last_seen_at:number}[]};
 };

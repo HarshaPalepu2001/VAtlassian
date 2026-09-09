@@ -22,7 +22,7 @@ import { FIELD_KIND } from '../content.js';
  */
 
 /** Bumped whenever these rules change, so a restore can record which ran. */
-export const ADAPTER_VERSION = 1;
+export const ADAPTER_VERSION = 2;
 
 const ADF_SYSTEM_FIELDS = new Set(['description', 'environment']);
 const ADF_CUSTOM_SUFFIXES = [':textarea'];
@@ -121,7 +121,10 @@ export function shapeFor({ field, value, editmeta = {} }) {
     case 'array': {
       const arr = Array.isArray(value) ? value : [value];
       // Labels are bare strings; everything else entity-backed wants ids.
-      if (items === 'string' || field.field_id === 'labels') return ok(arr.map(String), 'labels');
+      if (items === 'string' || field.field_id === 'labels') {
+        if (arr.some(v => typeof v !== 'string')) return refuse('labels', 'The approved list contains non-text entries; converting them to labels would lose content.');
+        return ok(arr, 'labels');
+      }
       const key = items === 'user' ? 'accountId' : 'id';
       const mapped = arr.map((v) => idOf(v, key));
       if (mapped.some((v) => v == null)) {
@@ -150,8 +153,8 @@ function inferType(kind) {
 function idOf(value, key) {
   if (value === null || value === undefined) return null;
   if (typeof value === 'object') {
-    const id = value[key] ?? value.id ?? value.value ?? value.key;
-    return id == null ? null : { [key]: String(id) };
+    const id = value[key];
+    return id == null || !['string', 'number'].includes(typeof id) || String(id) === '' ? null : { [key]: String(id) };
   }
   return { [key]: String(value) };
 }

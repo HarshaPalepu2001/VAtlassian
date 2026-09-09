@@ -94,6 +94,13 @@ export function diffIssue({
     const events = (driftByField.get(field.field_id) ?? [])
       .sort((a, b) => a.occurred_at - b.occurred_at);
     const touches = attribution[field.field_id] ?? [];
+    // Collector evidence still carries useful attribution if Jira history is
+    // missing. Sweep timestamps describe detection, not necessarily the edit.
+    const trace = touches.length ? touches : events.map(e => ({
+      at: Number(e.occurred_at), authorId: e.actor_account_id ?? null,
+      authorName: e.actor_name ?? null, source: e.source ?? 'UNKNOWN',
+      detected: e.detected_via === 'SWEEP', fromString: null, toString: null
+    }));
 
     const materiality = classify(
       field.field_id,
@@ -108,16 +115,31 @@ export function diffIssue({
       materiality,
       queued: shouldQueue(materiality, queueThreshold),
 
+      // WHAT THE IDENTIFIERS MEAN.
+      //
+      // The differ compares NORMALISED values, and normalising a scalar yields
+      // Jira's identifier — "10000", not "Critical". That is correct for
+      // comparison and useless for review: nobody can audit "Priority 10000 →
+      // 3". The raw values still carry the display name, so it travels with the
+      // comparison as a lookup.
+      //
+      // A LOOKUP RATHER THAN A SUBSTITUTION, because in a signed record the
+      // stored identifier IS the evidence. The panel shows the name AND the id
+      // it resolves; it never silently replaces one with the other, and an id
+      // with no known name renders as itself rather than as a guess.
+      valueLabels: valueLabels(beforeRaw, afterRaw),
+
       // The ordered account of how this field got here. `touches` is the raw
       // changelog view; `events` is what Baseline recorded and is what the AI
       // report must cite. Both are exposed because they answer different
       // questions: touches includes edits from before the baseline if the
       // caller asked for them, events are strictly post-approval.
-      attribution: touches.map((t) => ({
+      attribution: trace.map((t) => ({
         at: t.at,
         authorId: t.authorId,
         authorName: t.authorName,
         source: t.source,
+        detected: t.detected ?? false,
         fromString: t.fromString,
         toString: t.toString
       })),
@@ -167,22 +189,28 @@ export function diffIssue({
     // Keys the report cache. Any change to the evidence produces a different
     // hash and therefore a fresh report; no change produces a cache hit
     // forever, which is right for an item sitting in a queue for a week.
-    evidenceHash: evidenceHash(baseline, driftRows)
+    evidenceHash: evidenceHash(baseline, driftRows, '', Object.fromEntries(
+      controlledFields.map(field => [field.field_id, sha256Hex(canonical({
+        f: field.field_id, k: field.field_kind,
+        v: safeNormalise(field.field_kind, currentFields[field.field_id])
+      }))])
+    ))
   };
 }
 
 /**
- * sha256 over the baseline identity and the sorted set of drift ids.
+ * sha256 over the baseline, drift ids and normalized live field digests.
  *
  * Sorted, so that the order rows come back in cannot change the hash and
  * silently invalidate a perfectly good cached report.
  */
-export function evidenceHash(baseline, driftRows, model = '') {
+export function evidenceHash(baseline, driftRows, model = '', liveDigests = null) {
   return sha256Hex(canonical({
     baselineId: baseline?.baseline_id ? String(baseline.baseline_id) : null,
     version: baseline?.version ?? null,
     drift: (driftRows ?? []).map((d) => String(d.key ?? d.drift_id)).sort(),
-    model
+    model,
+    ...(liveDigests == null ? {} : { liveDigests })
   }));
 }
 
@@ -204,6 +232,32 @@ function safeNormalise(kind, value) {
 
 function materialityRank(m) {
   return { CRITICAL: 3, MAJOR: 2, MINOR: 1, COSMETIC: 0 }[m] ?? 0;
+}
+
+/**
+ * { identifier: display name } for the values on both sides of one field.
+ *
+ * Built from the RAW values, because they are the only place the name survives
+ * — normalisation keeps the identifier and discards everything around it. Both
+ * sides are walked: the approved value's name is as necessary as the current
+ * one's, and after a change the current issue no longer contains it.
+ *
+ * An entry is written only when the name genuinely differs from the identifier,
+ * so a label field ("urgent") does not produce a pointless "urgent" → "urgent"
+ * mapping for the panel to render twice.
+ */
+function valueLabels(...raws) {
+  const map = {};
+  for (const raw of raws) {
+    for (const item of Array.isArray(raw) ? raw : [raw]) {
+      if (!item || typeof item !== 'object') continue;
+      const id = item.accountId ?? item.id ?? item.value ?? item.key;
+      const name = item.name ?? item.displayName ?? item.filename ?? item.value;
+      if (id == null || name == null) continue;
+      if (String(id) !== String(name)) map[String(id)] = String(name);
+    }
+  }
+  return map;
 }
 
 function groupBy(list, keyFn) {

@@ -5,6 +5,7 @@ export const DENY = {
   NOT_ELIGIBLE: 'You are not an eligible reviewer for this work item, so this transition was blocked.',
   ELIGIBILITY_REVOKED: 'The reviewer who approved this transition is no longer eligible to do so, so it was blocked. A current reviewer needs to approve it again.',
   RESTORE_IN_PROGRESS: 'Baseline is currently restoring this work item to its approved state. Wait for that to finish, then try this transition again.',
+  ALREADY_DECIDING: 'A restore is already in progress for this work item. Use Retry restore in the Approval & Baseline panel to resume it; do not submit another rejection.',
   SERVICE_UNAVAILABLE: 'The signature service could not be reached, so this transition was blocked. No changes were made.',
   NOT_CONFIGURED: 'This transition is gated but has not been configured. Contact your VAtlassian administrator.',
   LEDGER_UNAVAILABLE: 'The audit ledger could not record this action, so the transition was blocked. No changes were made.',

@@ -1,5 +1,6 @@
 import { collect, DETECTED_VIA } from '../lib/collect.js';
 import { executeQuery } from '../lib/db.js';
+import { retryEvent, eventTime } from './retry.js';
 
 export async function run(event) {
   const issueLink = event?.issueLink;
@@ -11,6 +12,7 @@ export async function run(event) {
   const now = Date.now();
 
   const actorAccountId = event?.atlassianId ?? null;
+  let failed = false;
 
   for (const issueId of [sourceId, destId]) {
     if (!issueId) continue;
@@ -19,8 +21,10 @@ export async function run(event) {
         issueId,
         detectedVia: DETECTED_VIA.EVENT,
         actorAccountId,
+        eventId, eventAt: eventTime(event),
         now
       });
+      if (['ERROR', 'UNREADABLE', 'BUSY'].includes(result.outcome)) { failed = true; continue; }
 
       if (eventId) await recordReceipt(eventId, issueId, now, result.outcome);
 
@@ -34,8 +38,10 @@ export async function run(event) {
       }
     } catch (e) {
       console.error('linked: handler failed', JSON.stringify({ issueId }), e);
+      failed = true;
     }
   }
+  if (failed) return retryEvent(event, 'LINK_COLLECTION_FAILED');
 }
 
 async function recordReceipt(eventId, issueId, now, outcome) {

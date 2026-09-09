@@ -41,7 +41,8 @@ export function supersedeOnReviewEntry({ prior, currentStatusId, reviewStatusIds
 export function observe({ prior, baselineDigests, issueFields, controlledFields, reviewStatusIds, currentStatusId, now }) {
   if (controlledFields.length === 0) return { outcome: OUTCOME.NOT_CONTROLLED, review: prior };
   if (!prior?.baseline_id) return { outcome: OUTCOME.NO_BASELINE, review: prior };
-  if (prior.state === REVIEW_STATE.RESTORING || prior.state === REVIEW_STATE.DECIDING) return { outcome: OUTCOME.BUSY, review: prior };
+  const isStaleLock = prior.last_checked_at != null && now != null && (Number(now) - Number(prior.last_checked_at) > 60000);
+  if ((prior.state === REVIEW_STATE.RESTORING || prior.state === REVIEW_STATE.DECIDING) && !isStaleLock) return { outcome: OUTCOME.BUSY, review: prior };
 
   let bDigests = baselineDigests;
   if (!bDigests || typeof bDigests !== 'object') {
@@ -95,10 +96,8 @@ export function observe({ prior, baselineDigests, issueFields, controlledFields,
   }
 
   if (changes.length === 0) {
-    if (prior.state === REVIEW_STATE.DRIFTED) {
-      return { outcome: OUTCOME.SELF_REVERTED, review: { ...prior, state: REVIEW_STATE.BASELINED } };
-    }
-    return { outcome: OUTCOME.NO_CHANGE, review: prior };
+    // Returning values by hand does not erase the outstanding review decision.
+    return { outcome: OUTCOME.NO_CHANGE, review: { ...prior, last_checked_at: now } };
   }
 
   return {
@@ -106,7 +105,8 @@ export function observe({ prior, baselineDigests, issueFields, controlledFields,
     changedFields: changes,
     fromDigests: bDigests,
     toDigests: currentDigests,
-    review: { ...prior, state: REVIEW_STATE.DRIFTED }
+    review: { ...prior, state: REVIEW_STATE.DRIFTED, content_hash: contentHash,
+      field_digests: JSON.stringify(currentDigests), last_checked_at: now, last_drift_at: now }
   };
 }
 

@@ -1,5 +1,613 @@
-.va-banner{padding:14px 16px;border-radius:var(--va-radius);border:1px solid var(--va-border);background:var(--va-surface-sunken);line-height:1.5}
-.va-banner p{margin:6px 0 10px}.va-banner-info,.va-banner-brand{border-left:3px solid var(--va-brand)}.va-banner-warning,.va-banner-warn{border-left:3px solid var(--va-warning-text)}.va-banner-danger{border-left:3px solid var(--va-danger-text)}.va-banner-success{border-left:3px solid var(--va-success-text)}
-.va-input{box-sizing:border-box;width:100%;padding:8px 10px;border:1px solid var(--va-border-strong);border-radius:4px;background:var(--va-surface);color:var(--va-text);font:inherit}.va-button{cursor:pointer;padding:6px 12px;border:1px solid var(--va-border);border-radius:4px;background:var(--va-surface);color:var(--va-text)}.va-button:focus-visible,.va-collapse:focus-visible,.va-cite:focus-visible{outline:2px solid var(--va-brand);outline-offset:2px}
-.va-record-field{padding:12px 0;border-bottom:1px solid var(--va-border)}.va-record-field summary{cursor:pointer}.va-approved-value{white-space:pre-wrap;overflow-wrap:anywhere}.va-hash{overflow-wrap:anywhere;font-size:11px}.va-json{white-space:pre-wrap;max-height:320px;overflow:auto}.va-collapse{display:flex;align-items:center;gap:8px;width:100%;background:none;border:none;color:inherit;text-align:left;cursor:pointer;padding:0 0 12px;font:inherit}.va-grow{flex:1;min-width:0}.va-spread{display:flex;justify-content:space-between;gap:8px}.va-truncate{overflow:hidden;text-overflow:ellipsis}.va-subtlest{color:var(--va-text-subtle);font-size:12px}.va-highlight{outline:2px solid var(--va-brand);outline-offset:4px}.va-pill-change{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.va-pill{padding:4px 8px;border-radius:4px;background:var(--va-surface-sunken)}.va-pill-before,.va-del,.va-block-delete{background:var(--va-danger-bg);text-decoration:line-through}.va-pill-after,.va-ins,.va-block-insert{background:var(--va-success-bg);text-decoration:none}.va-diff-text{white-space:pre-wrap;overflow-wrap:anywhere}.va-block{padding:8px 10px;border-left:3px solid transparent}.va-block-move{border-left-color:var(--va-brand)}.va-block-modified,.va-block-markonly{border-left-color:var(--va-warning-text)}.va-trace{border-top:1px solid var(--va-border);padding-top:10px;margin-top:12px}.va-trace-row{display:flex;gap:12px;margin-top:6px;font-size:12px}.va-cite{cursor:pointer;color:var(--va-brand);background:var(--va-brand-bg);border:1px solid var(--va-border);border-radius:4px;padding:3px 6px}.va-h3{font-size:13px;font-weight:600}
-@media(max-width:560px){.va-form-grid{grid-template-columns:1fr!important}.va-row{flex-wrap:wrap}.va-table{display:block;overflow-x:auto}.va-page{padding:16px}.va-trace-row{flex-direction:column;gap:2px}}
+/**
+ * Product surfaces: the change ledger, the value chips, the attribution trail.
+ *
+ * WHY THIS FILE LOOKS THE WAY IT DOES. The reader is a QA or regulatory
+ * reviewer deciding whether a change to a signed record is acceptable. The
+ * artefact they know from their own world is a controlled document — a batch
+ * record, a validation protocol, a change-control form. Those are *ruled and
+ * registered*: hairlines, aligned columns, figures that line up, and a formal
+ * signature block at the end. That is the register this app is written in.
+ *
+ * So the diff is a ledger, not a stack of cards. Boldness is spent in exactly
+ * two places — the materiality spine down the left of each changed field, and
+ * the signature block in tokens.css. Everything else is deliberately quiet.
+ */
+
+/* ---------------------------------------------------------------------------
+   Banner — a statement with a coloured rule, not a filled alert box
+   --------------------------------------------------------------------------- */
+
+.va-banner {
+  padding: 14px 16px;
+  border: 1px solid var(--va-border);
+  border-left: 3px solid var(--va-border-strong);
+  border-radius: var(--va-radius);
+  background: var(--va-surface-sunken);
+  line-height: 1.5;
+}
+
+.va-banner p {
+  margin: 6px 0 0;
+}
+
+.va-banner-info,
+.va-banner-brand {
+  border-left-color: var(--va-brand);
+}
+.va-banner-warning,
+.va-banner-warn {
+  border-left-color: var(--va-mat-major);
+}
+.va-banner-danger {
+  border-left-color: var(--va-mat-critical);
+}
+.va-banner-success {
+  border-left-color: var(--va-success-text);
+}
+
+/* ---------------------------------------------------------------------------
+   Review header — what the reviewer is being asked to do
+   --------------------------------------------------------------------------- */
+
+/* Replaces a yellow warning box. Drift on a signed record is not a warning
+   about a malfunction; it is the reviewer's actual work arriving. It reads as
+   a heading with a count, the way an inbox does. */
+.va-review-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--va-border);
+}
+
+.va-review-head__count {
+  font-size: var(--va-size-title);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--va-text);
+}
+
+.va-review-head__detail {
+  color: var(--va-text-subtle);
+  font-size: var(--va-size-dense);
+}
+
+/* ---------------------------------------------------------------------------
+   The ledger
+   --------------------------------------------------------------------------- */
+
+.va-ledger {
+  border: 1px solid var(--va-border);
+  border-radius: var(--va-radius-lg);
+  background: var(--va-surface);
+  overflow: hidden;
+}
+
+.va-ledger__row + .va-ledger__row {
+  border-top: 1px solid var(--va-border);
+}
+
+/* THE SPINE. Colour and presence encode materiality — an ordinal property, on
+   an ordinal channel. It is set as a border rather than a pseudo-element so it
+   survives the row being collapsed to a single line. */
+.va-ledger__row {
+  border-left: 3px solid var(--va-mat-cosmetic);
+}
+
+.va-ledger__row--CRITICAL {
+  border-left-color: var(--va-mat-critical);
+}
+.va-ledger__row--MAJOR {
+  border-left-color: var(--va-mat-major);
+}
+.va-ledger__row--MINOR {
+  border-left-color: var(--va-mat-minor);
+}
+
+.va-ledger__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 14px 16px;
+  background: none;
+  border: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.va-ledger__head:hover {
+  background: var(--va-surface-hover);
+}
+
+.va-ledger__head:focus-visible {
+  outline: 2px solid var(--va-focus);
+  outline-offset: -2px;
+}
+
+.va-ledger__name {
+  font-size: var(--va-size-body);
+  font-weight: 600;
+  color: var(--va-text);
+}
+
+/* The one-line summary beside a collapsed field. Truncates rather than wraps:
+   a collapsed row is an index entry, and an index entry is one line. */
+.va-ledger__meta {
+  font-size: var(--va-size-meta);
+  color: var(--va-text-subtle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Drawn rather than typed: a "▾" glyph renders at wildly different weights
+   across the fonts Jira ships on Windows, macOS and Linux, and at 12px the
+   difference is a chevron versus a speck. */
+.va-ledger__toggle {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  color: var(--va-text-subtle);
+  transform: rotate(-90deg);
+  transition: transform 120ms ease;
+}
+
+.va-ledger__toggle::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  margin-top: -3px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+}
+
+.va-ledger__toggle--open {
+  transform: none;
+}
+
+.va-ledger__head:hover .va-ledger__toggle {
+  color: var(--va-text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .va-ledger__toggle {
+    transition: none;
+  }
+}
+
+.va-ledger__body {
+  padding: 2px 16px 16px;
+}
+
+/* ---------------------------------------------------------------------------
+   Value chips — the answer to "what does 10000 mean"
+   --------------------------------------------------------------------------- */
+
+.va-change {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 4px 0 0;
+}
+
+.va-chip {
+  display: grid;
+  gap: 2px;
+  align-content: center;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--va-border);
+  border-radius: var(--va-radius);
+  background: var(--va-surface-sunken);
+}
+
+.va-chip--before {
+  background: var(--va-del-bg);
+  border-color: var(--va-del-line);
+}
+
+.va-chip--after {
+  background: var(--va-ins-bg);
+  border-color: var(--va-ins-line);
+}
+
+/* "was" / "now". Three letters doing real work: they carry the before/after
+   distinction for a reader who cannot see the red and green, and they say
+   which side is current without the reader inferring it from position. */
+.va-chip__side {
+  font-size: var(--va-size-micro);
+  font-weight: 600;
+}
+
+.va-chip--before .va-chip__side {
+  color: var(--va-del-ink);
+}
+.va-chip--after .va-chip__side {
+  color: var(--va-ins-ink);
+}
+
+.va-chip__value {
+  font-size: var(--va-size-body);
+  font-weight: 600;
+  color: var(--va-text);
+  overflow-wrap: anywhere;
+}
+
+/* THE STORED IDENTIFIER, KEPT. The name above it is what the value means; this
+   is what the signed record actually holds. A compliance tool showing one and
+   hiding the other is choosing which of them the auditor gets to see. */
+.va-chip__id {
+  font-family: var(--va-font-mono);
+  font-size: var(--va-size-micro);
+  color: var(--va-text-subtle);
+  overflow-wrap: anywhere;
+}
+
+.va-flow {
+  display: flex;
+  align-items: center;
+  color: var(--va-text-subtlest);
+  font-size: var(--va-size-lead);
+}
+
+/* ---------------------------------------------------------------------------
+   Attribution — who, when, how many times
+   --------------------------------------------------------------------------- */
+
+.va-trace {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--va-border);
+}
+
+.va-trace__title {
+  font-size: var(--va-size-meta);
+  font-weight: 600;
+  color: var(--va-text-subtle);
+}
+
+/* Name left, timestamp right, so a field touched five times reads as a column
+   of dates rather than five sentences. */
+.va-trace-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-top: 6px;
+  font-size: var(--va-size-meta);
+  color: var(--va-text);
+}
+
+.va-trace-row time {
+  flex: 0 0 auto;
+  color: var(--va-text-subtle);
+}
+
+/* ---------------------------------------------------------------------------
+   Rich text and inline diffs
+   --------------------------------------------------------------------------- */
+
+.va-diff-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--va-border);
+  border-radius: var(--va-radius);
+  padding: 4px 0;
+  background: var(--va-surface-sunken);
+}
+
+.va-block {
+  padding: 6px 12px;
+  border-left: 3px solid transparent;
+}
+
+.va-block-insert {
+  background: var(--va-ins-bg);
+  border-left-color: var(--va-ins-line);
+}
+.va-block-delete {
+  background: var(--va-del-bg);
+  border-left-color: var(--va-del-line);
+  text-decoration: line-through;
+}
+.va-block-move {
+  border-left-color: var(--va-brand);
+}
+.va-block-modified,
+.va-block-markonly {
+  border-left-color: var(--va-mat-major);
+}
+
+.va-ins {
+  background: var(--va-ins-bg);
+  color: var(--va-ins-ink);
+  text-decoration: none;
+  border-radius: 2px;
+  padding: 0 2px;
+}
+
+.va-del {
+  background: var(--va-del-bg);
+  color: var(--va-del-ink);
+  text-decoration: line-through;
+  border-radius: 2px;
+  padding: 0 2px;
+}
+
+/* Retained for the set/link/attachment diffs, which are lists of items rather
+   than a before/after pair and so do not use the two-chip treatment. */
+.va-pill-change {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.va-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border: 1px solid var(--va-border);
+  border-radius: var(--va-radius);
+  background: var(--va-surface-sunken);
+  font-size: var(--va-size-dense);
+}
+
+.va-pill-before {
+  background: var(--va-del-bg);
+  border-color: var(--va-del-line);
+  text-decoration: line-through;
+}
+
+.va-pill-after {
+  background: var(--va-ins-bg);
+  border-color: var(--va-ins-line);
+  text-decoration: none;
+}
+
+/* ---------------------------------------------------------------------------
+   Baseline record
+   --------------------------------------------------------------------------- */
+
+.va-record-field {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--va-border);
+}
+
+.va-record-field:last-child {
+  border-bottom: none;
+}
+
+/* One disclosure affordance across the app. The browser default marker is a
+   solid triangle that matches nothing else on the page, and setting
+   display:flex on a summary silently removes it altogether in some engines —
+   leaving a row that expands with no sign that it can. */
+.va-record-field summary,
+.va-details > summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  list-style: none;
+}
+
+.va-record-field summary::-webkit-details-marker,
+.va-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.va-record-field summary::after,
+.va-details > summary::after {
+  content: '';
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  margin-left: 4px;
+  border-right: 1.5px solid var(--va-text-subtle);
+  border-bottom: 1.5px solid var(--va-text-subtle);
+  transform: rotate(-45deg) translate(-2px, -2px);
+  transition: transform 120ms ease;
+}
+
+.va-record-field[open] summary::after,
+.va-details[open] > summary::after {
+  transform: rotate(45deg) translate(-1px, -1px);
+}
+
+.va-details > summary {
+  font-size: var(--va-size-dense);
+  color: var(--va-text-subtle);
+  padding: 10px 0 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .va-record-field summary::after,
+  .va-details > summary::after {
+    transition: none;
+  }
+}
+
+.va-approved-value {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 8px 0 0;
+}
+
+.va-hash {
+  display: inline-block;
+  overflow-wrap: anywhere;
+  font-size: var(--va-size-micro);
+  color: var(--va-text-subtle);
+  background: var(--va-surface-sunken);
+  border: 1px solid var(--va-border);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
+.va-json {
+  white-space: pre-wrap;
+  max-height: 320px;
+  overflow: auto;
+  font-size: var(--va-size-meta);
+  background: var(--va-surface-sunken);
+  border: 1px solid var(--va-border);
+  border-radius: var(--va-radius);
+  padding: 12px;
+}
+
+/* ---------------------------------------------------------------------------
+   Controls
+   --------------------------------------------------------------------------- */
+
+.va-input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--va-border-strong);
+  border-radius: var(--va-radius);
+  background: var(--va-surface);
+  color: var(--va-text);
+  font: inherit;
+}
+
+.va-input:focus-visible {
+  outline: 2px solid var(--va-focus);
+  outline-offset: 1px;
+  border-color: var(--va-focus);
+}
+
+.va-button {
+  cursor: pointer;
+  padding: 6px 12px;
+  border: 1px solid var(--va-border);
+  border-radius: var(--va-radius);
+  background: var(--va-surface);
+  color: var(--va-text);
+}
+
+.va-button:focus-visible,
+.va-collapse:focus-visible,
+.va-cite:focus-visible {
+  outline: 2px solid var(--va-brand);
+  outline-offset: 2px;
+}
+
+.va-disclosure {
+  border-top: 1px solid var(--va-border);
+  padding-top: 4px;
+}
+
+.va-collapse {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: none;
+  border: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding: 10px 0;
+  font: inherit;
+}
+
+.va-collapse:hover {
+  color: var(--va-brand-text);
+}
+
+/* Evidence citation in the AI summary. Reads as a reference marker, which is
+   what it is — it points at the exact recorded change behind a claim. */
+.va-cite {
+  cursor: pointer;
+  color: var(--va-brand-text);
+  background: var(--va-brand-bg);
+  border: 1px solid var(--va-brand-line);
+  border-radius: var(--va-radius-pill);
+  padding: 2px 10px;
+  font-size: var(--va-size-micro);
+  font-weight: 600;
+}
+
+.va-cite:hover {
+  background: var(--va-surface-hover);
+}
+
+/* ---------------------------------------------------------------------------
+   Utilities
+   --------------------------------------------------------------------------- */
+
+.va-grow {
+  flex: 1;
+  min-width: 0;
+}
+.va-spread {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.va-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.va-subtlest {
+  color: var(--va-text-subtle);
+  font-size: var(--va-size-meta);
+}
+.va-h3 {
+  font-size: var(--va-size-dense);
+  font-weight: 600;
+}
+
+/* A cited field, flashed so the claim and its evidence are visibly one thing.
+   The only non-user-triggered motion in the app, and it answers a click. */
+.va-highlight {
+  outline: 2px solid var(--va-brand);
+  outline-offset: 2px;
+  border-radius: var(--va-radius-lg);
+  animation: va-flash 1.2s ease-out;
+}
+
+@keyframes va-flash {
+  from {
+    background: var(--va-brand-bg);
+  }
+  to {
+    background: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .va-highlight {
+    animation: none;
+  }
+}
+
+@media (max-width: 560px) {
+  .va-form-grid {
+    grid-template-columns: 1fr !important;
+  }
+  .va-row {
+    flex-wrap: wrap;
+  }
+  .va-table {
+    display: block;
+    overflow-x: auto;
+  }
+  .va-page {
+    padding: 16px;
+  }
+  .va-trace-row {
+    flex-direction: column;
+    gap: 2px;
+  }
+}

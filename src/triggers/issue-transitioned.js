@@ -2,127 +2,41 @@ import { captureBaseline } from '../lib/capture.js';
 import { collect, DETECTED_VIA } from '../lib/collect.js';
 import { getReview } from '../db/itemStateStore.js';
 
-/**
- * avi:jira:transitioned:issue
- *
- * Two jobs, and which one runs depends entirely on where the item went:
- *
- *   OUT of a review status through a configured gate → capture a baseline.
- *   INTO a review status                             → let the collector
- *                                                      disarm the standing one.
- *   anywhere else                                    → nothing. Onward movement
- *                                                      through the workflow
- *                                                      does not touch a
- *                                                      baseline (see
- *                                                      lib/interception.js).
- *
- * NEVER THROWS. A trigger that throws is retried by the platform, and an item
- * that fails permanently would be retried forever, burning invocations and
- * filling the logs with the same error.
- */
+import { retryEvent, eventTime } from './retry.js';
+
+/** Capture consumes the recorded approval; failures remain visible and retryable. */
 export async function run(event, suppliedDeps = null) {
-  const deps = suppliedDeps ?? await (await import('./runtime.js')).triggerRuntime();
+  const runtime = suppliedDeps ?? await (await import('./runtime.js')).triggerRuntime();
+  const deps = { captureBaseline, collect, getReview, ...runtime };
   const issue = event?.issue;
-  const changelog = event?.changelog;
-
-  if (!issue?.id || !issue?.key) {
-    console.warn('transitioned: event has no issue', JSON.stringify(Object.keys(event ?? {})));
-    return;
-  }
-
-  // WHICH EDGE THIS WAS, resolved from three sources rather than one.
-  //
-  // Everything downstream turns on from/to status ids: gatedTransition() looks
-  // the edge up by them, and if either comes back empty the lookup finds
-  // nothing, capture returns NOT_A_GATE — which is the ordinary case for most
-  // transitions and is deliberately not logged — and NOTHING IS BASELINED WITH
-  // NOTHING LOOKING BROKEN. That is the worst failure this app has, so the
-  // resolution does not rest on one payload shape holding.
+  if (!issue?.id || !issue?.key) return;
   const transition = resolveTransition(event);
-
   const issueId = Number(issue.id);
   const issueKey = String(issue.key);
   const now = Date.now();
-
-  // The transition's own timestamp, not "now". This is the drift epoch every
-  // later comparison is measured against, and taking it from the event rather
-  // than the clock is what makes the rewind in lib/baseline.js meaningful — the
-  // whole point is that the trigger ran LATER than the transition.
-  const transitionAt = parseTime(event?.timestamp ?? changelog?.created) ?? now;
-
-  const actorAccountId = event?.atlassianId
-    ?? event?.associatedUsers?.[0]?.accountId
-    ?? issue.fields?.reporter?.accountId
-    ?? null;
-
-  // Logged on every transition, at info, and worth the line: this is the only
-  // place that says which edge the app THINKS it saw. A gate that is configured
-  // and still not firing is almost always a status id that did not match, and
-  // without this the investigation starts with no evidence at all.
-  console.log('transitioned: edge', JSON.stringify({
-    issueKey,
-    fromStatusId: transition.from?.id ?? null,
-    toStatusId: transition.to?.id ?? null,
-    transitionId: transition.transitionId ?? null,
-    resolvedFrom: transition.source
-  }));
-
+  const transitionAt = eventTime(event) ?? now;
+  const actorAccountId = event?.atlassianId ?? event?.associatedUsers?.[0]?.accountId ?? null;
   try {
-    const result = await captureBaseline({
-      issueId,
-      issueKey,
-      transition,
-      actorAccountId,
-      transitionAt,
-      now
-    });
-
-    if (result.captured) {
-      console.log('transitioned: baselined', JSON.stringify({
-        issueKey,
-        version: result.version,
-        fidelity: result.fidelity,
-        retainedFields: result.retainedFields,
-        reviewer: result.reviewer ? 'assigned' : 'NONE'
-      }));
-      return;
+    const result = await deps.captureBaseline({ issueId, issueKey, transition,
+      actorAccountId, transitionAt, now });
+    if (['NO_APPROVAL', 'INSUFFICIENT_ASSURANCE'].includes(result.reason)) {
+      await deps.recordIncident(issueId, actorAccountId, 'UNAUTHORIZED_TRANSITION', now);
+    } else if (!result.captured && !['DISABLED', 'NOT_A_GATE', 'CAPTURE_DISABLED'].includes(result.reason)) {
+      await deps.recordIncident(issueId, actorAccountId, 'BASELINE_CAPTURE_FAILED', now);
+      return retryEvent(event, result.reason ?? 'CAPTURE_FAILED');
     }
-
-    // NOT_A_GATE is the common case — most transitions are not review gates.
-    // It still logs, but with the tuple that failed to match, because the one
-    // way this app fails invisibly is a gate that is configured and never
-    // matches: the transition succeeds, nothing is baselined, and there is no
-    // error anywhere to look at. One line per workflow move is a cheap price
-    // for that never being a mystery.
-    console.log('transitioned: not baselined', JSON.stringify({
-      issueKey,
-      reason: result.reason,
-      ...(result.lookup ? { lookup: result.lookup } : {})
-    }));
-
-    if (result.reason === 'NO_APPROVAL' || result.reason === 'INSUFFICIENT_ASSURANCE') {
-      if (deps.recordIncident) {
-        await deps.recordIncident(issueId, actorAccountId, 'UNAUTHORIZED_TRANSITION', now);
-      }
+    // Also compare after a successful capture: a delayed/duplicate transition
+    // event must not hide edits that arrived between signing and this read.
+    const review = await deps.getReview(issueId);
+    if (review?.baseline_id != null) {
+      const observed = await deps.collect({ issueId, issueKey, detectedVia: DETECTED_VIA.EVENT,
+        actorAccountId, eventId: event.eventId ?? event.id ?? null, eventAt: transitionAt, now });
+      if (['ERROR', 'UNREADABLE', 'BUSY'].includes(observed.outcome)) return retryEvent(event, observed.outcome);
     }
-
-    // The item moved somewhere that is not a gate. If it is being tracked, hand
-    // it to the collector: moving INTO a review status is what disarms a
-    // standing baseline, and the collector is the only place that rule lives.
-    const review = await getReview(issueId);
-    if (review && review.baseline_id != null) {
-      await collect({
-        issueId,
-        issueKey,
-        detectedVia: DETECTED_VIA.EVENT,
-        actorAccountId,
-        now
-      });
-    }
-  } catch (e) {
-    // Swallowed on purpose — see the header. Logged with enough context to find
-    // the item, and never with field values.
-    console.error('transitioned: handler failed', JSON.stringify({ issueKey }), e);
+    return result;
+  } catch {
+    console.error('transitioned: handler failed', JSON.stringify({ issueKey }));
+    return retryEvent(event, 'TRANSITION_HANDLER_FAILED');
   }
 }
 

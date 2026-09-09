@@ -204,3 +204,42 @@ test('an unrecognised custom field still reports that it changed', () => {
   assert.equal(result.changed, true);
   assert.equal(result.kind, 'unknown');
 });
+
+const { diffIssue, evidenceHash } = await import('../src/lib/diff/index.js');
+const evidenceFixture = (currentFields, changes = {}) => ({
+  baseline: { baseline_id: Buffer.from('baseline'), version: 1, transition_at: 100 },
+  baselineValues: { summary: 'Approved', labels: ['a'] },
+  currentFields,
+  controlledFields: [
+    { field_id: 'summary', field_name: 'Summary', field_kind: FIELD_KIND.TEXT, store_values: true },
+    { field_id: 'labels', field_name: 'Labels', field_kind: FIELD_KIND.MULTI, store_values: true }
+  ], driftRows: [], ...changes
+});
+test('review evidence binds live values before collector events arrive', () => {
+  const first = diffIssue(evidenceFixture({ summary: 'First edit', labels: ['a'] }));
+  const next = diffIssue(evidenceFixture({ summary: 'Second edit', labels: ['a'] }));
+  assert.notEqual(first.evidenceHash, next.evidenceHash);
+});
+test('review evidence normalization ignores multi-value and field ordering', () => {
+  const args = evidenceFixture({ summary: 'Edit', labels: ['a', 'b'] });
+  const first = diffIssue(args);
+  const next = diffIssue({ ...args, currentFields: { summary: 'Edit', labels: ['b', 'a'] }, controlledFields: [...args.controlledFields].reverse() });
+  assert.equal(first.evidenceHash, next.evidenceHash);
+});
+test('non-retained values bind evidence without being exposed in the diff', () => {
+  const options = { controlledFields: [{ field_id: 'secret', field_kind: FIELD_KIND.TEXT, store_values: false }] };
+  const first = diffIssue(evidenceFixture({ secret: 'one' }, options));
+  const next = diffIssue(evidenceFixture({ secret: 'two' }, options));
+  assert.notEqual(first.evidenceHash, next.evidenceHash);
+  assert.equal(first.fields[0].after, null);
+});
+test('collector attribution remains visible when Jira history is unavailable', () => {
+  const result = diffIssue(evidenceFixture({ summary: 'Edited', labels: ['a'] }, { driftRows: [
+    { key: 'event-1', field_id: 'summary', actor_name: 'Priya', actor_account_id: 'p', occurred_at: 200, source: 'USER', detected_via: 'EVENT' }
+  ] }));
+  assert.equal(result.fields[0].attribution[0]?.authorName, 'Priya');
+  assert.equal(result.fields[0].attribution[0]?.at, 200);
+});
+test('legacy evidenceHash callers still have stable sorted event identity', () => {
+  assert.equal(evidenceHash({version: 1}, [{key:'b'}, {key:'a'}]), evidenceHash({version:1}, [{key:'a'}, {key:'b'}]));
+});

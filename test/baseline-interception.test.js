@@ -196,10 +196,7 @@ test('a real edit is still caught when the tracked set has also narrowed', () =>
   assert.deepEqual(result.changedFields, ['priority']);
 });
 
-test('editing a field back to its approved value returns the item to BASELINED', () => {
-  // Somebody reverting their own edit is not drift a reviewer needs to act on.
-  // The drift rows already written stay — the change happened — but the item
-  // leaves the queue.
+test('editing a field back to its approved value preserves the outstanding review', () => {
   const baseline = project(APPROVED, FIELDS);
   const drifted = reviewFor({ ...APPROVED, priority: { id: '1' } }, { state: REVIEW_STATE.DRIFTED });
 
@@ -213,8 +210,8 @@ test('editing a field back to its approved value returns the item to BASELINED',
     now: 3000
   });
 
-  assert.equal(result.outcome, OUTCOME.SELF_REVERTED);
-  assert.equal(result.review.state, REVIEW_STATE.BASELINED);
+  assert.equal(result.outcome, OUTCOME.NO_CHANGE);
+  assert.equal(result.review.state, REVIEW_STATE.DRIFTED);
 });
 
 test('a decision or restore in flight blocks observation entirely', () => {

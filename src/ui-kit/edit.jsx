@@ -133,6 +133,7 @@ const Edit = () => {
   const [affirmed, setAffirmed] = useState(false);
   const [code, setCode] = useState('');
   const [token, setToken] = useState('');
+  const [evidenceHash, setEvidenceHash] = useState(null);
   const [status, setStatus] = useState({ kind: 'idle' });
 
   // Which controlled transition is being signed? The field's context tells
@@ -166,6 +167,7 @@ const Edit = () => {
         }
         setIssue(res.issue ?? null);
         setSignerName(res.actorName ?? null);
+        setEvidenceHash(res.drift?.evidenceHash ?? null);
         
         const opts = (res.transitions || []).map(t => ({
           ctId: t.transitionId,
@@ -179,7 +181,7 @@ const Edit = () => {
         const eligible = opts.filter((o) => o.eligible);
         
         let blockerMsg = null;
-        if (opts.length === 0) blockerMsg = "No transition rules apply here. A signature is not required to move this item.";
+        if (opts.length === 0) blockerMsg = "No configured signing transition is available. Ask a Jira administrator to check the published validator and the matching VAtlassian controlled transition.";
         else if (eligible.length === 0) blockerMsg = "You are not in the required approver role for this transition.";
         
         setBlocker(blockerMsg);
@@ -202,11 +204,15 @@ const Edit = () => {
   // frontend/src/panel/SignaturePanel.tsx): a code verified without one
   // records an identity check and calls it an attestation.
   useEffect(() => {
-    if (!issueKey || !ctId || !affirmed || code.length !== CODE_LENGTH) return;
+    if (!issueKey || !ctId || !affirmed || !evidenceHash || code.length !== CODE_LENGTH) return;
     let cancelled = false;
     setToken('');
     setStatus({ kind: 'verifying' });
-    invoke('approval:submit', { issueKey, transitionId: ctId, decision: 'APPROVE', code, preauthorize: true })
+    invoke('approval:challenge', { issueKey, transitionId: ctId, decision: 'APPROVE', expectedEvidenceHash: evidenceHash })
+      .then(challenge => {
+        if (!challenge?.success) throw new Error(challenge?.error ?? 'The reviewed content changed. Reopen the transition and review it again.');
+        return invoke('approval:submit', { issueKey, challengeId: challenge.challengeId, code, confirmed: true, preauthorize: true });
+      })
       .then((res) => {
         if (cancelled) return;
         if (res?.success) {
@@ -224,7 +230,7 @@ const Edit = () => {
       })
       .catch((e) => { if (!cancelled) setStatus({ kind: 'error', message: e.message }); });
     return () => { cancelled = true; };
-  }, [issueKey, ctId, affirmed, code]);
+  }, [issueKey, ctId, affirmed, code, evidenceHash]);
 
   // Changing WHICH statement is being signed withdraws the affirmation, and
   // clears any code and token already gathered under the old one. An

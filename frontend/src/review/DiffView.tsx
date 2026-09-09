@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { MaterialityBadge, When, Collapsible } from '../ui/feedback';
+import { MaterialityBadge, When } from '../ui/feedback';
 import { Badge } from '../ui/primitives';
 import type { ReactNode } from 'react';
 import type { DiffField, DiffOp, DiffBlock, DiffItem, MarkChange } from './types';
@@ -28,7 +28,7 @@ export default function DiffView({ fields, focusDriftId }: {fields: DiffField[];
   }
 
   return (
-    <div className="va-stack">
+    <div className="va-ledger">
       {fields.map((field) => (
         <FieldDiff
           key={field.fieldId}
@@ -51,30 +51,59 @@ function FieldDiff({ field, focused }: {field: DiffField;focused: boolean}) {
     if (focused) setOpen(true);
   }, [focused]);
 
-  const header = (
-    <>
-      <span className="va-grow va-truncate">
-        <strong>{field.fieldName}</strong>
-        <span className="va-muted" style={{ marginLeft: 8 }}>{field.summary}</span>
-      </span>
-      {field.retained === false && <Badge tone="neutral">not retained</Badge>}
-      {field.restorable === 'NO' && <Badge tone="neutral">cannot revert</Badge>}
-      <MaterialityBadge level={field.materiality} />
-    </>
-  );
+  const rowClass = [
+    'va-ledger__row',
+    `va-ledger__row--${field.materiality ?? 'COSMETIC'}`,
+    focused ? 'va-highlight' : ''
+  ].filter(Boolean).join(' ');
 
   return (
-    <div
-      id={`field-${field.fieldId}`}
-      className={focused ? 'va-highlight' : undefined}
-      style={{ borderRadius: 'var(--va-radius-lg)' }}
-    >
-      <Collapsible open={open} onToggle={() => setOpen((v) => !v)} header={header}>
-        <Body field={field} />
-        <Attribution field={field} />
-      </Collapsible>
+    <div id={`field-${field.fieldId}`} className={rowClass}>
+      <button
+        type="button"
+        className="va-ledger__head"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="va-ledger__name">{field.fieldName}</span>
+        {/* The one-line index entry. Only shown while collapsed — once the row
+            is open the values themselves are right there, and repeating them
+            in prose above is the kind of label that says nothing twice. */}
+        {!open && <span className="va-ledger__meta va-grow">{headline(field)}</span>}
+        {open && <span className="va-grow" />}
+        {field.retained === false && <Badge tone="neutral">value not kept</Badge>}
+        {field.restorable === 'NO' && <Badge tone="neutral">cannot revert</Badge>}
+        <MaterialityBadge level={field.materiality} />
+        {/* A disclosure marker, not the word "Hide" repeated down the column.
+            The button already carries aria-expanded, so the glyph is decoration
+            for the eye and the state is announced properly regardless. */}
+        <span className={open ? 'va-ledger__toggle va-ledger__toggle--open' : 'va-ledger__toggle'} aria-hidden />
+      </button>
+      {open && (
+        <div className="va-ledger__body">
+          <Body field={field} />
+          <Attribution field={field} />
+        </div>
+      )}
     </div>
   );
+}
+
+/** The collapsed row's single line: the change itself, in the reader's words. */
+function headline(field: DiffField): string {
+  if (field.retained === false) return 'Changed — approved value was not kept';
+  if (field.kind === 'multi' || field.kind === 'links' || field.kind === 'attachments') {
+    const added = (field.added ?? []).length;
+    const removed = (field.removed ?? []).length;
+    const parts = [];
+    if (added) parts.push(`${added} added`);
+    if (removed) parts.push(`${removed} removed`);
+    return parts.length ? parts.join(', ') : 'Changed';
+  }
+  if (field.kind === 'adf' || field.kind === 'text') return 'Text edited';
+  const before = display(field, field.before);
+  const after = display(field, field.after);
+  return `${before.text} to ${after.text}`;
 }
 
 function Body({ field }: {field: DiffField}) {
@@ -95,10 +124,10 @@ function Body({ field }: {field: DiffField}) {
   switch (field.kind) {
     case 'adf': return <AdfDiff blocks={field.blocks} />;
     case 'text': return <InlineDiff ops={field.ops} />;
-    case 'multi': return <SetDiff added={field.added} removed={field.removed} />;
+    case 'multi': return <SetDiff field={field} added={field.added} removed={field.removed} />;
     case 'links': return <LinkDiff field={field} />;
     case 'attachments': return <AttachmentDiff field={field} />;
-    default: return <ScalarDiff before={field.before} after={field.after} />;
+    default: return <ScalarDiff field={field} />;
   }
 }
 
@@ -203,24 +232,48 @@ function InlineDiff({ ops }: {ops?:DiffOp[]}) {
   );
 }
 
-function ScalarDiff({ before, after }: {before:unknown;after:unknown}) {
+/**
+ * The before/after pair.
+ *
+ * THE BUG THIS FIXES: it rendered "10000 → 3". Those are Jira's priority ids,
+ * because the comparison runs on normalised values and normalising a scalar
+ * keeps the identifier. Nobody can review that. The name now leads.
+ *
+ * The identifier is still printed underneath, and that is deliberate rather
+ * than leftover: the signed baseline holds the identifier, so it is the thing
+ * an auditor is actually looking at. Showing the name alone would be a nicer
+ * screen making a weaker claim.
+ */
+function ScalarDiff({ field }: {field: DiffField}) {
+  const before = display(field, field.before);
+  const after = display(field, field.after);
   return (
-    <div className="va-pill-change">
-      <span className="va-pill va-pill-before">{label(before)}</span>
-      <span className="va-arrow" aria-hidden style={{ display: 'inline-flex', alignItems: 'center' }}><IconArrowRight /></span>
-      <span className="va-pill va-pill-after">{label(after)}</span>
+    <div className="va-change">
+      <Chip side="was" value={before} />
+      <span className="va-flow" aria-hidden><IconArrowRight /></span>
+      <Chip side="now" value={after} />
     </div>
   );
 }
 
-function SetDiff({ added = [], removed = [] }: {added?:DiffItem[];removed?:DiffItem[]}) {
+function Chip({ side, value }: {side:'was'|'now'; value:{text:string;id?:string}}) {
+  return (
+    <span className={`va-chip va-chip--${side === 'was' ? 'before' : 'after'}`}>
+      <span className="va-chip__side">{side}</span>
+      <span className="va-chip__value">{value.text}</span>
+      {value.id && <span className="va-chip__id">id {value.id}</span>}
+    </span>
+  );
+}
+
+function SetDiff({ field, added = [], removed = [] }: {field:DiffField;added?:DiffItem[];removed?:DiffItem[]}) {
   return (
     <div className="va-pill-change">
-      {removed.map((item) => (
-        <span key={`r-${item}`} className="va-pill va-pill-before" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><IconRemove /> {label(item)}</span>
+      {removed.map((item, i) => (
+        <span key={`r-${i}`} className="va-pill va-pill-before"><IconRemove /> {display(field, item).text}</span>
       ))}
-      {added.map((item) => (
-        <span key={`a-${item}`} className="va-pill va-pill-after" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><IconAdd /> {label(item)}</span>
+      {added.map((item, i) => (
+        <span key={`a-${i}`} className="va-pill va-pill-after"><IconAdd /> {display(field, item).text}</span>
       ))}
       {added.length === 0 && removed.length === 0 && <span className="va-muted">No change.</span>}
     </div>
@@ -232,15 +285,15 @@ function LinkDiff({ field }: {field:DiffField}) {
     <>
       <div className="va-pill-change">
         {(field.removed ?? []).map((l, i) => (
-          <span key={`r${i}`} className="va-pill va-pill-before" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><IconRemove /> {describeLink(l)}</span>
+          <span key={`r${i}`} className="va-pill va-pill-before"><IconRemove /> {describeLink(l)}</span>
         ))}
         {(field.added ?? []).map((l, i) => (
-          <span key={`a${i}`} className="va-pill va-pill-after" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><IconAdd /> {describeLink(l)}</span>
+          <span key={`a${i}`} className="va-pill va-pill-after"><IconAdd /> {describeLink(l)}</span>
         ))}
       </div>
       <div className="va-subtlest" style={{ marginTop: 8 }}>
-        Issue links are listed but not reverted automatically — deleting a link somebody
-        made deliberately is a different act from resetting a field value.
+        Rejecting these changes restores the approved links, subject to Jira permissions.
+        The restore result verifies the complete set afterward.
       </div>
     </>
   );
@@ -250,14 +303,14 @@ function AttachmentDiff({ field }: {field:DiffField}) {
   return (
     <>
       <div className="va-pill-change">
-        {(field.removed ?? []).map((a) => (
-          <span key={`r${label(a)}`} className="va-pill va-pill-before" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><IconRemove /> {typeof a === 'string' ? a : a.filename}</span>
+        {(field.removed ?? []).map((a, i) => (
+          <span key={`r${i}`} className="va-pill va-pill-before"><IconRemove /> {typeof a === 'string' ? a : a.filename}</span>
         ))}
-        {(field.added ?? []).map((a) => (
-          <span key={`a${label(a)}`} className="va-pill va-pill-after" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><IconAdd /> {typeof a === 'string' ? a : a.filename}</span>
+        {(field.added ?? []).map((a, i) => (
+          <span key={`a${i}`} className="va-pill va-pill-after"><IconAdd /> {typeof a === 'string' ? a : a.filename}</span>
         ))}
-        {(field.replaced ?? []).map((a) => (
-          <span key={`x${label(a)}`} className="va-pill" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><IconRefresh /> {typeof a === 'string' ? a : a.filename} (same name, different file)</span>
+        {(field.replaced ?? []).map((a, i) => (
+          <span key={`x${i}`} className="va-pill"><IconRefresh /> {typeof a === 'string' ? a : a.filename} (same name, different file)</span>
         ))}
       </div>
       {(field.removed ?? []).length > 0 && (
@@ -293,21 +346,24 @@ function Attribution({ field }: {field:DiffField}) {
 
   return (
     <div className="va-trace">
-      <div className="va-row" style={{ marginBottom: 4 }}>
-        <strong style={{ fontSize: 12 }}>
+      <div className="va-row" style={{ marginBottom: 2 }}>
+        <span className="va-trace__title">
           Changed {trail.length === 1 ? 'once' : `${trail.length} times`} since approval
-        </strong>
+        </span>
         {field.churned && <Badge tone="neutral">ended where it started</Badge>}
       </div>
+      {/* Name left, time right. Five edits should read as a column of dates a
+          reviewer can scan, not five sentences they have to parse. */}
       {trail.map((t, i) => (
         <div className="va-trace-row" key={`${t.at}-${i}`}>
-          <When ms={t.at} />
           <span className="va-grow va-truncate">
-            {t.authorName ?? 'Unknown'}
-            {t.source === 'AUTOMATION' && <Badge tone="neutral"> automation</Badge>}
-            {t.source === 'APP' && <Badge tone="neutral"> app</Badge>}
-            {t.source === 'BASELINE' && <Badge tone="brand"> Baseline restore</Badge>}
+            {t.authorName ?? t.authorId ?? 'Unknown'}
+            {t.detected && <span className="va-muted"> · seen by VAtlassian, not in Jira history</span>}
+            {t.source === 'AUTOMATION' && <Badge tone="neutral">automation</Badge>}
+            {t.source === 'APP' && <Badge tone="neutral">app</Badge>}
+            {t.source === 'BASELINE' && <Badge tone="brand">restore</Badge>}
           </span>
+          <When ms={t.at} />
         </div>
       ))}
     </div>
@@ -320,10 +376,51 @@ function describeLink(l: DiffItem) {
   return `${l.type ?? 'link'} ${l.inward ?? l.outward ?? ''}`.trim();
 }
 
-function label(v: unknown) {
-  if (v === null || v === undefined) return '(empty)';
-  if (Array.isArray(v)) return v.length === 0 ? '(empty)' : v.join(', ');
-  if (typeof v === 'object') return String((v as Record<string, unknown>).name ?? (v as Record<string, unknown>).value ?? (v as Record<string, unknown>).displayName ?? (v as Record<string, unknown>).id ?? '(set)');
-  const s = String(v);
-  return s.length === 0 ? '(empty)' : s;
+/**
+ * One value, resolved for reading.
+ *
+ * Returns the display name and — only when the two genuinely differ — the
+ * stored identifier behind it, so the caller can show both. `valueLabels` is
+ * built by the backend from the raw values on both sides of the comparison,
+ * which is the only place a name survives normalisation.
+ *
+ * An identifier with no known name renders as itself. That is the honest
+ * outcome: an invented label would be worse than a bare id, because the reader
+ * could not tell it was invented.
+ */
+function display(field: DiffField, v: unknown): { text: string; id?: string } {
+  if (v === null || v === undefined) return { text: 'Empty' };
+  if (Array.isArray(v)) {
+    if (v.length === 0) return { text: 'Empty' };
+    return { text: v.map((item) => display(field, item).text).join(', ') };
+  }
+  if (typeof v === 'object') {
+    const o = v as Record<string, unknown>;
+    const name = o.name ?? o.displayName ?? o.value ?? o.filename;
+    if (name != null) return { text: String(name) };
+    const id = o.accountId ?? o.id ?? o.key;
+    return id == null ? { text: 'A structured value' } : display(field, id);
+  }
+
+  const raw = String(v);
+  if (raw.length === 0) return { text: 'Empty' };
+  const name = field.valueLabels?.[raw];
+  if (!name) return { text: raw };
+  return referenceable(raw) ? { text: name, id: raw } : { text: name };
+}
+
+/**
+ * Whether an identifier is one a person can actually use as a reference.
+ *
+ * A Jira entity id — priority 10000, status 3, an option id — is a real
+ * reference: it is what the signed baseline stores and what an auditor would
+ * quote. An Atlassian account id is not. It identifies a *person*, means
+ * nothing to the reader, and printing it beside their name is a disclosure with
+ * no corresponding benefit — the rule ui/format.ts exists to enforce.
+ *
+ * Numeric-only, and short. That admits the entity ids and excludes account ids
+ * in both their shapes ("5b10a2844c20165700ede21g" and "712020:8a3f11c2").
+ */
+function referenceable(id: string): boolean {
+  return /^[0-9]{1,12}$/.test(id);
 }

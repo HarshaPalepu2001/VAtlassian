@@ -158,7 +158,7 @@ function ProvenanceNote({ meta, groundingIssues = 0 }: {meta?:ReportMeta;groundi
         </span>
       )}
       <span className="va-subtlest" title={meta.model}>
-        AI summary{meta.cached ? ' · cached' : ''}
+        {meta.cached ? 'AI summary, from cache' : 'AI summary'}
       </span>
     </span>
   );

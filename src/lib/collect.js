@@ -16,6 +16,7 @@ import { suppressedFields } from '../db/restoreStore.js';
 import { voidOthers } from '../db/approvalStore.js';
 import { tryAppend } from '../db/store.js';
 import { EVENT } from './ledger.js';
+import { recordObservation } from '../db/observationStore.js';
 
 /**
  * The drift collector.
@@ -50,16 +51,17 @@ export const DETECTED_VIA = { EVENT: 'EVENT', SWEEP: 'SWEEP', RECONCILE: 'RECONC
  * permanently failing item would be retried forever. Errors are logged and
  * reported in the return value so the caller can count them.
  */
-export async function collect({ issueId, issueKey, detectedVia = DETECTED_VIA.EVENT, actorAccountId = null, now = Date.now() }) {
+export async function collect({ issueId, issueKey, detectedVia = DETECTED_VIA.EVENT, actorAccountId = null,
+  eventId = null, eventAt = null, now = Date.now() }) {
   try {
-    return await run({ issueId, issueKey, detectedVia, actorAccountId, now });
+    return await run({ issueId, issueKey, detectedVia, actorAccountId, eventId, eventAt, now });
   } catch (e) {
     console.error('collect: failed for', issueKey ?? issueId, e);
     return { outcome: 'ERROR', error: String(e?.message ?? e) };
   }
 }
 
-async function run({ issueId, issueKey, detectedVia, actorAccountId, now }) {
+async function run({ issueId, issueKey, detectedVia, actorAccountId, eventId, eventAt, now }) {
   const review = await getReview(issueId);
 
   // Never baselined and not tracked. Nothing to do, and importantly nothing to
@@ -71,8 +73,8 @@ async function run({ issueId, issueKey, detectedVia, actorAccountId, now }) {
 
   // A decision or restore is in flight. observe() would return BUSY anyway, but
   // returning here avoids reading the issue at all — and during a restore that
-  // read would be racing our own writes.
-  if (review.state === REVIEW_STATE.DECIDING || review.state === REVIEW_STATE.RESTORING) {
+  const isStaleLock = review.last_checked_at != null && now != null && (Number(now) - Number(review.last_checked_at) > 60000);
+  if ((review.state === REVIEW_STATE.DECIDING || review.state === REVIEW_STATE.RESTORING) && !isStaleLock) {
     return { outcome: OUTCOME.BUSY };
   }
 
@@ -80,10 +82,7 @@ async function run({ issueId, issueKey, detectedVia, actorAccountId, now }) {
   // took this baseline over the screen-scoped set, so measuring drift over a
   // wider one compares the approved state against fields it never recorded.
   const lookupKey = issueKey ?? review.issue_key;
-  const [issue, editmeta] = await Promise.all([
-    readIssue(lookupKey),
-    readEditmeta(lookupKey)
-  ]);
+  const issue = await readIssue(lookupKey);
   if (!issue) return { outcome: 'UNREADABLE' };
 
   const key = issue.key;
@@ -107,7 +106,7 @@ async function run({ issueId, issueKey, detectedVia, actorAccountId, now }) {
   // disagree. See scopeFromIssue() for why an unknown scope widens rather than
   // narrows.
   const { fields } = scopeFromIssue({
-    declared, issueFields: issue.fields, editmetaFields: editmeta?.fields
+    declared, issueFields: issue.fields
   });
 
   // DRIFT IS MEASURED OVER THE DECLARED SET, NOT OVER EVERY FIELD JIRA HAS.
@@ -124,6 +123,7 @@ async function run({ issueId, issueKey, detectedVia, actorAccountId, now }) {
   // Nothing declared means nothing to compare. Distinct from NOT_CONTROLLED,
   // which means this item's fields were checked and none had changed.
   if (fields.length === 0) return { outcome: 'NO_TRACKED_FIELDS' };
+  if (!baseline) return { outcome: 'ERROR', error: 'BASELINE_UNREADABLE' };
 
   const result = observe({
     prior: review,
@@ -134,6 +134,9 @@ async function run({ issueId, issueKey, detectedVia, actorAccountId, now }) {
     currentStatusId,
     now
   });
+  // Even an untracked-field update verifies and records the full projection.
+  await recordObservation({ issueId, baseline, fields, issueFields: issue.fields,
+    eventId, eventAt, actorAccountId, observedAt: now, detectedVia });
 
   // Keep the denormalised queue header honest. Cheap, and a stale summary on a
   // queue row is the kind of small wrongness that makes people distrust a list.
@@ -315,6 +318,7 @@ async function recordAll({
       maxMateriality: materialities.length > 0 ? maxMateriality(materialities) : null
     }
   });
+  if (!applied.updated) return { outcome: 'ERROR', error: 'CONCURRENT_OBSERVATION' };
 
   // ── Void any live approval ───────────────────────────────────────────────
   //

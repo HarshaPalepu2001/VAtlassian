@@ -8,6 +8,7 @@ import { scopeFromIssue } from '../lib/trackedFields.js';
 import { project } from '../lib/content.js';
 import { diffIssue } from '../lib/diff/index.js';
 import { fetchChangelog } from '../lib/changelog.js';
+import { DENY } from '../lib/errors.js';
 
 export function fail(reason) { const error = new Error(reason); error.reason = reason; throw error; }
 export function actorFrom(context) {
@@ -24,7 +25,7 @@ export async function readableIssue({ payload = {}, context }) {
   if (!issue.id || !issue.fields?.project?.id || !issue.fields?.issuetype?.id) fail('ISSUE_UNREADABLE');
   return issue;
 }
-export async function snapshot({ issue, actor, requireAuthority = false, expectedEvidenceHash, includeChangelog = true }) {
+export async function snapshot({ issue, actor, requireAuthority = false, expectedEvidenceHash, includeChangelog = true, transition = null }) {
   if (!actor?.accountId) fail('AUTHENTICATION_REQUIRED');
   const issueId = Number(issue.id);
   const projectId = Number(issue.fields.project.id);
@@ -37,14 +38,12 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
   ]);
   const editmeta = editResponse.ok ? (await editResponse.json()).fields ?? {} : {};
   const { fields } = scopeFromIssue({ declared, issueFields: issue.fields, editmetaFields: editmeta });
-  let gate = edge.gated ? edge : null;
-  if (!gate && baseline) gate = await gatedTransition({ projectId, issueTypeId,
+  let gate = transition ? await gatedTransition({ projectId, issueTypeId, fromStatusId,
+    toStatusId: String(transition.toStatusId) }) : null;
+  if (!transition && baseline) gate = await gatedTransition({ projectId, issueTypeId,
     fromStatusId: baseline.from_status_id, toStatusId: baseline.to_status_id });
   // Drift outlives review status. Resolve authority from configured scope, never assignment.
-  if (!gate && baseline) {
-    const gates = await listGatedTransitions(projectId);
-    gate = gates.find(row => row.state === 'ACTIVE' && [issueTypeId, '*'].includes(String(row.issue_type_id)));
-  }
+  if (!transition && !baseline) gate = edge.gated ? edge : null;
   const eligible = !!gate && await isEligible({ accountId: actor.accountId, projectId, issueTypeId, role: gate.required_role });
   if (requireAuthority && (!config.enabled || !eligible)) fail(config.enabled ? 'NOT_ELIGIBLE' : 'DISABLED');
   if (requireAuthority && !fields.length) fail('NO_TRACKED_FIELDS');
@@ -54,16 +53,48 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
       route`/rest/api/3/issue/${issue.key}/changelog?startAt=${startAt}&maxResults=${maxResults}`
     ), { sinceMs: Number(baseline.transition_at), maxPages: 5 }) : { entries: [] }
   ]) : [{}, [], { entries: [] }];
+  // The map the restore planner reads, which is deliberately NOT the one above.
+  //
+  // `editmeta` is what THIS reviewer may edit, and capture records `writable`
+  // from it, so widening it would change what that column means. The planner
+  // needs a different question answered: what can be written back AT ALL. A
+  // declared field that is not on this issue type's edit screen is absent from
+  // the user-scoped read, and the planner would refuse to restore exactly the
+  // field the reviewer rejected. Asked as the app, with the same overrides the
+  // executor writes under, so plan and write agree about what is possible.
+  const restoreEditmeta = requireAuthority && baseline
+    ? await overrideEditmeta(issue.key) ?? editmeta
+    : editmeta;
   const projection = project(issue.fields, fields);
   const diff = baseline ? diffIssue({ baseline, baselineValues, currentFields: issue.fields,
     controlledFields: fields, driftRows, changelogEntries: changelog.entries, queueThreshold: config.queueThreshold }) : null;
+  if (diff) {
+    diff.historyTruncated = changelog.truncated === true;
+    diff.historyUnavailable = changelog.failed === true;
+  }
   const evidenceHash = diff?.evidenceHash ?? projection.contentHash;
   if (expectedEvidenceHash != null && expectedEvidenceHash !== evidenceHash) fail('STALE_EVIDENCE');
   return { issue, actor, issueId, projectId, issueTypeId, config, baseline, review, gate,
-    eligible, fields, editmeta, baselineValues, driftRows, diff,
+    eligible, fields, editmeta, restoreEditmeta, baselineValues, driftRows, diff,
     contentHash: projection.contentHash, digests: projection.digests,
-    evidenceHash, baselineVersion: baseline?.version ?? 0, driftCount: driftRows.length, reportHash: null };
+    evidenceHash, baselineVersion: baseline?.version ?? 0,
+    driftCount: Math.max(driftRows.length, diff?.changedFieldCount ?? 0), reportHash: null };
 }
+/** null, never {}, so the caller can tell "nothing extra" from "could not ask"
+ *  and fall back to the user-scoped map rather than refusing every field. */
+async function overrideEditmeta(issueKey) {
+  try {
+    const res = await api.asApp().requestJira(
+      route`/rest/api/3/issue/${issueKey}/editmeta?overrideScreenSecurity=true&overrideEditableFlag=true`);
+    if (!res.ok) return null;
+    const body = await res.json();
+    return body?.fields && Object.keys(body.fields).length ? body.fields : null;
+  } catch (error) {
+    console.error('panelAccess: override editmeta unavailable', error);
+    return null;
+  }
+}
+
 export async function load(args, options = {}) {
   const issue = await readableIssue(args);
   return snapshot({ issue, actor: actorFrom(args.context), ...options });
@@ -76,5 +107,8 @@ export function serialise(value) {
 }
 export async function respond(operation) {
   try { return serialise(await operation()); }
-  catch (error) { return { error: error.message ?? String(error), reason: error.reason ?? 'ERROR' }; }
+  catch (error) {
+    const reason = error.reason ?? 'ERROR';
+    return { error: DENY[reason] ?? error.message ?? String(error), reason };
+  }
 }

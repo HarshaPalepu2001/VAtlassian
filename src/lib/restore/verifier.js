@@ -68,7 +68,8 @@ export async function verifyRestore({ api, issueKey, controlledFields, baselineD
     if (d.outcome !== OUTCOME.SUCCEEDED) return { ...d, verified: false };
 
     const expected = baselineDigests?.[d.fieldId] ?? null;
-    const actual = digests?.[d.fieldId] ?? null;
+    const actual = Object.hasOwn(current, d.fieldId) && current[d.fieldId] !== undefined
+      ? digests?.[d.fieldId] ?? null : null;
     if (expected != null && actual === expected) return { ...d, verified: true };
 
     return {
@@ -87,17 +88,19 @@ export async function verifyRestore({ api, issueKey, controlledFields, baselineD
   // we attempted landed", which is a different and much weaker claim.
   const byId = new Map(controlledFields.map((f) => [f.field_id, f]));
   const unmatched = [];
-  for (const [fieldId, expected] of Object.entries(baselineDigests ?? {})) {
-    const field = byId.get(fieldId);
-    if (!field) continue;                       // no longer tracked; not this restore's business
-    const actual = digests?.[fieldId] ?? null;
-    if (actual === expected) continue;
+  for (const [fieldId, field] of byId) {
+    const expected = baselineDigests?.[fieldId] ?? null;
+    const present = Object.hasOwn(current, fieldId) && current[fieldId] !== undefined;
+    const actual = present ? digests?.[fieldId] ?? null : null;
+    if (expected != null && present && actual === expected) continue;
     unmatched.push({
       fieldId,
       fieldName: field.field_name ?? fieldId,
       expected,
       actual,
-      reason: 'This tracked field does not match its approved value after the restore.'
+      reason: expected == null ? 'No approved digest was recorded for this tracked field, so it cannot be confirmed.'
+        : !present ? 'Jira omitted this tracked field from the verification read, so its value cannot be confirmed.'
+          : 'This tracked field does not match its approved value after the restore.'
     });
   }
 

@@ -5,3 +5,8 @@ frontend/dist/
 !.env.example
 .DS_Store
 *.log
+
+# Forge CLI working state. `.container-service-assets/local-account` holds a
+# live signed tunnel token — it is a credential and must never be committed.
+.forge/
+.container-service-assets/

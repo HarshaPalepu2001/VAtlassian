@@ -107,8 +107,8 @@ export async function currentVersion(issueId) {
  * new one is durable would leave a window where an item has NO active baseline
  * and every field reads as un-approved.
  */
-export async function writeBaseline({ baseline, values, raw, writable }) {
-  const baselineId = newId();
+export async function writeBaseline({ baseline, values, raw, writable, resume = null }) {
+  const baselineId = resume?.baseline_id ?? newId();
   const now = baseline.captured_at;
 
   // 1. Values first. Retained fields only — `values`/`raw` are already filtered
@@ -125,7 +125,7 @@ export async function writeBaseline({ baseline, values, raw, writable }) {
   }
   
   // 2. The baseline row. Until this exists, nothing above is visible.
-  await throwing(
+  if (!resume) await throwing(
     `INSERT INTO va_baseline
      (baseline_id, issue_id, project_id, issue_type_id, version, state, content_hash,
       field_digests, transition_id, from_status_id, to_status_id, approved_by, approved_name,
@@ -155,14 +155,12 @@ export async function writeBaseline({ baseline, values, raw, writable }) {
     ]
   );
 
-  const BATCH_SIZE = 5;
-  for (let i = 0; i < allRows.length; i += BATCH_SIZE) {
-    const batch = allRows.slice(i, i + BATCH_SIZE);
+  for (const batch of valueBatches(allRows)) {
     const placeholders = batch.map(() => '(?, ?, ?, ?, ?, ?, ?)').join(', ');
     const params = batch.flat();
     await throwing(
       `INSERT INTO va_baseline_value (issue_id, version, field_id, seq, encoding, raw_bytes, data)
-       VALUES ${placeholders}`,
+       VALUES ${placeholders} ON DUPLICATE KEY UPDATE data = data`,
       params
     );
   }
@@ -185,16 +183,33 @@ export async function writeBaseline({ baseline, values, raw, writable }) {
   // particular approval. Best-effort — a failure here costs the admin console a
   // warning, not the customer a baseline.
   if (writable) {
-    for (const [fieldId, canWrite] of Object.entries(writable)) {
+    const entries = Object.entries(writable);
+    for (let start = 0; start < entries.length; start += 100) {
+      const batch = entries.slice(start, start + 100);
       await executeQuery(
-        `UPDATE va_controlled_field SET writable = ?
-         WHERE project_id = ? AND issue_type_id = ? AND field_id = ?`,
-        [canWrite ? 1 : 0, baseline.project_id, baseline.issue_type_id, fieldId]
+        `UPDATE va_controlled_field SET writable = CASE field_id ${batch.map(() => 'WHEN ? THEN ?').join(' ')} ELSE writable END
+         WHERE project_id = ? AND issue_type_id = ? AND field_id IN (${batch.map(() => '?').join(',')})`,
+        [...batch.flatMap(([id, value]) => [id, value ? 1 : 0]), baseline.project_id, baseline.issue_type_id,
+          ...batch.map(([id]) => id)]
       );
     }
   }
 
   return { baselineId, valueBytes: totalBytes };
+}
+
+/** Keep requests below Forge SQL's 1 MiB JSON request limit, without a field cap. */
+export function valueBatches(rows) {
+  const batches = []; let batch = []; let bytes = 0;
+  for (const row of rows) {
+    const size = Buffer.byteLength(JSON.stringify(row), 'utf8') + 100;
+    if (batch.length && (bytes + size > 850000 || batch.length >= 100)) {
+      batches.push(batch); batch = []; bytes = 0;
+    }
+    batch.push(row); bytes += size;
+  }
+  if (batch.length) batches.push(batch);
+  return batches;
 }
 
 /**
@@ -205,27 +220,41 @@ export async function writeBaseline({ baseline, values, raw, writable }) {
  * retained", NEVER as an empty value. Those are completely different claims:
  * one says we chose not to store it, the other says the field was cleared.
  */
-export async function readValue(issueId, version, fieldId) {
-  const meta = await throwing(`SELECT seq FROM va_baseline_value
-    WHERE issue_id = ? AND version = ? AND field_id = ? ORDER BY seq ASC`, [issueId, version, fieldId]);
+export async function readValue(issueId, version, fieldId, query = throwing) {
   const chunks = [];
-  for (const { seq } of meta) {
-    const rows = await throwing(`SELECT seq, encoding, data FROM va_baseline_value
-      WHERE issue_id = ? AND version = ? AND field_id = ? AND seq = ?`, [issueId, version, fieldId, seq]);
-    if (!rows.length) throw new Error('BASELINE_VALUE_INCOMPLETE');
-    chunks.push(rows[0]);
+  let after = -1;
+  for (;;) {
+    const rows = await query(`SELECT seq, encoding, raw_bytes, data FROM va_baseline_value
+      WHERE issue_id = ? AND version = ? AND field_id = ? AND seq > ? ORDER BY seq ASC LIMIT 20`,
+    [issueId, version, fieldId, after]);
+    chunks.push(...rows);
+    if (rows.length < 20) break;
+    after = Number(rows.at(-1).seq);
   }
   return decodeValue(chunks);
 }
 
 /** Every retained value for a baseline, as { fieldId: value }. */
-export async function readAllValues(issueId, version) {
-  const rows = await throwing(`SELECT DISTINCT field_id FROM va_baseline_value
-    WHERE issue_id = ? AND version = ? ORDER BY field_id ASC`, [issueId, version]);
+export async function readAllValues(issueId, version, query = throwing) {
+  // 20 * 180k chunks stays below Forge SQL's 4 MiB response ceiling.
+  // Keyset pagination has no field-count cap and avoids one query per value.
+  const grouped = new Map();
+  let field = ''; let seq = -1;
+  for (;;) {
+    const rows = await query(`SELECT field_id, seq, encoding, raw_bytes, data FROM va_baseline_value
+      WHERE issue_id = ? AND version = ? AND (field_id > ? OR (field_id = ? AND seq > ?))
+      ORDER BY field_id ASC, seq ASC LIMIT 20`, [issueId, version, field, field, seq]);
+    for (const row of rows) {
+      if (!grouped.has(row.field_id)) grouped.set(row.field_id, []);
+      grouped.get(row.field_id).push(row);
+    }
+    if (rows.length < 20) break;
+    field = rows.at(-1).field_id; seq = Number(rows.at(-1).seq);
+  }
   const values = {};
-  for (const { field_id } of rows) {
-    const result = await readValue(issueId, version, field_id);
-    if (result.present) values[field_id] = result.value;
+  for (const [fieldId, chunks] of grouped) {
+    const result = decodeValue(chunks);
+    if (result.present) values[fieldId] = result.value;
   }
   return values;
 }
@@ -240,18 +269,8 @@ export async function retainedFieldIds(issueId, version) {
 }
 
 
-export async function pruneSupersededValues({ issueId, keepVersions = 2 }) {
-  const rows = await throwing(
-    `SELECT version FROM va_baseline WHERE issue_id = ?
-     ORDER BY version DESC LIMIT ${limitClause(keepVersions)}`,
-    [issueId]
-  );
-  if (rows.length === 0) return 0;
-  const floor = rows[rows.length - 1].version;
-
-  const result = await executeQuery(
-    'DELETE FROM va_baseline_value WHERE issue_id = ? AND version < ?',
-    [issueId, floor]
-  );
-  return affectedRows(result) ?? 0;
+export async function pruneSupersededValues() {
+  // A version count is not proof of a verified, value-complete archival copy.
+  // Retain signed snapshots until the export/retention workflow supplies one.
+  return 0;
 }

@@ -33,27 +33,29 @@ export async function getReview(issueId) {
   return rows.length > 0 ? decode(rows[0]) : null;
 }
 
-/**
- * Create or replace the review row for a freshly captured baseline.
- *
- * REPLACE rather than INSERT ... ON DUPLICATE KEY UPDATE because the column
- * list is long and every column is being set anyway: a new baseline resets the
- * whole row by definition. The `version` restarts at 0, which is correct — the
- * CAS token guards concurrent updates WITHIN a baseline's life, and a new
- * baseline is a new life.
- */
+/** Publish monotonically. Duplicate/older captures cannot clear newer drift,
+ * and the CAS version never resets (which would let an old observer win). */
 export async function upsertBaselined({
   issueId, issueKey, projectId, issueTypeId, summary,
   reviewerAccountId, reviewerName, baselineId, baselineVersion,
   contentHash, fieldDigests, lastChangelogId, now
 }) {
+  const newer = '(baseline_version IS NULL OR baseline_version < VALUES(baseline_version))';
+  const columns = ['issue_key', 'project_id', 'issue_type_id', 'summary', 'reviewer_account_id', 'reviewer_name',
+    'state', 'baseline_id', 'content_hash', 'field_digests', 'drift_count', 'drifted_field_count',
+    'max_materiality', 'last_drift_at', 'last_drift_by', 'last_checked_at', 'last_changelog_id'];
+  const updates = columns.map(column => `${column} = CASE WHEN ${newer} THEN VALUES(${column}) ELSE ${column} END`);
+  // baseline_version is assigned last because MySQL evaluates assignments in order.
+  updates.push(`version = CASE WHEN ${newer} THEN version + 1 ELSE version END`);
+  updates.push(`baseline_version = CASE WHEN ${newer} THEN VALUES(baseline_version) ELSE baseline_version END`);
   await throwing(
-    `REPLACE INTO va_item_state
+    `INSERT INTO va_item_state
      (issue_id, issue_key, project_id, issue_type_id, summary, reviewer_account_id, reviewer_name,
       state, baseline_id, baseline_version, content_hash, field_digests,
       drift_count, drifted_field_count, max_materiality,
       last_drift_at, last_drift_by, last_checked_at, last_changelog_id, version)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, FROM_BASE64(?), ?, ?, ?, 0, 0, NULL, NULL, NULL, ?, ?, 0)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, FROM_BASE64(?), ?, ?, ?, 0, 0, NULL, NULL, NULL, ?, ?, 0)
+     ON DUPLICATE KEY UPDATE ${updates.join(', ')}`,
     [
       issueId, issueKey, projectId, issueTypeId, truncate(summary, 255),
       reviewerAccountId ?? null, reviewerName ?? null,
@@ -127,14 +129,35 @@ export async function touch(issueId, now, lastChangelogId = undefined) {
  * rather than a flag — two reviewers clicking Reject at the same moment, one
  * wins.
  */
-export async function acquire({ issueId, expectedVersion, state }) {
+export async function acquire({ issueId, expectedVersion, state, allowedStates = null, now = Date.now(), staleOlderThan = 60000 }) {
+  const states = Array.isArray(allowedStates) && allowedStates.length ? allowedStates : null;
+  let stateClause = '';
+  const params = [state, now, issueId, expectedVersion];
+  if (states) {
+    stateClause = ` AND (state IN (${states.map(() => '?').join(', ')}) OR (state IN ('DECIDING', 'RESTORING') AND (last_checked_at IS NULL OR last_checked_at <= ?)))`;
+    params.push(...states, now - staleOlderThan);
+  }
   const result = await executeQuery(
-    `UPDATE va_item_state SET state = ?, version = version + 1
-     WHERE issue_id = ? AND version = ?
-       AND state NOT IN ('DECIDING', 'RESTORING')`,
-    [state, issueId, expectedVersion]
+    `UPDATE va_item_state SET state = ?, last_checked_at = ?, version = version + 1
+     WHERE issue_id = ? AND version = ?${stateClause}`,
+    params
   );
   return { acquired: (affectedRows(result) ?? 0) === 1 };
+}
+
+/** Break abandoned locks older than staleOlderThan and return them to the queue. */
+export async function recoverStaleLocks(now = Date.now(), staleOlderThan = 60000) {
+  const cutoff = now - staleOlderThan;
+  const result = await executeQuery(
+    `UPDATE va_item_state
+     SET state = CASE WHEN drift_count > 0 THEN '${REVIEW_STATE.DRIFTED}' ELSE '${REVIEW_STATE.BASELINED}' END,
+         last_checked_at = ?,
+         version = version + 1
+     WHERE state IN ('DECIDING', 'RESTORING')
+       AND (last_checked_at IS NULL OR last_checked_at <= ?)`,
+    [now, cutoff]
+  );
+  return affectedRows(result) ?? 0;
 }
 
 /** Release a lock into a settled state. Unconditional: we hold it. */
@@ -256,12 +279,13 @@ export async function queueForProject(projectId, { states = [REVIEW_STATE.DRIFTE
  * baseline to measure against, and
  * one that is DECIDING or RESTORING is mid-operation and must be left alone.
  */
-export async function dueForReconcile(limit = 50) {
+export async function dueForReconcile(limit = 50, now = Date.now(), staleOlderThan = 60000) {
   const rows = await throwing(
     `SELECT ${REVIEW_COLUMNS} FROM va_item_state
      WHERE state IN ('BASELINED', 'DRIFTED')
+        OR (state IN ('DECIDING', 'RESTORING') AND (last_checked_at IS NULL OR last_checked_at <= ?))
      ORDER BY last_checked_at ASC LIMIT ${limitClause(limit)}`,
-    []
+    [now - staleOlderThan]
   );
   return rows.map(decode);
 }
