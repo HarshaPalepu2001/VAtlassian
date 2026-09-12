@@ -96,8 +96,12 @@ async function overrideEditmeta(issueKey) {
 }
 
 export async function load(args, options = {}) {
-  const issue = await readableIssue(args);
-  return snapshot({ issue, actor: actorFrom(args.context), ...options });
+  const [issue, myself] = await Promise.all([
+    readableIssue(args),
+    api.asUser().requestJira(route`/rest/api/3/myself`).then(r => r.ok ? r.json() : null).catch(() => null)
+  ]);
+  const actor = { ...actorFrom(args.context), displayName: myself?.displayName ?? null };
+  return snapshot({ issue, actor, ...options });
 }
 export function serialise(value) {
   if (Buffer.isBuffer(value)) return value.toString('base64');

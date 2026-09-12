@@ -117,6 +117,7 @@ const Edit = () => {
   // declares the `issue-transition` experience, where an issue already
   // exists; on `issue-create` it would legitimately be undefined.
   const issueKey = context?.extension?.issue?.key;
+  const issueId = context?.extension?.issue?.id;
 
   // Which surface Jira actually mounted this on. Documented for custom fields
   // on the jira:customField reference ("Issue creation and issue transition
@@ -124,6 +125,15 @@ const Edit = () => {
   // useProductContext()`. Rendered below, because the single most useful fact
   // when a signature never gets created is whether THIS component ran at all.
   const renderContext = context?.extension?.renderContext;
+
+  // Jira's issue-transition field context carries the exact transition the
+  // signer is acting on (Jira's `issueTransition.id`). This is the
+  // disambiguator: an administrator places whichever field matches the rule's
+  // required assurance on that transition screen, so the field already knows
+  // which transition it is for. Field-level re-selection would allow signing
+  // the wrong sibling transition — exactly the failure this resolver exists
+  // to prevent. See the header in src/usecases/signing.js.
+  const transitionId = context?.extension?.issueTransition?.id;
 
   const [issue, setIssue] = useState(null);
   const [signerName, setSignerName] = useState(null);
@@ -157,7 +167,7 @@ const Edit = () => {
       return;
     }
     let cancelled = false;
-    invoke('panel:getState', { issueKey })
+    invoke('signing:context', { issueKey, issueId, transitionId, surface: 'esignature-field' })
       .then((res) => {
         if (cancelled) return;
         if (!res?.issue) {
@@ -169,29 +179,42 @@ const Edit = () => {
         setSignerName(res.actorName ?? null);
         setEvidenceHash(res.drift?.evidenceHash ?? null);
         
-        const opts = (res.transitions || []).map(t => ({
+        const list = res.actions || (res.transitions || []).filter(t => t.eligible !== false);
+        const opts = list.map(t => ({
           ctId: t.transitionId,
           meaning: t.meaning,
           requiredRole: t.requiredRole,
-          toStatusName: t.name,
+          toStatusName: t.toStatusName || t.name,
           toStatusId: t.toStatusId,
-          eligible: t.eligible
+          eligible: t.eligible !== false,
+          requiredAssurance: t.requiredAssurance
         }));
         
-        const eligible = opts.filter((o) => o.eligible);
-        
         let blockerMsg = null;
-        if (opts.length === 0) blockerMsg = "No configured signing transition is available. Ask a Jira administrator to check the published validator and the matching VAtlassian controlled transition.";
-        else if (eligible.length === 0) blockerMsg = "You are not in the required approver role for this transition.";
+        if (opts.length === 0) {
+          const reqRole = res.requiredRole || (res.transitions || []).find(t => t.requiredRole)?.requiredRole;
+          const isNotEligible = res.blocker === 'NOT_ELIGIBLE_FOR_RULE' || (!res.blocker && (res.transitions || []).some(t => t.eligible === false));
+          if (res.blocker === 'GATE_NOT_ENFORCED') {
+            blockerMsg = "The approval rule exists, but the VAtlassian validator is not attached to this transition in Jira. Ask a Jira administrator to re-attach it.";
+          } else if (res.blocker === 'WRONG_FIELD_FOR_RULE') {
+            blockerMsg = "This transition needs a biometric device check. Ask an administrator to put the 'Biometric Authentication' field on this transition screen.";
+          } else if (isNotEligible) {
+            blockerMsg = reqRole
+              ? `This transition is signed by ${reqRole}. You do not hold the approver role on this work item.`
+              : "You do not hold the approver role this transition requires.";
+          } else {
+            blockerMsg = "No configured signing transition is available. Ask a Jira administrator to check the published validator and the matching VAtlassian controlled transition.";
+          }
+        }
         
         setBlocker(blockerMsg);
-        setOptions(eligible);
-        if (eligible.length === 1) setCtId(eligible[0].ctId);
+        setOptions(opts);
+        if (opts.length === 1) setCtId(opts[0].ctId);
         setStatus({ kind: 'idle' });
       })
       .catch((e) => { if (!cancelled) setStatus({ kind: 'error', message: e.message }); });
     return () => { cancelled = true; };
-  }, [issueKey]);
+  }, [issueKey, transitionId]);
 
   // Verify + create the PENDING signature the moment a full code is present.
   // Keyed on [code, ctId] so one code is spent at most once: re-rendering
@@ -257,6 +280,22 @@ const Edit = () => {
 
   const selected = options?.find((o) => o.ctId === ctId) ?? null;
   const signable = options !== null && options.length > 0;
+
+  // THE ONE EDGE THIS SURFACE CANNOT SERVE. UI Kit renders declaratively on
+  // Atlassian's side: there is no DOM, no `window` and no `navigator` here, so
+  // navigator.credentials.get() cannot be called and a biometric edge can
+  // never be satisfied from this field. Offering the code box anyway produced
+  // the worst possible outcome — the signer types a valid code, and the server
+  // refuses it as INSUFFICIENT_ASSURANCE because an ESIGNATURE does not meet a
+  // BIOMETRIC policy. Say so instead, and name the field that does serve it.
+  //
+  // A literal comparison is correct rather than an effectiveAssurance() call:
+  // BIOMETRIC is the only level above the floor in lib/approval/levels.js, so
+  // every other policy is enforced AS an electronic signature and is signable
+  // right here. Deliberately no cross-directory import — a broken bundle on
+  // this surface makes Jira fall back to its built-in text editor, which is
+  // the failure this file's header exists to prevent.
+  const needsDeviceCheck = selected?.requiredAssurance === 'BIOMETRIC';
 
   return (
     <CustomFieldEdit onSubmit={onSubmit} disableSubmitOnEnter>
@@ -351,7 +390,18 @@ const Edit = () => {
             here and on both Custom UI signing surfaces, so that the three
             routes to the same ledger entry demand the same act. `label` is a
             plain string on purpose — see the Text-nesting caution above. */}
-        {selected && (
+        {needsDeviceCheck && (
+          <SectionMessage appearance="warning">
+            <Text weight="bold">This transition is confirmed with a device check.</Text>
+            <Text>
+              An authenticator code cannot satisfy it. Ask a Jira administrator to put the
+              "Biometric Authentication" field on this transition screen, or approve from
+              the VAtlassian panel on the work item and then run the transition.
+            </Text>
+          </SectionMessage>
+        )}
+
+        {selected && !needsDeviceCheck && (
           <Checkbox
             isChecked={affirmed}
             onChange={(e) => setAffirmed(e?.target?.checked ?? !affirmed)}
@@ -359,7 +409,7 @@ const Edit = () => {
           />
         )}
 
-        {signable && (
+        {signable && !needsDeviceCheck && (
           <Stack space="space.075">
             <Text weight="medium">Authenticator code</Text>
             <Textfield
