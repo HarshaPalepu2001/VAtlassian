@@ -13,7 +13,7 @@ import type { BaselineRecordData, BaselineField } from '../types';
  * Signatory and time are the two things an auditor looks for first, so they get
  * their own places on the page.
  */
-export default function BaselineRecord({ record }: {record: BaselineRecordData | null}) {
+export default function BaselineRecord({ record, baseline }: {record: BaselineRecordData | null, baseline?: {nodeCount:number;edgeCount:number;totalFieldCount:number;treeHash:string|null}}) {
   const [open, setOpen] = useState(false);
 
   if (!record) {
@@ -72,6 +72,17 @@ export default function BaselineRecord({ record }: {record: BaselineRecordData |
               {notRetained === 1 ? ' detects' : ' detect'} changes, but the approved
               {notRetained === 1 ? ' contents cannot' : ' contents cannot'} be shown or restored.
             </p>
+          )}
+          {baseline?.nodeCount != null && (
+            <div style={{ marginTop: 16 }}>
+              <strong>Recursive Baseline Tree</strong>
+              <ul style={{ margin: '8px 0 0 16px', padding: 0 }}>
+                <li><strong>Nodes:</strong> {baseline.nodeCount}</li>
+                <li><strong>Edges:</strong> {baseline.edgeCount}</li>
+                <li><strong>Total fields:</strong> {baseline.totalFieldCount}</li>
+                {baseline.treeHash && <li><strong>Tree Hash:</strong> <code className="va-hash">{baseline.treeHash}</code></li>}
+              </ul>
+            </div>
           )}
         </Collapsible>
 

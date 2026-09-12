@@ -21,7 +21,7 @@ const BASELINE_COLUMNS = `
   state, content_hash, field_digests, transition_id, from_status_id, to_status_id,
   approved_by, approved_name, transition_at, captured_at,
   assurance_level, TO_BASE64(approval_id) AS approval_id,
-  fidelity, field_count, value_bytes
+  fidelity, field_count, value_bytes, tree_hash, node_count, edge_count, total_field_count
 `;
 
 function decode(row) {

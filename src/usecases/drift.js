@@ -120,7 +120,7 @@ export async function applyApproval({ issue, actor, approval, prepared, resuming
           controlledFields: checked.fields,
           transitionAt: approval.decided_at ?? approval.signed_at ?? Date.now(),
           deps: {
-            readTree: createTreeReader(api.default.asUser()).read,
+            readTree: createTreeReader({ api: api.default, route: api.route }).read,
             readStableTree,
             planTreeCapture,
             writeTreeCapture,

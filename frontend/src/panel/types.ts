@@ -8,7 +8,14 @@ export type PanelState = {
  error?:string;reason?:string; issue?:{id?:string;key?:string;summary?:string;statusName?:string};
  tier?: 'actor' | 'observer'; state?: string;
  eligibility:{eligible:boolean;reason?:string}; approval:{requiredAssurance:AssuranceLevel;meaning?:string;pending?:PendingApproval|null};
- record:BaselineRecordData|null; drift:{count:number;materialCount:number;evidenceHash?:string;fields?:DiffField[]};
+ record:BaselineRecordData|null; 
+ baseline?:{nodeCount:number;edgeCount:number;totalFieldCount:number;treeHash:string|null};
+ drift:{
+   count:number;materialCount:number;evidenceHash?:string;
+   fields?:DiffField[];
+   addedNodes?:any[]; removedNodes?:any[]; movedNodes?:any[]; changedFields?:any[];
+ };
+ rejection?: { deleteIssueKeys: string[]; recreateCount: number };
  transitions?:Transition[];credentialEnrolled?:boolean;
  controls?:{unavailable?:boolean;incidents:{event_type:string;occurred_at:number}[];gateFindings:{finding_type:string;detail:string;last_seen_at:number}[]};
 };

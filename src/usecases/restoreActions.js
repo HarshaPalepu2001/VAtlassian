@@ -83,6 +83,7 @@ export async function performRestore({ prepared, actor, approval }) {
         readStableTree: treeReader.read,
         rootIssueKey: issue.key, baselineTree: tree, controlledFields: fields, replacements
       });
+      detail = [{ replacements: verified.replacements }];
       state = verified.matches
         ? verified.replacements.length ? 'COMPLETE_WITH_REPLACEMENTS' : 'COMPLETE'
         : verified.progress ? 'PARTIAL' : 'FAILED';

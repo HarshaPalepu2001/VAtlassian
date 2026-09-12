@@ -90,7 +90,24 @@ export default function ApprovalControls({state,issueKey,onDone,disabled=false}:
     {mode==='totp'&&state.credentialEnrolled===false&&<div style={{marginBottom:16}}><Notice>Enrol your authenticator in Jira personal settings, under VAtlassian authenticator, before signing.</Notice></div>}
     <div className="va-attest__consequence">
      <AssuranceChip level={level}/>
-     <span>{decline?'The governed issue tree will be returned to its approved content.':transition?.capturesBaseline?'A recursive baseline will be captured from the approved issue tree.':'This transition records the approval without replacing the active baseline.'}</span>
+     {decline ? (
+      <div className="va-stack" style={{marginLeft: 12}}>
+       <span>The governed issue tree will be returned to its approved content.</span>
+       {!!state.rejection?.deleteIssueKeys?.length && (
+        <span className="va-warning-text"><strong>Permanently delete:</strong> {state.rejection.deleteIssueKeys.join(', ')}</span>
+       )}
+       {!!state.rejection?.recreateCount && (
+        <span className="va-warning-text"><strong>Recreate {state.rejection.recreateCount} missing nodes.</strong></span>
+       )}
+      </div>
+     ) : (
+      <div className="va-stack" style={{marginLeft: 12}}>
+       <span>{transition?.capturesBaseline?'A recursive baseline will be captured from the approved issue tree.':'This transition records the approval without replacing the active baseline.'}</span>
+       {transition?.blocksOnDrift && !!state.baseline && (
+        <span className="va-warning-text">This transition is blocked if there are unapproved changes.</span>
+       )}
+      </div>
+     )}
     </div>
     <Affirmation checked={confirmed} onChange={setConfirmed} disabled={busy||disabled}>I have reviewed this work item and the changes shown. My decision will be recorded against my name.</Affirmation>
     {confirmed&&mode==='totp'&&<div style={{marginBottom:16}}><Field label="Authenticator code"><CodeInput value={code} onChange={setCode} disabled={busy||disabled} onSubmit={()=>{if(ready)void submit();}}/></Field></div>}

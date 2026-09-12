@@ -427,6 +427,20 @@ test('controls alerts are not rendered when controls is omitted from payload',as
  assert.doesNotMatch(container.textContent,/A control incident was recorded/);
 });
 
+const treeDriftState=()=>({...state(),tier:'actor',state:'Changes since approval need a decision',
+ eligibility:{eligible:true},transitions:[{transitionId:'5',toStatusId:'2',eligible:true,requiredAssurance:'ESIGNATURE',meaning:'Approve'}],
+ record:{version:2,fields:[]},
+ drift:{count:1,materialCount:1,fields:[],evidenceHash:'e1'},
+ rejection:{deleteIssueKeys:['NEW-1','NEW-2'],recreateCount:5}});
+
+test('reject confirmation names every added descendant to be deleted',async()=>{
+ setup(async key=>key==='panel:getState'?treeDriftState():{restores:[]});
+ await act(()=>root.render(React.createElement(IssuePanel,{issueKey:'T-1'})));await flush();
+ await act(()=>clickButton(/Reject and restore/i).click());await flush();
+ assert.match(container.textContent,/NEW-1, NEW-2/);
+ assert.match(container.textContent,/Recreate 5 missing nodes/i);
+});
+
 test('transition field sends Jira issueTransition.id to signing context',async()=>{
  const calls=[];
  setup(async(key,payload)=>{calls.push([key,payload]);

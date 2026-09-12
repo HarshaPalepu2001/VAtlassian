@@ -8,6 +8,13 @@ import { scopeFromIssue } from '../lib/trackedFields.js';
 import { project } from '../lib/content.js';
 import { diffIssue } from '../lib/diff/index.js';
 import { fetchChangelog } from '../lib/changelog.js';
+import { createTreeReader } from '../lib/tree/jira.js';
+import { readStableTree } from '../lib/tree/stableRead.js';
+import { planTreeCapture } from '../lib/tree/capturePlan.js';
+import { logicalNodeId } from '../lib/tree/model.js';
+import { diffTree } from '../lib/tree/diff.js';
+import { readBaselineTree } from '../db/baselineTreeStore.js';
+import { executeQuery } from '../lib/db.js';
 import { DENY } from '../lib/errors.js';
 
 export function fail(reason) { const error = new Error(reason); error.reason = reason; throw error; }
@@ -76,13 +83,8 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
   let tree = null, treeDiff = null, treeHash = null;
   const useTree = gate?.capture_baseline || baseline?.tree_hash;
   if (useTree) {
-    const { createTreeReader } = await import('../lib/tree/jira.js');
-    const { readStableTree } = await import('../lib/tree/stableRead.js');
-    const { planTreeCapture } = await import('../lib/tree/capturePlan.js');
-    const { diffTree } = await import('../lib/tree/diff.js');
-    
     const stable = await readStableTree({
-      readTree: createTreeReader(api.asUser()).read,
+      readTree: createTreeReader({ api, route }).read,
       rootIssueKey: issue.key,
       fieldIds: fields.map(f => f.field_id)
     });
@@ -93,15 +95,17 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
       nodes: tree.nodes,
       controlledFields: fields
     });
+    tree = {
+      ...stable.tree,
+      nodes: stable.tree.nodes.map(n => ({ ...n, logicalNodeId: logicalNodeId(n.id) }))
+    };
     treeHash = plan.treeHash;
     
     if (baseline?.tree_hash) {
-      const { readBaselineTree } = await import('../db/baselineTreeStore.js');
-      const { executeQuery } = await import('../lib/db.js');
       const baselineTree = await readBaselineTree(baseline.baseline_id, executeQuery);
       treeDiff = diffTree({
         baselineTree,
-        currentTree: plan,
+        currentTree: tree,
         controlledFields: fields
       });
     }

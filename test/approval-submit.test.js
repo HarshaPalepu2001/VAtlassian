@@ -334,6 +334,16 @@ test('challenge refuses a changed baseline even when the candidate content is id
   assert.equal(f.rows.length, 0);
 });
 
+test('challenge refuses confirmation if the drift list (and thus evidence hash) mutates mid-flow', async () => {
+  const f = fixture(), api = createApprovalUsecases(f.deps);
+  const challenge = await api.challenge(f.request);
+  const prepared = await f.deps.prepare();
+  f.deps.prepare = async () => ({ ...prepared, evidenceHash: 'new-mutated-hash' });
+  const result = await api.submit({ context: f.request.context, payload: { ...f.request.payload, challengeId: challenge.challengeId } });
+  assert.equal(result.success, false);
+  assert.equal(f.rows.length, 0);
+});
+
 test('electronic signature requires explicit affirmation before spending the code', async () => {
   const f = fixture();
   f.request.payload.confirmed = false;

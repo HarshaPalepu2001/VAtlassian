@@ -34,9 +34,18 @@ export default function DriftSection({ drift, issueKey }: {drift: PanelState['dr
           {plural(drift.count, 'change')} since approval
         </span>
         <span className="va-review-head__detail va-grow">
-          {drift.materialCount === 0
-            ? 'All of them are formatting only.'
-            : `${plural(drift.materialCount, 'change')} need${drift.materialCount === 1 ? 's' : ''} a decision.`}
+          {(drift.addedNodes || drift.removedNodes || drift.movedNodes) ? (
+            [
+              drift.changedFields?.length ? `${drift.changedFields.length} changed fields` : '',
+              drift.addedNodes?.length ? `${drift.addedNodes.length} added nodes` : '',
+              drift.removedNodes?.length ? `${drift.removedNodes.length} removed nodes` : '',
+              drift.movedNodes?.length ? `${drift.movedNodes.length} moved nodes` : ''
+            ].filter(Boolean).join(', ')
+          ) : (
+            drift.materialCount === 0
+              ? 'All of them are formatting only.'
+              : `${plural(drift.materialCount, 'change')} need${drift.materialCount === 1 ? 's' : ''} a decision.`
+          )}
         </span>
         <Button appearance={open ? 'subtle' : 'primary'} onClick={() => setOpen(!open)}>
           {open ? 'Hide changes' : 'Review changes'}

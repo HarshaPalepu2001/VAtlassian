@@ -140,16 +140,53 @@ export async function getState(args) { return respond(async () => {
   const descriptionEmpty = desc.length === 0;
   const description = descriptionTruncated ? desc.substring(0, 500) + '…' : desc;
 
+  let groupedDrift = {
+    addedNodes: [], removedNodes: [], movedNodes: [], changedFields: []
+  };
+  let deleteIssueKeys = [];
+  let recreateCount = 0;
+
+  if (state.treeDiff && state.treeDiff.changes) {
+    const currentNodesById = new Map(state.tree?.nodes?.map(n => [n.logicalNodeId, n]) ?? []);
+    for (const change of state.treeDiff.changes) {
+      if (change.kind === 'NODE_ADDED') {
+        const node = currentNodesById.get(change.logicalNodeId);
+        groupedDrift.addedNodes.push(node);
+        if (node?.key) {
+          deleteIssueKeys.push(node.key);
+        }
+      } else if (change.kind === 'NODE_REMOVED') {
+        groupedDrift.removedNodes.push(change);
+        recreateCount++;
+      } else if (change.kind === 'NODE_MOVED') {
+        groupedDrift.movedNodes.push(change);
+      } else if (change.kind === 'FIELD_CHANGED') {
+        groupedDrift.changedFields.push(change);
+      }
+    }
+  }
+
   const base = {
     issue: { id: issue.id, key: issue.key, summary: issue.fields.summary, status: issue.fields.status,
       description, descriptionEmpty, descriptionTruncated, assignee: issue.fields.assignee, reporter: issue.fields.reporter },
     tier,
     state: livingState,
     record,
+    baseline: state.baseline ? {
+      nodeCount: Number(state.baseline.node_count ?? 1),
+      edgeCount: Number(state.baseline.edge_count ?? 0),
+      totalFieldCount: Number(state.baseline.total_field_count ?? state.baseline.field_count ?? 0),
+      treeHash: state.baseline.tree_hash ?? null
+    } : undefined,
     drift: {
-      count: state.baseline ? (state.diff?.changedFieldCount ?? 0) : 0,
-      materialCount: state.baseline ? (state.diff?.materialFieldCount ?? 0) : 0,
-      evidenceHash: state.evidenceHash
+      count: state.baseline ? (state.diff?.changedFieldCount ?? state.treeDiff?.changes?.length ?? 0) : 0,
+      materialCount: state.baseline ? (state.diff?.materialFieldCount ?? state.treeDiff?.changes?.length ?? 0) : 0,
+      evidenceHash: state.evidenceHash,
+      ...groupedDrift
+    },
+    rejection: {
+      deleteIssueKeys,
+      recreateCount
     },
     approval: { pending: null }
   };

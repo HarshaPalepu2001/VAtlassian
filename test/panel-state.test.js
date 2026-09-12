@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 import { project } from '../src/lib/content.js';
+import { logicalNodeId } from '../src/lib/tree/model.js';
 
 /**
  * WHAT THE PANEL TELLS THE SCREEN.
@@ -21,6 +22,7 @@ const modules = {
   'db/configStore.js': ['controlledFields', 'projectConfig', 'gateActiveOutOf', 'gatedTransition',
     'listGatedTransitions', 'declaredFieldRows', 'seedControlledFields', 'countControlledFields'],
   'db/baselineStore.js': ['activeBaseline', 'readAllValues', 'baselineHistory'],
+  'db/baselineTreeStore.js': ['readBaselineTree'],
   'db/itemStateStore.js': ['getReview'],
   'db/driftStore.js': ['driftForIssue'],
   'db/approvalStore.js': ['approvalById', 'pendingApprovalForActor'],
@@ -34,7 +36,8 @@ const modules = {
 const hooks = registerHooks({
   resolve(specifier, context, next) {
     if (specifier === '@forge/api') return { url: 'fixture:api', shortCircuit: true };
-    const resolved = specifier.startsWith('.') ? new URL(specifier, context.parentURL).pathname : specifier;
+    let resolved = specifier;
+    try { resolved = specifier.startsWith('.') ? new URL(specifier, context.parentURL || 'file:///').pathname : specifier; } catch (e) {}
     const key = Object.keys(modules).find(k => resolved.endsWith('/' + k));
     return key ? { url: 'fixture:' + key, shortCircuit: true } : next(specifier, context);
   },
@@ -63,7 +66,7 @@ function fixture(overrides = {}) {
   const approvedValues = { summary: 'approved text' };
   const projected = project(approvedValues, fields);
   const issue = { id: '10', key: 'T-10',
-    fields: { summary: 'approved text', project: { id: '1' }, issuetype: { id: '1' }, status: { id: '100' } } };
+    fields: { summary: 'approved text', parent: null, project: { id: '1' }, issuetype: { id: '1' }, status: { id: '100' } } };
   const baseline = { baseline_id: Buffer.alloc(16, 1), issue_id: 10, version: 1, state: 'ACTIVE',
     content_hash: projected.contentHash, field_digests: JSON.stringify(projected.digests),
     from_status_id: '100', to_status_id: '200', transition_id: '31', transition_at: NOW - 1000,
@@ -90,7 +93,8 @@ function fixture(overrides = {}) {
     credentialState: async () => f.credential,
     isActiveAdmin: async () => false,
     isEligible: async () => true,
-    availableTransitions: async () => [{ id: '31', name: 'Approve', toStatusId: '200' }],
+    availableTransitions: async () => [{ id: '31', name: 'Approve to next', toStatusId: '200' }],
+    throwing: async () => [],
     request: async (_identity, url) => {
       const response = body => ({ ok: true, status: 200, json: async () => clone(body) });
       if (String(url).includes('/editmeta')) return response({ fields: editmeta });
@@ -245,7 +249,7 @@ test('when issue is in done category, living state reports completed and no tran
     issue: {
       id: '10', key: 'T-10',
       fields: {
-        summary: 'approved text', project: { id: '1' }, issuetype: { id: '1' },
+        summary: 'approved text', parent: null, project: { id: '1' }, issuetype: { id: '1' },
         status: { id: '100', statusCategory: { key: 'done' } }
       }
     }
@@ -296,3 +300,44 @@ test('baseline history is mapped from database snake_case to camelCase propertie
   assert.equal(h.assuranceLevel, 'ESIGNATURE');
 });
 
+
+test('panel returns structural drift and exact destructive consequences', async () => {
+  const f = fixture({
+    activeBaseline: async () => ({
+      baseline_id: Buffer.alloc(16, 1),
+      tree_hash: 'abc',
+      node_count: 5,
+      edge_count: 4,
+      total_field_count: 48,
+      from_status_id: '100', to_status_id: '200', transition_id: '31'
+    }),
+    readBaselineTree: async () => ({
+      nodes: [
+        { logicalNodeId: logicalNodeId('10'), issueKey: 'T-10', parentLogicalId: null, digests: { summary: '5c220e4800cda2aba11f631dacaca88f4c8bf8b5529ea30b657e5d978bf396a0' } },
+        { logicalNodeId: logicalNodeId('11'), issueKey: 'T-11', parentLogicalId: logicalNodeId('10'), digests: { summary: '76bb4b18bc769e84fb98bb7751b019f5474317821f558597e1fcd07637f1559f' } },
+        { logicalNodeId: 'removed-12', issueKey: 'T-12', parentLogicalId: logicalNodeId('10'), digests: {} }
+      ],
+      values: {}
+    }),
+    request: async (_identity, url, options = {}) => {
+      const response = body => ({ ok: true, status: 200, json: async () => body });
+      if (String(url).includes('/editmeta')) return response({ fields: {} });
+      if (options.method === 'POST' && String(url).includes('/search/jql')) {
+        const bodyStr = options.body;
+        if (bodyStr.includes('T-10')) {
+          return response({ issues: [
+            { id: '11', key: 'T-11', fields: { summary: 'story', parent: { id: '10' } } },
+            { id: '9', key: 'NEW-9', fields: { summary: 'new1', parent: { id: '10' } } },
+            { id: '100', key: 'NEW-10', fields: { summary: 'new2', parent: { id: '10' } } }
+          ]});
+        }
+        return response({ issues: [] });
+      }
+      return response({ ...f.issue, fields: { ...f.issue.fields, parent: null } });
+    }
+  });
+  const state = await getState(args);
+  assert.deepEqual(state.rejection.deleteIssueKeys.sort(), ['NEW-10', 'NEW-9'].sort());
+  assert.equal(state.rejection.recreateCount, 1);
+  assert.equal(state.baseline.totalFieldCount, 48);
+});
