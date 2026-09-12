@@ -1,4 +1,4 @@
-import { isAssuranceLevel } from '../lib/approval/levels.js';
+import { controlledAuthenticationMethod } from '../lib/approval/levels.js';
 import { validScope } from './adminRuntime.js';
 
 export function transitionInput(payload = {}) {
@@ -8,8 +8,8 @@ export function transitionInput(payload = {}) {
   if (![requiredRole, meaning].every(s => typeof s === 'string' && s.trim() === s && s.length > 0 && s.length <= 32)) {
     throw new Error('Role and meaning must be nonempty text of at most 32 characters, without surrounding spaces.');
   }
-  const requiredAssurance = payload.requiredAssurance ?? payload.required_assurance ?? 'ESIGNATURE';
-  if (!isAssuranceLevel(requiredAssurance)) throw new Error('Unknown required assurance level.');
+  const requiredAssurance = payload.requiredAssurance ?? payload.required_assurance;
+  controlledAuthenticationMethod(requiredAssurance); // throws for anything other than ESIGNATURE or BIOMETRIC
   const flags = {};
   for (const [camel, snake, fallback] of [['captureBaseline', 'capture_baseline', true],
     ['blockOnDrift', 'block_on_drift', true], ['requireDecision', 'require_decision', false]]) {

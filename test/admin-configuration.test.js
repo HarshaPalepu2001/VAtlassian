@@ -6,12 +6,20 @@ const edge = { projectId: '1', issueTypeId: '*', fromStatusId: '*', toStatusId: 
 
 test('edge creation stores assurance and both capture/drift policy flags', async () => {
   const deps = fixture();
-  const result = await admin.createControlledTransition(request({ ...edge, requiredAssurance: 'NATIVE_TRANSITION', captureBaseline: false, blockOnDrift: true }), deps);
+  const result = await admin.createControlledTransition(request({ ...edge, requiredAssurance: 'ESIGNATURE', captureBaseline: false, blockOnDrift: true }), deps);
   assert.equal(result.success, true);
   const insert = deps.calls.find(c => c.sql.includes('INSERT INTO va_controlled_transition'));
   assert.match(insert.sql, /required_assurance, capture_baseline, block_on_drift/);
-  assert.deepEqual(insert.params.slice(9, 13), ['NATIVE_TRANSITION', 0, 1, 0]);
-  assert.equal(deps.events[0].payload.requiredAssurance, 'NATIVE_TRANSITION');
+  assert.deepEqual(insert.params.slice(9, 13), ['ESIGNATURE', 0, 1, 0]);
+  assert.equal(deps.events[0].payload.requiredAssurance, 'ESIGNATURE');
+});
+
+test('controlled transitions refuse implicit or weaker authentication modes', async () => {
+  for (const requiredAssurance of [undefined, 'NATIVE_TRANSITION', 'JSM_APPROVAL']) {
+    const deps = fixture();
+    const result = await admin.createControlledTransition(request({ ...edge, requiredAssurance }), deps);
+    assert.equal(result.success, false, `requiredAssurance=${requiredAssurance} should be rejected`);
+  }
 });
 
 test('invalid assurance and nonboolean flags never reach persistence', async () => {

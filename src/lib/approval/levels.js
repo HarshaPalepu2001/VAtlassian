@@ -33,3 +33,18 @@ export function effectiveAssurance(required) {
   if (!isAssuranceLevel(required)) return MINIMUM_ASSURANCE;
   return meetsAssurance(required, MINIMUM_ASSURANCE) ? required : MINIMUM_ASSURANCE;
 }
+
+/**
+ * The EXACT authentication method configured for a controlled transition.
+ *
+ * Unlike effectiveAssurance(), this function NEVER silently raises weak levels:
+ * it throws for anything that is not an explicit ESIGNATURE or BIOMETRIC choice.
+ * Use it to (a) validate admin config — refuse NATIVE_TRANSITION/JSM_APPROVAL/
+ * undefined as invalid controlled-transition policies — and (b) dispatch the
+ * one exact provider at submit/challenge time. Never use it in the gate or in
+ * any code that handles uncontrolled-transition rows.
+ */
+export function controlledAuthenticationMethod(required) {
+  if (required === ASSURANCE_LEVEL.ESIGNATURE || required === ASSURANCE_LEVEL.BIOMETRIC) return required;
+  throw new Error(`Controlled transitions require an explicit ESIGNATURE or BIOMETRIC policy; got: ${required}`);
+}

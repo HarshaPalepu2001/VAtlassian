@@ -9,7 +9,7 @@ import {
 } from '../../ui/primitives';
 import { AssuranceChip } from '../../ui/feedback';
 import type { AssuranceLevel } from '../../lib/assurance';
-import { ASSURANCE_LABELS } from '../../lib/assurance';
+import { CONTROLLED_TRANSITION_ASSURANCE_OPTIONS } from '../../lib/assurance';
 import { formatDate } from '../../ui/format';
 
 type Project = { id: string; key: string; name: string };
@@ -254,7 +254,9 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
           </Field>
         </div>
 
-        <div className="va-form-grid" style={{marginTop:16}}><Field label="Required assurance"><Select value={requiredAssurance} onChange={v=>setAssurance(v as AssuranceLevel)} placeholder="Choose assurance" options={Object.entries(ASSURANCE_LABELS).map(([value,label])=>({value,label:label+(['JSM_APPROVAL','BIOMETRIC'].includes(value)?' (not configured)':'')}))}/></Field><Field label="Capture approved baseline"><input type="checkbox" checked={captureBaseline} onChange={e=>setCapture(e.target.checked)}/></Field><Field label="Block transition on unresolved drift"><input type="checkbox" checked={blockOnDrift} onChange={e=>setBlock(e.target.checked)}/></Field></div>
+        <div className="va-form-grid" style={{marginTop:16}}><Field label="Required assurance" hint={requiredAssurance==='BIOMETRIC'
+          ? 'Add the "Biometric Authentication" field to this transition screen.'
+          : 'Add the "Electronic Signature" field to this transition screen.'}><Select value={requiredAssurance} onChange={v=>setAssurance(v as AssuranceLevel)} placeholder="Choose assurance" options={CONTROLLED_TRANSITION_ASSURANCE_OPTIONS}/></Field><Field label="Capture approved baseline"><input type="checkbox" checked={captureBaseline} onChange={e=>setCapture(e.target.checked)}/></Field><Field label="Block transition on unresolved drift"><input type="checkbox" checked={blockOnDrift} onChange={e=>setBlock(e.target.checked)}/></Field></div>
         <div className="va-form-actions">
           <Button appearance="primary" onClick={handleCreate} isDisabled={saving || !complete}>
             {saving ? 'Adding…' : 'Add rule'}

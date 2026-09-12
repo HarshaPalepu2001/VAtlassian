@@ -1,5 +1,5 @@
 import { providerFor } from '../lib/approval/registry.js';
-import { meetsAssurance, isAssuranceLevel, effectiveAssurance } from '../lib/approval/levels.js';
+import { meetsAssurance, isAssuranceLevel, effectiveAssurance, controlledAuthenticationMethod } from '../lib/approval/levels.js';
 import { makeApproval, validEvidence } from '../lib/approval/record.js';
 import { FailClosed, DENY } from '../lib/errors.js';
 import { createChallengePayload, challengeContextHash } from '../lib/approval/challenge.js';
@@ -8,6 +8,23 @@ import { LOCK_TTL_MS } from '../lib/decision.js';
 import { REVIEW_STATE } from '../lib/interception.js';
 
 const fail = reason => { throw new FailClosed(reason); };
+/**
+ * Return only the evidence fields accepted by the configured provider, and
+ * reject any field that belongs to the OTHER provider. This runs BEFORE any
+ * provider is invoked, so a mismatched payload field is caught and returned
+ * as WRONG_AUTHENTICATION_METHOD without spending any OTP attempt or WebAuthn
+ * challenge.
+ */
+function providerInput(required, payload) {
+  if (required === 'BIOMETRIC') {
+    if (payload.code != null && payload.code !== '') fail('WRONG_AUTHENTICATION_METHOD');
+    return { webauthn: payload.webauthn };
+  }
+  // ESIGNATURE
+  if (payload.webauthn != null) fail('WRONG_AUTHENTICATION_METHOD');
+  return { code: payload.code };
+}
+
 const MAX_NOTE_LENGTH = 4000;
 function actorId(context) {
   if (typeof context?.accountId !== 'string' || !context.accountId) fail('NOT_ELIGIBLE');
@@ -109,7 +126,7 @@ export function createApprovalUsecases(deps) {
         if (hasTransition && !yes(ct.capture_baseline) && prepared.driftCount > 0) fail('UNDECIDED_DRIFT');
         if (challengeRow.operation_plan_hash !== challengeContextHash({ issue, transition, prepared, policy: ct })) fail('CONTENT_CHANGED');
 
-        required = effectiveAssurance(ct.required_assurance);
+        required = controlledAuthenticationMethod(ct.required_assurance);
         binding = { accountId, issueId: issue.issueId, fromStatusId: issue.statusId,
           toStatusId: transition?.toStatusId ?? issue.statusId, contentHash: prepared.contentHash, decision: challengeRow.decision };
         payload = { ...payload, decision: challengeRow.decision, note: approvalNote };
@@ -131,20 +148,29 @@ export function createApprovalUsecases(deps) {
         if (hasTransition && !yes(ct.capture_baseline) && prepared.driftCount > 0) fail('UNDECIDED_DRIFT');
         binding = { accountId, issueId: issue.issueId, fromStatusId: issue.statusId,
           toStatusId: transition?.toStatusId ?? issue.statusId, contentHash: prepared.contentHash, decision: payload.decision };
-        required = effectiveAssurance(ct.required_assurance);
+        required = controlledAuthenticationMethod(ct.required_assurance);
         payload = { ...payload, note: approvalNote };
       }
 
       // Preauthorization only defers Jira's transition; it is not affirmation.
       if (payload.confirmed !== true) fail('NO_DECISION');
-      const level = payload.code != null ? 'ESIGNATURE' : required;
-      const proof = await providerFor(level).verify({ binding, confirmed: payload.confirmed, code: payload.code, totpDeps: deps.totpDeps });
-      if (!proof.ok) {
+      // Dispatch to the ONE provider configured for this edge. providerInput()
+      // rejects any payload field belonging to the OTHER provider before any
+      // provider code runs (so no OTP attempt or WebAuthn challenge is spent).
+      const proof = await providerFor(required).verify({
+        binding: { ...binding, transitionId: transition?.id ?? null },
+        confirmed: payload.confirmed,
+        ...providerInput(required, payload),
+        totpDeps: deps.totpDeps,
+        webauthnDeps: deps.webauthnDeps,
+        context
+      });
+      if (!proof.ok || proof.level !== required) {
+        const reason = proof.reason ?? 'INSUFFICIENT_ASSURANCE';
         await deps.audit({ eventType: 'APPROVAL_REFUSED', actorAccountId: accountId, issueId: issue.issueId,
-          payload: { reason: proof.reason, requiredAssurance: required } });
-        return { success: false, reason: proof.reason, error: proof.error ?? DENY[proof.reason] ?? DENY.SERVICE_UNAVAILABLE };
+          payload: { reason, requiredAssurance: required } });
+        return { success: false, reason, error: proof.error ?? DENY[reason] ?? DENY.SERVICE_UNAVAILABLE };
       }
-      if (!meetsAssurance(proof.level, required)) fail('INSUFFICIENT_ASSURANCE');
 
       if (challengeRow && !await challenges.consume(challengeRow.challenge_id)) fail('NO_DECISION');
 

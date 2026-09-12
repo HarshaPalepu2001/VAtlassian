@@ -42,6 +42,7 @@ export function validEvidence(row) {
       && row.actor_account_id === row.account_id && row.evidence_hash === evidenceHash(row)
       && b.accountId === row.account_id && String(b.issueId) === String(row.issue_id)
       && (b.fromStatusId ?? null) === row.from_status_id && (b.toStatusId ?? null) === row.to_status_id
-      && b.contentHash === row.content_hash && b.decision === row.decision;
+      && b.contentHash === row.content_hash && b.decision === row.decision
+      && (b.transitionId ?? null) === (row.transition_id ?? null);
   } catch { return false; }
 }

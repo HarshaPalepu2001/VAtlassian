@@ -10,7 +10,7 @@ function fixture() {
   const issue = { issueId: 10, issueKey: 'T-10', projectId: 1, issueTypeId: '1', statusId: '1' };
   const deps = {
     now: () => 1700000000000, issue: async () => issue, actor: async id => ({ accountId: id, displayName: 'Name' }),
-    edge: async () => ({ required_assurance: 'NATIVE_TRANSITION', required_role: 'reviewer', meaning: 'Approve', capture_baseline: true, block_on_drift: true }),
+    edge: async () => ({ required_assurance: 'ESIGNATURE', required_role: 'reviewer', meaning: 'Approve', capture_baseline: true, block_on_drift: true }),
     eligible: async () => true, transition: async () => ({ id: '5', toStatusId: '2' }),
     prepare: async () => ({ contentHash: 'a'.repeat(64), evidenceHash: 'e'.repeat(64), baselineVersion: 1, driftCount: 0 }),
     apply: async () => ({ success: true }), record: async row => rows.push(row), audit: async event => events.push(event),
@@ -71,6 +71,104 @@ test('electronic signature challenge completes with an authenticator code and no
   assert.equal(result.success, true);
   assert.equal(f.rows[0].state, 'CONSUMED');
 });
+
+test('biometric challenge records a WebAuthn-backed approval through the same approval row', async () => {
+  const f = fixture();
+  const edge = await f.deps.edge();
+  f.deps.edge = async () => ({ ...edge, required_assurance: 'BIOMETRIC' });
+  let totpSpent = false;
+  f.deps.totpDeps.consume = async () => { totpSpent = true; return true; };
+  f.deps.webauthnDeps = {
+    verifyAssertion: async ({ binding, payload }) => {
+      assert.equal(binding.accountId, 'trusted');
+      assert.equal(binding.issueId, 10);
+      assert.equal(binding.decision, 'APPROVE');
+      assert.equal(binding.contentHash, 'a'.repeat(64));
+      assert.equal(payload.challengeId, 'webauthn-challenge');
+      return {
+        ok: true,
+        credentialId: 'credential-1',
+        assertionAssurance: 'DEVICE_BOUND_UV',
+        rpId: 'app.cdn.prod.atlassian-dev.net',
+        origin: 'https://app.cdn.prod.atlassian-dev.net',
+        verifiedAt: f.deps.now()
+      };
+    }
+  };
+  const api = createApprovalUsecases(f.deps);
+  const challenge = await api.challenge(f.request);
+  const result = await api.submit({
+    context: { accountId: 'trusted' },
+    payload: {
+      issueKey: 'T-10',
+      challengeId: challenge.challengeId,
+      confirmed: true,
+      webauthn: { challengeId: 'webauthn-challenge', response: { id: 'credential-1' } }
+    }
+  });
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(totpSpent, false);
+  assert.equal(f.rows[0].assurance_level, 'BIOMETRIC');
+  assert.equal(f.rows[0].provider_id, 'webauthn');
+  assert.equal(JSON.parse(f.rows[0].provider_evidence).method, 'SESSION_AND_WEBAUTHN');
+});
+
+for (const decision of ['APPROVE', 'REJECT']) {
+  test(`drift ${decision.toLowerCase()} follows the configured biometric assurance from the controlled transition`, async () => {
+    const f = fixture();
+    delete f.request.payload.transitionId;
+    f.request.payload.decision = decision;
+    f.request.payload.preauthorize = false;
+    const edge = await f.deps.edge();
+    f.deps.edge = async () => ({ ...edge, required_assurance: 'BIOMETRIC', meaning: 'Bug Done' });
+    const prepared = await f.deps.prepare();
+    f.deps.prepare = async () => ({
+      ...prepared,
+      driftCount: 2,
+      review: { state: 'DRIFTED' },
+      baseline: { baseline_id: Buffer.alloc(16, 1), content_hash: 'b'.repeat(64) }
+    });
+    let webauthnChecked = false;
+    f.deps.webauthnDeps = {
+      verifyAssertion: async ({ binding, payload }) => {
+        webauthnChecked = true;
+        assert.equal(binding.decision, decision);
+        assert.equal(payload.challengeId, 'webauthn-challenge');
+        return {
+          ok: true,
+          credentialId: 'credential-1',
+          assertionAssurance: 'DEVICE_BOUND_UV',
+          rpId: 'app.cdn.prod.atlassian-dev.net',
+          origin: 'https://app.cdn.prod.atlassian-dev.net',
+          verifiedAt: f.deps.now()
+        };
+      }
+    };
+
+    const api = createApprovalUsecases(f.deps);
+    const challenge = await api.challenge(f.request);
+    assert.equal(challenge.success, true, JSON.stringify(challenge));
+    assert.equal(challenge.requiredAssurance, 'BIOMETRIC');
+    assert.equal(challenge.meaning, 'Bug Done');
+
+    const result = await api.submit({
+      context: { accountId: 'trusted' },
+      payload: {
+        issueKey: 'T-10',
+        challengeId: challenge.challengeId,
+        confirmed: true,
+        webauthn: { challengeId: 'webauthn-challenge', response: { id: 'credential-1' } }
+      }
+    });
+
+    assert.equal(result.success, true, JSON.stringify(result));
+    assert.equal(webauthnChecked, true);
+    assert.equal(f.rows[0].assurance_level, 'BIOMETRIC');
+    assert.equal(f.rows[0].provider_id, 'webauthn');
+    assert.equal(f.rows[0].transition_id, null);
+    assert.equal(f.rows[0].meaning, 'Bug Done');
+  });
+}
 test('challenge submit rejects content that changed after the challenge was created', async () => {
   const f = fixture(), api = createApprovalUsecases(f.deps);
   const challenge = await api.challenge(f.request);
@@ -269,4 +367,75 @@ test('Jira preauthorization cannot substitute for the signer affirming the decla
   assert.equal(result.success, false);
   assert.equal(f.rows.length, 0);
   assert.equal(spentCode, false);
+});
+
+// A panel that always sends its code box, empty or not, must not silently
+// downgrade a biometric edge into an electronic signature it cannot satisfy.
+test('an empty signature code does not displace the required biometric assurance', async () => {
+  const f = fixture();
+  const edge = await f.deps.edge();
+  f.deps.edge = async () => ({ ...edge, required_assurance: 'BIOMETRIC' });
+  let totpSpent = false;
+  f.deps.totpDeps.consume = async () => { totpSpent = true; return true; };
+  let verified = false;
+  f.deps.webauthnDeps = {
+    verifyAssertion: async () => {
+      verified = true;
+      return { ok: true, credentialId: 'credential-1', assertionAssurance: 'DEVICE_BOUND_UV',
+        rpId: 'app.cdn.prod.atlassian-dev.net', origin: 'https://app.cdn.prod.atlassian-dev.net', verifiedAt: f.deps.now() };
+    }
+  };
+  const api = createApprovalUsecases(f.deps);
+  const challenge = await api.challenge(f.request);
+  const result = await api.submit({
+    context: { accountId: 'trusted' },
+    payload: {
+      issueKey: 'T-10',
+      challengeId: challenge.challengeId,
+      confirmed: true,
+      code: '',
+      webauthn: { challengeId: 'webauthn-challenge', response: { id: 'credential-1' } }
+    }
+  });
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(verified, true, 'the device assertion is what must be checked');
+  assert.equal(totpSpent, false);
+  assert.equal(f.rows[0].assurance_level, 'BIOMETRIC');
+});
+
+test('biometric policy refuses an injected TOTP code', async () => {
+  const f = fixture();
+  const edge = await f.deps.edge();
+  f.deps.edge = async () => ({ ...edge, required_assurance: 'BIOMETRIC' });
+  let providerCalled = false;
+  f.deps.totpDeps.consume = async () => { providerCalled = true; return true; };
+  f.deps.webauthnDeps = { verifyAssertion: async () => { providerCalled = true; return { ok: true }; } };
+  const api = createApprovalUsecases(f.deps);
+  const challenge = await api.challenge(f.request);
+  const result = await api.submit({
+    context: { accountId: 'trusted' },
+    payload: { issueKey: 'T-10', challengeId: challenge.challengeId, confirmed: true, code: '123456' }
+  });
+  assert.equal(providerCalled, false, 'no provider must be called before method mismatch check');
+  assert.equal(result.success, false);
+  assert.equal(result.reason, 'WRONG_AUTHENTICATION_METHOD');
+});
+
+test('electronic policy refuses WebAuthn substitution', async () => {
+  const f = fixture();
+  const edge = await f.deps.edge();
+  f.deps.edge = async () => ({ ...edge, required_assurance: 'ESIGNATURE' });
+  let providerCalled = false;
+  f.deps.totpDeps.consume = async () => { providerCalled = true; return true; };
+  f.deps.webauthnDeps = { verifyAssertion: async () => { providerCalled = true; return { ok: true }; } };
+  const api = createApprovalUsecases(f.deps);
+  const challenge = await api.challenge(f.request);
+  const result = await api.submit({
+    context: { accountId: 'trusted' },
+    payload: { issueKey: 'T-10', challengeId: challenge.challengeId, confirmed: true,
+      webauthn: { challengeId: 'webauthn-challenge', response: { id: 'cred-1' } } }
+  });
+  assert.equal(providerCalled, false, 'no provider must be called before method mismatch check');
+  assert.equal(result.success, false);
+  assert.equal(result.reason, 'WRONG_AUTHENTICATION_METHOD');
 });
