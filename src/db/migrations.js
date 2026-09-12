@@ -426,5 +426,102 @@ export const MIGRATIONS = [
     observation_id CHAR(64) NOT NULL, field_id VARCHAR(64) NOT NULL, seq INT NOT NULL,
     encoding VARCHAR(16) NOT NULL, raw_bytes INT NOT NULL, data MEDIUMTEXT NOT NULL,
     PRIMARY KEY (observation_id, field_id, seq)
-  )` }
+  )` },
+  { id: 'v029_webauthn_credential', sql: `CREATE TABLE IF NOT EXISTS va_webauthn_credential (
+    credential_row_id BINARY(16) NOT NULL,
+    account_id VARCHAR(128) NOT NULL,
+    credential_id VARCHAR(255) NOT NULL,
+    public_key TEXT NOT NULL,
+    sign_count BIGINT NOT NULL DEFAULT 0,
+    rp_id VARCHAR(255) NOT NULL,
+    origin VARCHAR(512) NOT NULL,
+    aaguid VARCHAR(64) NULL,
+    transports VARCHAR(128) NULL,
+    backup_eligible BOOLEAN NOT NULL DEFAULT FALSE,
+    backup_state BOOLEAN NOT NULL DEFAULT FALSE,
+    device_label VARCHAR(128) NULL,
+    state VARCHAR(16) NOT NULL,
+    enrolled_at BIGINT NOT NULL,
+    last_used_at BIGINT NULL,
+    PRIMARY KEY (credential_row_id),
+    UNIQUE KEY idx_webauthn_account_credential (account_id, credential_id),
+    KEY idx_webauthn_account_state (account_id, state, enrolled_at)
+  )` },
+  { id: 'v030_webauthn_challenge', sql: `CREATE TABLE IF NOT EXISTS va_webauthn_challenge (
+    challenge_id BINARY(16) NOT NULL,
+    account_id VARCHAR(128) NOT NULL,
+    purpose VARCHAR(16) NOT NULL,
+    challenge VARCHAR(255) NOT NULL,
+    binding_hash CHAR(64) NULL,
+    issue_id BIGINT NULL,
+    approval_challenge_id BINARY(16) NULL,
+    rp_id VARCHAR(255) NOT NULL,
+    created_at BIGINT NOT NULL,
+    expires_at BIGINT NOT NULL,
+    consumed_at BIGINT NULL,
+    PRIMARY KEY (challenge_id),
+    KEY idx_webauthn_challenge_account (account_id, consumed_at, expires_at),
+    KEY idx_webauthn_challenge_approval (approval_challenge_id)
+  )` },
+  { id: 'v032_baseline_tree_meta', sql: `ALTER TABLE va_baseline
+  ADD COLUMN tree_hash CHAR(64) NULL,
+  ADD COLUMN tree_schema_version INT NOT NULL DEFAULT 1,
+  ADD COLUMN node_count INT NOT NULL DEFAULT 1,
+  ADD COLUMN edge_count INT NOT NULL DEFAULT 0,
+  ADD COLUMN total_field_count INT NOT NULL DEFAULT 0` },
+  { id: 'v033_baseline_node', sql: `CREATE TABLE IF NOT EXISTS va_baseline_node (
+  baseline_id BINARY(16) NOT NULL,
+  logical_node_id CHAR(64) NOT NULL,
+  original_issue_id BIGINT NOT NULL,
+  current_issue_id BIGINT NOT NULL,
+  issue_key VARCHAR(32) NOT NULL,
+  parent_logical_node_id CHAR(64) NULL,
+  project_id BIGINT NOT NULL,
+  issue_type_id VARCHAR(32) NOT NULL,
+  content_hash CHAR(64) NOT NULL,
+  field_digests MEDIUMTEXT NOT NULL,
+  node_order INT NOT NULL,
+  PRIMARY KEY (baseline_id, logical_node_id),
+  UNIQUE KEY uq_baseline_original_issue (baseline_id, original_issue_id),
+  KEY idx_baseline_current_issue (current_issue_id, baseline_id)
+)` },
+  { id: 'v034_baseline_node_value', sql: `CREATE TABLE IF NOT EXISTS va_baseline_node_value (
+  baseline_id BINARY(16) NOT NULL,
+  logical_node_id CHAR(64) NOT NULL,
+  field_id VARCHAR(64) NOT NULL,
+  seq INT NOT NULL DEFAULT 0,
+  encoding VARCHAR(16) NOT NULL,
+  raw_bytes INT NOT NULL,
+  chunk TEXT NOT NULL,
+  PRIMARY KEY (baseline_id, logical_node_id, field_id, seq)
+)` },
+  { id: 'v035_tree_drift', sql: `CREATE TABLE IF NOT EXISTS va_tree_drift (
+  baseline_id BINARY(16) NOT NULL,
+  logical_node_id CHAR(64) NOT NULL,
+  field_id VARCHAR(64) NOT NULL,
+  field_name VARCHAR(256) NULL,
+  baseline_digest CHAR(64) NULL,
+  current_digest CHAR(64) NULL,
+  materiality VARCHAR(32) NULL,
+  detected_at BIGINT NOT NULL,
+  PRIMARY KEY (baseline_id, logical_node_id, field_id)
+)` },
+  { id: 'v036_restore_step', sql: `CREATE TABLE IF NOT EXISTS va_restore_step (
+  restore_id BINARY(16) NOT NULL,
+  logical_node_id CHAR(64) NOT NULL,
+  issue_id BIGINT NOT NULL,
+  started_at BIGINT NOT NULL,
+  finished_at BIGINT NULL,
+  success TINYINT(1) NULL,
+  detail TEXT NULL,
+  PRIMARY KEY (restore_id, logical_node_id)
+)` },
+  { id: 'v037_restore_replacement', sql: `CREATE TABLE IF NOT EXISTS va_restore_replacement (
+  restore_id BINARY(16) NOT NULL,
+  logical_node_id CHAR(64) NOT NULL,
+  old_issue_id BIGINT NOT NULL,
+  new_issue_id BIGINT NOT NULL,
+  replaced_at BIGINT NOT NULL,
+  PRIMARY KEY (restore_id, logical_node_id)
+)` }
 ];

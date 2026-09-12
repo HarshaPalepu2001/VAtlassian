@@ -2,6 +2,8 @@ import { executeQuery, toBinaryParam, fromBinaryColumn, limitClause, affectedRow
 import { newId, throwing } from './store.js';
 import { encodeValue, decodeValue } from '../lib/valuestore.js';
 
+export { encodeValue, decodeValue };
+
 /**
  * va_baseline and va_baseline_value.
  *
