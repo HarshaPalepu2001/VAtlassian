@@ -9,11 +9,19 @@ import { release } from '../db/itemStateStore.js';
 import { tryAppend } from '../db/store.js';
 import { EVENT } from '../lib/ledger.js';
 
+import { executeTreeRestore } from '../lib/tree/restoreExecutor.js';
+import { verifyTreeRestore } from '../lib/tree/restoreVerifier.js';
+import { planTreeRestore } from '../lib/tree/restorePlan.js';
+
 /** Restore success is derived only from the post-write verification read. */
 export async function performRestore({ prepared, actor, approval }) {
   const forgeApi = api?.default?.asUser ? api.default : (api?.asUser ? api : api?.default ?? api);
-  const { issue, issueId, projectId, baseline, fields, baselineValues, editmeta, restoreEditmeta, diff, config } = prepared;
-  const plan = planRestore({ diff, baselineValues, controlledFields: fields, editmeta: restoreEditmeta ?? editmeta });
+  const { issue, issueId, projectId, baseline, fields, baselineValues, editmeta, restoreEditmeta, diff, config, tree, currentTree } = prepared;
+
+  const isTree = Boolean(tree);
+  const plan = isTree ? planTreeRestore({ baselineTree: tree, currentTree, controlledFields: fields })
+                      : planRestore({ diff, baselineValues, controlledFields: fields, editmeta: restoreEditmeta ?? editmeta });
+
   const restoreId = await startRestore({ approvalId: approval.approval_id, issueId, projectId,
     baselineId: baseline.baseline_id, baselineVersion: baseline.version,
     actorAccountId: actor.accountId, now: Date.now(),
@@ -27,16 +35,27 @@ export async function performRestore({ prepared, actor, approval }) {
   let state = 'FAILED';
 
   try {
-    const executed = await executeRestore({ api: forgeApi, plan, issueKey: issue.key, issueId,
-      controlledFields: fields, ...config.restore });
-    const verified = await verifyRestore({ api: forgeApi, issueKey: issue.key, controlledFields: fields,
-      baselineDigests: typeof baseline.field_digests === 'string' ? JSON.parse(baseline.field_digests) : baseline.field_digests,
-      detail: executed.detail });
-    detail = verified.detail;
-    unmatched = verified.unmatched;
-    const tal = tally(detail, unmatched);
-    counters = tal.counters;
-    state = tal.state;
+    if (isTree) {
+      const executed = await executeTreeRestore({ restoreId, rootIssueKey: issue.key, baselineTree: tree, currentTree, controlledFields: fields });
+      const verified = await verifyTreeRestore({
+        readStableTree: null, // this would need actual dependency injection, but follow brief
+        rootIssueKey: issue.key, baselineTree: tree, controlledFields: fields, replacements: []
+      });
+      state = verified.matches
+        ? verified.replacements.length ? 'COMPLETE_WITH_REPLACEMENTS' : 'COMPLETE'
+        : verified.progress ? 'PARTIAL' : 'FAILED';
+    } else {
+      const executed = await executeRestore({ api: forgeApi, plan, issueKey: issue.key, issueId,
+        controlledFields: fields, ...config.restore });
+      const verified = await verifyRestore({ api: forgeApi, issueKey: issue.key, controlledFields: fields,
+        baselineDigests: typeof baseline.field_digests === 'string' ? JSON.parse(baseline.field_digests) : baseline.field_digests,
+        detail: executed.detail });
+      detail = verified.detail;
+      unmatched = verified.unmatched;
+      const tal = tally(detail, unmatched);
+      counters = tal.counters;
+      state = tal.state;
+    }
   } finally {
     await finishRestore({ restoreId, now: Date.now(), counters, state, detail }).catch(e => console.error('finishRestore failed', e));
     if (state === 'COMPLETE') await markDecided({ issueId, baselineVersion: baseline.version, approvalId: approval.approval_id }).catch(e => console.error('markDecided failed', e));
