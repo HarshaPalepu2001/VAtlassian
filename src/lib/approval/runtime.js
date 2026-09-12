@@ -43,7 +43,8 @@ export async function approvalRuntime() {
       return { id: String(matches[0].id), toStatusId: String(matches[0].to.id) };
     },
     edge: (issue, transition, prepared) => transition ? config.gatedTransition({ projectId: issue.projectId,
-      issueTypeId: issue.issueTypeId, fromStatusId: issue.statusId, toStatusId: transition.toStatusId }) : prepared.gate,
+      issueTypeId: issue.issueTypeId, fromStatusId: issue.statusId, toStatusId: transition.toStatusId,
+      transitionId: transition.id }) : prepared.gate,
     prepare: drift.prepareApproval, apply: drift.applyApproval,
     record: approvals.recordApproval, activate: approvals.activateApproval, byId: approvals.approvalById,
     performTransition: async (issue, transition, row) => {
@@ -64,13 +65,13 @@ export async function gateRuntime() {
   return {
     now: Date.now, log: data => console.log('gate', JSON.stringify(data)), audit, eligible,
     pending: approvals.pendingApprovalFor, consume: approvals.casConsume, voidOthers: approvals.voidOthers,
-    load: async ({ issueKey, fromStatusId, toStatusId, modifiedFields }) => {
+    load: async ({ issueKey, fromStatusId, toStatusId, transitionId, modifiedFields }) => {
       const response = await api.asUser().requestJira(route`/rest/api/3/issue/${issueKey}?fields=*all`);
       if (!response.ok) throw new FailClosed('SERVICE_UNAVAILABLE');
       const issue = describeIssue(await response.json());
       if (issue.statusId !== fromStatusId) throw new FailClosed('CONTENT_CHANGED');
       const [ct, items, declared, drift] = await Promise.all([
-        config.gatedTransition({ projectId: issue.projectId, issueTypeId: issue.issueTypeId, fromStatusId, toStatusId }),
+        config.gatedTransition({ projectId: issue.projectId, issueTypeId: issue.issueTypeId, fromStatusId, toStatusId, transitionId }),
         query('SELECT state, baseline_version FROM va_item_state WHERE issue_id = ?', [issue.issueId]),
         config.controlledFields({ projectId: issue.projectId, issueTypeId: issue.issueTypeId }),
         query('SELECT COUNT(*) AS count FROM va_drift WHERE issue_id = ? AND approval_id IS NULL', [issue.issueId])

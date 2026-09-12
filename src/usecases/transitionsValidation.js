@@ -18,8 +18,13 @@ export function transitionInput(payload = {}) {
     flags[camel] = value;
   }
   const rejectToStatusId = payload.rejectToStatusId || null;
-  const transitionId = payload.transitionId || null;
-  if ([rejectToStatusId, transitionId].some(v => v !== null && !/^\d+$/.test(String(v)))) throw new Error('Invalid transition or rejection status id.');
+  if (rejectToStatusId !== null && !/^\d+$/.test(String(rejectToStatusId))) throw new Error('Invalid rejection status id.');
+  // The exact Jira transition, not a guess at one. Two workflow transitions can
+  // share a destination status, and a rule saved without picking the precise
+  // one cannot be enforced without risking a sibling edge borrowing it — see
+  // gatedTransition() in db/configStore.js.
+  if (!/^\d+$/.test(String(payload.transitionId ?? ''))) throw new Error('An exact Jira transition is required.');
+  const transitionId = String(payload.transitionId);
   return { projectId: String(projectId), issueTypeId: String(issueTypeId), fromStatusId: String(fromStatusId),
     toStatusId: String(toStatusId), requiredRole, meaning, rejectToStatusId, transitionId, requiredAssurance, ...flags };
 }

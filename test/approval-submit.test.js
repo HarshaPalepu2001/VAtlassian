@@ -209,7 +209,7 @@ test('initial transition makes the audited approval available to the real gate b
     },
     voidOthers: async () => {}
   });
-  f.deps.performTransition = async () => ({ transitioned: (await gate({ issue: { key: 'T-10' }, transition: { from: { id: '1' }, to: { id: '2' } } })).result });
+  f.deps.performTransition = async () => ({ transitioned: (await gate({ issue: { key: 'T-10' }, transition: { id: '5', from: { id: '1' }, to: { id: '2' } } })).result });
   const result = await createApprovalUsecases(f.deps).submit(f.request);
   assert.equal(result.success, true);
   assert.equal(result.transitioned, true);

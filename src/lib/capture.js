@@ -36,7 +36,8 @@ async function run({ issueId, issueKey, transition, transitionAt, now }) {
   const issueTypeId = String(issue.fields.issuetype.id);
   const [config, declared, gate] = await Promise.all([
     projectConfig(projectId), controlledFields({ projectId, issueTypeId }),
-    gatedTransition({ projectId, issueTypeId, fromStatusId, toStatusId })
+    gatedTransition({ projectId, issueTypeId, fromStatusId, toStatusId,
+      transitionId: transition?.transitionId ?? transition?.id ?? null })
   ]);
   if (!config.enabled) return { captured: false, reason: 'DISABLED' };
   if (!gate) return { captured: false, reason: 'NOT_A_GATE' };

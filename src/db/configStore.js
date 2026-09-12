@@ -153,33 +153,75 @@ function deepMerge(base, over) {
  * baselined and NOTHING WOULD LOOK BROKEN: the trigger would report NOT_A_GATE,
  * which is the ordinary case for most transitions and is not even logged.
  */
-export async function gatedTransition({ projectId, issueTypeId, fromStatusId, toStatusId }) {
-  return memo(`gatedTransition:${projectId}:${issueTypeId}:${fromStatusId}:${toStatusId}`, async () => {
+/**
+ * Shapes a matched va_controlled_transition row into the object every caller
+ * reads. Pulled out of gatedTransition() so the one place that decides what a
+ * "gate" object looks like does not drift from the one place that queries for
+ * it.
+ */
+function decodeControlledTransition(r) {
+  return {
+    ct_id: fromBinaryColumn(r.ct_id),
+    // THE COLUMNS THE ROW MATCHED ON, not the ones that were asked for.
+    //
+    // The WHERE above accepts '*' in three places, so a returned row may have
+    // matched this edge exactly or by wildcard, and the caller cannot tell
+    // them apart from the arguments it passed in. That distinction is not
+    // used to decide WHETHER an action is offered — Jira's own workflow
+    // decides that — but it is needed to describe one honestly: "Sign to
+    // close this as Done, available from any status" is a different promise
+    // from "Sign to move to Selected for Development", and a reviewer who is
+    // shown the second when the rule is really the first has been misled
+    // about the scope of what they are signing.
+    issue_type_id: r.issue_type_id,
+    from_status_id: r.from_status_id,
+    to_status_id: r.to_status_id,
+    // The exact Jira transition id this row was matched on. Never a wildcard:
+    // gatedTransition() requires an exact transitionId to run the query at
+    // all, so every row it returns matched one specific Jira transition, never
+    // a sibling that happens to share the same destination status.
+    transition_id: r.transition_id,
+    matched_any_status: String(r.from_status_id) === '*',
+    required_role: r.required_role,
+    meaning: r.meaning,
+    // Forge SQL returns BOOLEAN as 0/1. Coerced here so no caller has to
+    // remember that `if (row.require_decision)` is true for the string "0".
+    require_decision: !!Number(r.require_decision),
+    block_on_drift: !!Number(r.block_on_drift),
+    required_assurance: r.required_assurance,
+    capture_baseline: !!Number(r.capture_baseline)
+  };
+}
+
+/**
+ * IS THIS EXACT JIRA TRANSITION GATED?
+ *
+ * `transitionId` is not one more optional narrowing column alongside the
+ * project/type/status wildcards above — it is the identity of the edge.
+ * Two different workflow transitions ("Approve" and "Approve (fast-track)",
+ * say) can both go from status 3 to status 5; matching on status pair alone
+ * cannot tell them apart; and a rule saved against one of them must never be
+ * borrowed by the other just because they share a destination. So the id is
+ * matched exactly (never '*') and a caller that does not have one yet gets no
+ * policy at all, rather than a guess.
+ */
+export async function gatedTransition({ projectId, issueTypeId, fromStatusId, toStatusId, transitionId }) {
+  if (transitionId == null) return null;
+  return memo(`gatedTransition:${projectId}:${issueTypeId}:${fromStatusId}:${toStatusId}:${transitionId}`, async () => {
     const rows = await throwing(
-      `SELECT TO_BASE64(ct_id) AS ct_id, required_role, meaning, require_decision, block_on_drift, required_assurance, capture_baseline
+      `SELECT TO_BASE64(ct_id) AS ct_id, issue_type_id, from_status_id, to_status_id, transition_id,
+              required_role, meaning, require_decision, block_on_drift, required_assurance, capture_baseline
        FROM va_controlled_transition
        WHERE project_id = ?
          AND (issue_type_id = ? OR issue_type_id = '*')
          AND (from_status_id = ? OR from_status_id = '*')
          AND (to_status_id = ? OR to_status_id = '*')
-         AND state = ?
+         AND transition_id = ? AND state = ?
        ORDER BY issue_type_id DESC, from_status_id DESC, to_status_id DESC
        LIMIT 1`,
-      [projectId, issueTypeId, fromStatusId, toStatusId, ACTIVE]
+      [projectId, issueTypeId, fromStatusId, toStatusId, String(transitionId), ACTIVE]
     );
-    if (rows.length === 0) return null;
-    const r = rows[0];
-    return {
-      ct_id: fromBinaryColumn(r.ct_id),
-      required_role: r.required_role,
-      meaning: r.meaning,
-      // Forge SQL returns BOOLEAN as 0/1. Coerced here so no caller has to
-      // remember that `if (row.require_decision)` is true for the string "0".
-      require_decision: !!Number(r.require_decision),
-      block_on_drift: !!Number(r.block_on_drift),
-      required_assurance: r.required_assurance,
-      capture_baseline: !!Number(r.capture_baseline)
-    };
+    return rows[0] ? decodeControlledTransition(rows[0]) : null;
   });
 }
 

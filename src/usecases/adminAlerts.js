@@ -58,41 +58,76 @@ export async function listGateFindings(req, overrides) {
     const { executeQuery, lookupProjects, lookupIssueTypes, lookupStatuses } = deps;
     const { accountId } = req.context;
   const includeCleared = req.payload?.includeCleared === true;
-  const result = await executeQuery(
-    `SELECT finding_key, finding_type, severity, project_id, issue_type_id,
-            workflow_id, transition_id, from_status_id, to_status_id,
-            detail, first_seen_at, last_seen_at, cleared_at
-       FROM va_gate_finding
-      ${includeCleared ? '' : 'WHERE cleared_at IS NULL'}
-      ORDER BY cleared_at IS NULL DESC, severity ASC, first_seen_at ASC`
-  );
+  const [result, missingTransitionResult] = await Promise.all([
+    executeQuery(
+      `SELECT finding_key, finding_type, severity, project_id, issue_type_id,
+              workflow_id, transition_id, from_status_id, to_status_id,
+              detail, first_seen_at, last_seen_at, cleared_at
+         FROM va_gate_finding
+        ${includeCleared ? '' : 'WHERE cleared_at IS NULL'}
+        ORDER BY cleared_at IS NULL DESC, severity ASC, first_seen_at ASC`
+    ),
+    // Rows saved before an exact transition id was required. gatedTransition()
+    // now matches on transition_id exactly, so a row with none can never match
+    // any Jira transition again — it is not "gating everything out of this
+    // status", it is silently gating nothing. That failure mode has no
+    // gatecheck signature to diff against a live workflow, so it is surfaced
+    // here directly rather than guessed at as one edge or another.
+    executeQuery(
+      `SELECT TO_BASE64(ct_id) AS ct_id, project_id, issue_type_id, from_status_id, to_status_id, created_at
+         FROM va_controlled_transition
+        WHERE state = 'ACTIVE' AND transition_id IS NULL`
+    )
+  ]);
   if (!result.result) return { success: false, error: 'Failed to list gate findings' };
   const rows = result.data ?? [];
+  const missingRows = missingTransitionResult.result ? (missingTransitionResult.data ?? []) : [];
   const [projects, issueTypes, statuses] = await Promise.all([
     lookupProjects(),
     lookupIssueTypes(),
     lookupStatuses()
   ]);
   const statusName = (id) => (id == null ? null : (id === '*' ? 'Any status' : statuses.get(String(id))?.name ?? null));
+  const issueTypeName = (id) => (id === '*' ? 'All work item types' : issueTypes.get(String(id))?.name ?? null);
+  const missingTransitionFindings = missingRows.map((row) => ({
+    findingKey: `MISSING_TRANSITION_ID:${row.ct_id}`,
+    type: 'MISSING_TRANSITION_ID',
+    severity: 'CRITICAL',
+    projectKey: projects.get(String(row.project_id))?.key ?? null,
+    projectName: projects.get(String(row.project_id))?.name ?? null,
+    issueTypeName: issueTypeName(row.issue_type_id),
+    fromStatusName: statusName(row.from_status_id),
+    toStatusName: statusName(row.to_status_id),
+    workflowId: null,
+    transitionId: null,
+    detail: 'This controlled transition has no exact Jira transition selected, so it can no longer be enforced. Edit it and choose the exact transition it governs.',
+    firstSeenAt: row.created_at,
+    lastSeenAt: Date.now(),
+    clearedAt: null,
+    openForMs: Date.now() - Number(row.created_at)
+  }));
   return {
     success: true,
-    findings: rows.map((row) => ({
-      findingKey: row.finding_key,
-      type: row.finding_type,
-      severity: row.severity,
-      projectKey: projects.get(String(row.project_id))?.key ?? null,
-      projectName: projects.get(String(row.project_id))?.name ?? null,
-      issueTypeName: issueTypes.get(String(row.issue_type_id))?.name ?? null,
-      fromStatusName: statusName(row.from_status_id),
-      toStatusName: statusName(row.to_status_id),
-      workflowId: row.workflow_id,
-      transitionId: row.transition_id,
-      detail: row.detail,
-      firstSeenAt: row.first_seen_at,
-      lastSeenAt: row.last_seen_at,
-      clearedAt: row.cleared_at,
-      openForMs: (row.cleared_at ?? Date.now()) - row.first_seen_at
-    }))
+    findings: [
+      ...missingTransitionFindings,
+      ...rows.map((row) => ({
+        findingKey: row.finding_key,
+        type: row.finding_type,
+        severity: row.severity,
+        projectKey: projects.get(String(row.project_id))?.key ?? null,
+        projectName: projects.get(String(row.project_id))?.name ?? null,
+        issueTypeName: issueTypes.get(String(row.issue_type_id))?.name ?? null,
+        fromStatusName: statusName(row.from_status_id),
+        toStatusName: statusName(row.to_status_id),
+        workflowId: row.workflow_id,
+        transitionId: row.transition_id,
+        detail: row.detail,
+        firstSeenAt: row.first_seen_at,
+        lastSeenAt: row.last_seen_at,
+        clearedAt: row.cleared_at,
+        openForMs: (row.cleared_at ?? Date.now()) - row.first_seen_at
+      }))
+    ]
   };
   }, overrides, 'adminAlerts');
 }

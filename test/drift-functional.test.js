@@ -109,7 +109,7 @@ function fixture() {
       contentHash:project(f.issue.fields,fields).contentHash,driftCount:f.drift.filter(d=>!d.approval_id).length}),
     pending:async()=>f.rows.find(r=>r.state==='PENDING'),
     consume:async({approvalId})=>{const r=f.rows.find(r=>r.approval_id.equals(approvalId));if(r.state!=='PENDING')return {consumed:false};r.state='CONSUMED';return {consumed:true};},voidOthers:async()=>{}});
-  f.gate=()=>gate({issue:{key:'T-10'},transition:{from:{id:'1'},to:{id:'2'}}});
+  f.gate=()=>gate({issue:{key:'T-10'},transition:{id:'5',from:{id:'1'},to:{id:'2'}}});
   const deps={now,issue:async()=>describe(),actor:async accountId=>({accountId,displayName:'Reviewer'}),
     edge:async()=>f.policy,eligible:async()=>true,transition:async()=>({id:'5',toStatusId:'2'}),
     prepare:prepareApproval,apply:applyApproval,totpDeps:totpFixture(now),

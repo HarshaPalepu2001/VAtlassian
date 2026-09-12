@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as admin from '../src/usecases/admin.js';
 import { fixture, request } from './admin-fixture.js';
-const edge = { projectId: '1', issueTypeId: '*', fromStatusId: '*', toStatusId: '2', requiredRole: 'QA', meaning: 'APPROVED' };
+const edge = { projectId: '1', issueTypeId: '*', fromStatusId: '*', toStatusId: '2', requiredRole: 'QA', meaning: 'APPROVED', transitionId: '100' };
 
 test('edge creation stores assurance and both capture/drift policy flags', async () => {
   const deps = fixture();
@@ -20,6 +20,13 @@ test('invalid assurance and nonboolean flags never reach persistence', async () 
     assert.equal((await admin.createControlledTransition(request({ ...edge, ...extra }), deps)).success, false);
     assert.equal(deps.calls.length, 1);
   }
+});
+
+test('controlled transition configuration requires an exact Jira transition id', async () => {
+  const deps = fixture();
+  const result = await admin.createControlledTransition(request({ ...edge, transitionId: null }), deps);
+  assert.equal(result.success, false);
+  assert.equal(deps.calls.length, 1);
 });
 
 test('edge edits persist changed assurance without creating approvals', async () => {

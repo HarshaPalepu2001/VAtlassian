@@ -35,7 +35,7 @@ export async function getState(args) { return respond(async () => {
   const gateResults = await Promise.all(
     available.map((transition) =>
       gatedTransition({ projectId, issueTypeId,
-        fromStatusId: String(issue.fields.status?.id), toStatusId: transition.toStatusId })
+        fromStatusId: String(issue.fields.status?.id), toStatusId: transition.toStatusId, transitionId: transition.id })
     )
   );
   const eligibilityResults = await Promise.all(

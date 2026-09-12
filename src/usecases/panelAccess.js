@@ -39,9 +39,9 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
   const editmeta = editResponse.ok ? (await editResponse.json()).fields ?? {} : {};
   const { fields } = scopeFromIssue({ declared, issueFields: issue.fields, editmetaFields: editmeta });
   let gate = transition ? await gatedTransition({ projectId, issueTypeId, fromStatusId,
-    toStatusId: String(transition.toStatusId) }) : null;
+    toStatusId: String(transition.toStatusId), transitionId: transition.id }) : null;
   if (!transition && baseline) gate = await gatedTransition({ projectId, issueTypeId,
-    fromStatusId: baseline.from_status_id, toStatusId: baseline.to_status_id });
+    fromStatusId: baseline.from_status_id, toStatusId: baseline.to_status_id, transitionId: baseline.transition_id });
   // Drift outlives review status. Resolve authority from configured scope, never assignment.
   if (!transition && !baseline) gate = edge.gated ? edge : null;
   const eligible = !!gate && await isEligible({ accountId: actor.accountId, projectId, issueTypeId, role: gate.required_role });

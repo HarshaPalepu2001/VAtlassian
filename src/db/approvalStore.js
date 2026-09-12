@@ -31,12 +31,20 @@ export async function activateApproval({ approvalId, now, state = APPROVAL_STATE
   [state, state === 'CONSUMED' ? now : null, encode(approvalId), now]);
   return affectedRows(result) === 1;
 }
-export async function pendingApprovalFor({ issueId, fromStatusId, toStatusId, now = Date.now(), approvalId }) {
-  const params = [issueId, fromStatusId, toStatusId, now];
+/**
+ * The PENDING approval recorded for this exact Jira transition — not just this
+ * status pair. `transitionId` is required for the same reason it is required
+ * on gatedTransition(): two sibling transitions can share a destination
+ * status, and a receipt signed for one must never be usable to complete the
+ * other. A caller with no exact transition id gets no candidate at all.
+ */
+export async function pendingApprovalFor({ issueId, fromStatusId, toStatusId, transitionId, now = Date.now(), approvalId }) {
+  if (transitionId == null) return null;
+  const params = [issueId, fromStatusId, toStatusId, String(transitionId), now];
   let idClause = '';
   if (approvalId) { idClause = ' AND approval_id = FROM_BASE64(?)'; params.push(encode(Buffer.isBuffer(approvalId) ? approvalId : Buffer.from(approvalId, 'hex'))); }
   const result = await query(`SELECT ${selection} FROM va_approval WHERE issue_id = ?
-    AND state = 'PENDING' AND decision = 'APPROVE' AND from_status_id = ? AND to_status_id = ? AND expires_at > ?${idClause}
+    AND state = 'PENDING' AND decision = 'APPROVE' AND from_status_id = ? AND to_status_id = ? AND transition_id = ? AND expires_at > ?${idClause}
     ORDER BY decided_at DESC LIMIT 1`, params);
   return decode(result.data[0]);
 }
