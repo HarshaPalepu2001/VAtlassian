@@ -4,7 +4,8 @@ import { registerHooks } from 'node:module';
 
 /**
  * Functional coverage for the aggregate tree collector (src/lib/collect.js's
- * collectTree/affectedTreeRoots/collectAffectedTrees).
+ * collectTree/affectedTreeRoots/collectAffectedTrees/
+ * discoverActiveRootsByAncestor).
  *
  * diffTree()'s own drift-category logic already has dedicated unit coverage
  * in test/tree-diff.test.js. What is untested anywhere else is the GLUE this
@@ -57,7 +58,7 @@ const hooks = registerHooks({
     return next(url, context);
   }
 });
-const { collectTree } = await import('../src/lib/collect.js');
+const { collectTree, discoverActiveRootsByAncestor } = await import('../src/lib/collect.js');
 const { sweep } = await import('../src/jobs/reconcile.js');
 const { planTreeCapture } = await import('../src/lib/tree/capturePlan.js');
 hooks.deregister();
@@ -200,4 +201,85 @@ test('reconcile.sweep enumerates active tree roots and runs the aggregate collec
   assert.equal(result.examined, 2);
   assert.equal(result.withDrift, 1, 'NO_BASELINE must not be counted as drift');
   assert.equal(result.errors, 0, 'NO_BASELINE is not an error');
+});
+
+/**
+ * discoverActiveRootsByAncestor() end to end — the ancestor-walk fallback for
+ * a node created after its tree was baselined, so no baseline row indexes it
+ * yet. Every other test in this file (and in tree-trigger-fanout.test.js and
+ * baseline-trigger-retry.test.js) either mocks affectedTreeRoots() directly
+ * or forces activeRootsForNode() to answer immediately, so the real walk —
+ * the one piece of this task that talks to @forge/api — was never actually
+ * exercised. These two tests replace globalThis.vaFlow with a minimal fixture
+ * of their own: only activeRootsForNode() and the Jira parent-fetch request()
+ * this function calls, nothing collectTree() needs.
+ */
+test('the ancestor walk climbs past an unindexed parent to find an active governed root at the grandparent', async () => {
+  const activeRoot = [{ rootIssueId: 1, rootIssueKey: 'FEAT-1' }];
+  const rootsByIssueId = { 2: [], 1: activeRoot };
+  const parentOf = { 2: 1 }; // issue 2's native parent is issue 1
+  const requests = [];
+  globalThis.vaFlow = {
+    activeRootsForNode: async (id) => rootsByIssueId[id] ?? [],
+    request: async (identity, url) => {
+      requests.push(url);
+      const id = Number(String(url).match(/issue\/([^?]+)/)[1]);
+      return { status: 200, json: async () => ({ fields: { parent: parentOf[id] ? { id: String(parentOf[id]) } : null } }) };
+    }
+  };
+
+  const result = await discoverActiveRootsByAncestor({ issueId: '10', issueKey: 'SUB-10', parentIssueId: '2' });
+
+  assert.deepEqual(result, activeRoot);
+  assert.equal(requests.length, 1,
+    'the immediate parent (2) is not indexed so its native parent is fetched once; the grandparent (1) answers from the index, so the walk stops there without a second Jira call');
+});
+
+test('an unindexed leaf with no governed ancestor at all comes back empty, not stuck forever', async () => {
+  globalThis.vaFlow = {
+    activeRootsForNode: async () => [],
+    request: async () => ({ status: 200, json: async () => ({ fields: { parent: null } }) })
+  };
+
+  const result = await discoverActiveRootsByAncestor({ issueId: '10', issueKey: 'SUB-10', parentIssueId: '2' });
+  assert.deepEqual(result, []);
+});
+
+test('a cycle in the native parent chain is detected via the visited set and the walk stops instead of looping forever', async () => {
+  const requests = [];
+  globalThis.vaFlow = {
+    activeRootsForNode: async () => [], // nothing is ever indexed on this chain
+    request: async (identity, url) => {
+      requests.push(url);
+      const id = Number(String(url).match(/issue\/([^?]+)/)[1]);
+      const parentOf = { 2: 3, 3: 2 }; // 2 -> 3 -> 2 -> ... a real cycle
+      return { status: 200, json: async () => ({ fields: { parent: parentOf[id] ? { id: String(parentOf[id]) } : null } }) };
+    }
+  };
+
+  const result = await discoverActiveRootsByAncestor({ issueId: '10', issueKey: 'SUB-10', parentIssueId: '2' });
+
+  assert.deepEqual(result, []);
+  // 2 (unvisited) -> fetch -> 3 (unvisited, followed) -> fetch -> 2 (already
+  // visited: the walk breaks here). Two Jira calls, not an infinite loop.
+  assert.equal(requests.length, 2);
+});
+
+test('the starting node itself is protected from a one-hop cycle back to it', async () => {
+  const requests = [];
+  globalThis.vaFlow = {
+    activeRootsForNode: async () => [],
+    request: async (identity, url) => {
+      requests.push(url);
+      // Issue 2's own native parent is reported as issue 10 — the node that
+      // is asking. visited seeds with the asking issue's own id specifically
+      // to catch this.
+      return { status: 200, json: async () => ({ fields: { parent: { id: '10' } } }) };
+    }
+  };
+
+  const result = await discoverActiveRootsByAncestor({ issueId: '10', issueKey: 'SUB-10', parentIssueId: '2' });
+
+  assert.deepEqual(result, []);
+  assert.equal(requests.length, 1, 'the walk must not follow the chain back to the node that started it');
 });
