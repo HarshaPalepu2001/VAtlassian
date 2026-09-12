@@ -1,0 +1,85 @@
+export function createTreeReader({ api, route }) {
+  return {
+    async read(rootIssueKey, fieldIds) {
+      const nodes = [];
+      const edges = [];
+      const visited = new Set();
+      
+      const fieldsParam = fieldIds.join(',');
+      const rootRes = await api.asApp().requestJira(route`/rest/api/3/issue/${rootIssueKey}?fields=${fieldsParam}`);
+      if (rootRes.status >= 300) throw new Error('Failed to fetch root');
+      const rootIssue = await rootRes.json();
+      
+      for (const f of fieldIds) {
+        if (!(f in rootIssue.fields)) {
+          throw new Error(`Jira omitted requested field: ${f}`);
+        }
+      }
+      
+      nodes.push({ id: rootIssue.id, key: rootIssue.key, fields: rootIssue.fields });
+      visited.add(rootIssue.id);
+      
+      const MAX_NODES = 500;
+      let queue = [rootIssue];
+      
+      while (queue.length > 0 && nodes.length < MAX_NODES) {
+        const parentNode = queue.shift();
+        
+        let startAt = 0;
+        const maxResults = 100;
+        let isLast = false;
+        
+        while (!isLast && nodes.length < MAX_NODES) {
+          const escapedKey = parentNode.key.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+          const jql = `parent IN ("${escapedKey}")`;
+          const req = {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              jql,
+              startAt,
+              maxResults,
+              fields: fieldIds
+            })
+          };
+          
+          const searchRes = await api.asApp().requestJira(route`/rest/api/3/search/jql`, req);
+          if (searchRes.status >= 300) throw new Error('Failed search');
+          const searchData = await searchRes.json();
+          
+          const issues = searchData.issues || [];
+          for (const child of issues) {
+            for (const f of fieldIds) {
+              if (!(f in child.fields)) {
+                throw new Error(`Jira omitted requested field: ${f}`);
+              }
+            }
+
+            if (visited.has(child.id)) {
+              // De-duplicate if it's the exact same parent (pagination artifact)
+              const existingEdge = edges.find(e => e.target === child.id);
+              if (existingEdge && existingEdge.source === parentNode.id) {
+                continue; // Pagination duplicate, skip
+              }
+              // Otherwise it's a cycle or multi-parent
+              throw new Error('Cycle detected');
+            }
+            
+            visited.add(child.id);
+            nodes.push({ id: child.id, key: child.key, fields: child.fields });
+            edges.push({ source: parentNode.id, target: child.id });
+            queue.push(child);
+            if (nodes.length >= MAX_NODES) break;
+          }
+          
+          startAt += issues.length;
+          if (issues.length < maxResults || nodes.length >= MAX_NODES) {
+            isLast = true;
+          }
+        }
+      }
+      
+      return { nodes, edges };
+    }
+  };
+}
