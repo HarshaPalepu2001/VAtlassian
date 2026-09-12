@@ -1,19 +1,19 @@
 import * as store from './store.js';
 import { toBinaryParam } from '../lib/db.js';
 
-export async function claimRestoreStep(restoreId, logicalNodeId, issueId) {
+export async function claimRestoreStep(restoreId, logicalNodeId, issueId, query = store.throwing) {
   const rId = toBinaryParam(restoreId);
-  await store.throwing(
+  await query(
     `INSERT INTO va_restore_step (restore_id, logical_node_id, issue_id, started_at)
      VALUES (FROM_BASE64(?), ?, ?, ?)`,
     [rId, logicalNodeId, issueId, Date.now()]
   );
 }
 
-export async function finishRestoreStep(restoreId, logicalNodeId, success, detail) {
+export async function finishRestoreStep(restoreId, logicalNodeId, success, detail, query = store.throwing) {
   const rId = toBinaryParam(restoreId);
   const detailStr = detail ? JSON.stringify(detail) : null;
-  await store.throwing(
+  await query(
     `UPDATE va_restore_step
      SET finished_at = ?, success = ?, detail = ?
      WHERE restore_id = FROM_BASE64(?) AND logical_node_id = ?`,
@@ -21,9 +21,9 @@ export async function finishRestoreStep(restoreId, logicalNodeId, success, detai
   );
 }
 
-export async function recordReplacement(restoreId, logicalNodeId, oldIssueId, newIssueId) {
+export async function recordReplacement(restoreId, logicalNodeId, oldIssueId, newIssueId, query = store.throwing) {
   const rId = toBinaryParam(restoreId);
-  await store.throwing(
+  await query(
     `INSERT INTO va_restore_replacement (restore_id, logical_node_id, old_issue_id, new_issue_id, replaced_at)
      VALUES (FROM_BASE64(?), ?, ?, ?, ?)`,
     [rId, logicalNodeId, oldIssueId, newIssueId, Date.now()]

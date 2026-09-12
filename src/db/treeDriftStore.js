@@ -1,16 +1,16 @@
 import * as store from './store.js';
 import { toBinaryParam, fromBinaryColumn } from '../lib/db.js';
 
-export async function replaceTreeDrift(baselineId, driftRows) {
+export async function replaceTreeDrift(baselineId, driftRows, query = store.throwing) {
   const bId = toBinaryParam(baselineId);
 
-  await store.throwing(
+  await query(
     `DELETE FROM va_tree_drift WHERE baseline_id = FROM_BASE64(?)`,
     [bId]
   );
 
   for (const row of driftRows) {
-    await store.throwing(
+    await query(
       `INSERT INTO va_tree_drift (
         baseline_id, logical_node_id, field_id, field_name,
         baseline_digest, current_digest, materiality, detected_at
@@ -24,9 +24,9 @@ export async function replaceTreeDrift(baselineId, driftRows) {
   }
 }
 
-export async function readTreeDrift(baselineId) {
+export async function readTreeDrift(baselineId, query = store.throwing) {
   const bId = toBinaryParam(baselineId);
-  const rows = await store.throwing(
+  const rows = await query(
     `SELECT logical_node_id AS logicalNodeId, field_id AS fieldId,
             field_name AS fieldName, baseline_digest AS baselineDigest,
             current_digest AS currentDigest, materiality, detected_at AS detectedAt

@@ -2,15 +2,15 @@ import * as store from './store.js';
 import { toBinaryParam, fromBinaryColumn } from '../lib/db.js';
 import { encodeValue, decodeValue } from '../lib/valuestore.js';
 
-export async function writeTreeCapture(baselineId, rootIssueId, rootIssueKey, nodes, values) {
+export async function writeTreeCapture(baselineId, rootIssueId, rootIssueKey, treeHash, nodes, values, query = store.throwing) {
   const bId = toBinaryParam(baselineId);
 
   let totalFieldCount = 0;
-  const edgeCount = Math.max(0, nodes.length - 1);
+  const edgeCount = nodes.filter(n => n.parentLogicalNodeId != null).length;
   const nodeCount = nodes.length;
 
   for (const node of nodes) {
-    await store.throwing(
+    await query(
       `INSERT INTO va_baseline_node (
         baseline_id, logical_node_id, original_issue_id, current_issue_id, issue_key,
         parent_logical_node_id, project_id, issue_type_id, content_hash, field_digests, node_order
@@ -27,7 +27,7 @@ export async function writeTreeCapture(baselineId, rootIssueId, rootIssueKey, no
       totalFieldCount++;
       const { encoding, rawBytes, chunks } = encodeValue(rawValue);
       for (let seq = 0; seq < chunks.length; seq++) {
-        await store.throwing(
+        await query(
           `INSERT INTO va_baseline_node_value (baseline_id, logical_node_id, field_id, seq, encoding, raw_bytes, chunk)
            VALUES (FROM_BASE64(?), ?, ?, ?, ?, ?, ?)`,
           [bId, node.logicalNodeId, fieldId, seq, encoding, rawBytes, chunks[seq]]
@@ -37,17 +37,17 @@ export async function writeTreeCapture(baselineId, rootIssueId, rootIssueKey, no
   }
 
   // Update va_baseline
-  await store.throwing(
+  await query(
     `UPDATE va_baseline
      SET tree_hash = ?, node_count = ?, edge_count = ?, total_field_count = ?
      WHERE baseline_id = FROM_BASE64(?)`,
-    [null, nodeCount, edgeCount, totalFieldCount, bId]
+    [treeHash, nodeCount, edgeCount, totalFieldCount, bId]
   );
 }
 
-export async function readBaselineTree(baselineId) {
+export async function readBaselineTree(baselineId, query = store.throwing) {
   const bId = toBinaryParam(baselineId);
-  const dbNodes = await store.throwing(
+  const dbNodes = await query(
     `SELECT logical_node_id AS logicalNodeId, original_issue_id AS originalIssueId,
             current_issue_id AS currentIssueId, issue_key AS issueKey,
             parent_logical_node_id AS parentLogicalNodeId, project_id AS projectId,
@@ -59,7 +59,7 @@ export async function readBaselineTree(baselineId) {
     [bId]
   );
 
-  const valueRows = await store.throwing(
+  const valueRows = await query(
     `SELECT logical_node_id, field_id, seq, encoding, raw_bytes, chunk AS data
      FROM va_baseline_node_value
      WHERE baseline_id = FROM_BASE64(?)
