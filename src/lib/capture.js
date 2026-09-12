@@ -46,6 +46,7 @@ async function run({ issueId, issueKey, transition, transitionAt, now }) {
   const approval = approvalFrom(consumed, gate.required_assurance);
   if (!approval.ok) return { captured: false, reason: approval.reason };
   const { fields } = scopeFromIssue({ declared, issueFields: issue.fields, editmetaFields: editmeta?.fields });
+  if (gate.capture_baseline && fields.some(f => f.store_values === false || f.store_values === 0)) return { captured: false, reason: 'BASELINE_VALUES_REQUIRED' };
   return writeCapturedBaseline({ issueId, issueKey: issue.key, projectId, issueTypeId,
     controlledFields: fields, issueFields: issue.fields, editmetaFields: editmeta?.fields ?? {},
     transitionAt, capturedAt: now, approver: approval.approver,
@@ -134,4 +135,48 @@ export function approvalFrom(record, requiredAssurance = 'NATIVE_TRANSITION') {
   return { ok: true, approver: { accountId: record.actor_account_id ?? record.account_id,
     displayName: record.actor_name ?? record.printed_name, approvalId: record.approval_id,
     assuranceLevel: record.assurance_level, contentHash: record.content_hash } };
+}
+
+
+
+export async function writeCapturedTreeBaseline({
+  rootIssue, approval, controlledFields, transitionAt, deps = {}
+}) {
+  const { readStableTree, planTreeCapture, writeTreeCapture, publishTreeBaseline, verifyTree } = deps;
+  
+  const hasUnretained = controlledFields.some(f => f.store_values === false || f.store_values === 0);
+  if (hasUnretained) {
+    return { captured: false, reason: 'BASELINE_VALUES_REQUIRED' };
+  }
+  
+  const stable = await readStableTree({
+    readTree: deps.readTree, rootIssueKey: rootIssue.key, fieldIds: controlledFields.map(field => field.field_id)
+  });
+  
+  const treePlan = planTreeCapture({
+    rootIssueId: rootIssue.id, nodes: stable.tree.nodes, controlledFields
+  });
+  
+  if (approval && treePlan.treeHash !== approval.content_hash) {
+    return { captured: false, reason: 'CONTENT_CHANGED' };
+  }
+  
+  const baseline = {
+    issue_id: rootIssue.id,
+    issue_key: rootIssue.key,
+    // we might need more fields in baseline for writeTreeCapture?
+  };
+  
+  if (verifyTree) verifyTree();
+  
+  const stored = await writeTreeCapture({ baseline, treePlan });
+  
+  await publishTreeBaseline({
+    baselineId: stored.baselineId,
+    expectedNodes: treePlan.nodeCount,
+    expectedFields: treePlan.totalFieldCount,
+    treeHash: treePlan.treeHash
+  });
+  
+  return { captured: true, nodeCount: treePlan.nodeCount, fieldCount: treePlan.totalFieldCount };
 }

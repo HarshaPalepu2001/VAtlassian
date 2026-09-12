@@ -53,6 +53,12 @@ export async function listControlledTransitions(req, overrides) {
 export async function createControlledTransition(req, overrides) {
   return runAdmin(req, async deps => {
     const input = transitionInput(req.payload);
+    if (input.captureBaseline) {
+      const rows = await deps.declaredFieldRows({ projectId: input.projectId, issueTypeId: input.issueTypeId });
+      if (rows.some(r => r.store_values === 0 || r.store_values === false)) {
+        throw new Error('This project has fields with retention disabled. Enable retention for all tracked fields before creating a capture-baseline policy.');
+      }
+    }
     const id = deps.newId();
     await audit(deps, req.context.accountId, deps.EVENT.CONTROLLED_TRANSITION_CHANGED, { action: 'CREATE_REQUESTED', ctId: id.toString('hex'), ...input });
     await query(deps, `INSERT INTO va_controlled_transition
@@ -75,6 +81,12 @@ export async function updateControlledTransition(req, overrides) {
     if (!validId(req.payload?.ctId)) throw new Error('A valid ctId is required.');
     const input = transitionInput(req.payload);
     const id = deps.toBinaryParam(Buffer.from(req.payload.ctId, 'hex'));
+    if (input.captureBaseline) {
+      const rows = await deps.declaredFieldRows({ projectId: input.projectId, issueTypeId: input.issueTypeId });
+      if (rows.some(r => r.store_values === 0 || r.store_values === false)) {
+        throw new Error('This project has fields with retention disabled. Enable retention for all tracked fields before updating a capture-baseline policy.');
+      }
+    }
     const existing = (await query(deps, "SELECT state FROM va_controlled_transition WHERE ct_id = FROM_BASE64(?) AND state = 'ACTIVE'", [id])).data;
     if (!existing?.length) throw new Error('Active controlled transition not found.');
     await audit(deps, req.context.accountId, deps.EVENT.CONTROLLED_TRANSITION_CHANGED, { action: 'UPDATE_REQUESTED', ctId: req.payload.ctId, ...input });

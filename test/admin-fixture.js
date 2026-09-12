@@ -39,6 +39,7 @@ export function fixture(options = {}) {
     setFieldRetention: async row => { writes.push(row); return true; },
     setConfig: async (...args) => { writes.push(args); },
     verifyChain: async () => ({ ok: true, checked: 1 }),
+    listGatedTransitions: async () => [],
   };
   deps.tryAppend = event => deps.append(deps.auditStore, event);
   return deps;
