@@ -10,5 +10,6 @@ test('verification checks logical nodes, parent edges and fields', async () => {
     controlledFields: [],
     replacements: []
   });
-  assert.ok('matches' in verified);
+  assert.equal(verified.matches, true);
+  assert.equal(verified.progress, false);
 });

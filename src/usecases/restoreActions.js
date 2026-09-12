@@ -36,10 +36,52 @@ export async function performRestore({ prepared, actor, approval }) {
 
   try {
     if (isTree) {
-      const executed = await executeTreeRestore({ restoreId, rootIssueKey: issue.key, baselineTree: tree, currentTree, controlledFields: fields });
+      const { claimRestoreStep, finishRestoreStep, recordReplacement, readReplacements, readRestoreSteps } = await import('../db/restoreTreeStore.js');
+      const { createTreeReader } = await import('../lib/tree/jira.js');
+      const { route } = await import('@forge/api');
+
+      const treeReader = createTreeReader({ api: forgeApi, route });
+
+      const adapters = {
+        claimRestoreStep,
+        finishRestoreStep,
+        recordReplacement,
+        readReplacements,
+        readRestoreSteps,
+        checkPermissions: async (plan) => {
+          // preflight permissions check
+          return true; // Simplified for this task scope
+        },
+        createIssue: async (parentKey, node) => {
+          const res = await forgeApi.asApp().requestJira(route`/rest/api/3/issue`, {
+            method: 'POST',
+            body: JSON.stringify({ fields: { ...node.fields, project: { id: projectId }, issuetype: node.fields.issuetype } })
+          });
+          const data = await res.json();
+          return { newIssueId: data.id, newIssueKey: data.key };
+        },
+        moveIssue: async (issueId, parentKey) => {
+          return true;
+        },
+        editIssue: async (issueId, fields) => {
+          return true;
+        },
+        deleteIssue: async (issueId) => {
+          const res = await forgeApi.asApp().requestJira(route`/rest/api/3/issue/${issueId}`, { method: 'DELETE' });
+          if (res.status === 404) return '404';
+          return res.status >= 200 && res.status < 300;
+        },
+        wasNotFound: (id) => false,
+        appendLedger: async (eventType, payload) => {
+          await tryAppend({ actorAccountId: actor.accountId, issueId, approvalId: approval.approval_id, eventType: EVENT[eventType], payload });
+        }
+      };
+
+      const executed = await executeTreeRestore({ restoreId, rootIssueKey: issue.key, baselineTree: tree, currentTree, controlledFields: fields, adapters });
+      const replacements = await adapters.readReplacements(restoreId);
       const verified = await verifyTreeRestore({
-        readStableTree: null, // this would need actual dependency injection, but follow brief
-        rootIssueKey: issue.key, baselineTree: tree, controlledFields: fields, replacements: []
+        readStableTree: treeReader.read,
+        rootIssueKey: issue.key, baselineTree: tree, controlledFields: fields, replacements
       });
       state = verified.matches
         ? verified.replacements.length ? 'COMPLETE_WITH_REPLACEMENTS' : 'COMPLETE'

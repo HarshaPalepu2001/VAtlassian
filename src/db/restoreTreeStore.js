@@ -29,3 +29,31 @@ export async function recordReplacement(restoreId, logicalNodeId, oldIssueId, ne
     [rId, logicalNodeId, oldIssueId, newIssueId, Date.now()]
   );
 }
+
+export async function readReplacements(restoreId, query = store.throwing) {
+  const rId = toBinaryParam(restoreId);
+  const rows = await query(
+    `SELECT logical_node_id AS logicalNodeId, old_issue_id AS oldIssueId, new_issue_id AS newIssueId
+     FROM va_restore_replacement
+     WHERE restore_id = FROM_BASE64(?)`,
+    [rId]
+  );
+  return rows.map(r => ({ logicalNodeId: r.logicalNodeId, oldIssueId: r.oldIssueId, newIssueId: r.newIssueId }));
+}
+
+export async function readRestoreSteps(restoreId, query = store.throwing) {
+  const rId = toBinaryParam(restoreId);
+  const rows = await query(
+    `SELECT logical_node_id AS logicalNodeId, issue_id AS issueId, started_at AS startedAt, finished_at AS finishedAt, success, detail
+     FROM va_restore_step
+     WHERE restore_id = FROM_BASE64(?)`,
+    [rId]
+  );
+  return rows.map(r => ({
+    logicalNodeId: r.logicalNodeId,
+    issueId: r.issueId,
+    success: r.success === 1,
+    finished: r.finishedAt !== null,
+    detail: r.detail ? JSON.parse(r.detail) : null
+  }));
+}

@@ -38,19 +38,39 @@ export function planTreeRestore({ baselineTree, currentTree, controlledFields })
   function getDepth(logicalNodeId) {
     let depth = 0;
     let curr = logicalNodeId;
+    let seen = new Set();
     while (curr) {
+      if (seen.has(curr)) break; // cycle protection
+      seen.add(curr);
       depth++;
       curr = parentMap.get(curr);
     }
     return depth;
   }
 
-  addedNodes.sort((a, b) => getDepth(b.logicalNodeId) - getDepth(a.logicalNodeId));
+  // Never delete the governed root under any circumstance.
+  // The governed root is the one without a parent in the baseline or current tree.
+  // Actually, we should just find the root of the current tree and explicitly exclude it from deletion.
+  const rootIds = new Set();
+  if (baselineTree && baselineTree.nodes) {
+    for (const n of baselineTree.nodes) {
+      if (!n.parentLogicalId && !n.parent) rootIds.add(n.logicalNodeId);
+    }
+  }
+  if (currentTree && currentTree.nodes) {
+    for (const n of currentTree.nodes) {
+      if (!n.parentLogicalId && !n.parent) rootIds.add(n.logicalNodeId);
+    }
+  }
+
+  const safeAddedNodes = addedNodes.filter(n => !rootIds.has(n.logicalNodeId));
+
+  safeAddedNodes.sort((a, b) => getDepth(b.logicalNodeId) - getDepth(a.logicalNodeId));
 
   return orderRestoreSteps([
     ...removedNodes.map(node => createReplacementStep(node)),
     ...movedNodes.map(node => moveNodeStep(node)),
     ...changedNodes.map(node => restoreFieldsStep(node)),
-    ...addedNodes.map(node => deleteAddedNodeStep(node))
+    ...safeAddedNodes.map(node => deleteAddedNodeStep(node))
   ]);
 }
