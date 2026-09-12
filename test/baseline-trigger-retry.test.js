@@ -2,17 +2,23 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { run as updated } from '../src/triggers/issue-updated.js';
 import { run as transitioned } from '../src/triggers/issue-transitioned.js';
+import { collectAffectedTrees } from '../src/lib/collect.js';
 import { retryEvent } from '../src/triggers/retry.js';
 const event = { issue: { id: '1', key: 'VA-1' }, eventId: 'update-1', timestamp: 100 };
 test('failed observations request supported Forge retry without recording success receipt', async () => {
-  const result = await updated(event, { collect: async () => ({ outcome: 'ERROR' }),
+  const result = await updated(event, { collectAffectedTrees: async () => [{ outcome: 'ERROR' }],
     recordReceipt: async () => assert.fail('failure must not be receipted') });
   assert.equal(result._retry, true);
   assert.equal(result.retryOptions.retryReason, 'FUNCTION_RETRY_REQUEST');
 });
-test('update passes observation identity and timestamp even without a field changelog', async () => {
+test('update fans out through the aggregate collector and passes event identity and timestamp to it', async () => {
   let received;
-  await updated(event, { collect: async args => { received = args; return { outcome: 'NO_CHANGE' }; }, recordReceipt: async () => {} });
+  await updated(event, {
+    collectAffectedTrees,
+    affectedTreeRoots: async () => [{ rootIssueId: 1, rootIssueKey: 'VA-ROOT' }],
+    collectTree: async args => { received = args; return { outcome: 'NO_CHANGE' }; },
+    recordReceipt: async () => {}
+  });
   assert.equal(received.eventId, 'update-1'); assert.equal(received.eventAt, 100);
 });
 test('capture failures are visible incidents and request retry', async () => {

@@ -322,3 +322,29 @@ function truncate(s, max) {
   const str = String(s);
   return str.length <= max ? str : `${str.slice(0, max - 1)}…`;
 }
+
+/**
+ * Governed tree ROOTS due for a sweep — one row per tree, not per descendant.
+ *
+ * The join through va_baseline_node restricts va_item_state (which holds one
+ * row per work item ever observed) down to items that are the root of an
+ * ACTIVE — captured, verified, published — baseline. A descendant's own
+ * va_item_state row, if it has one at all, is never a sweep target: its tree
+ * is examined as a whole, from its root, by the aggregate collector.
+ */
+export async function dueTreeRoots(limit = 50, now = Date.now(), staleOlderThan = 60000) {
+  const rows = await throwing(
+    `SELECT i.issue_id, i.issue_key, i.state, TO_BASE64(i.baseline_id) AS baseline_id, i.baseline_version,
+             i.last_checked_at, i.last_drift_at
+     FROM va_item_state i
+     JOIN va_baseline b ON b.baseline_id = i.baseline_id
+     JOIN va_baseline_node n ON n.baseline_id = b.baseline_id AND n.original_issue_id = i.issue_id AND n.parent_logical_node_id IS NULL
+     WHERE b.state = 'ACTIVE' AND (
+        i.state IN ('BASELINED', 'DRIFTED')
+        OR (i.state IN ('DECIDING', 'RESTORING') AND (i.last_checked_at IS NULL OR i.last_checked_at <= ?))
+     )
+     ORDER BY i.last_checked_at ASC LIMIT ${limitClause(limit)}`,
+    [now - staleOlderThan]
+  );
+  return rows.map(decode);
+}

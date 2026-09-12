@@ -17,6 +17,9 @@ import { voidOthers } from '../db/approvalStore.js';
 import { tryAppend } from '../db/store.js';
 import { EVENT } from './ledger.js';
 import { recordObservation } from '../db/observationStore.js';
+import { DETECTED_VIA } from './detectedVia.js';
+export { DETECTED_VIA };
+export { discoverActiveRootsByAncestor, affectedTreeRoots, collectTree, collectAffectedTrees } from './treeCollect.js';
 
 /**
  * The drift collector.
@@ -34,8 +37,6 @@ import { recordObservation } from '../db/observationStore.js';
  * consulted afterwards, for ATTRIBUTION, which is the one thing it is exact
  * about.
  */
-
-export const DETECTED_VIA = { EVENT: 'EVENT', SWEEP: 'SWEEP', RECONCILE: 'RECONCILE' };
 
 /**
  * Examine one work item and record whatever changed.
@@ -441,3 +442,9 @@ function safeParse(json) {
   if (typeof json === 'object') return json;
   try { return JSON.parse(json); } catch { return null; }
 }
+
+// Aggregate (whole-tree) drift collection lives in ./treeCollect.js, and is
+// re-exported above so `../lib/collect.js` stays the one stable import path
+// for both the single-issue and aggregate-tree collectors. It is a separate
+// module rather than more of this file because this file is already at the
+// lib/ line ceiling test/resolver-wiring.test.js enforces.

@@ -155,6 +155,10 @@ modules:
     - key: va-on-issue-transitioned
       function: on-issue-transitioned
       events: [ avi:jira:transitioned:issue ]
+    - key: va-on-issue-created
+      function: on-issue-created
+      events: [ avi:jira:created:issue ]
+
     - key: va-on-issue-deleted
       function: on-issue-deleted
       events: [ avi:jira:deleted:issue ]
@@ -186,6 +190,9 @@ modules:
       handler: triggers/issue-updated.run
     - key: on-issue-transitioned
       handler: triggers/issue-transitioned.run
+    - key: on-issue-created
+      handler: triggers/issue-created.run
+
     - key: on-issue-deleted
       handler: triggers/issue-deleted.run
     - key: on-issue-link

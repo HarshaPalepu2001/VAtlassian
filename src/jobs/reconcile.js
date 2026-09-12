@@ -1,12 +1,15 @@
-import { collect, DETECTED_VIA } from '../lib/collect.js';
-import { dueForReconcile, recoverStaleLocks } from '../db/itemStateStore.js';
+import { collectTree, DETECTED_VIA } from '../lib/collect.js';
+import { dueTreeRoots, recoverStaleLocks } from '../db/itemStateStore.js';
 import { expireStale } from '../db/approvalStore.js';
 
-/** Event gap-fill using the same collector as the issue trigger. Bounded and
- * least-recently-checked first; each bad item is isolated from the rest.
+/** Event gap-fill using the same aggregate collector as the issue triggers.
+ * Enumerates ACTIVE tree roots, not every indexed descendant, so one sweep
+ * pass runs the collector once per governed tree rather than once per node.
+ * Bounded and least-recently-checked first; each bad item is isolated from
+ * the rest.
  */
 export async function sweep({ now = Date.now(), detectedVia = DETECTED_VIA.RECONCILE,
-  batch = 40, due = dueForReconcile, collector = collect } = {}) {
+  batch = 40, due = dueTreeRoots, collector = collectTree } = {}) {
   const started = Date.now();
   const items = await due(batch);
   let examined = 0;
@@ -14,7 +17,7 @@ export async function sweep({ now = Date.now(), detectedVia = DETECTED_VIA.RECON
   let errors = 0;
   for (const item of items) {
     try {
-      const result = await collector({issueId:item.issue_id, issueKey:item.issue_key, detectedVia, now});
+      const result = await collector({rootIssueId:item.issue_id, rootIssueKey:item.issue_key, detectedVia, now});
       examined++;
       if (result.outcome === 'DRIFT_RECORDED' && result.inserted > 0) withDrift++;
       if (result.outcome === 'ERROR' || result.ok === false) errors++;
