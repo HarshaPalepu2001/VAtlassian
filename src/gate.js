@@ -2,6 +2,7 @@ import { DENY, FailClosed } from './lib/errors.js';
 import { meetsAssurance, isAssuranceLevel, effectiveAssurance } from './lib/approval/levels.js';
 import { validEvidence } from './lib/approval/record.js';
 import { normalizeCode } from './lib/totp.js';
+import { EVENT } from './lib/ledger.js';
 
 export function submittedApprovalToken(fields) {
   if (!fields || typeof fields !== 'object') return null;
@@ -59,8 +60,22 @@ export function createGate(deps) {
       const result = await deps.consume({ approvalId: approval.approval_id, now: deps.now() });
       if (!result?.consumed) return deny('NO_DECISION', 'CAS_LOST_RACE');
       // Consumed before the success audit; an audit failure spends the approval but never allows Jira.
-      await deps.audit({ eventType: 'APPROVAL_CONSUMED', actorAccountId: approval.account_id, issueId,
-        approvalId: approval.approval_id, payload: { fromStatusId, toStatusId, assuranceLevel: approval.assurance_level } });
+      await deps.audit({
+        eventType: EVENT.SIGNATURE_CONSUMED,
+        actorAccountId: approval.account_id,
+        issueId,
+        approvalId: approval.approval_id,
+        payload: {
+          actorName: approval.printed_name ?? approval.actor_name,
+          role: approval.signer_role,
+          assuranceLevel: approval.assurance_level,
+          meaning: approval.meaning,
+          fromStatusId,
+          toStatusId,
+          transitionId: approval.transition_id ?? (payload?.transition?.id ? String(payload.transition.id) : null),
+          decision: approval.decision
+        }
+      });
       await deps.voidOthers({ issueId, exceptApprovalId: approval.approval_id, now: deps.now() });
       deps.log({ event: 'gate:allow', ...facts, elapsedMs: deps.now() - startedAt });
       return { result: true };

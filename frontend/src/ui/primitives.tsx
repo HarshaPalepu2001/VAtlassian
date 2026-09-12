@@ -12,7 +12,6 @@
  */
 
 import type { ReactNode } from 'react';
-import { router } from '@forge/bridge';
 import Spinner from '@atlaskit/spinner';
 import { avatarColour, initials, nameOr } from './format';
 
@@ -159,7 +158,11 @@ function ForgeLink({ href, children }: { href: string; children: ReactNode }) {
       onClick={(event) => {
         if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
         event.preventDefault();
-        router.open(href);
+        import('@forge/bridge')
+          .then(({ router }) => router.open(href))
+          .catch(() => {
+            window.open(href, '_blank', 'noopener,noreferrer');
+          });
       }}
     >
       {children}

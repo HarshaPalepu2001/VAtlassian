@@ -42,6 +42,7 @@ async function run({ issueId, issueKey, transition, transitionAt, now }) {
   if (!config.enabled) return { captured: false, reason: 'DISABLED' };
   if (!gate) return { captured: false, reason: 'NOT_A_GATE' };
   if (!gate.capture_baseline) return { captured: false, reason: 'CAPTURE_DISABLED' };
+  if (gate.capture_baseline && fields.some(f => f.store_values === false || f.store_values === 0)) return { captured: false, reason: 'BASELINE_VALUES_REQUIRED' };
   const consumed = await recentConsumedApproval(issueId, fromStatusId, toStatusId, transitionAt ?? now);
   const approval = approvalFrom(consumed, gate.required_assurance);
   if (!approval.ok) return { captured: false, reason: approval.reason };
@@ -140,9 +141,9 @@ export function approvalFrom(record, requiredAssurance = 'NATIVE_TRANSITION') {
 
 
 export async function writeCapturedTreeBaseline({
-  rootIssue, approval, controlledFields, transitionAt, deps = {}
+  rootIssue, policy, approval, controlledFields, transitionAt, deps = {}
 }) {
-  const { readStableTree, planTreeCapture, writeTreeCapture, publishTreeBaseline, verifyTree } = deps;
+  const { readStableTree, planTreeCapture, writeTreeCapture, publishTreeBaseline, verifyTree, tryAppend } = deps;
   
   const hasUnretained = controlledFields.some(f => f.store_values === false || f.store_values === 0);
   if (hasUnretained) {
@@ -164,12 +165,21 @@ export async function writeCapturedTreeBaseline({
   const baseline = {
     issue_id: rootIssue.id,
     issue_key: rootIssue.key,
-    // we might need more fields in baseline for writeTreeCapture?
+    transition_id: policy?.transition_id ?? null,
+    from_status_id: policy?.from_status_id ?? null,
+    to_status_id: policy?.to_status_id ?? null,
+    approved_by: approval?.accountId ?? null,
+    approved_name: approval?.displayName ?? null,
+    transition_at: transitionAt,
+    captured_at: Date.now(),
+    assurance_level: approval?.assuranceLevel ?? null,
+    approval_id: approval?.approvalId ?? null,
+    field_count: treePlan.totalFieldCount,
   };
   
   if (verifyTree) verifyTree();
   
-  const stored = await writeTreeCapture({ baseline, treePlan });
+  const stored = await writeTreeCapture(baseline.approval_id, baseline.issue_id, baseline.issue_key, treePlan.treeHash, treePlan.nodes, treePlan.values, deps.executeQuery);
   
   await publishTreeBaseline({
     baselineId: stored.baselineId,
@@ -177,6 +187,23 @@ export async function writeCapturedTreeBaseline({
     expectedFields: treePlan.totalFieldCount,
     treeHash: treePlan.treeHash
   });
+  
+  if (tryAppend) {
+    await tryAppend({
+      actorAccountId: approval?.accountId ?? 'system',
+      eventType: EVENT.BASELINE_CAPTURED,
+      issueId: rootIssue.id,
+      approvalId: approval?.approvalId ?? null,
+      payload: {
+        treeHash: treePlan.treeHash,
+        nodeCount: treePlan.nodeCount,
+        fieldCount: treePlan.totalFieldCount,
+        assuranceLevel: approval?.assuranceLevel ?? null,
+        fromStatusId: policy?.from_status_id ?? null,
+        toStatusId: policy?.to_status_id ?? null,
+      }
+    });
+  }
   
   return { captured: true, nodeCount: treePlan.nodeCount, fieldCount: treePlan.totalFieldCount };
 }

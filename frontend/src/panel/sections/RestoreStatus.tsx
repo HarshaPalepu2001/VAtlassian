@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { subscribeIssueUpdates } from '../../lib/issueUpdates';
 import { invoke } from '../../lib/bridge';
+import { view, events } from '@forge/bridge';
 import Button from '@atlaskit/button';
 import { Badge, Card } from '../../ui/primitives';
 import { Notice } from '../../ui/feedback';
@@ -18,7 +19,7 @@ export default function RestoreStatus({issueKey,revision}:{issueKey?:string;revi
   void refresh();const unsubscribe=subscribeIssueUpdates(refresh);
   return()=>{active=false;++sequence;unsubscribe();};
  },[issueKey,revision]);
- async function retry(restoreId:string){setBusy(restoreId);setError('');try{assertResult(await invoke<Result>('restore:retry',{issueKey,restoreId}));const r=assertResult(await invoke<Result&{restores:Restore[]}>('restore:getState',{issueKey}));setRows(r.restores??[]);}catch(e){setError(errorMessage(e));}finally{setBusy('');}}
+ async function retry(restoreId:string){setBusy(restoreId);setError('');try{assertResult(await invoke<Result>('restore:retry',{issueKey,restoreId}));const r=assertResult(await invoke<Result&{restores:Restore[]}>('restore:getState',{issueKey}));setRows(r.restores??[]);view.refresh().catch(()=>{});void events.emit('VA_ISSUE_CHANGED', { issueKey }).catch(()=>{});}catch(e){setError(errorMessage(e));}finally{setBusy('');}}
  if(!rows.length&&!error)return null;
  // A restore is only "complete" once every tracked field has been read back and
  // matched, so the state is the headline rather than an afterthought appended

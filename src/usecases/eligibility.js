@@ -6,15 +6,23 @@ export async function listAvailableRoles(req, overrides) {
   return runAdmin(req, async (deps) => {
     const { executeQuery } = deps;
     const { projectId, issueTypeId } = req.payload ?? {};
-  if (!projectId || !issueTypeId) return { success: true, roles: [] };
-  const result = await executeQuery(
-    `SELECT DISTINCT role FROM va_eligibility 
-     WHERE state = ? AND (issue_type_id = ? OR issue_type_id = '*') AND (project_id = ? OR project_id IS NULL) 
-     ORDER BY role ASC`, 
-    [ACTIVE, issueTypeId, String(projectId)]
-  );
-  if (!result.result) return { success: false, error: 'Failed to list roles' };
-  return { success: true, roles: (result.data ?? []).map(r => r.role) };
+    if (!projectId) return { success: true, roles: [] };
+    const query = (issueTypeId && issueTypeId !== '*')
+      ? {
+          sql: `SELECT DISTINCT role FROM va_eligibility 
+                WHERE state = ? AND (issue_type_id = ? OR issue_type_id = '*') AND (project_id = ? OR project_id IS NULL) 
+                ORDER BY role ASC`,
+          params: [ACTIVE, issueTypeId, String(projectId)]
+        }
+      : {
+          sql: `SELECT DISTINCT role FROM va_eligibility 
+                WHERE state = ? AND (project_id = ? OR project_id IS NULL) 
+                ORDER BY role ASC`,
+          params: [ACTIVE, String(projectId)]
+        };
+    const result = await executeQuery(query.sql, query.params);
+    if (!result.result) return { success: false, error: 'Failed to list roles' };
+    return { success: true, roles: (result.data ?? []).map(r => r.role) };
   }, overrides, 'eligibility');
 }
 

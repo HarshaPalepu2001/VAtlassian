@@ -251,13 +251,37 @@ function valueLabels(...raws) {
   for (const raw of raws) {
     for (const item of Array.isArray(raw) ? raw : [raw]) {
       if (!item || typeof item !== 'object') continue;
+      // Extract rich labels for issuelinks
+      if (item.type && (item.inwardIssue || item.outwardIssue)) {
+        if (item.type.id && item.type.name) {
+          map[String(item.type.id)] = String(item.type.name);
+        }
+        const linked = item.inwardIssue ?? item.outwardIssue;
+        if (linked?.id) {
+          const key = linked.key ?? '';
+          const summary = linked.fields?.summary ?? linked.summary ?? '';
+          const label = key && summary ? `${key} - ${summary}` : (key || summary || String(linked.id));
+          map[String(linked.id)] = label;
+          if (key) map[String(key)] = label;
+        }
+      }
       const id = item.accountId ?? item.id ?? item.value ?? item.key;
-      const name = item.name ?? item.displayName ?? item.filename ?? item.value;
+      const name = readableName(item);
       if (id == null || name == null) continue;
       if (String(id) !== String(name)) map[String(id)] = String(name);
     }
   }
   return map;
+}
+
+function readableName(item) {
+  const direct = item.name ?? item.displayName ?? item.filename ?? item.value;
+  if (direct != null) return direct;
+  const key = item.key;
+  const summary = item.fields?.summary ?? item.summary;
+  if (key != null && summary != null) return `${key} - ${summary}`;
+  if (key != null) return key;
+  return null;
 }
 
 function groupBy(list, keyFn) {

@@ -2,10 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-test('manifest.yml must not contain permissions.external or remotes', () => {
+test('manifest.yml permits the WebAuthn popup without declaring remotes', () => {
   const manifest = fs.readFileSync('manifest.yml', 'utf8');
-  assert.equal(manifest.includes('permissions.external'), false, 'permissions.external must not appear in manifest.yml');
   assert.equal(manifest.includes('remotes'), false, 'remotes must not appear in manifest.yml');
+  assert.match(manifest, /external:\s*\n\s*fetch:\s*\n\s*client:\s*\n\s*-\s*address:\s*"\*"/,
+    'WebAuthn needs Forge to allow a top-level ceremony popup');
 });
 
 test('manifest.yml edit.experience array must be exactly issue-transition or issue-view', () => {

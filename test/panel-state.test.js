@@ -26,6 +26,7 @@ const modules = {
   'db/approvalStore.js': ['approvalById', 'pendingApprovalForActor'],
   'db/incidentStore.js': ['issueControlStatus'],
   'db/credentialStore.js': ['credentialState'],
+  'db/adminStore.js': ['isActiveAdmin'],
   'lib/reviewer.js': ['isEligible'],
   'lib/transitions.js': ['availableTransitions']
 };
@@ -87,6 +88,7 @@ function fixture(overrides = {}) {
     pendingApprovalForActor: async () => f.pendingRow,
     issueControlStatus: async () => ({ incidents: [], gateFindings: [] }),
     credentialState: async () => f.credential,
+    isActiveAdmin: async () => false,
     isEligible: async () => true,
     availableTransitions: async () => [{ id: '31', name: 'Approve', toStatusId: '200' }],
     request: async (_identity, url) => {
@@ -171,3 +173,126 @@ test('an unreadable credential is not reported as "not enrolled"', async () => {
   assert.equal(state.credentialEnrolled, undefined);
   assert.equal(state.error, undefined, 'the panel still renders');
 });
+
+// ── Payload tiering & living state sentence ──────────────────────────────────
+
+test('an ineligible reviewer receives observer tier without actions, drift fields, or controls', async () => {
+  const f = fixture({ isEligible: async () => false });
+  const state = await getState(args);
+
+  assert.equal(state.tier, 'observer');
+  assert.equal(state.state, 'Waiting on a signature from reviewer');
+  assert.equal(state.transitions, undefined, 'actions are omitted for observer');
+  assert.equal(state.drift.fields, undefined, 'drift field details are omitted for observer');
+  assert.equal(state.credentialEnrolled, undefined);
+  assert.equal(state.controls, undefined, 'controls are omitted for non-admin');
+});
+
+test('when no transitions are gated, living state reports nothing needs a signature', async () => {
+  const f = fixture({ gatedTransition: async () => null });
+  const state = await getState(args);
+
+  assert.equal(state.tier, 'observer');
+  assert.equal(state.state, 'Nothing needs a signature at this status');
+  assert.equal(state.transitions, undefined);
+});
+
+/**
+ * The item sits in a status no rule fires out of, and it has drifted since it
+ * was signed. Authority to decide that drift belongs to the BASELINE's own
+ * gate — snapshot() already resolves it from `baseline.from_status_id ->
+ * baseline.to_status_id` precisely because "drift outlives review status".
+ * Deriving the tier from the offered transitions alone threw that answer away,
+ * so the panel counted the change, said it needed a decision, and then rendered
+ * the observer card with no way to make one.
+ */
+test('drift on a signed baseline is decidable when no transition is gated at the current status', async () => {
+  const f = fixture({
+    // Gated on the baseline's edge only. Nothing is gated out of where it sits now.
+    gatedTransition: async ({ fromStatusId, toStatusId }) =>
+      String(fromStatusId) === '100' && String(toStatusId) === '200'
+        ? { required_assurance: 'ESIGNATURE', required_role: 'reviewer', meaning: 'Reviewed and approved',
+            capture_baseline: true, block_on_drift: true, gated: true }
+        : null,
+    gateActiveOutOf: async () => ({ gated: false }),
+    availableTransitions: async () => [{ id: '41', name: 'Start progress', toStatusId: '300' }]
+  });
+  f.issue.fields.status = { id: '200' };
+  f.issue.fields.summary = 'edited after approval';
+
+  const state = await getState(args);
+
+  assert.equal(state.drift.count, 1, 'the change is detected');
+  assert.equal(state.drift.materialCount, 1, 'and it needs a decision');
+  assert.equal(state.tier, 'actor', 'so the reviewer must be able to make one');
+  assert.ok(state.drift.fields?.length, 'the changed field reaches the panel');
+  assert.equal(state.eligibility.eligible, true);
+  assert.deepEqual(state.transitions, [], 'no transition is offered — only the drift decision');
+  assert.equal(state.approval.requiredAssurance, 'ESIGNATURE', 'signed at the baseline rule\'s level');
+  assert.notEqual(state.state, 'Nothing needs a signature at this status');
+});
+
+test('an administrator receives controls in the payload', async () => {
+  const f = fixture({ isActiveAdmin: async () => true });
+  const state = await getState(args);
+
+  assert.ok(state.controls, 'admin must receive controls');
+  assert.deepEqual(state.controls, { incidents: [], gateFindings: [] });
+});
+
+test('when issue is in done category, living state reports completed and no transitions offered', async () => {
+  const f = fixture({
+    issue: {
+      id: '10', key: 'T-10',
+      fields: {
+        summary: 'approved text', project: { id: '1' }, issuetype: { id: '1' },
+        status: { id: '100', statusCategory: { key: 'done' } }
+      }
+    }
+  });
+  const state = await getState(args);
+
+  assert.equal(state.state, 'Work item is completed.');
+  assert.equal(state.transitions?.length ?? 0, 0, 'no forward transition gates when issue is completed');
+});
+
+test('self-transitions where toStatusId matches fromStatusId are never offered', async () => {
+  const f = fixture({
+    availableTransitions: async () => [
+      { id: '10', name: 'Move to same', toStatusId: '100' },
+      { id: '31', name: 'Approve to next', toStatusId: '200' }
+    ]
+  });
+  const state = await getState(args);
+
+  assert.ok(state.transitions.every(t => t.toStatusId !== '100'), 'self-transition must be filtered out');
+});
+
+test('when baseline is null, drift counts are strictly zero', async () => {
+  const f = fixture({
+    activeBaseline: async () => null,
+    getReview: async () => ({ state: 'UNAPPROVED', version: 0, baseline_version: null })
+  });
+  const state = await getState(args);
+
+  assert.equal(state.drift.count, 0);
+  assert.equal(state.drift.materialCount, 0);
+  assert.equal(state.record, null);
+});
+
+test('baseline history is mapped from database snake_case to camelCase properties', async () => {
+  const f = fixture({
+    baselineHistory: async () => [
+      { version: 1, approved_name: 'Priya', transition_at: NOW - 5000, assurance_level: 'ESIGNATURE', captured_at: NOW - 4000 }
+    ]
+  });
+  const state = await getState(args);
+
+  assert.ok(state.record?.history?.length === 1);
+  const h = state.record.history[0];
+  assert.equal(h.version, 1);
+  assert.equal(h.approvedName, 'Priya');
+  assert.equal(h.approvedAt, NOW - 5000);
+  assert.equal(h.assuranceLevel, 'ESIGNATURE');
+});
+

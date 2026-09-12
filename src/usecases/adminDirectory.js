@@ -53,18 +53,29 @@ export async function listStatusesForProject(req, overrides) {
   return runAdmin(req, async (deps) => {
     const { asApp, route } = deps;
     const { projectId, issueTypeId } = req.payload ?? {};
-  if (!projectId || !issueTypeId) return { success: false, error: 'projectId and issueTypeId are required' };
-  try {
-    const response = await asApp().requestJira(route`/rest/api/3/project/${projectId}/statuses`);
-    if (!response.ok) return { success: false, error: `Jira returned ${response.status}` };
-    const body = await response.json();
-    const issueTypeObj = body.find((it) => it.id === issueTypeId);
-    if (!issueTypeObj) return { success: true, statuses: [] };
-    return { success: true, statuses: issueTypeObj.statuses.map((s) => ({ id: s.id, name: s.name, category: s.statusCategory?.name })) };
-  } catch (e) {
-    console.error(e);
-    return { success: false, error: e.message };
-  }
+    if (!projectId) return { success: false, error: 'projectId is required' };
+    try {
+      const response = await asApp().requestJira(route`/rest/api/3/project/${projectId}/statuses`);
+      if (!response.ok) return { success: false, error: `Jira returned ${response.status}` };
+      const body = await response.json();
+      if (issueTypeId && issueTypeId !== '*') {
+        const issueTypeObj = (body ?? []).find((it) => it.id === issueTypeId);
+        if (!issueTypeObj) return { success: true, statuses: [] };
+        return { success: true, statuses: (issueTypeObj.statuses ?? []).map((s) => ({ id: s.id, name: s.name, category: s.statusCategory?.name })) };
+      }
+      const seen = new Map();
+      for (const it of body ?? []) {
+        for (const s of it.statuses ?? []) {
+          if (!seen.has(String(s.id))) {
+            seen.set(String(s.id), { id: String(s.id), name: s.name, category: s.statusCategory?.name });
+          }
+        }
+      }
+      return { success: true, statuses: [...seen.values()] };
+    } catch (e) {
+      console.error(e);
+      return { success: false, error: e.message };
+    }
   }, overrides, 'adminDirectory');
 }
 

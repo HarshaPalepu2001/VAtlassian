@@ -66,19 +66,55 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
     ? await overrideEditmeta(issue.key) ?? editmeta
     : editmeta;
   const projection = project(issue.fields, fields);
-  const diff = baseline ? diffIssue({ baseline, baselineValues, currentFields: issue.fields,
+  const diff = baseline && !baseline.tree_hash ? diffIssue({ baseline, baselineValues, currentFields: issue.fields,
     controlledFields: fields, driftRows, changelogEntries: changelog.entries, queueThreshold: config.queueThreshold }) : null;
   if (diff) {
     diff.historyTruncated = changelog.truncated === true;
     diff.historyUnavailable = changelog.failed === true;
   }
-  const evidenceHash = diff?.evidenceHash ?? projection.contentHash;
-  if (expectedEvidenceHash != null && expectedEvidenceHash !== evidenceHash) fail('STALE_EVIDENCE');
+  
+  let tree = null, treeDiff = null, treeHash = null;
+  const useTree = gate?.capture_baseline || baseline?.tree_hash;
+  if (useTree) {
+    const { createTreeReader } = await import('../lib/tree/jira.js');
+    const { readStableTree } = await import('../lib/tree/stableRead.js');
+    const { planTreeCapture } = await import('../lib/tree/capturePlan.js');
+    const { diffTree } = await import('../lib/tree/diff.js');
+    
+    const stable = await readStableTree({
+      readTree: createTreeReader(api.asUser()).read,
+      rootIssueKey: issue.key,
+      fieldIds: fields.map(f => f.field_id)
+    });
+    tree = stable.tree;
+    
+    const plan = planTreeCapture({
+      rootIssueId: issue.id,
+      nodes: tree.nodes,
+      controlledFields: fields
+    });
+    treeHash = plan.treeHash;
+    
+    if (baseline?.tree_hash) {
+      const { readBaselineTree } = await import('../db/baselineTreeStore.js');
+      const { executeQuery } = await import('../lib/db.js');
+      const baselineTree = await readBaselineTree(baseline.baseline_id, executeQuery);
+      treeDiff = diffTree({
+        baselineTree,
+        currentTree: plan,
+        controlledFields: fields
+      });
+    }
+  }
+  
+  const evidenceHash = treeDiff ? null : (diff?.evidenceHash ?? projection.contentHash);
+  if (expectedEvidenceHash != null && expectedEvidenceHash !== (useTree ? treeHash : evidenceHash)) fail('STALE_EVIDENCE');
   return { issue, actor, issueId, projectId, issueTypeId, config, baseline, review, gate,
     eligible, fields, editmeta, restoreEditmeta, baselineValues, driftRows, diff,
-    contentHash: projection.contentHash, digests: projection.digests,
-    evidenceHash, baselineVersion: baseline?.version ?? 0,
-    driftCount: Math.max(driftRows.length, diff?.changedFieldCount ?? 0), reportHash: null };
+    contentHash: useTree ? treeHash : projection.contentHash, digests: projection.digests,
+    evidenceHash: useTree ? treeHash : evidenceHash, baselineVersion: baseline?.version ?? 0,
+    tree, treeDiff, treeHash,
+    driftCount: useTree ? (treeDiff?.changes?.length ?? 0) : Math.max(driftRows.length, diff?.changedFieldCount ?? 0), reportHash: null };
 }
 /** null, never {}, so the caller can tell "nothing extra" from "could not ask"
  *  and fall back to the user-scoped map rather than refusing every field. */

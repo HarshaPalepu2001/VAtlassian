@@ -250,7 +250,7 @@ export function describeAssurance(level) {
     NATIVE_TRANSITION: 'Approved through an authenticated Jira workflow transition.',
     JSM_APPROVAL: 'Approved through a Jira Service Management approval.',
     ESIGNATURE: 'Electronic signature confirmed using a one-time authenticator code.',
-    BIOMETRIC: 'Biometric assurance is reserved and is not configured in this release.'
+    BIOMETRIC: 'Electronic signature confirmed by a WebAuthn device check with user verification.'
   }[level] ?? 'Assurance was not recorded.';
 }
 

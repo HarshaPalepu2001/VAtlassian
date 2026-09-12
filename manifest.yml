@@ -41,7 +41,7 @@ modules:
       title: VAtlassian authenticator
   jira:workflowValidator:
     - key: va-gate
-      name: VAtlassian approval required
+      name: VAtlassian Approval
       description: Requires an eligible approval for this transition and its
         configured assurance level, with no unresolved blocking drift.
       function: gate
@@ -60,7 +60,7 @@ modules:
         resource: main-ui
   jira:customField:
     - key: va-approval-field
-      name: VAtlassian Approval
+      name: Electronic Signature
       description: Confirm this transition in the VAtlassian approval form. Never
         enter an authenticator code in a plain Jira text field.
       type: string
@@ -77,6 +77,38 @@ modules:
       edit:
         resource: ui-kit-approval-edit
         render: native
+        experience: [ issue-transition ]
+
+    # THE SECOND FIELD IS NOT A DUPLICATE. The field above is UI Kit, which
+    # renders declaratively on Atlassian's side and has no DOM, no `window`
+    # and no `navigator` — `navigator.credentials.get()` cannot be called
+    # from it, so it can never serve an edge whose required assurance is
+    # BIOMETRIC. This one is Custom UI, runs in an iframe, and can open the
+    # ceremony popup (see the permissions note further down).
+    #
+    # An administrator puts whichever field matches the assurance that
+    # transition requires on its screen. This one reads the requirement and
+    # serves every level, so it is the safe choice for a screen shared by
+    # several rules; the UI Kit field above is left exactly as it is so the
+    # authenticator-code path already in use is not disturbed.
+    - key: va-device-approval-field
+      name: Biometric Authentication
+      description: Signing form for controlled transitions, including biometric
+        device checks. Put this on the transition screen for any rule whose
+        required assurance is Biometric approval.
+      type: string
+      resolver:
+        function: panel-resolver
+      view:
+        resource: ui-kit-approval-view
+        render: native
+        experience: [ issue-view ]
+        formatter:
+          expression: "value == null || value == '' ? 'Not approved' : 'Approval recorded
+            — see Approval & Baseline'"
+          export: true
+      edit:
+        resource: main-ui
         experience: [ issue-transition ]
   jira:adminPage:
     - key: va-admin
@@ -172,6 +204,24 @@ resources:
   - key: ui-kit-approval-edit
     path: src/ui-kit/edit.jsx
 permissions:
+  # THIS BLOCK FORFEITS RUNS ON ATLASSIAN. It is here for one reason: biometric
+  # approval needs navigator.credentials.get(), which a Forge Custom UI iframe
+  # cannot call unless the parent page delegates `publickey-credentials-get`,
+  # and Jira does not. The ceremony therefore runs in a top-level popup, and
+  # popups from Forge iframes are sandbox-blocked by default. Declaring
+  # `external.fetch.client` is the only documented way to get `allow-popups`
+  # and `allow-popups-to-escape-sandbox` onto the iframe sandbox attribute, and
+  # `"*"` is the form that recipe specifies.
+  #
+  # THE APP STILL MAKES NO EGRESS CALLS. Nothing here fetches an external
+  # domain; this is a CSP connect-src declaration kept only for the sandbox
+  # side effect. Eligibility looks at the presence of the block, not at whether
+  # it is used. Delete it if an assurance level of BIOMETRIC is withdrawn, or
+  # if Atlassian ever delegates publickey-credentials-get to app frames.
+  external:
+    fetch:
+      client:
+        - address: "*"
   scopes:
     - storage:app
     - read:jira-work

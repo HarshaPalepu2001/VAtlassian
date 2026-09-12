@@ -9,11 +9,13 @@ import { isEligible } from '../lib/reviewer.js';
 import { approvalById, pendingApprovalForActor } from '../db/approvalStore.js';
 import { issueControlStatus } from '../db/incidentStore.js';
 import { credentialState } from '../db/credentialStore.js';
+import { isActiveAdmin } from '../db/adminStore.js';
+import { resolveActions, tierFor, BLOCKER } from '../lib/journey.js';
 
 export async function getState(args) { return respond(async () => {
   const state = await load(args);
   const { issue, baseline, actor, projectId, issueTypeId } = state;
-  const [history, available, approvalRecord, controls, stranded, credential] = await Promise.all([
+  const [history, available, approvalRecord, controls, stranded, credential, isAdmin] = await Promise.all([
     baselineHistory(state.issueId), availableTransitions(api, issue.key),
     baseline?.approval_id ? approvalById(baseline.approval_id) : null,
     issueControlStatus({ issueId: state.issueId, projectId, issueTypeId }).catch(() => ({ unavailable: true, incidents: [], gateFindings: [] })),
@@ -25,17 +27,28 @@ export async function getState(args) { return respond(async () => {
     // Whether this reviewer can sign at all. Unreadable is left `undefined`
     // rather than false: telling an enrolled signer to go and enrol is worse
     // than saying nothing, and the panel's notice keys on `=== false`.
-    credentialState(actor.accountId).then(row => row?.state === 'ACTIVE').catch(() => undefined)
+    credentialState(actor.accountId).then(row => row?.state === 'ACTIVE').catch(() => undefined),
+    isActiveAdmin(actor.accountId).catch(() => false)
   ]);
+  const fromStatusId = String(issue.fields.status?.id ?? '');
+  const statusCategory = issue.fields.status?.statusCategory?.key?.toLowerCase();
+  const isDone = statusCategory === 'done' || issue.fields.status?.name?.toLowerCase() === 'done';
+
+  // Do not offer transitions if the work item is already completed (Done/Closed),
+  // and never offer transitions to the same status the issue is currently in.
+  const validTransitions = isDone
+    ? []
+    : available.filter(t => String(t.toStatusId) !== fromStatusId);
+
   // Look up all gates in parallel, then check eligibility for confirmed gates
   // in parallel. The original serial for-loop did await gatedTransition() +
   // await isEligible() per transition, costing 2×N sequential round trips.
   // Promise.all fires them all at once; the memo in gatedTransition / getConfig
   // means most will be served from the in-process cache.
   const gateResults = await Promise.all(
-    available.map((transition) =>
+    validTransitions.map((transition) =>
       gatedTransition({ projectId, issueTypeId,
-        fromStatusId: String(issue.fields.status?.id), toStatusId: transition.toStatusId, transitionId: transition.id })
+        fromStatusId, toStatusId: transition.toStatusId, transitionId: transition.id })
     )
   );
   const eligibilityResults = await Promise.all(
@@ -43,17 +56,81 @@ export async function getState(args) { return respond(async () => {
       gate ? isEligible({ accountId: actor.accountId, projectId, issueTypeId, role: gate.required_role }) : false
     )
   );
-  const transitions = [];
-  for (let i = 0; i < available.length; i++) {
-    const gate = gateResults[i];
-    if (!gate) continue;
-    transitions.push({ transitionId: available[i].id, toStatusId: available[i].toStatusId,
-      name: available[i].name, requiredRole: gate.required_role, requiredAssurance: gate.required_assurance, meaning: gate.meaning ?? 'Approved',
-      eligible: eligibilityResults[i] });
+
+  const { actions, gatedCount, blocker } = resolveActions({
+    offered: validTransitions,
+    gates: gateResults,
+    eligible: eligibilityResults,
+    surface: 'panel'
+  });
+  // A change since approval is its own call to action, and it is not a workflow
+  // move. `state.eligible` is authority over THIS item's baseline edge, already
+  // resolved by snapshot() — an item can sit for weeks in a status no rule
+  // fires out of and still carry a change somebody has to decide.
+  const pendingDrift = Boolean(state.baseline) && (state.diff?.changedFieldCount ?? 0) > 0;
+  const decidesDrift = pendingDrift && state.eligible === true;
+  const tier = tierFor(actions, { decidesDrift });
+
+  // TEMPORARY DIAGNOSTIC — remove once the missing-controls report is closed.
+  // Prints both authority lookups side by side: the baseline's own edge (which
+  // governs the drift decision) and the gates out of the current status (which
+  // govern transition signing). Every value the tier depends on, in one line.
+  console.log('panel: diag', JSON.stringify({
+    issueKey: issue.key, projectId, issueTypeId, fromStatusId,
+    baseline: state.baseline
+      ? { version: state.baseline.version, from: String(state.baseline.from_status_id),
+          to: String(state.baseline.to_status_id) }
+      : null,
+    baselineGate: state.gate ? { role: state.gate.required_role, assurance: state.gate.required_assurance,
+      matchedType: state.gate.issue_type_id, matchedFrom: state.gate.from_status_id, matchedTo: state.gate.to_status_id } : null,
+    eligibleForBaselineGate: state.eligible,
+    offered: validTransitions.map(t => ({ id: String(t.id), to: String(t.toStatusId) })),
+    transitionGates: gateResults.map(g => g ? g.required_role : null),
+    transitionEligibility: eligibilityResults,
+    changedFieldCount: state.diff?.changedFieldCount ?? 0,
+    pendingDrift, decidesDrift, gatedCount, blocker, actions: actions.length, tier
+  }));
+
+  let livingState = "Waiting on signature";
+  if (decidesDrift) {
+    livingState = "Changes since approval need a decision";
+  } else if (pendingDrift) {
+    // Something does need a signature here; it is simply not theirs to give.
+    // Name the role if ANY rule in play knows it — the baseline's own edge
+    // first, then whatever is gated out of the current status. Reading only the
+    // first would print the anonymous fallback whenever the baseline's rule has
+    // been removed, which is exactly when the reviewer most needs telling who
+    // to go to.
+    const role = state.gate?.required_role
+      ?? gateResults.find(g => g?.required_role)?.required_role;
+    livingState = role
+      ? `Waiting on a signature from ${role}`
+      : "Waiting on a signature from the required role";
+  } else if (isDone) {
+    livingState = "Work item is completed.";
+  } else if (gatedCount === 0) {
+    livingState = "Nothing needs a signature at this status";
+  } else if (blocker === BLOCKER.NOT_ELIGIBLE_FOR_RULE) {
+    const blockedGate = gateResults.find(g => Boolean(g?.required_role));
+    livingState = blockedGate?.required_role
+      ? `Waiting on a signature from ${blockedGate.required_role}`
+      : "Waiting on a signature from the required role";
   }
+
   const record = buildRecord({ baseline, controlledFields: state.fields, baselineValues: state.baselineValues,
     digests: baseline ? JSON.parse(baseline.field_digests || '{}') : {}, approval: approvalRecord });
-  if (record) record.history = history;
+  if (record) {
+    record.history = (history ?? []).map(h => ({
+      version: Number(h.version),
+      approvedName: h.approved_name ?? h.approvedName ?? 'Reviewer',
+      approvedAt: h.transition_at ?? h.captured_at ?? h.approvedAt ?? null,
+      capturedAt: h.captured_at ?? h.capturedAt ?? null,
+      assuranceLevel: h.assurance_level ?? h.assuranceLevel ?? null,
+      approved_name: h.approved_name ?? h.approvedName,
+      transition_at: h.transition_at ?? h.approvedAt,
+      assurance_level: h.assurance_level ?? h.assuranceLevel
+    }));
+  }
   const extractText = (doc) => {
     if (!doc || !doc.content) return '';
     return doc.content.map(c => (c.type === 'paragraph' ? (c.content || []).map(n => n.text).join('') : '')).join('\n').trim();
@@ -63,14 +140,46 @@ export async function getState(args) { return respond(async () => {
   const descriptionEmpty = desc.length === 0;
   const description = descriptionTruncated ? desc.substring(0, 500) + '…' : desc;
 
-  return { issue: { id: issue.id, key: issue.key, summary: issue.fields.summary, status: issue.fields.status,
-    description, descriptionEmpty, descriptionTruncated, assignee: issue.fields.assignee, reporter: issue.fields.reporter },
-    eligibility: { eligible: state.eligible, reason: state.eligible ? null : 'NOT_ELIGIBLE' },
-    approval: { requiredRole: state.gate?.required_role ?? null, requiredAssurance: state.gate?.required_assurance ?? transitions[0]?.requiredAssurance ?? 'ESIGNATURE',
-      pending: pendingApproval(stranded, transitions), meaning: 'Approved' }, record, actorName: actor.displayName,
+  const base = {
+    issue: { id: issue.id, key: issue.key, summary: issue.fields.summary, status: issue.fields.status,
+      description, descriptionEmpty, descriptionTruncated, assignee: issue.fields.assignee, reporter: issue.fields.reporter },
+    tier,
+    state: livingState,
+    record,
+    drift: {
+      count: state.baseline ? (state.diff?.changedFieldCount ?? 0) : 0,
+      materialCount: state.baseline ? (state.diff?.materialFieldCount ?? 0) : 0,
+      evidenceHash: state.evidenceHash
+    },
+    approval: { pending: null }
+  };
+
+  const payload = tier === 'actor' ? {
+    ...base,
+    actorName: actor.displayName,
+    eligibility: { eligible: true, reason: null },
+    drift: {
+      ...base.drift,
+      fields: state.diff?.fields ?? []
+    },
+    transitions: actions,
     credentialEnrolled: credential,
-    drift: { count: state.diff?.changedFieldCount ?? 0, materialCount: state.diff?.materialFieldCount ?? 0,
-      evidenceHash: state.evidenceHash, fields: state.diff?.fields ?? [] }, transitions, controls };
+    approval: {
+      requiredRole: state.gate?.required_role ?? null,
+      requiredAssurance: state.gate?.required_assurance ?? actions[0]?.requiredAssurance ?? null,
+      pending: pendingApproval(stranded, actions),
+      meaning: actions[0]?.meaning ?? 'Approved'
+    }
+  } : {
+    ...base,
+    eligibility: { eligible: false, reason: null }
+  };
+
+  if (isAdmin) {
+    payload.controls = controls;
+  }
+
+  return payload;
 }); }
 
 /**
@@ -92,15 +201,20 @@ function pendingApproval(row, transitions) {
 
 /** Rendered on every issue view: exactly one primary-key read, no Jira fan-out. */
 export async function getGlanceState({ context }) { return respond(async () => {
-  actorFrom(context);
+  const actor = actorFrom(context);
   const issueId = context.extension?.issue?.id;
   if (!issueId) fail('ISSUE_CONTEXT_REQUIRED');
-  const [row, controls] = await Promise.all([
+  const [row, controls, isAdmin] = await Promise.all([
     getReview(Number(issueId)),
     issueControlStatus({ issueId: Number(issueId), projectId: context.extension?.project?.id,
-      issueTypeId: context.extension?.issue?.typeId })
+      issueTypeId: context.extension?.issue?.typeId }),
+    isActiveAdmin(actor.accountId).catch(() => false)
   ]);
-  return { state: row?.state ?? 'UNAPPROVED', baselineVersion: row?.baseline_version ?? null,
+  const result = { state: row?.state ?? 'UNAPPROVED', baselineVersion: row?.baseline_version ?? null,
     driftCount: Number(row?.drift_count ?? 0), materialCount: Number(row?.drifted_field_count ?? 0),
-    maxMateriality: row?.max_materiality ?? null, controls };
+    maxMateriality: row?.max_materiality ?? null };
+  if (isAdmin) {
+    result.controls = controls;
+  }
+  return result;
 }); }

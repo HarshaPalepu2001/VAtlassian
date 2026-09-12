@@ -97,19 +97,53 @@ export async function applyApproval({ issue, actor, approval, prepared, resuming
     }
     let capture = { captured: false, reason: 'CAPTURE_DISABLED' };
     if (!transition || [true, 1, '1'].includes(checked.gate?.capture_baseline)) {
-      capture = await writeCapturedBaseline({ issueId: checked.issueId, issueKey: checked.issue.key,
-        projectId: checked.projectId, issueTypeId: checked.issueTypeId, controlledFields: checked.fields,
-        issueFields: checked.issue.fields, editmetaFields: checked.editmeta,
-        transitionAt: approval.decided_at ?? approval.signed_at ?? Date.now(), capturedAt: Date.now(),
-        approver: { accountId: actor.accountId, displayName: approval.actor_name ?? approval.printed_name ?? actor.displayName,
-          approvalId: approval.approval_id, assuranceLevel: approval.assurance_level, contentHash: approval.content_hash },
-        // A standalone ratification does not select a new workflow policy.
-        // Preserve the policy edge so the next review can resolve its authority;
-        // the approval itself still records the actual, unchanged Jira status.
-        transitionId: transition ? approval.transition_id : checked.baseline?.transition_id ?? null,
-        fromStatusId: transition ? approval.from_status_id : checked.baseline?.from_status_id ?? checked.gate?.from_status_id ?? approval.from_status_id,
-        toStatusId: transition ? approval.to_status_id : checked.baseline?.to_status_id ?? checked.gate?.to_status_id ?? approval.to_status_id,
-        requiredRole: checked.gate?.required_role, reviewerFieldId: checked.config.reviewerFieldId });
+      if (checked.gate?.capture_baseline) {
+        const { writeCapturedTreeBaseline } = await import('../lib/capture.js');
+        const { readStableTree } = await import('../lib/tree/stableRead.js');
+        const { planTreeCapture } = await import('../lib/tree/capturePlan.js');
+        const { writeTreeCapture, publishTreeBaseline } = await import('../db/baselineTreeStore.js');
+        const { tryAppend } = await import('../db/store.js');
+        const { executeQuery } = await import('../lib/db.js');
+        const { createTreeReader } = await import('../lib/tree/jira.js');
+        const api = await import('@forge/api');
+        
+        capture = await writeCapturedTreeBaseline({
+          rootIssue: checked.issue,
+          policy: checked.gate,
+          approval: {
+            accountId: actor.accountId,
+            displayName: approval.actor_name ?? approval.printed_name ?? actor.displayName,
+            approvalId: approval.approval_id,
+            assuranceLevel: approval.assurance_level,
+            content_hash: approval.content_hash,
+          },
+          controlledFields: checked.fields,
+          transitionAt: approval.decided_at ?? approval.signed_at ?? Date.now(),
+          deps: {
+            readTree: createTreeReader(api.default.asUser()).read,
+            readStableTree,
+            planTreeCapture,
+            writeTreeCapture,
+            publishTreeBaseline,
+            tryAppend,
+            executeQuery
+          }
+        });
+      } else {
+        capture = await writeCapturedBaseline({ issueId: checked.issueId, issueKey: checked.issue.key,
+          projectId: checked.projectId, issueTypeId: checked.issueTypeId, controlledFields: checked.fields,
+          issueFields: checked.issue.fields, editmetaFields: checked.editmeta,
+          transitionAt: approval.decided_at ?? approval.signed_at ?? Date.now(), capturedAt: Date.now(),
+          approver: { accountId: actor.accountId, displayName: approval.actor_name ?? approval.printed_name ?? actor.displayName,
+            approvalId: approval.approval_id, assuranceLevel: approval.assurance_level, contentHash: approval.content_hash },
+          // A standalone ratification does not select a new workflow policy.
+          // Preserve the policy edge so the next review can resolve its authority;
+          // the approval itself still records the actual, unchanged Jira status.
+          transitionId: transition ? approval.transition_id : checked.baseline?.transition_id ?? null,
+          fromStatusId: transition ? approval.from_status_id : checked.baseline?.from_status_id ?? checked.gate?.from_status_id ?? approval.from_status_id,
+          toStatusId: transition ? approval.to_status_id : checked.baseline?.to_status_id ?? checked.gate?.to_status_id ?? approval.to_status_id,
+          requiredRole: checked.gate?.required_role, reviewerFieldId: checked.config.reviewerFieldId });
+      }
       if (!capture.captured) fail(capture.reason ?? 'CAPTURE_FAILED');
     }
     if (checked.baseline && capture.captured) await markDecided({ issueId: checked.issueId,

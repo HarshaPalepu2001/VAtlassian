@@ -240,6 +240,44 @@ test('collector attribution remains visible when Jira history is unavailable', (
   assert.equal(result.fields[0].attribution[0]?.authorName, 'Priya');
   assert.equal(result.fields[0].attribution[0]?.at, 200);
 });
+test('subtask drift carries work item labels instead of bare Jira ids', () => {
+  const result = diffIssue({
+    baseline: { baseline_id: Buffer.from('baseline'), version: 1, transition_at: 100, field_digests: { subtasks: 'old' } },
+    baselineValues: { subtasks: [] },
+    currentFields: { subtasks: [{ id: '66385', key: 'VJIRA-8', fields: { summary: 'Understand the drift' } }] },
+    controlledFields: [
+      { field_id: 'subtasks', field_name: 'Subtasks', field_kind: FIELD_KIND.MULTI, store_values: true }
+    ],
+    driftRows: []
+  });
+
+  assert.equal(result.fields[0].added[0], '66385');
+  assert.equal(result.fields[0].valueLabels['66385'], 'VJIRA-8 - Understand the drift');
+});
 test('legacy evidenceHash callers still have stable sorted event identity', () => {
   assert.equal(evidenceHash({version: 1}, [{key:'b'}, {key:'a'}]), evidenceHash({version:1}, [{key:'a'}, {key:'b'}]));
 });
+
+test('issuelinks drift carries link type and linked issue summary labels instead of bare ids', () => {
+  const result = diffIssue({
+    baseline: { baseline_id: Buffer.from('baseline'), version: 1, transition_at: 100, field_digests: { issuelinks: 'old' } },
+    baselineValues: { issuelinks: [] },
+    currentFields: {
+      issuelinks: [
+        {
+          id: '1000',
+          type: { id: '10001', name: 'Blocks' },
+          inwardIssue: { id: '66382', key: 'VJIRA-8', fields: { summary: 'Security audit logging' } }
+        }
+      ]
+    },
+    controlledFields: [
+      { field_id: 'issuelinks', field_name: 'Linked Issues', field_kind: FIELD_KIND.LINKS, store_values: true }
+    ],
+    driftRows: []
+  });
+
+  assert.equal(result.fields[0].valueLabels['10001'], 'Blocks');
+  assert.equal(result.fields[0].valueLabels['66382'], 'VJIRA-8 - Security audit logging');
+});
+

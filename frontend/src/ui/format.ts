@@ -80,9 +80,11 @@ export function avatarColour(name: string | null | undefined): string {
  * relative phrase is not that — it also silently changes meaning depending
  * on when the page happened to be loaded.
  */
-export function formatTimestamp(ms: number | null | undefined): string | null {
-  if (ms == null || !Number.isFinite(Number(ms))) return null;
-  const date = new Date(Number(ms));
+export function formatTimestamp(ms: number | string | null | undefined): string | null {
+  if (ms == null) return null;
+  const num = typeof ms === 'string' && isNaN(Number(ms)) ? Date.parse(ms) : Number(ms);
+  if (!Number.isFinite(num) || num <= 0) return null;
+  const date = new Date(num);
   if (Number.isNaN(date.getTime())) return null;
   return date.toLocaleString(undefined, {
     day: 'numeric',

@@ -9,8 +9,8 @@ export function challengeContextHash({ issue, transition, prepared, policy }) {
     transitionId: transition?.id == null ? null : String(transition.id),
     baselineId: prepared.baseline?.baseline_id?.toString('hex') ?? null,
     baselineVersion: Number(prepared.baselineVersion ?? 0),
-    baselineHash: prepared.baseline?.content_hash ?? null,
-    evidenceHash: prepared.evidenceHash ?? null, plan: prepared.plan ?? null,
+    baselineHash: prepared.baseline?.tree_hash ?? prepared.baseline?.content_hash ?? null,
+    evidenceHash: prepared.evidenceHash ?? null, plan: prepared.plan ?? null, treeDiff: prepared.treeDiff ?? null,
     policy: { meaning: policy.meaning, role: policy.required_role,
       assurance: policy.required_assurance, captureBaseline: !!Number(policy.capture_baseline),
       blockOnDrift: !!Number(policy.block_on_drift) }

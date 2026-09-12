@@ -5,6 +5,8 @@ import * as drift from '../usecases/drift.js';
 import * as restore from '../usecases/restore.js';
 import * as queue from '../usecases/queue.js';
 import * as report from '../usecases/report.js';
+import * as signing from '../usecases/signing.js';
+import { defineWebAuthnResolvers } from '../usecases/webauthn.js';
 
 const Resolver = ForgeResolver.default ?? ForgeResolver;
 const resolver = new Resolver();
@@ -22,4 +24,6 @@ resolver.define('restore:retry', ({ payload, context }) => restore.retry({ paylo
 resolver.define('queue:list', ({ payload, context }) => queue.list({ payload, context }));
 resolver.define('report:get', ({ payload, context }) => report.get({ payload, context }));
 resolver.define('report:generate', ({ payload, context }) => report.generate({ payload, context }));
+resolver.define('signing:context', ({ payload, context }) => signing.signingContext({ payload, context }));
+defineWebAuthnResolvers(resolver);
 export const handler = resolver.getDefinitions();

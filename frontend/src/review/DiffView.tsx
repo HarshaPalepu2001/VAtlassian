@@ -285,10 +285,10 @@ function LinkDiff({ field }: {field:DiffField}) {
     <>
       <div className="va-pill-change">
         {(field.removed ?? []).map((l, i) => (
-          <span key={`r${i}`} className="va-pill va-pill-before"><IconRemove /> {describeLink(l)}</span>
+          <span key={`r${i}`} className="va-pill va-pill-before"><IconRemove /> {describeLink(l, field)}</span>
         ))}
         {(field.added ?? []).map((l, i) => (
-          <span key={`a${i}`} className="va-pill va-pill-after"><IconAdd /> {describeLink(l)}</span>
+          <span key={`a${i}`} className="va-pill va-pill-after"><IconAdd /> {describeLink(l, field)}</span>
         ))}
       </div>
       <div className="va-subtlest" style={{ marginTop: 8 }}>
@@ -370,10 +370,18 @@ function Attribution({ field }: {field:DiffField}) {
   );
 }
 
-function describeLink(l: DiffItem) {
+function describeLink(l: DiffItem, field?: DiffField) {
   if (!l) return 'link';
   if (typeof l === 'string') return l;
-  return `${l.type ?? 'link'} ${l.inward ?? l.outward ?? ''}`.trim();
+  const labels = field?.valueLabels;
+  const typeId = l.type ? String(l.type) : '';
+  const typeName = (labels && labels[typeId]) || l.type || 'Link';
+  const targetId = l.inward ? String(l.inward) : (l.outward ? String(l.outward) : '');
+  const targetName = (labels && labels[targetId]) || targetId;
+  if (typeName && targetName) {
+    return `${typeName}: ${targetName}`;
+  }
+  return `${typeName || 'Link'} ${targetName}`.trim();
 }
 
 /**

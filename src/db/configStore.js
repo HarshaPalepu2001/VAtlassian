@@ -290,22 +290,16 @@ export async function recallTargetStatus({ projectId, issueTypeId }) {
 }
 
 /**
- * Every (project, review status) pair that is gated anywhere in the tenant.
+ * Every controlled-transition scope the review page may need to surface.
  *
- * reviewStatusIds() above answers the same question for ONE project, which is
- * what the capture path needs. The review page needs it for all of them at
- * once: a reviewer holding a site-wide grant may have work waiting in nine
- * projects, and asking per project would be nine round trips before the page
- * can even build its JQL.
- *
- * `from_status_id <> '*'` for the same reason reviewStatusIds excludes it — a
- * wildcard gate says "out of any status", which is not a status anybody sits
- * in and cannot be searched for.
+ * Directed rows produce a project/status/type JQL clause. Wildcard rows produce
+ * a project/type clause and are filtered afterward against Jira's offered
+ * transitions, because "*" is a rule scope, not a status somebody sits in.
  */
 export async function gatedReviewStatuses() {
   const rows = await throwing(
-    `SELECT DISTINCT project_id, from_status_id, required_role FROM va_controlled_transition
-     WHERE state = ? AND from_status_id <> '*'
+    `SELECT DISTINCT project_id, issue_type_id, from_status_id, to_status_id, required_role FROM va_controlled_transition
+     WHERE state = ?
      LIMIT ${limitClause(2000)}`,
     [ACTIVE]
   );
@@ -317,7 +311,9 @@ export async function gatedReviewStatuses() {
   // decide them or offer items to somebody who cannot.
   return rows.map((r) => ({
     projectId: Number(r.project_id),
+    issueTypeId: String(r.issue_type_id),
     statusId: String(r.from_status_id),
+    toStatusId: String(r.to_status_id),
     role: r.required_role ?? null
   }));
 }

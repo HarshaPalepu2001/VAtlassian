@@ -6,6 +6,12 @@ export async function saveField(req, overrides) {
     const scope = fieldScope(req.payload);
     const catalogue = await fieldCatalogue(deps, scope);
     const row = fieldRow(deps, scope, req.payload, catalogue, req.context.accountId);
+    if (row.store_values === false) {
+      const gates = await deps.listGatedTransitions(scope.projectId);
+      if (gates.some(g => (String(g.issue_type_id) === scope.issueTypeId || String(g.issue_type_id) === '*') && g.capture_baseline)) {
+        throw new Error('Retention cannot be disabled because a capture-baseline policy is active.');
+      }
+    }
     await deps.tryAppend({ actorAccountId: req.context.accountId, eventType: deps.EVENT.CONFIG_CHANGED,
       payload: { scope: 'trackedFields', ...scope, fieldId: row.field_id, state: row.state, storeValues: row.store_values, action: 'SAVE_REQUESTED' } });
     const id = await deps.upsertControlledField(row);
@@ -28,6 +34,12 @@ export async function setRetention(req, overrides) {
     const scope = fieldScope(req.payload);
     const { fieldId, storeValues } = req.payload ?? {};
     if (typeof storeValues !== 'boolean') throw new Error('storeValues must be a boolean.');
+    if (storeValues === false) {
+      const gates = await deps.listGatedTransitions(scope.projectId);
+      if (gates.some(g => (String(g.issue_type_id) === scope.issueTypeId || String(g.issue_type_id) === '*') && g.capture_baseline)) {
+        throw new Error('Retention cannot be disabled because a capture-baseline policy is active.');
+      }
+    }
     const rows = await deps.declaredFieldRows(scope);
     if (!rows.some(r => r.field_id === fieldId && String(r.issue_type_id) === scope.issueTypeId)) throw new Error('Configure this field in the selected scope first.');
     await deps.tryAppend({ actorAccountId: req.context.accountId, eventType: deps.EVENT.FIELD_RETENTION_CHANGED,
