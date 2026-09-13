@@ -1,5 +1,6 @@
 import { project } from './content.js';
 import { FIELD_KIND } from './content.js';
+import { controlledFieldsHash } from './baselinePolicy.js';
 
 /**
  * Capturing a baseline, and the window that has to be closed to do it honestly.
@@ -244,6 +245,8 @@ export function planCapture({
   transitionId = null,
   fromStatusId = null,
   toStatusId = null,
+  requiredRole = null,
+  requiredAssurance = null,
   assuranceLevel = null,
   approvalId = null,
   changelogEntries = [],
@@ -282,6 +285,9 @@ export function planCapture({
       transition_id: transitionId,
       from_status_id: fromStatusId,
       to_status_id: toStatusId,
+      required_role: requiredRole,
+      required_assurance: requiredAssurance,
+      controlled_fields_hash: controlledFieldsHash(controlledFields, writable),
       approved_by: actorId,
       approved_name: actorName,
       transition_at: transitionAt,

@@ -90,7 +90,10 @@ test('Acceptance: Capture Baseline ON vs OFF', async (t) => {
     };
     const res = await writeCapturedTreeBaseline({
       rootIssue: { id: '1', key: 'KEY-1', fields: { summary: 'Root' } },
-      policy: {},
+      policy: {
+        transition_id: '5', from_status_id: '1', to_status_id: '2',
+        required_role: 'Quality Reviewer', required_assurance: 'ESIGNATURE'
+      },
       approval: {
         approvalId: 'approval-1', accountId: 'user-1', displayName: 'Reviewer',
         assuranceLevel: 'ESIGNATURE', content_hash: 'abc'

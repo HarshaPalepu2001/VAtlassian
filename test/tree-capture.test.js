@@ -9,6 +9,10 @@ function threeNodeFixture() {
   calls = [];
   return {
     rootIssue: { id: 1, key: 'VA-1', fields: { summary: 'Root' } },
+    policy: {
+      transition_id: '31', from_status_id: 'review', to_status_id: 'approved',
+      required_role: 'Quality Reviewer', required_assurance: 'ESIGNATURE'
+    },
     approval: { approvalId: 'approval', accountId: 'user', displayName: 'Reviewer', assuranceLevel: 'ESIGNATURE', content_hash: 'hash' },
     controlledFields: Array(48).fill({ store_values: true }),
     deps: {
@@ -153,8 +157,14 @@ function publicationFixture() {
     writeState,
     rootIssue,
     approval,
-    policy: { transition_id: '5', from_status_id: '1', to_status_id: '2' },
-    controlledFields: [{ field_id: 'summary', field_kind: 'TEXT', store_values: true }],
+    policy: {
+      transition_id: '5', from_status_id: '1', to_status_id: '2',
+      required_role: 'Quality Reviewer', required_assurance: 'ESIGNATURE'
+    },
+    controlledFields: [{
+      field_id: 'summary', field_kind: 'TEXT', schema_type: 'string',
+      materiality: 'MAJOR', store_values: true, writable: true
+    }],
     transitionAt: 1700000000000,
     deps: {
       readStableTree: async ({ fieldIds }) => {
@@ -172,6 +182,12 @@ function publicationFixture() {
         assert.equal(baseline.project_id, 100);
         assert.equal(baseline.issue_type_id, '200');
         assert.equal(baseline.state, 'CAPTURING');
+        assert.equal(baseline.required_role, 'Quality Reviewer');
+        assert.equal(baseline.required_assurance, 'ESIGNATURE');
+        assert.equal(
+          baseline.controlled_fields_hash,
+          'fd72aecbb8f6bb81b736aef9a8487475cbd738237f347353fbc93b37c8599e5f'
+        );
         return { baselineId: 'baseline-1', version: 1 };
       },
       writeTreeCapture: async args => {
@@ -205,6 +221,25 @@ test('approval id is never used as a baseline id', async () => {
 
   assert.equal(fixture.writeState.args.baselineId, 'baseline-1');
   assert.notEqual(fixture.writeState.args.baselineId, fixture.approval.approvalId);
+});
+
+test('tree capture refuses incomplete baseline-owned policy before reading Jira', async () => {
+  const result = await writeCapturedTreeBaseline({
+    rootIssue: { id: '1', key: 'VA-1' },
+    policy: { transition_id: '5', from_status_id: '1', to_status_id: '2' },
+    approval: {
+      approvalId: Buffer.alloc(16, 1), accountId: 'user-1', displayName: 'Reviewer',
+      assuranceLevel: 'ESIGNATURE', content_hash: 'hash'
+    },
+    controlledFields: [{ field_id: 'summary', field_kind: 'TEXT', store_values: true }],
+    transitionAt: 1700000000000,
+    deps: {
+      baselineForApproval: async () => null,
+      readStableTree: async () => assert.fail('incomplete policy must not read Jira')
+    }
+  });
+
+  assert.deepEqual(result, { captured: false, reason: 'BASELINE_POLICY_INCOMPLETE' });
 });
 
 test('a completed capture is idempotent without rereading changed Jira content', async () => {

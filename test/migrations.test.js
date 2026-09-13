@@ -21,3 +21,11 @@ test('tree restoration actions are journaled by restore and durable step key', (
   assert.match(sql, /PRIMARY KEY \(restore_id, step_key\)/);
   assert.match(sql, /KEY idx_restore_action_state \(restore_id, state, started_at\)/);
 });
+
+test('baseline control provenance has its own append-only migration', () => {
+  const sql = sqlFor('v039_baseline_control_provenance');
+  assert.match(sql, /ALTER TABLE va_baseline/);
+  assert.match(sql, /ADD COLUMN required_role VARCHAR\(32\) NULL/);
+  assert.match(sql, /ADD COLUMN required_assurance VARCHAR\(24\) NULL/);
+  assert.match(sql, /ADD COLUMN controlled_fields_hash CHAR\(64\) NULL/);
+});

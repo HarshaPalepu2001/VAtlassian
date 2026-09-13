@@ -1,5 +1,6 @@
 import { executeQuery, toBinaryParam, fromBinaryColumn, limitClause, affectedRows } from '../lib/db.js';
 import { newId, throwing } from './store.js';
+import { FailClosed } from '../lib/errors.js';
 import { encodeValue, decodeValue } from '../lib/valuestore.js';
 
 export { encodeValue, decodeValue };
@@ -19,6 +20,7 @@ export { encodeValue, decodeValue };
 const BASELINE_COLUMNS = `
   TO_BASE64(baseline_id) AS baseline_id, issue_id, project_id, issue_type_id, version,
   state, content_hash, field_digests, transition_id, from_status_id, to_status_id,
+  required_role, required_assurance, controlled_fields_hash,
   approved_by, approved_name, transition_at, captured_at,
   assurance_level, TO_BASE64(approval_id) AS approval_id,
   fidelity, field_count, value_bytes, tree_hash, node_count, edge_count, total_field_count
@@ -111,7 +113,8 @@ export async function currentVersion(issueId) {
  * new one is durable would leave a window where an item has NO active baseline
  * and every field reads as un-approved.
  */
-export async function writeBaseline({ baseline, values, raw, writable, resume = null }) {
+export async function writeBaseline({ baseline, values, raw, writable, resume = null,
+  query = throwing, execute = executeQuery }) {
   const baselineId = resume?.baseline_id ?? newId();
   const now = baseline.captured_at;
 
@@ -129,12 +132,13 @@ export async function writeBaseline({ baseline, values, raw, writable, resume = 
   }
   
   // 2. The baseline row. Until this exists, nothing above is visible.
-  if (!resume) await throwing(
+  if (!resume) await query(
     `INSERT INTO va_baseline
      (baseline_id, issue_id, project_id, issue_type_id, version, state, content_hash,
       field_digests, transition_id, from_status_id, to_status_id, approved_by, approved_name,
-      transition_at, captured_at, assurance_level, approval_id, fidelity, field_count, value_bytes)
-     VALUES (FROM_BASE64(?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FROM_BASE64(?), ?, ?, ?)`,
+      transition_at, captured_at, assurance_level, approval_id, fidelity, field_count, value_bytes,
+      required_role, required_assurance, controlled_fields_hash)
+     VALUES (FROM_BASE64(?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FROM_BASE64(?), ?, ?, ?, ?, ?, ?)`,
     [
       toBinaryParam(baselineId),
       baseline.issue_id,
@@ -155,14 +159,17 @@ export async function writeBaseline({ baseline, values, raw, writable, resume = 
       baseline.approval_id ? toBinaryParam(baseline.approval_id) : null,
       baseline.fidelity,
       baseline.field_count,
-      totalBytes
+      totalBytes,
+      baseline.required_role,
+      baseline.required_assurance,
+      baseline.controlled_fields_hash
     ]
   );
 
   for (const batch of valueBatches(allRows)) {
     const placeholders = batch.map(() => '(?, ?, ?, ?, ?, ?, ?)').join(', ');
     const params = batch.flat();
-    await throwing(
+    await query(
       `INSERT INTO va_baseline_value (issue_id, version, field_id, seq, encoding, raw_bytes, data)
        VALUES ${placeholders} ON DUPLICATE KEY UPDATE data = data`,
       params
@@ -171,12 +178,19 @@ export async function writeBaseline({ baseline, values, raw, writable, resume = 
 
   // Publish only after every chunk is durable. CAPTURING reserves the unique
   // issue/version and issue/approval keys so a second writer cannot mix values.
-  await throwing("UPDATE va_baseline SET state = 'ACTIVE' WHERE baseline_id = FROM_BASE64(?) AND state = 'CAPTURING'",
+  // Provenance is re-checked at the row: a baseline without its frozen control
+  // policy stays CAPTURING and never displaces the standing one.
+  const activated = await query(
+    `UPDATE va_baseline SET state = 'ACTIVE'
+     WHERE baseline_id = FROM_BASE64(?) AND state = 'CAPTURING'
+       AND required_role IS NOT NULL AND required_assurance IS NOT NULL
+       AND controlled_fields_hash IS NOT NULL`,
     [toBinaryParam(baselineId)]);
+  if (Number(activated?.affectedRows) !== 1) throw new FailClosed('CAPTURE_INCOMPLETE');
 
   // 3. Retire every earlier version. Scoped by `version <` rather than by id so
   // a crash between two captures still converges to exactly one ACTIVE row.
-  await executeQuery(
+  await execute(
     `UPDATE va_baseline SET state = 'SUPERSEDED'
      WHERE issue_id = ? AND version < ? AND state = 'ACTIVE'`,
     [baseline.issue_id, baseline.version]
@@ -190,7 +204,7 @@ export async function writeBaseline({ baseline, values, raw, writable, resume = 
     const entries = Object.entries(writable);
     for (let start = 0; start < entries.length; start += 100) {
       const batch = entries.slice(start, start + 100);
-      await executeQuery(
+      await execute(
         `UPDATE va_controlled_field SET writable = CASE field_id ${batch.map(() => 'WHEN ? THEN ?').join(' ')} ELSE writable END
          WHERE project_id = ? AND issue_type_id = ? AND field_id IN (${batch.map(() => '?').join(',')})`,
         [...batch.flatMap(([id, value]) => [id, value ? 1 : 0]), baseline.project_id, baseline.issue_type_id,

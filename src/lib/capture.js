@@ -10,6 +10,7 @@ import { tryAppend } from '../db/store.js';
 import { EVENT } from './ledger.js';
 import { scopeFromIssue } from './trackedFields.js';
 import { meetsAssurance } from './approval/levels.js';
+import { controlledFieldsHash, requireBaselineProvenance } from './baselinePolicy.js';
 import {
   beginTreeBaseline,
   publishTreeBaseline,
@@ -59,13 +60,15 @@ async function run({ issueId, issueKey, transition, transitionAt, now }) {
     transitionAt, capturedAt: now, approver: approval.approver,
     transitionId: transition?.transitionId ?? transition?.id ?? null, fromStatusId, toStatusId,
     changelogEntries: changelog.entries, changelogFailed: changelog.failed || changelog.truncated,
-    requiredRole: gate.required_role, reviewerFieldId: config.reviewerFieldId ?? null });
+    requiredRole: gate.required_role, requiredAssurance: gate.required_assurance,
+    reviewerFieldId: config.reviewerFieldId ?? null });
 }
 
 export async function writeCapturedBaseline({ issueId, issueKey, projectId, issueTypeId,
   controlledFields: fields, issueFields, editmetaFields = {}, transitionAt, capturedAt,
   approver, transitionId = null, fromStatusId = null, toStatusId = null,
-  changelogEntries = [], changelogFailed = false, requiredRole, reviewerFieldId = null },
+  changelogEntries = [], changelogFailed = false, requiredRole, requiredAssurance,
+  reviewerFieldId = null },
   deps = { baselineForApproval, currentVersion, writeBaseline, assignReviewer, upsertBaselined, tryAppend, getReview }) {
   if (!fields?.length) return { captured: false, reason: 'NO_TRACKED_FIELDS' };
   if (!approver?.approvalId || !approver?.assuranceLevel) return { captured: false, reason: 'NO_APPROVAL' };
@@ -85,8 +88,17 @@ export async function writeCapturedBaseline({ issueId, issueKey, projectId, issu
     controlledFields: fields, issueFields, editmetaFields, transitionAt, capturedAt,
     actorId: approver.accountId, actorName: approver.displayName ?? 'Unknown',
     transitionId: String(transitionId ?? ''), fromStatusId, toStatusId,
+    requiredRole, requiredAssurance,
     approvalId: approver.approvalId, assuranceLevel: approver.assuranceLevel,
     changelogEntries, changelogFailed });
+  try {
+    requireBaselineProvenance(plan.baseline);
+  } catch (error) {
+    if (error?.reason === 'BASELINE_POLICY_INCOMPLETE') {
+      return { captured: false, reason: error.reason };
+    }
+    throw error;
+  }
   if ((!existing || existing.state === 'CAPTURING') && (!approver.contentHash || plan.baseline.content_hash !== approver.contentHash)) {
     return { captured: false, reason: 'CONTENT_CHANGED' };
   }
@@ -194,6 +206,23 @@ export async function writeCapturedTreeBaseline({
     };
   }
 
+  const provenance = {
+    transition_id: policy?.transition_id ?? null,
+    from_status_id: policy?.from_status_id ?? null,
+    to_status_id: policy?.to_status_id ?? null,
+    required_role: policy?.required_role ?? null,
+    required_assurance: policy?.required_assurance ?? null,
+    controlled_fields_hash: controlledFieldsHash(controlledFields)
+  };
+  try {
+    requireBaselineProvenance(provenance);
+  } catch (error) {
+    if (error?.reason === 'BASELINE_POLICY_INCOMPLETE') {
+      return { captured: false, reason: error.reason };
+    }
+    throw error;
+  }
+
   const fieldIds = [...new Set([
     ...controlledFields.map(field => field.field_id),
     'project', 'issuetype', 'status', 'parent'
@@ -225,9 +254,7 @@ export async function writeCapturedTreeBaseline({
     state: 'CAPTURING',
     content_hash: treePlan.treeHash,
     field_digests: '{}',
-    transition_id: policy?.transition_id ?? null,
-    from_status_id: policy?.from_status_id ?? null,
-    to_status_id: policy?.to_status_id ?? null,
+    ...provenance,
     approved_by: approval.accountId,
     approved_name: approval.displayName,
     transition_at: transitionAt,

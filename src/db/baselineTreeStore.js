@@ -15,10 +15,11 @@ export async function beginTreeBaseline({ baseline, resume = null, query = store
       baseline_id, issue_id, project_id, issue_type_id, version, state, content_hash,
       field_digests, transition_id, from_status_id, to_status_id, approved_by, approved_name,
       transition_at, captured_at, assurance_level, approval_id, fidelity, field_count, value_bytes,
-      tree_hash, node_count, edge_count, total_field_count
+      tree_hash, node_count, edge_count, total_field_count,
+      required_role, required_assurance, controlled_fields_hash
     ) VALUES (
       FROM_BASE64(?), ?, ?, ?, ?, 'CAPTURING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FROM_BASE64(?),
-      ?, ?, ?, ?, ?, ?, ?
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
     )`,
     [
       toBinaryParam(baselineId), baseline.issue_id, baseline.project_id,
@@ -27,7 +28,8 @@ export async function beginTreeBaseline({ baseline, resume = null, query = store
       baseline.to_status_id, baseline.approved_by, baseline.approved_name,
       baseline.transition_at, baseline.captured_at, baseline.assurance_level,
       toBinaryParam(baseline.approval_id), baseline.fidelity, baseline.field_count, 0,
-      baseline.tree_hash, 0, 0, 0
+      baseline.tree_hash, 0, 0, 0,
+      baseline.required_role, baseline.required_assurance, baseline.controlled_fields_hash
     ]
   );
   return { baselineId, version: Number(baseline.version) };
@@ -126,9 +128,13 @@ export async function verifyTreeCapture({ baselineId, expectedNodeCount, expecte
 }
 
 export async function publishTreeBaseline({ baselineId, issueId, version, query = store.throwing }) {
+  // Provenance is re-checked at the row itself: a baseline without its frozen
+  // control policy must never become the standing evidence.
   const activated = await query(
     `UPDATE va_baseline SET state = 'ACTIVE'
-     WHERE baseline_id = FROM_BASE64(?) AND state = 'CAPTURING'`,
+     WHERE baseline_id = FROM_BASE64(?) AND state = 'CAPTURING'
+       AND required_role IS NOT NULL AND required_assurance IS NOT NULL
+       AND controlled_fields_hash IS NOT NULL`,
     [toBinaryParam(baselineId)]
   );
   if (Number(activated?.affectedRows) !== 1) throw new FailClosed('CAPTURE_INCOMPLETE');

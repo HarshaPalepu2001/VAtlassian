@@ -1,7 +1,140 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readAllValues, valueBatches } from '../src/db/baselineStore.js';
+import { baselineByVersion, readAllValues, valueBatches, writeBaseline } from '../src/db/baselineStore.js';
 import { encodeValue, decodeValue } from '../src/lib/valuestore.js';
+
+function provenancedBaseline() {
+  return {
+    issue_id: 1, project_id: 100, issue_type_id: '200', version: 2,
+    content_hash: 'content-hash', field_digests: '{}',
+    transition_id: '31', from_status_id: 'review', to_status_id: 'approved',
+    required_role: 'Quality Reviewer', required_assurance: 'ESIGNATURE',
+    controlled_fields_hash: 'd'.repeat(64),
+    approved_by: 'user-1', approved_name: 'Reviewer', transition_at: 10, captured_at: 11,
+    assurance_level: 'BIOMETRIC', approval_id: Buffer.alloc(16, 7), fidelity: 'EXACT', field_count: 1
+  };
+}
+
+test('scalar baseline insert records immutable control provenance', async () => {
+  const queries = [];
+  await writeBaseline({
+    baseline: provenancedBaseline(), raw: {},
+    query: async (sql, params) => {
+      queries.push({ sql, params });
+      return sql.includes("SET state = 'ACTIVE'") ? { affectedRows: 1 } : [];
+    },
+    execute: async () => ({ result: true, data: { affectedRows: 0 } })
+  });
+
+  const insert = queries.find(entry => entry.sql.includes('INSERT INTO va_baseline\n'));
+  assert.match(insert.sql, /required_role, required_assurance, controlled_fields_hash/);
+  assert.equal((insert.sql.match(/\?/g) ?? []).length, insert.params.length);
+  assert.deepEqual(insert.params.slice(-3), ['Quality Reviewer', 'ESIGNATURE', 'd'.repeat(64)]);
+});
+
+test('scalar publication is guarded by provenance at the database update', async () => {
+  const queries = [];
+  const executed = [];
+  await assert.rejects(() => writeBaseline({
+    baseline: provenancedBaseline(), raw: {},
+    query: async (sql, params) => {
+      queries.push({ sql, params });
+      return sql.includes("SET state = 'ACTIVE'") ? { affectedRows: 0 } : [];
+    },
+    execute: async sql => { executed.push(sql); return { result: true, data: {} }; }
+  }), error => error.reason === 'CAPTURE_INCOMPLETE');
+
+  const publish = queries.find(entry => entry.sql.includes("SET state = 'ACTIVE'"));
+  assert.match(publish.sql, /required_role IS NOT NULL/);
+  assert.match(publish.sql, /required_assurance IS NOT NULL/);
+  assert.match(publish.sql, /controlled_fields_hash IS NOT NULL/);
+  assert.deepEqual(executed, [], 'an unpublished baseline must not supersede the standing one');
+});
+
+test('controlled-field provenance has one canonical server-side hash', async () => {
+  const policy = await import('../src/lib/baselinePolicy.js').catch(() => null);
+  assert.equal(typeof policy?.controlledFieldsHash, 'function');
+
+  const fields = [{
+    field_id: 'summary', field_kind: 'TEXT', schema_type: 'string',
+    materiality: 'MAJOR', store_values: true, writable: false
+  }];
+  const expected = 'fd72aecbb8f6bb81b736aef9a8487475cbd738237f347353fbc93b37c8599e5f';
+
+  assert.equal(policy.controlledFieldsHash(fields, { summary: true }), expected);
+  assert.equal(policy.controlledFieldsHash([...fields].reverse(), { summary: true }), expected);
+  assert.notEqual(policy.controlledFieldsHash(fields, { summary: false }), expected);
+});
+
+test('baseline policy remains the signed policy after the current rule changes', async () => {
+  const policyModule = await import('../src/lib/baselinePolicy.js');
+  assert.equal(typeof policyModule.baselinePolicy, 'function');
+  const baselineId = Buffer.alloc(16, 4);
+  const baseline = {
+    baseline_id: baselineId,
+    version: 7,
+    transition_id: '31',
+    from_status_id: 'review',
+    to_status_id: 'approved',
+    required_role: 'Quality Reviewer',
+    required_assurance: 'ESIGNATURE',
+    controlled_fields_hash: 'a'.repeat(64),
+    assurance_level: 'BIOMETRIC'
+  };
+  const currentRule = {
+    transition_id: '99', required_role: 'Administrator', required_assurance: 'BIOMETRIC'
+  };
+
+  const result = policyModule.baselinePolicy(baseline);
+  currentRule.transition_id = '100';
+
+  assert.deepEqual(result, {
+    baselineId,
+    version: 7,
+    transitionId: '31',
+    reviewStatusId: 'review',
+    destinationStatusId: 'approved',
+    requiredRole: 'Quality Reviewer',
+    requiredAssurance: 'ESIGNATURE',
+    controlledFieldsHash: 'a'.repeat(64)
+  });
+  assert.equal(baseline.assurance_level, 'BIOMETRIC');
+  assert.equal(result.requiredAssurance, 'ESIGNATURE');
+});
+
+test('an incomplete historical baseline cannot supply drift authority', async () => {
+  const { baselinePolicy } = await import('../src/lib/baselinePolicy.js');
+  assert.equal(typeof baselinePolicy, 'function');
+  const complete = {
+    baseline_id: Buffer.alloc(16, 4), version: 1, transition_id: '31',
+    from_status_id: 'review', to_status_id: 'approved', required_role: 'Quality Reviewer',
+    required_assurance: 'ESIGNATURE', controlled_fields_hash: 'b'.repeat(64)
+  };
+
+  for (const field of [
+    'baseline_id', 'version', 'transition_id', 'from_status_id', 'to_status_id',
+    'required_role', 'required_assurance', 'controlled_fields_hash'
+  ]) {
+    const incomplete = { ...complete, [field]: null };
+    assert.throws(
+      () => baselinePolicy(incomplete),
+      error => error.reason === 'BASELINE_POLICY_INCOMPLETE',
+      `${field} must be required`
+    );
+  }
+});
+
+test('baseline reads include immutable control provenance', async () => {
+  let statement = '';
+  await baselineByVersion(42, 3, async sql => {
+    statement = sql;
+    return [];
+  });
+
+  assert.match(statement, /required_role/);
+  assert.match(statement, /required_assurance/);
+  assert.match(statement, /controlled_fields_hash/);
+});
 
 test('read a 100-field baseline with bounded chunk pages instead of per-field queries', async () => {
   const expected = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`customfield_${String(i).padStart(3, '0')}`, { value: i }]));

@@ -315,11 +315,11 @@ git commit -m "feat: configure exact Jira workflow transitions"
 - Migration `v039_baseline_control_provenance` adds `required_role`, `required_assurance`, and `controlled_fields_hash` to `va_baseline`.
 - `baselinePolicy(baseline) -> { baselineId, version, transitionId, reviewStatusId, destinationStatusId, requiredRole, requiredAssurance, controlledFieldsHash }`
 
-- [ ] **Step 1: Write failing immutable-provenance tests**
+- [x] **Step 1: Write failing immutable-provenance tests**
 
 Prove that a baseline retains the original role/provider/edge after its controlled-transition row changes, `required_assurance` is distinct from achieved `assurance_level`, and a missing provenance field makes drift decisions unavailable rather than falling back to the current rule.
 
-- [ ] **Step 2: Add columns and include them in every read/write**
+- [x] **Step 2: Add columns and include them in every read/write**
 
 ```sql
 ALTER TABLE va_baseline
@@ -330,15 +330,15 @@ ALTER TABLE va_baseline
 
 New baselines require all three before publication. Existing baselines with null provenance remain readable as historical evidence, but a drift action against one returns `BASELINE_POLICY_INCOMPLETE` and raises an admin incident.
 
-- [ ] **Step 3: Compute the field-catalogue hash server-side**
+- [x] **Step 3: Compute the field-catalogue hash server-side**
 
 Hash canonical ordered entries containing field id, field kind/schema, materiality, `store_values`, and writable classification. Both scalar and tree capture write the same snapshot values from the exact gate and controlled-field list used for content hashing.
 
-- [ ] **Step 4: Run storage/capture regression tests**
+- [x] **Step 4: Run storage/capture regression tests**
 
 Run: `node --test test/migrations.test.js test/baseline-storage.test.js test/baseline-capture-lifecycle.test.js test/tree-capture.test.js test/controlled-transition-tree-acceptance.test.js`
 
-- [ ] **Step 5: Commit only Task 4 hunks**
+- [x] **Step 5: Commit only Task 4 hunks**
 
 ```bash
 git add -p src/db/migrations.js src/db/baselineStore.js src/db/baselineTreeStore.js src/lib/baseline.js src/lib/capture.js src/lib/baselinePolicy.js test/migrations.test.js test/baseline-storage.test.js test/baseline-capture-lifecycle.test.js test/tree-capture.test.js

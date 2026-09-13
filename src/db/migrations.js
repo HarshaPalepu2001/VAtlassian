@@ -538,5 +538,9 @@ export const MIGRATIONS = [
   detail TEXT NULL,
   PRIMARY KEY (restore_id, step_key),
   KEY idx_restore_action_state (restore_id, state, started_at)
-)` }
+)` },
+  { id: 'v039_baseline_control_provenance', sql: `ALTER TABLE va_baseline
+  ADD COLUMN required_role VARCHAR(32) NULL,
+  ADD COLUMN required_assurance VARCHAR(24) NULL,
+  ADD COLUMN controlled_fields_hash CHAR(64) NULL` }
 ];

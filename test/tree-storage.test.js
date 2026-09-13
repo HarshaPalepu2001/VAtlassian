@@ -80,6 +80,27 @@ test('beginTreeBaseline reserves a distinct capturing baseline id', async () => 
   assert.notDeepEqual(result.baselineId, approvalId);
 });
 
+test('beginTreeBaseline reserves the row with its immutable control provenance', async () => {
+  const queries = [];
+  await beginTreeBaseline({
+    baseline: {
+      issue_id: 1, project_id: 100, issue_type_id: '200', version: 1,
+      content_hash: 'tree-hash', field_digests: '{}',
+      transition_id: '5', from_status_id: '1', to_status_id: '2',
+      required_role: 'Quality Reviewer', required_assurance: 'ESIGNATURE',
+      controlled_fields_hash: 'c'.repeat(64),
+      approved_by: 'user-1', approved_name: 'Reviewer', transition_at: 10,
+      captured_at: 11, assurance_level: 'BIOMETRIC', approval_id: Buffer.alloc(16, 7),
+      fidelity: 'EXACT', field_count: 2, tree_hash: 'tree-hash'
+    },
+    query: async (sql, params) => { queries.push({ sql, params }); }
+  });
+
+  assert.match(queries[0].sql, /required_role, required_assurance, controlled_fields_hash/);
+  assert.equal((queries[0].sql.match(/\?/g) ?? []).length, queries[0].params.length);
+  assert.deepEqual(queries[0].params.slice(-3), ['Quality Reviewer', 'ESIGNATURE', 'c'.repeat(64)]);
+});
+
 test('beginTreeBaseline resumes the capturing row without inserting another', async () => {
   const baselineId = Buffer.alloc(16, 4);
   const result = await beginTreeBaseline({
@@ -179,6 +200,22 @@ test('publishTreeBaseline activates before superseding older versions', async ()
   assert.match(calls[0].sql, /SET state = 'ACTIVE'.*state = 'CAPTURING'/s);
   assert.match(calls[1].sql, /version < \?.*state = 'ACTIVE'/s);
   assert.deepEqual(calls[1].params, [1, 3]);
+});
+
+test('publishTreeBaseline cannot activate a row without control provenance', async () => {
+  const calls = [];
+  await assert.rejects(() => publishTreeBaseline({
+    baselineId: Buffer.alloc(16, 2), issueId: 1, version: 3,
+    query: async (sql, params) => {
+      calls.push({ sql, params });
+      return { affectedRows: 0 };
+    }
+  }), error => error.reason === 'CAPTURE_INCOMPLETE');
+
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].sql, /required_role IS NOT NULL/);
+  assert.match(calls[0].sql, /required_assurance IS NOT NULL/);
+  assert.match(calls[0].sql, /controlled_fields_hash IS NOT NULL/);
 });
 
 test('readBaselineTree fetches and decodes nodes and values', async (t) => {
