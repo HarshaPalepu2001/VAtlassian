@@ -1,6 +1,6 @@
 // Endpoint address book. Implementation is split by administrative responsibility.
 export { check, bootstrap, runMigrations, listAdmins, grantAdmin, revokeAdmin } from './admins.js';
-export { listProjects, listIssueTypesForProject, listStatuses, listStatusesForProject, searchUsers } from './adminDirectory.js';
+export { listProjects, listIssueTypesForProject, listStatuses, listStatusesForProject, listWorkflowTransitions, searchUsers } from './adminDirectory.js';
 export { issueCredentialResetGrant, listCredentialResetGrants } from './adminRecovery.js';
 export { getAlertDestination, setAlertDestination, listGateFindings } from './adminAlerts.js';
 export { listAvailableRoles, listEligibility, grantEligibility, revokeEligibility } from './eligibility.js';

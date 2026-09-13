@@ -1,4 +1,6 @@
 import { runAdmin } from './adminRuntime.js';
+import { isOurGate, isDisabled } from '../lib/gateDrift.js';
+import { MODULE_KEY } from '../lib/workflowSource.js';
 const ACTIVE = 'ACTIVE';
 const REVOKED = 'REVOKED';
 
@@ -76,6 +78,83 @@ export async function listStatusesForProject(req, overrides) {
       console.error(e);
       return { success: false, error: e.message };
     }
+  }, overrides, 'adminDirectory');
+}
+
+/**
+ * Every exact transition Jira's live workflow offers for one project + issue
+ * type, normalized for the admin picker.
+ *
+ * WHY THIS EXISTS. The old console asked an administrator to name a from-
+ * status and a to-status and typed those into va_controlled_transition
+ * directly. Two workflow transitions can share a destination status
+ * (gatedTransition() in db/configStore.js), so a rule saved that way could
+ * describe an edge Jira does not actually have, or silently collide with a
+ * sibling transition the admin never meant to touch. This reads the workflow
+ * Jira is actually running and hands back one row per real edge, so the
+ * console can offer an exact transition id instead of a guess.
+ *
+ * NEVER TRUSTS THE BROWSER. Every field here — including whether our own
+ * va-gate validator is attached — comes from this live read, re-verified on
+ * every call. createControlledTransition/updateControlledTransition
+ * (transitionsValidation.js#verifyControlledTransition) read the same source
+ * again at save time rather than trusting whatever this call returned
+ * earlier.
+ *
+ * INITIAL transitions (issue creation) are excluded — they have no
+ * from-status, so they can never be a controlled edge (see
+ * gateDrift.js#transitionCovers). A DIRECTED transition reachable from
+ * several statuses is exploded into one row per from-status, because that is
+ * the exact edge the picker and the controlled-transition table both key on;
+ * a GLOBAL transition is reachable from every status and is represented once
+ * with the `fromStatusId: '*'` wildcard gateDrift.js already uses for that.
+ */
+export async function listWorkflowTransitions(req, overrides) {
+  return runAdmin(req, async (deps) => {
+    const { readWorkflowForPair, runtimeAppId, lookupStatuses } = deps;
+    const { projectId, issueTypeId } = req.payload ?? {};
+    if (!/^\d+$/.test(String(projectId ?? '')) || !/^\d+$/.test(String(issueTypeId ?? ''))) {
+      return { success: false, error: 'An exact project and work item type are required.' };
+    }
+    const workflow = await readWorkflowForPair({ projectId: String(projectId), issueTypeId: String(issueTypeId) });
+    if (!workflow) {
+      return { success: false, error: 'Could not read the live Jira workflow for this project and work item type.' };
+    }
+    const appId = runtimeAppId();
+    const statuses = await lookupStatuses();
+    const statusName = (id) => (id === '*' ? 'Any status' : statuses.get(String(id))?.name ?? null);
+
+    const rows = [];
+    for (const t of workflow.transitions ?? []) {
+      if (t.type === 'INITIAL') continue;
+      const ours = (t.validators ?? []).filter((v) => isOurGate(v, { appId, moduleKey: MODULE_KEY }));
+      const base = {
+        transitionId: String(t.id),
+        name: t.name,
+        toStatusId: String(t.toStatusReference),
+        toStatusName: statusName(t.toStatusReference),
+        hasScreen: Boolean(t.transitionScreen),
+        jiraRules: {
+          conditions: Boolean(t.conditions),
+          otherValidators: (t.validators ?? []).length - ours.length,
+          postFunctions: (t.postFunctions ?? []).length
+        },
+        validatorAttached: ours.length > 0 && !ours.every(isDisabled)
+      };
+      if (t.type === 'GLOBAL') {
+        rows.push({ ...base, fromStatusId: '*', fromStatusName: 'Any status', global: true });
+        continue;
+      }
+      for (const link of t.links ?? []) {
+        rows.push({
+          ...base,
+          fromStatusId: String(link.fromStatusReference),
+          fromStatusName: statusName(link.fromStatusReference),
+          global: false
+        });
+      }
+    }
+    return { success: true, transitions: rows };
   }, overrides, 'adminDirectory');
 }
 

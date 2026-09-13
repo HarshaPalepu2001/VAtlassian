@@ -6,11 +6,18 @@ export async function adminDependencies(overrides, profile = '') {
     import('../lib/ledger.js'), import('../lib/directory.js')
   ]);
   const api = forge.default;
+  const workflowSource = await import('../lib/workflowSource.js');
   const deps = { ...db, ...store, ...ledger, ...directory,
     asApp: () => api.asApp(), asUser: () => api.asUser(), route: forge.route,
     hasUnresolvedDrift: (await import('../db/driftStore.js')).hasUnresolvedDrift,
     listGatedTransitions: (await import('../db/configStore.js')).listGatedTransitions,
-    declaredFieldRows: (await import('../db/configStore.js')).declaredFieldRows };
+    declaredFieldRows: (await import('../db/configStore.js')).declaredFieldRows,
+    // The live Jira workflow read and this app's own runtime identity — shared
+    // by the admin transition picker (adminDirectory.js#listWorkflowTransitions)
+    // and the create/update revalidation in transitionsValidation.js, so both
+    // read the same authoritative source rather than trusting the browser.
+    readWorkflowForPair: workflowSource.readWorkflowForPair,
+    runtimeAppId: workflowSource.runtimeAppId };
   deps.isJiraAdmin = async () => {
     const response = await api.asUser().requestJira(forge.route`/rest/api/3/mypermissions?permissions=ADMINISTER`);
     if (!response.ok) throw new Error('Could not verify Jira administrator permission.');

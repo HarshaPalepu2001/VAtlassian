@@ -1,8 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as admin from '../src/usecases/admin.js';
-import { fixture, request } from './admin-fixture.js';
-const edge = { projectId: '1', issueTypeId: '*', fromStatusId: '*', toStatusId: '2', requiredRole: 'QA', meaning: 'APPROVED', transitionId: '100' };
+import { fixture, request, fixtureGateValidator } from './admin-fixture.js';
+// issueTypeId is concrete, never '*': a controlled transition is now
+// verified against the one live Jira workflow for this exact project + work
+// item type pair (workflowSource.js#readWorkflowForPair takes no wildcard),
+// so there is no longer a single workflow to re-check a wildcard scope
+// against. The wildcard remains supported everywhere ELSE this app uses
+// issue_type_id — see db/configStore.js's "ISSUE TYPE TAKES THE WILDCARD TOO".
+const edge = { projectId: '1', issueTypeId: '2', fromStatusId: '*', toStatusId: '2', requiredRole: 'QA', meaning: 'APPROVED', transitionId: '100', requiredAssurance: 'ESIGNATURE' };
 
 test('edge creation stores assurance and both capture/drift policy flags', async () => {
   const deps = fixture();
@@ -38,11 +44,107 @@ test('controlled transition configuration requires an exact Jira transition id',
 });
 
 test('edge edits persist changed assurance without creating approvals', async () => {
-  const deps = fixture({ query: sql => ({ result: true, data: sql.startsWith('SELECT state') ? [{ state: 'ACTIVE' }] : [] }) });
+  const deps = fixture({
+    query: sql => ({
+      result: true,
+      data: sql.startsWith('SELECT state') ? [{ state: 'ACTIVE' }]
+        : sql.includes('FROM va_eligibility') ? [{ role: 'QA' }]
+        : []
+    })
+  });
   const result = await admin.updateControlledTransition(request({ ...edge, ctId: 'a'.repeat(32), requiredAssurance: 'ESIGNATURE' }), deps);
   assert.equal(result.success, true);
   assert.equal(deps.calls.some(c => c.sql.startsWith('UPDATE va_controlled_transition')), true);
   assert.equal(deps.calls.some(c => /(?:INSERT|UPDATE).*va_approval/.test(c.sql)), false);
+});
+
+// --- Step 5: revalidated against Jira's live workflow, never the browser ---
+
+test('creation refuses a live workflow with no VAtlassian validator attached', async () => {
+  const deps = fixture({
+    readWorkflowForPair: async () => ({
+      id: 'wf-1', name: 'wf',
+      transitions: [{ id: '100', name: 'Approve', type: 'GLOBAL', toStatusReference: '2', links: [], validators: [] }]
+    })
+  });
+  const result = await admin.createControlledTransition(request(edge), deps);
+  assert.equal(result.success, false);
+  assert.match(result.error, /va-gate/);
+});
+
+test('creation refuses a live workflow whose gate is attached but disabled', async () => {
+  const deps = fixture({
+    readWorkflowForPair: async () => ({
+      id: 'wf-1', name: 'wf',
+      transitions: [{
+        id: '100', name: 'Approve', type: 'GLOBAL', toStatusReference: '2', links: [],
+        validators: [fixtureGateValidator({ disabled: 'true' })]
+      }]
+    })
+  });
+  const result = await admin.createControlledTransition(request(edge), deps);
+  assert.equal(result.success, false);
+});
+
+test('creation refuses a transition no longer present in the live workflow snapshot', async () => {
+  const deps = fixture({
+    readWorkflowForPair: async () => ({ id: 'wf-1', name: 'wf', transitions: [] })
+  });
+  const result = await admin.createControlledTransition(request(edge), deps);
+  assert.equal(result.success, false);
+  assert.match(result.error, /no longer runs/);
+});
+
+test('creation refuses an edge whose live from/to no longer matches the picked edge', async () => {
+  const deps = fixture({
+    readWorkflowForPair: async () => ({
+      id: 'wf-1', name: 'wf',
+      transitions: [{
+        id: '100', name: 'Approve', type: 'DIRECTED', toStatusReference: '2',
+        links: [{ fromStatusReference: '999' }], validators: [fixtureGateValidator()]
+      }]
+    })
+  });
+  // edge.fromStatusId is '*' (a GLOBAL pick); the live transition is now DIRECTED
+  // from a different status entirely, so the earlier read is stale.
+  const result = await admin.createControlledTransition(request(edge), deps);
+  assert.equal(result.success, false);
+});
+
+test('creation refuses a role nobody currently holds', async () => {
+  const deps = fixture({ ineligible: true });
+  const result = await admin.createControlledTransition(request(edge), deps);
+  assert.equal(result.success, false);
+  assert.match(result.error, /No one currently holds/);
+});
+
+test('creation refuses a second ACTIVE row over the identical exact edge', async () => {
+  const deps = fixture({
+    query: sql => ({
+      result: true,
+      data: sql.includes('FROM va_eligibility') ? [{ role: 'QA' }]
+        : sql.includes('FROM va_controlled_transition') && sql.includes('transition_id = ?') ? [{ '1': 1 }]
+        : []
+    })
+  });
+  const result = await admin.createControlledTransition(request(edge), deps);
+  assert.equal(result.success, false);
+  assert.match(result.error, /already governs/);
+});
+
+test('an update excludes its own row from the no-conflicting-scope check', async () => {
+  const deps = fixture({
+    query: sql => ({
+      result: true,
+      data: sql.startsWith('SELECT state') ? [{ state: 'ACTIVE' }]
+        : sql.includes('FROM va_eligibility') ? [{ role: 'QA' }]
+        : []
+    })
+  });
+  const result = await admin.updateControlledTransition(request({ ...edge, ctId: 'a'.repeat(32) }), deps);
+  assert.equal(result.success, true);
+  const conflictCall = deps.calls.find(c => c.sql.includes('FROM va_controlled_transition') && c.sql.includes('transition_id = ?'));
+  assert.ok(conflictCall.sql.includes('ct_id !='), 'the row being edited must exclude itself from the conflict check');
 });
 
 test('role lookup honors project-wide and issue-type wildcard grants', async () => {

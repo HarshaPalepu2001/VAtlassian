@@ -1,11 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { invoke } from '../../lib/bridge';
 import Button from '@atlaskit/button';
 import SectionMessage from '@atlaskit/section-message';
 import Textfield from '@atlaskit/textfield';
 
 import {
-  Badge, Card, EmptyState, Field, Name, Page, ProjectLink, Section, Select, StatusFlow, Table
+  Badge, Card, EmptyState, Facts, Field, Name, Page, ProjectLink, Section, Select, StatusFlow, Table
 } from '../../ui/primitives';
 import { AssuranceChip } from '../../ui/feedback';
 import type { AssuranceLevel } from '../../lib/assurance';
@@ -15,6 +15,30 @@ import { formatDate } from '../../ui/format';
 type Project = { id: string; key: string; name: string };
 type IssueType = { id: string; name: string };
 type Status = { id: string; name: string };
+
+/**
+ * One exact edge from admin:listWorkflowTransitions — Jira's live workflow,
+ * read fresh every time project or work item type changes. Nothing here is
+ * typed in by an administrator; it is exactly what workflowSource.js read.
+ */
+type WorkflowTransition = {
+  transitionId: string;
+  name: string;
+  fromStatusId: string;
+  fromStatusName: string | null;
+  toStatusId: string;
+  toStatusName: string | null;
+  global: boolean;
+  hasScreen: boolean;
+  validatorAttached: boolean;
+  jiraRules: { conditions: boolean; otherValidators: number; postFunctions: number };
+};
+
+/** Two Jira transitions can share a destination status (and, for a DIRECTED
+ *  transition reachable from several statuses, even a transition id) — see
+ *  transitionsValidation.js's "exact Jira transition" doc. `transitionId`
+ *  alone is not a unique option key; the pair is. */
+const optionKey = (t: WorkflowTransition) => `${t.transitionId}:${t.fromStatusId}`;
 
 /**
  * Note what is NOT on this type: project_id, issue_type_id, from_status_id,
@@ -61,8 +85,15 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
 
   const [projectId, setProjectId] = useState('');
   const [issueTypeId, setIssueTypeId] = useState('');
-  const [fromStatus, setFromStatus] = useState('');
-  const [toStatus, setToStatus] = useState('');
+
+  // The exact edge picker. Discovery re-reads Jira's live workflow every time
+  // project or work item type changes; nothing here is carried over from an
+  // earlier read once either scope input changes.
+  const [workflowTransitions, setWorkflowTransitions] = useState<WorkflowTransition[]>([]);
+  const [discovery, setDiscovery] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
+  const [selectedKey, setSelectedKey] = useState('');
+  const discoverySeq = useRef(0);
+
   const [role, setRole] = useState('');
   const [meaning, setMeaning] = useState('');
   const [requiredAssurance,setAssurance]=useState<AssuranceLevel>('ESIGNATURE');
@@ -75,7 +106,7 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
     try {
       const response = await invoke('admin:listControlledTransitions') as
         { success: boolean; transitions?: ControlledTransition[]; error?: string };
-      
+
       if (response.success) setTransitions(response.transitions ?? []);
       else setMessage({ type: 'error', text: response.error || 'Failed to load controlled transitions.' });
     } catch (err: any) {
@@ -91,7 +122,7 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
     if (!projectId) { setIssueTypes([]); return; }
     invoke('admin:listStatusesForProject', { projectId, issueTypeId: '' })
       .then((r: any) => { if (r.success) setProjectStatuses(r.statuses ?? []); });
-      
+
     invoke('admin:listIssueTypesForProject', { projectId })
       .then((r: any) => { if (r.success) setIssueTypes(r.issueTypes ?? []); });
   }, [projectId]);
@@ -117,18 +148,61 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
       });
   }, [projectId, issueTypeId]);
 
-  const complete = projectId && issueTypeId && fromStatus && toStatus && role.trim() && meaning.trim();
+  // The transition picker. A change to either scope input invalidates
+  // whatever was selected — Jira's workflow for a different project or work
+  // item type may not even have the same transition ids — so the selection
+  // and the offered options are cleared before the new read starts, never
+  // after it lands, so nothing stale can be picked while a newer read is in
+  // flight. `discoverySeq` drops a response overtaken by a later one; save
+  // stays disabled for the whole of `loading`, so an overtaken response
+  // cannot be told apart from one that is simply slow.
+  useEffect(() => {
+    const seq = ++discoverySeq.current;
+    setSelectedKey('');
+    setWorkflowTransitions([]);
+    if (!projectId || !issueTypeId) { setDiscovery('idle'); return; }
+    setDiscovery('loading');
+    invoke('admin:listWorkflowTransitions', { projectId, issueTypeId })
+      .then((r: any) => {
+        if (discoverySeq.current !== seq) return;
+        if (r.success) { setWorkflowTransitions(r.transitions ?? []); setDiscovery('loaded'); }
+        else { setDiscovery('error'); setMessage({ type: 'error', text: r.error || 'Could not read the live Jira workflow.' }); }
+      })
+      .catch((err: any) => {
+        if (discoverySeq.current !== seq) return;
+        setDiscovery('error');
+        setMessage({ type: 'error', text: err.message || 'Could not read the live Jira workflow.' });
+      });
+  }, [projectId, issueTypeId]);
+
+  const selectedTransition = workflowTransitions.find((t) => optionKey(t) === selectedKey) ?? null;
+  // A transition with no enabled va-gate of ours cannot be enforced no matter
+  // what is saved — Jira would never call this app on it. That is a blocking
+  // finding, not a soft warning: saving must stay disabled until it clears.
+  const blockingFinding = selectedTransition != null && !selectedTransition.validatorAttached;
+
+  const transitionOptions = workflowTransitions.map((t) => ({
+    value: optionKey(t),
+    label: `${t.global ? 'Any status' : t.fromStatusName} -> ${t.toStatusName} - ${t.name} (#${t.transitionId})`
+  }));
+  const statusOptions = projectStatuses.map((s) => ({ value: s.id, label: s.name }));
+
+  const complete = Boolean(projectId && issueTypeId && selectedTransition && role.trim() && meaning.trim());
+  const canSave = complete && discovery === 'loaded' && !blockingFinding;
 
   const handleCreate = async () => {
     setMessage(null);
-    if (!complete) {
-      setMessage({ type: 'error', text: 'Fill in every field except the optional decline destination.' });
+    if (!canSave || !selectedTransition) {
+      setMessage({ type: 'error', text: 'Choose a project, type, an exact transition, a role and a meaning.' });
       return;
     }
     setSaving(true);
     try {
       const result = await invoke('admin:createControlledTransition', {
-        projectId, issueTypeId, fromStatusId: fromStatus, toStatusId: toStatus,
+        projectId, issueTypeId,
+        transitionId: selectedTransition.transitionId,
+        fromStatusId: selectedTransition.fromStatusId,
+        toStatusId: selectedTransition.toStatusId,
         requiredAssurance,captureBaseline,blockOnDrift,requiredRole: role.trim(), meaning: meaning.trim(), rejectToStatusId: rejectStatus || null
       }) as { success: boolean; error?: string };
 
@@ -138,7 +212,7 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
           type: 'success',
           text: `Approval now required${project ? ` in ${project.name}` : ''} for "${meaning.trim()}".`
         });
-        setRole(''); setMeaning(''); setRejectStatus(''); setFromStatus(''); setToStatus('');
+        setRole(''); setMeaning(''); setRejectStatus(''); setSelectedKey('');
         await loadTransitions();
       } else {
         setMessage({ type: 'error', text: result.error || 'Failed to add the rule.' });
@@ -161,12 +235,6 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
     }
   };
 
-  const statusOptions = projectStatuses.map((s) => ({ value: s.id, label: s.name }));
-  const fromStatusOptions = [
-    { value: '*', label: 'Any status' },
-    ...statusOptions
-  ];
-
   return (
     <Page eyebrow="Setup" title="Controlled transitions">
       {message && (
@@ -186,7 +254,7 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
             <Select
               placeholder="Choose a project…"
               value={projectId}
-              onChange={(value) => { setProjectId(value); setIssueTypeId(''); setFromStatus(''); setToStatus(''); setRejectStatus(''); }}
+              onChange={(value) => { setProjectId(value); setIssueTypeId(''); setRejectStatus(''); }}
               options={projects.map((p) => ({ value: p.id, label: p.name }))}
             />
           </Field>
@@ -195,29 +263,46 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
               placeholder="Choose a type…"
               value={issueTypeId}
               disabled={!projectId}
-              onChange={(value) => { setIssueTypeId(value); setFromStatus(''); setToStatus(''); setRejectStatus(''); }}
-              options={[{value:'*',label:'All work item types'},...issueTypes.map((t) => ({ value: t.id, label: t.name }))]}
+              onChange={(value) => { setIssueTypeId(value); setRejectStatus(''); }}
+              options={issueTypes.map((t) => ({ value: t.id, label: t.name }))}
             />
           </Field>
-          <Field label="Moving from">
+          <Field
+            label="Exact transition"
+            hint={
+              discovery === 'loading' ? 'Reading the live Jira workflow…'
+              : discovery === 'error' ? 'Could not read the live Jira workflow.'
+              : discovery === 'loaded' && transitionOptions.length === 0 ? 'This workflow has no controllable transitions.'
+              : 'Read live from Jira — the exact edge, not a status guess.'
+            }
+          >
             <Select
-              placeholder="Current status…"
-              value={fromStatus}
-              disabled={!issueTypeId}
-              onChange={setFromStatus}
-              options={fromStatusOptions}
-            />
-          </Field>
-          <Field label="Moving to">
-            <Select
-              placeholder="New status…"
-              value={toStatus}
-              disabled={!issueTypeId}
-              onChange={setToStatus}
-              options={statusOptions}
+              placeholder="Choose the exact transition…"
+              value={selectedKey}
+              disabled={!issueTypeId || discovery !== 'loaded'}
+              onChange={setSelectedKey}
+              options={transitionOptions}
             />
           </Field>
         </div>
+
+        {selectedTransition && (
+          <div style={{ marginTop: '12px' }}>
+            <Facts items={[
+              { label: 'Has a transition screen', value: selectedTransition.hasScreen ? 'Yes' : 'No' },
+              {
+                label: 'Signature validator',
+                value: selectedTransition.validatorAttached
+                  ? 'Attached and enabled'
+                  : <span className="va-unknown">Not attached — this edge cannot be enforced yet</span>
+              },
+              {
+                label: 'Other Jira rules on this edge',
+                value: `${selectedTransition.jiraRules.otherValidators} other validator(s), ${selectedTransition.jiraRules.postFunctions} post function(s)${selectedTransition.jiraRules.conditions ? ', has conditions' : ''}`
+              }
+            ]} />
+          </div>
+        )}
 
         <div className="va-form-grid va-form-grid--wide" style={{ marginTop: '16px' }}>
           <Field label="Who must sign" hint="Roles defined in Approver roles. Create a grant there first to add new roles.">
@@ -258,11 +343,13 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
           ? 'Add the "Biometric Authentication" field to this transition screen.'
           : 'Add the "Electronic Signature" field to this transition screen.'}><Select value={requiredAssurance} onChange={v=>setAssurance(v as AssuranceLevel)} placeholder="Choose assurance" options={CONTROLLED_TRANSITION_ASSURANCE_OPTIONS}/></Field><Field label="Capture approved baseline"><input type="checkbox" checked={captureBaseline} onChange={e=>setCapture(e.target.checked)}/></Field><Field label="Block transition on unresolved drift"><input type="checkbox" checked={blockOnDrift} onChange={e=>setBlock(e.target.checked)}/></Field></div>
         <div className="va-form-actions">
-          <Button appearance="primary" onClick={handleCreate} isDisabled={saving || !complete}>
+          <Button appearance="primary" onClick={handleCreate} isDisabled={saving || !canSave}>
             {saving ? 'Adding…' : 'Add rule'}
           </Button>
           <span className="va-hint">
-            {complete ? 'Takes effect immediately.' : 'Choose a project, type, both statuses, a role and a meaning.'}
+            {blockingFinding
+              ? 'Attach the signature validator to this transition in Jira before it can be controlled.'
+              : canSave ? 'Takes effect immediately.' : 'Choose a project, type, exact transition, a role and a meaning.'}
           </span>
         </div>
       </Card>

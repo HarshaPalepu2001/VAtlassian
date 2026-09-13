@@ -32,24 +32,18 @@
  * this job's whole remit; remediation belongs to the admin console, where a
  * person clicks it and the ledger records who.
  */
-import { asApp, route, getAppContext } from '@forge/api';
 import { executeQuery } from '../lib/db.js';
 import { append, EVENT } from '../lib/ledger.js';
 import { auditStore, newId } from '../db/store.js';
 import { diffWorkflow, groupByPair, FINDING, SEVERITY } from '../lib/gateDrift.js';
 import { gateUnenforcedAlert } from '../lib/alerts.js';
 import { enqueue } from '../db/alertStore.js';
+import { readWorkflowForPair, defaultRequest, runtimeAppId, MODULE_KEY } from '../lib/workflowSource.js';
 
 const ACTOR = 'system:gatecheck';
 const ACTIVE = 'ACTIVE';
 
-export const MODULE_KEY = 'va-gate';
-
-export function runtimeAppId() {
-  const id = getAppContext().appAri.appId;
-  if (!id) throw new Error('gatecheck: runtime app identity unavailable');
-  return id;
-}
+export { MODULE_KEY, runtimeAppId };
 
 async function loadActiveControlledTransitions() {
   const res = await executeQuery(
@@ -62,51 +56,6 @@ async function loadActiveControlledTransitions() {
     throw new Error(`gatecheck: could not read controlled transitions: ${res.error}`);
   }
   return res.data ?? [];
-}
-
-/**
- * Fetch the workflow Jira actually serves for one project + issue type.
- * Returns null on any failure, which the caller treats as "not evaluated"
- * rather than "nothing found".
- */
-export async function fetchWorkflowForPair({ projectId, issueTypeId }, { request = defaultRequest } = {}) {
-  try {
-    const response = await request({ projectId, issueTypeId });
-    if (!response.ok) {
-      const body = await response.text();
-      console.error(`gatecheck: workflow read failed for ${projectId}/${issueTypeId}`, response.status, body.slice(0, 300));
-      return null;
-    }
-    const data = await response.json();
-    const workflows = data.workflows ?? [];
-    if (workflows.length === 0) {
-      console.warn(`gatecheck: no workflow returned for ${projectId}/${issueTypeId}`);
-      return null;
-    }
-    // A single pair resolves to a single workflow. More than one would mean the
-    // endpoint's contract changed under us; take the first but say so, because
-    // silently picking one would produce findings against the wrong workflow.
-    if (workflows.length > 1) {
-      console.warn(`gatecheck: ${workflows.length} workflows for one pair ${projectId}/${issueTypeId}; using the first`);
-    }
-    return workflows[0];
-  } catch (e) {
-    console.error(`gatecheck: workflow read threw for ${projectId}/${issueTypeId}`, e);
-    return null;
-  }
-}
-
-async function defaultRequest({ projectId, issueTypeId }) {
-  // asApp(), not asUser(): this runs from a scheduled trigger with no user in
-  // context, and reading workflow configuration needs admin authority the
-  // signer would not have anyway.
-  return asApp().requestJira(route`/rest/api/3/workflows?expand=workflows.transitions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({
-      projectAndIssueTypes: [{ projectId: String(projectId), issueTypeId: String(issueTypeId) }]
-    })
-  });
 }
 
 async function readOpenFindingKeys() {
@@ -184,7 +133,7 @@ export async function run({ request = defaultRequest, appId = runtimeAppId() } =
   let unreadable = 0;
 
   for (const group of groups) {
-    const workflow = await fetchWorkflowForPair(group, { request });
+    const workflow = await readWorkflowForPair(group, { request });
     if (!workflow) {
       unreadable += 1;
       continue; // NOT evaluated — its findings must survive untouched.

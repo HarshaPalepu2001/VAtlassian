@@ -12,6 +12,7 @@ resolver.define('admin:listProjects', req => admin.listProjects(req));
 resolver.define('admin:listIssueTypesForProject', req => admin.listIssueTypesForProject(req));
 resolver.define('admin:listStatuses', req => admin.listStatuses(req));
 resolver.define('admin:listStatusesForProject', req => admin.listStatusesForProject(req));
+resolver.define('admin:listWorkflowTransitions', req => admin.listWorkflowTransitions(req));
 resolver.define('admin:searchUsers', req => admin.searchUsers(req));
 resolver.define('admin:issueCredentialResetGrant', req => admin.issueCredentialResetGrant(req));
 resolver.define('admin:listCredentialResetGrants', req => admin.listCredentialResetGrants(req));

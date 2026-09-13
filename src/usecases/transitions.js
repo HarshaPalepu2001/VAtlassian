@@ -1,4 +1,4 @@
-import { transitionInput } from './transitionsValidation.js';
+import { transitionInput, verifyControlledTransition } from './transitionsValidation.js';
 import { runAdmin, query, validId, audit } from './adminRuntime.js';
 const ACTIVE = 'ACTIVE';
 const REVOKED = 'REVOKED';
@@ -53,6 +53,10 @@ export async function listControlledTransitions(req, overrides) {
 export async function createControlledTransition(req, overrides) {
   return runAdmin(req, async deps => {
     const input = transitionInput(req.payload);
+    // The picker's earlier read is a display convenience, never the authority.
+    // Re-read the live transition and re-derive every fact this row will
+    // claim before it can be persisted.
+    await verifyControlledTransition(input, deps);
     if (input.captureBaseline) {
       const rows = await deps.declaredFieldRows({ projectId: input.projectId, issueTypeId: input.issueTypeId });
       if (rows.some(r => r.store_values === 0 || r.store_values === false)) {
@@ -81,6 +85,10 @@ export async function updateControlledTransition(req, overrides) {
     if (!validId(req.payload?.ctId)) throw new Error('A valid ctId is required.');
     const input = transitionInput(req.payload);
     const id = deps.toBinaryParam(Buffer.from(req.payload.ctId, 'hex'));
+    // Re-read the live transition and re-derive every fact this row will
+    // claim, excluding this row itself from the no-conflicting-scope check —
+    // an edit is allowed to keep governing the edge it already governs.
+    await verifyControlledTransition(input, deps, { excludeCtId: id });
     if (input.captureBaseline) {
       const rows = await deps.declaredFieldRows({ projectId: input.projectId, issueTypeId: input.issueTypeId });
       if (rows.some(r => r.store_values === 0 || r.store_values === false)) {

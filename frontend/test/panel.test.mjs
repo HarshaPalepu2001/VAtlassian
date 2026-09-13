@@ -38,6 +38,7 @@ const {invoke}=await import('../src/lib/bridge.ts');
 const {approvalMode}=await import('../src/lib/assurance.ts');
 const {default:RestoreStatus}=await import('../src/panel/sections/RestoreStatus.tsx');
 const {default:ApprovalField}=await import('../src/field/ApprovalField.tsx');
+const {default:TransitionsPage}=await import('../src/admin/pages/TransitionsPage.tsx');
 hooks.deregister();
 let root,container;
 const openWindow=window.open;
@@ -66,6 +67,13 @@ const typeInto=(input,value)=>{
  input.dispatchEvent(new window.Event('input',{bubbles:true}));
 };
 const clickButton=label=>[...container.querySelectorAll('button')].find(b=>label instanceof RegExp?label.test(b.textContent):b.textContent===label);
+// Same rationale as typeInto: a controlled <select>'s value is tracked by
+// React, so it must go through the native setter and a real 'change' event.
+const selectValue=(select,value)=>{
+ Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype,'value').set.call(select,value);
+ select.dispatchEvent(new window.Event('change',{bubbles:true}));
+};
+const fieldSelect=label=>[...container.querySelectorAll('.va-field')].find(f=>f.querySelector('.va-label')?.textContent===label)?.querySelector('select');
 function setup(handler){
  const listeners=new Map();const subscribers=new Map();
  globalThis.panelTransport={emitted:[],submitted:[],invoke:handler,on:(name,cb)=>{if(!subscribers.has(name))subscribers.set(name,new Set());const callbacks=subscribers.get(name);callbacks.add(cb);listeners.set(name,payload=>{for(const fn of callbacks)fn(payload);});return {unsubscribe:()=>{callbacks.delete(cb);if(!callbacks.size)listeners.delete(name);}};}};
@@ -451,6 +459,94 @@ test('transition field sends Jira issueTransition.id to signing context',async()
  const call=calls.find(([key])=>key==='signing:context');
  assert.ok(call,'signing:context must be called');
  assert.equal(call[1].transitionId,'102');
+});
+
+// ── Admin: the exact workflow-transition picker (TransitionsPage) ─────────
+// admin:listWorkflowTransitions replaces the old free-text from/to status
+// inputs with Jira's own live edges, read fresh every time the project or
+// work item type changes. See src/usecases/adminDirectory.js and
+// src/usecases/transitionsValidation.js for the server-side half.
+const oneProject=[{id:'1',key:'ONE',name:'Project one'}];
+function transitionsHandler({workflow=[],fail=false,issueTypes=[{id:'2',name:'Bug'}]}={}){
+ return async(key)=>{
+  if(key==='admin:listControlledTransitions')return {success:true,transitions:[]};
+  if(key==='admin:listIssueTypesForProject')return {success:true,issueTypes};
+  if(key==='admin:listStatusesForProject')return {success:true,statuses:[]};
+  if(key==='admin:listAvailableRoles')return {success:true,roles:['QA']};
+  if(key==='admin:listWorkflowTransitions')return fail?{success:false,error:'Could not read the live Jira workflow.'}:{success:true,transitions:workflow};
+  return {success:true};
+ };
+}
+const directedEdge=(over={})=>({transitionId:'2',name:'Done',fromStatusId:'10004',fromStatusName:'To Do',toStatusId:'10006',toStatusName:'Done',global:false,hasScreen:false,validatorAttached:true,jiraRules:{conditions:false,otherValidators:0,postFunctions:0},...over});
+const globalEdge=(over={})=>({transitionId:'4',name:'Any',fromStatusId:'*',fromStatusName:'Any status',toStatusId:'10004',toStatusName:'To Do',global:true,hasScreen:false,validatorAttached:true,jiraRules:{conditions:false,otherValidators:0,postFunctions:0},...over});
+async function chooseScope(){
+ await act(()=>selectValue(fieldSelect('Project'),'1'));await flush();
+ await act(()=>selectValue(fieldSelect('Work item type'),'2'));await flush();
+}
+
+test('an option is labelled with the exact edge, and a global transition reads "Any status"',async()=>{
+ setup(transitionsHandler({workflow:[directedEdge(),globalEdge()]}));
+ await act(()=>root.render(React.createElement(TransitionsPage,{projects:oneProject})));await flush();
+ await chooseScope();
+ const labels=[...fieldSelect('Exact transition').querySelectorAll('option')].map(o=>o.textContent);
+ assert.ok(labels.includes('To Do -> Done - Done (#2)'));
+ assert.ok(labels.includes('Any status -> To Do - Any (#4)'));
+});
+
+test('two transitions sharing a destination status remain two separate options',async()=>{
+ setup(transitionsHandler({workflow:[directedEdge(),directedEdge({transitionId:'3',name:'Sign',fromStatusId:'3',fromStatusName:'In Progress'})]}));
+ await act(()=>root.render(React.createElement(TransitionsPage,{projects:oneProject})));await flush();
+ await chooseScope();
+ const values=[...fieldSelect('Exact transition').querySelectorAll('option')].map(o=>o.value).filter(Boolean);
+ assert.equal(values.length,2,'both edges into Done must stay selectable, not collapse into one');
+});
+
+test('selecting a transition shows its read-only facts; changing scope clears them',async()=>{
+ setup(transitionsHandler({workflow:[directedEdge({hasScreen:true})]}));
+ await act(()=>root.render(React.createElement(TransitionsPage,{projects:oneProject})));await flush();
+ await chooseScope();
+ const select=fieldSelect('Exact transition');
+ await act(()=>selectValue(select,'2:10004'));await flush();
+ assert.match(container.textContent,/Has a transition screen/);
+ assert.match(container.textContent,/Attached and enabled/);
+ // Clearing the work item type must drop the pick and its facts, not just
+ // disable the control — a stale exact edge left selected under a changed
+ // scope would misrepresent which transition is actually being controlled.
+ await act(()=>selectValue(fieldSelect('Work item type'),''));await flush();
+ assert.equal(fieldSelect('Exact transition').value,'');
+ assert.doesNotMatch(container.textContent,/Has a transition screen/);
+});
+
+test('the transition selector stays disabled while discovery is loading or has failed',async()=>{
+ let resolveWorkflow;
+ setup(async key=>{
+  if(key==='admin:listWorkflowTransitions')return new Promise(r=>{resolveWorkflow=()=>r({success:true,transitions:[directedEdge()]});});
+  return transitionsHandler()(key);
+ });
+ await act(()=>root.render(React.createElement(TransitionsPage,{projects:oneProject})));await flush();
+ await act(()=>selectValue(fieldSelect('Project'),'1'));await flush();
+ await act(()=>selectValue(fieldSelect('Work item type'),'2'));await flush();
+ assert.equal(fieldSelect('Exact transition').disabled,true,'must stay disabled while the live read is in flight');
+ await act(()=>resolveWorkflow());await flush();
+ assert.equal(fieldSelect('Exact transition').disabled,false,'must enable once the live read lands');
+});
+
+test('a failed live read leaves the transition selector disabled and reports the error',async()=>{
+ setup(transitionsHandler({fail:true}));
+ await act(()=>root.render(React.createElement(TransitionsPage,{projects:oneProject})));await flush();
+ await chooseScope();
+ assert.equal(fieldSelect('Exact transition').disabled,true);
+ assert.match(container.textContent,/Could not read the live Jira workflow/);
+});
+
+test('a transition with no VAtlassian validator attached is a blocking finding, not a soft warning',async()=>{
+ setup(transitionsHandler({workflow:[directedEdge({validatorAttached:false})]}));
+ await act(()=>root.render(React.createElement(TransitionsPage,{projects:oneProject})));await flush();
+ await chooseScope();
+ await act(()=>selectValue(fieldSelect('Exact transition'),'2:10004'));await flush();
+ assert.match(container.textContent,/cannot be enforced yet/);
+ assert.match(container.textContent,/Attach the signature validator to this transition in Jira/);
+ assert.equal(clickButton('Add rule').disabled,true);
 });
 
 test('non-capturing approval never promises a baseline',async()=>{
