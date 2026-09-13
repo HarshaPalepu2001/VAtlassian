@@ -369,7 +369,7 @@ git commit -m "feat: persist baseline control provenance"
 - New outcomes: `AMBIGUOUS_ROUTE`, `SCREEN_BLOCKED`, `JIRA_REFUSED` in addition to existing no-op/success outcomes.
 - `recallToReview` receives `{ baselineId, baselineVersion, reviewStatusId }`; it never calls `recallTargetStatus`.
 
-- [ ] **Step 1: Write zero/one/multiple-route tests**
+- [x] **Step 1: Write zero/one/multiple-route tests**
 
 ```js
 test('latest baseline source is the only recall target', async () => {
@@ -383,19 +383,19 @@ test('two Jira routes to review are ambiguous', () => {
 });
 ```
 
-- [ ] **Step 2: Make route selection exact and fail closed**
+- [x] **Step 2: Make route selection exact and fail closed**
 
 Filter offered/available transitions to the baseline review status. Proceed only when exactly one remains and it has no unsatisfied screen. If already at review, do nothing. Never use another configured rule, first-match routing, or another review status.
 
-- [ ] **Step 3: Persist administrator-only incidents**
+- [x] **Step 3: Persist administrator-only incidents**
 
 Use a dedupe key containing baseline id/version and failure type. Record offered transition ids, target status, screen fact, Jira response, and last retry time. Keep ordinary reviewer responses actionable but free of configuration-repair tasks.
 
-- [ ] **Step 4: Run recall, trigger, and admin-health tests**
+- [x] **Step 4: Run recall, trigger, and admin-health tests**
 
 Run: `node --test test/baseline-recall.test.js test/baseline-trigger-retry.test.js test/drift-functional.test.js test/admin-health.test.js test/signature-ledger.test.js`
 
-- [ ] **Step 5: Commit only Task 5 hunks**
+- [x] **Step 5: Commit only Task 5 hunks**
 
 ```bash
 git add -p src/lib/recall.js src/lib/restore/recall.js src/db/configStore.js src/db/incidentStore.js src/lib/ledger.js src/lib/collect.js test/baseline-recall.test.js test/baseline-trigger-retry.test.js test/drift-functional.test.js test/admin-health.test.js
