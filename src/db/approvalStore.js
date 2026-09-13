@@ -90,6 +90,12 @@ export async function approvalById(approvalId) {
 export async function approvalHistory(issueId, limit = 50) {
   return (await query(`SELECT ${selection} FROM va_approval WHERE issue_id = ? ORDER BY decided_at DESC LIMIT ${limitClause(limit)}`, [issueId])).data.map(decode);
 }
+/** The most recent transition approval for this issue, decided or not, with or without a baseline.
+ *  Used by the panel summary to show "latest approval owner/time/outcome" without the full history read. */
+export async function latestApproval(issueId) {
+  const result = await query(`SELECT ${selection} FROM va_approval WHERE issue_id = ? ORDER BY decided_at DESC LIMIT 1`, [issueId]);
+  return decode(result.data[0]);
+}
 export async function approvalsForActor(accountId, { limit = 50 } = {}) {
   return (await query(`SELECT ${selection} FROM va_approval WHERE actor_account_id = ? ORDER BY decided_at DESC LIMIT ${limitClause(limit)}`, [accountId])).data.map(decode);
 }

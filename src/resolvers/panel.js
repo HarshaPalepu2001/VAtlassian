@@ -1,5 +1,7 @@
 import ForgeResolver from '@forge/resolver';
 import * as panel from '../usecases/panel.js';
+import * as panelSummary from '../usecases/panelSummary.js';
+import * as panelEvidence from '../usecases/panelEvidence.js';
 import * as approval from '../usecases/approval.js';
 import * as drift from '../usecases/drift.js';
 import * as restore from '../usecases/restore.js';
@@ -11,6 +13,8 @@ import { defineWebAuthnResolvers } from '../usecases/webauthn.js';
 const Resolver = ForgeResolver.default ?? ForgeResolver;
 const resolver = new Resolver();
 resolver.define('panel:getState', ({ payload, context }) => panel.getState({ payload, context }));
+resolver.define('panel:getSummary', ({ payload, context }) => panelSummary.getSummary({ payload, context }));
+resolver.define('panel:getEvidence', ({ payload, context }) => panelEvidence.getEvidence({ payload, context }));
 resolver.define('panel:getGlanceState', ({ payload, context }) => panel.getGlanceState({ payload, context }));
 resolver.define('signature:challenge', ({ payload, context }) => approval.challenge({ payload, context }));
 resolver.define('approval:challenge', ({ payload, context }) => approval.challenge({ payload, context }));

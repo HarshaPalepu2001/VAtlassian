@@ -51,6 +51,27 @@ export async function issueControlStatus({ issueId, projectId, issueTypeId }) {
  * drift against the same stuck baseline advances one row's `last_seen_at` —
  * the last retry time — instead of growing a new row per attempt.
  */
+/**
+ * ADMINISTRATOR-ONLY BADGE COUNT — how many open control facts touch this
+ * issue, without the LIMIT-5 detail issueControlStatus() returns.
+ *
+ * The panel summary shows this as a number so an administrator knows to open
+ * the full detail view; it must never be the number itself that decides
+ * anything, only a hint to go look.
+ */
+export async function adminIncidentCount({ issueId, projectId, issueTypeId }) {
+  const [incidentRows, findingRows] = await Promise.all([
+    throwing(`SELECT COUNT(*) AS n FROM va_incident WHERE issue_id = ?`, [Number(issueId)]),
+    projectId != null && issueTypeId != null ? throwing(
+      `SELECT COUNT(*) AS n FROM va_gate_finding
+       WHERE project_id = ? AND (issue_type_id = ? OR issue_type_id = '*')
+         AND cleared_at IS NULL AND finding_type NOT LIKE 'RECALL\\_%'`,
+      [String(projectId), String(issueTypeId)]
+    ) : [{ n: 0 }]
+  ]);
+  return Number(incidentRows?.[0]?.n ?? 0) + Number(findingRows?.[0]?.n ?? 0);
+}
+
 export async function recordRecallFinding({
   baselineId, baselineVersion, issueId, projectId, issueTypeId, failureType,
   currentStatusId, targetStatusId, offeredTransitionIds, hasScreen, jiraResponse, now

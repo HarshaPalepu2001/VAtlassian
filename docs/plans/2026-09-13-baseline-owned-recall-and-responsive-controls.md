@@ -481,7 +481,7 @@ git commit -m "feat: transition approved drift from baseline policy"
 - Resolver `panel:getEvidence` returns values, tree/diff details, attribution, baseline history, and restore history for an expected baseline/version.
 - `panel:getState` remains temporarily as a compatibility adapter and is removed only after all callers migrate.
 
-- [ ] **Step 1: Write dependency-boundary tests**
+- [x] **Step 1: Write dependency-boundary tests**
 
 ```js
 test('summary never invokes tree, changelog, editmeta, or baseline-value readers', async () => {
@@ -496,19 +496,19 @@ test('observer sees control and provenance but no enabled actions', async () => 
 });
 ```
 
-- [ ] **Step 2: Implement a narrow summary query path**
+- [x] **Step 2: Implement a narrow summary query path**
 
 Read Jira with only `project,issuetype,status,summary`. Run independent SQL reads in parallel: active baseline summary, item state, latest transition approval, restore state/progress, gate rows, eligibility, and admin incident count. Resolve all Jira-offered transitions once and exact-match each gate. The summary must never call `snapshot`, `readStableTree`, `fetchChangelog`, `readAllValues`, or `editmeta`.
 
-- [ ] **Step 3: Return one shared viewer projection**
+- [x] **Step 3: Return one shared viewer projection**
 
 Every viewer receives controlled status, exact scoped labels (`Any status -> Done` versus `In Progress -> Done`), role/provider/meaning, baseline capture/drift flags, latest baseline owner/time/version/method/field count, latest approval outcome/time/owner, and drift/restore state. Add `canApprove`, `canReject`, and retry flags per action; omit proof inputs and enabled actions for ineligible viewers.
 
-- [ ] **Step 4: Move heavy reads into evidence**
+- [x] **Step 4: Move heavy reads into evidence**
 
 `getEvidence` receives only issue identity plus expected baseline/version/selected transition. It rejects stale expectations, then uses the existing full `snapshot` mechanics to return recursive tree, values, changelog attribution, diff, baseline history, and restoration history.
 
-- [ ] **Step 5: Run panel contracts and full backend suite**
+- [x] **Step 5: Run panel contracts and full backend suite**
 
 Run: `node --test test/panel-state.test.js test/panel-response.test.js test/resolver-wiring.test.js test/panel-performance-contract.test.js test/queue.test.js test/journey.test.js`
 

@@ -67,6 +67,15 @@ test('R4: Exactly one file writes va_approval', () => {
   assert.equal(insertCount, 1, 'Exactly one file should write to va_approval');
 });
 
+test('Panel summary/evidence resolvers are wired for the responsive read split', () => {
+  const content = fs.readFileSync(path.join(srcDir, 'resolvers', 'panel.js'), 'utf8');
+  assert.ok(content.includes("resolver.define('panel:getSummary'"), 'panel:getSummary must be wired');
+  assert.ok(content.includes("resolver.define('panel:getEvidence'"), 'panel:getEvidence must be wired');
+  // panel:getState is a temporary compatibility adapter, kept until every
+  // caller migrates to the summary/evidence split — see Task 7's interfaces.
+  assert.ok(content.includes("resolver.define('panel:getState'"), 'panel:getState must remain until callers migrate');
+});
+
 test('Providers adhere to registry constraints', () => {
   const registryContent = fs.readFileSync(path.join(srcDir, 'lib', 'approval', 'registry.js'), 'utf8');
   assert.ok(registryContent, 'Registry must exist');

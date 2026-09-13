@@ -25,10 +25,11 @@ const modules = {
   'db/baselineTreeStore.js': ['readBaselineTree'],
   'db/itemStateStore.js': ['getReview'],
   'db/driftStore.js': ['driftForIssue'],
-  'db/approvalStore.js': ['approvalById', 'pendingApprovalForActor'],
-  'db/incidentStore.js': ['issueControlStatus'],
+  'db/approvalStore.js': ['approvalById', 'pendingApprovalForActor', 'latestApproval'],
+  'db/incidentStore.js': ['issueControlStatus', 'adminIncidentCount'],
   'db/credentialStore.js': ['credentialState'],
   'db/adminStore.js': ['isActiveAdmin'],
+  'db/restoreStore.js': ['restoresForIssue'],
   'lib/reviewer.js': ['isEligible'],
   'lib/transitions.js': ['availableTransitions']
 };
@@ -53,6 +54,7 @@ const hooks = registerHooks({
   }
 });
 const { getState } = await import('../src/usecases/panel.js');
+const { getEvidence } = await import('../src/usecases/panelEvidence.js');
 hooks.deregister();
 
 const clone = value => structuredClone(value);
@@ -89,7 +91,10 @@ function fixture(overrides = {}) {
     driftForIssue: async () => [],
     approvalById: async () => null,
     pendingApprovalForActor: async () => f.pendingRow,
+    latestApproval: async () => null,
     issueControlStatus: async () => ({ incidents: [], gateFindings: [] }),
+    adminIncidentCount: async () => 0,
+    restoresForIssue: async () => [],
     credentialState: async () => f.credential,
     isActiveAdmin: async () => false,
     isEligible: async () => true,
@@ -340,4 +345,62 @@ test('panel returns structural drift and exact destructive consequences', async 
   assert.deepEqual(state.rejection.deleteIssueKeys.sort(), ['NEW-10', 'NEW-9'].sort());
   assert.equal(state.rejection.recreateCount, 1);
   assert.equal(state.baseline.totalFieldCount, 48);
+});
+
+// ── panel:getEvidence — the lazy, heavy half of the split ────────────────────
+
+test('evidence returns the retained-value record, live diff fields, and tree rejection detail', async () => {
+  const f = fixture();
+  f.issue.fields.summary = 'edited after approval';
+  const evidence = await getEvidence(args);
+
+  assert.equal(evidence.error, undefined, `getEvidence must not fail: ${evidence.error}`);
+  assert.equal(evidence.baselineVersion, 1);
+  assert.ok(evidence.record, 'the retained-value record is part of evidence for every viewer');
+  assert.ok(Array.isArray(evidence.drift.fields));
+  assert.ok(evidence.drift.fields.some(field => field.fieldId === 'summary'));
+  assert.deepEqual(evidence.rejection, { deleteIssueKeys: [], recreateCount: 0 });
+  assert.deepEqual(evidence.restoreHistory, []);
+});
+
+test('evidence refuses a stale expected baseline version rather than mixing vintages', async () => {
+  fixture();
+  const evidence = await getEvidence({ ...args, payload: { ...args.payload, expectedBaselineVersion: 99 } });
+  assert.equal(evidence.reason, 'STALE_EVIDENCE');
+});
+
+test('evidence reports structural rejection detail identically to the compatibility adapter', async () => {
+  const f = fixture({
+    activeBaseline: async () => ({
+      baseline_id: Buffer.alloc(16, 1), tree_hash: 'abc', node_count: 5, edge_count: 4, total_field_count: 48,
+      from_status_id: '100', to_status_id: '200', transition_id: '31'
+    }),
+    readBaselineTree: async () => ({
+      nodes: [
+        { logicalNodeId: logicalNodeId('10'), issueKey: 'T-10', parentLogicalId: null, digests: { summary: '5c220e4800cda2aba11f631dacaca88f4c8bf8b5529ea30b657e5d978bf396a0' } },
+        { logicalNodeId: logicalNodeId('11'), issueKey: 'T-11', parentLogicalId: logicalNodeId('10'), digests: { summary: '76bb4b18bc769e84fb98bb7751b019f5474317821f558597e1fcd07637f1559f' } },
+        { logicalNodeId: 'removed-12', issueKey: 'T-12', parentLogicalId: logicalNodeId('10'), digests: {} }
+      ],
+      values: {}
+    }),
+    request: async (_identity, url, options = {}) => {
+      const response = body => ({ ok: true, status: 200, json: async () => body });
+      if (String(url).includes('/editmeta')) return response({ fields: {} });
+      if (options.method === 'POST' && String(url).includes('/search/jql')) {
+        const bodyStr = options.body;
+        if (bodyStr.includes('T-10')) {
+          return response({ issues: [
+            { id: '11', key: 'T-11', fields: { summary: 'story', parent: { id: '10' }, project: { id: '1' }, issuetype: { id: '1' }, status: { id: '100' } } },
+            { id: '9', key: 'NEW-9', fields: { summary: 'new1', parent: { id: '10' }, project: { id: '1' }, issuetype: { id: '1' }, status: { id: '100' } } },
+            { id: '100', key: 'NEW-10', fields: { summary: 'new2', parent: { id: '10' }, project: { id: '1' }, issuetype: { id: '1' }, status: { id: '100' } } }
+          ]});
+        }
+        return response({ issues: [] });
+      }
+      return response({ ...f.issue, fields: { ...f.issue.fields, parent: null } });
+    }
+  });
+  const evidence = await getEvidence(args);
+  assert.deepEqual(evidence.rejection.deleteIssueKeys.sort(), ['NEW-10', 'NEW-9'].sort());
+  assert.equal(evidence.rejection.recreateCount, 1);
 });

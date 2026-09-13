@@ -11,6 +11,8 @@ import { issueControlStatus } from '../db/incidentStore.js';
 import { credentialState } from '../db/credentialStore.js';
 import { isActiveAdmin } from '../db/adminStore.js';
 import { resolveActions, tierFor, BLOCKER } from '../lib/journey.js';
+import { pendingApprovalSummary } from './panelSummary.js';
+import { extractDescription, buildTreeRejection } from './panelEvidence.js';
 
 export async function getState(args) { return respond(async () => {
   const state = await load(args);
@@ -131,40 +133,8 @@ export async function getState(args) { return respond(async () => {
       assurance_level: h.assurance_level ?? h.assuranceLevel
     }));
   }
-  const extractText = (doc) => {
-    if (!doc || !doc.content) return '';
-    return doc.content.map(c => (c.type === 'paragraph' ? (c.content || []).map(n => n.text).join('') : '')).join('\n').trim();
-  };
-  const desc = extractText(issue.fields.description);
-  const descriptionTruncated = desc.length > 500;
-  const descriptionEmpty = desc.length === 0;
-  const description = descriptionTruncated ? desc.substring(0, 500) + '…' : desc;
-
-  let groupedDrift = {
-    addedNodes: [], removedNodes: [], movedNodes: [], changedFields: []
-  };
-  let deleteIssueKeys = [];
-  let recreateCount = 0;
-
-  if (state.treeDiff && state.treeDiff.changes) {
-    const currentNodesById = new Map(state.tree?.nodes?.map(n => [n.logicalNodeId, n]) ?? []);
-    for (const change of state.treeDiff.changes) {
-      if (change.kind === 'NODE_ADDED') {
-        const node = currentNodesById.get(change.logicalNodeId);
-        groupedDrift.addedNodes.push(node);
-        if (node?.key) {
-          deleteIssueKeys.push(node.key);
-        }
-      } else if (change.kind === 'NODE_REMOVED') {
-        groupedDrift.removedNodes.push(change);
-        recreateCount++;
-      } else if (change.kind === 'NODE_MOVED') {
-        groupedDrift.movedNodes.push(change);
-      } else if (change.kind === 'FIELD_CHANGED') {
-        groupedDrift.changedFields.push(change);
-      }
-    }
-  }
+  const { description, descriptionEmpty, descriptionTruncated } = extractDescription(issue.fields.description);
+  const { groupedDrift, deleteIssueKeys, recreateCount } = buildTreeRejection(state);
 
   const base = {
     issue: { id: issue.id, key: issue.key, summary: issue.fields.summary, status: issue.fields.status,
@@ -204,7 +174,7 @@ export async function getState(args) { return respond(async () => {
     approval: {
       requiredRole: state.gate?.required_role ?? null,
       requiredAssurance: state.gate?.required_assurance ?? actions[0]?.requiredAssurance ?? null,
-      pending: pendingApproval(stranded, actions),
+      pending: pendingApprovalSummary(stranded, actions),
       meaning: actions[0]?.meaning ?? 'Approved'
     }
   } : {
@@ -218,23 +188,6 @@ export async function getState(args) { return respond(async () => {
 
   return payload;
 }); }
-
-/**
- * The stranded approval, only if retrying it could actually work.
- *
- * retryTransition resolves the transition by id and requires its to-status to
- * match the signed row. If Jira is no longer offering that transition the retry
- * is certain to be refused, and a button that cannot succeed is worse than no
- * button — so it is not advertised.
- */
-function pendingApproval(row, transitions) {
-  if (!row?.approval_id || !row.transition_id) return null;
-  const offered = transitions.some(t => t.transitionId === String(row.transition_id)
-    && String(t.toStatusId) === String(row.to_status_id));
-  if (!offered) return null;
-  return { approvalId: Buffer.from(row.approval_id).toString('hex'),
-    transitionId: String(row.transition_id), state: row.state, expiresAt: Number(row.expires_at) };
-}
 
 /** Rendered on every issue view: exactly one primary-key read, no Jira fan-out. */
 export async function getGlanceState({ context }) { return respond(async () => {

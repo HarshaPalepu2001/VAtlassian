@@ -14,13 +14,9 @@ import { planTreeCapture } from '../lib/tree/capturePlan.js';
 import { logicalNodeId } from '../lib/tree/model.js';
 import { diffTree } from '../lib/tree/diff.js';
 import { readBaselineTree } from '../db/baselineTreeStore.js';
-import { DENY } from '../lib/errors.js';
+import { fail, actorFrom, serialise, respond } from './access.js';
 
-export function fail(reason) { const error = new Error(reason); error.reason = reason; throw error; }
-export function actorFrom(context) {
-  if (!context?.accountId) fail('AUTHENTICATION_REQUIRED');
-  return { accountId: context.accountId };
-}
+export { fail, actorFrom, serialise, respond };
 export async function readableIssue({ payload = {}, context }) {
   actorFrom(context);
   const key = payload.issueKey ?? payload.issueId ?? context.extension?.issue?.key ?? context.extension?.issue?.id;
@@ -144,17 +140,4 @@ export async function load(args, options = {}) {
   ]);
   const actor = { ...actorFrom(args.context), displayName: myself?.displayName ?? null };
   return snapshot({ issue, actor, ...options });
-}
-export function serialise(value) {
-  if (Buffer.isBuffer(value)) return value.toString('base64');
-  if (Array.isArray(value)) return value.map(serialise);
-  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k, serialise(v)]));
-  return value;
-}
-export async function respond(operation) {
-  try { return serialise(await operation()); }
-  catch (error) {
-    const reason = error.reason ?? 'ERROR';
-    return { error: DENY[reason] ?? error.message ?? String(error), reason };
-  }
 }
