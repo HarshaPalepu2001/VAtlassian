@@ -45,7 +45,7 @@
 - `values -> Record<logicalNodeId, Record<fieldId, rawValue>>`
 - `writeTreeBaseline({ baseline, nodes, values, resume }) -> { baselineId, version, valueBytes }`
 
-- [ ] **Step 1: Replace permissive fixture shapes with failing contract tests**
+- [x] **Step 1: Replace permissive fixture shapes with failing contract tests**
 
 ```js
 test('capture plan separates durable node metadata from retained values', () => {
@@ -71,13 +71,13 @@ test('approval id is never used as a baseline id', async () => {
 });
 ```
 
-- [ ] **Step 2: Run the focused red tests**
+- [x] **Step 2: Run the focused red tests**
 
 Run: `node --test test/tree-capture.test.js test/tree-storage.test.js test/controlled-transition-tree-acceptance.test.js test/drift-functional.test.js`
 
 Expected: failures reproduce the missing `nodes`, approval-id/baseline-id mix-up, and incomplete publication order.
 
-- [ ] **Step 3: Make `planTreeCapture` emit the storage contract without mutation**
+- [x] **Step 3: Make `planTreeCapture` emit the storage contract without mutation**
 
 ```js
 const nodes = planned.map((node, nodeOrder) => ({
@@ -98,7 +98,7 @@ return { treeHash, nodeCount: nodes.length, edgeCount, totalFieldCount, nodes, v
 
 Require the Jira tree reader to include `project`, `issuetype`, `status`, and `parent` even when they are not controlled fields. Reject missing roots, duplicate ids, missing parents, cycles, more than 500 nodes, or any controlled field without a retained raw value.
 
-- [ ] **Step 4: Add a hidden-until-complete tree baseline lifecycle**
+- [x] **Step 4: Add a hidden-until-complete tree baseline lifecycle**
 
 Add focused store functions in `baselineTreeStore.js`:
 
@@ -111,11 +111,11 @@ publishTreeBaseline({ baselineId, issueId, version })
 
 `beginTreeBaseline` creates one `CAPTURING` `va_baseline` row keyed by a new baseline id (or resumes the row for the same approval). `writeTreeCapture` only writes node/value rows for that baseline id. `verifyTreeCapture` counts distinct nodes and value fields and checks stored tree metadata. `publishTreeBaseline` changes `CAPTURING -> ACTIVE` with a guarded update and only then supersedes lower versions. Readers continue to ignore `CAPTURING` rows.
 
-- [ ] **Step 5: Rewire `writeCapturedTreeBaseline` to the lifecycle**
+- [x] **Step 5: Rewire `writeCapturedTreeBaseline` to the lifecycle**
 
 Derive project/issue type from the root node, use `baselineForApproval` and `currentVersion` for idempotency/versioning, compare the approval hash to the complete tree hash, write with the baseline id returned by `beginTreeBaseline`, verify storage before publication, and publish item state/audit only after activation. Remove the undefined `publishTreeBaseline` import path and the `stored.version ?? 2` fallback.
 
-- [ ] **Step 6: Run the focused group, then the complete backend suite**
+- [x] **Step 6: Run the focused group, then the complete backend suite**
 
 Run: `node --test test/tree-capture.test.js test/tree-storage.test.js test/controlled-transition-tree-acceptance.test.js test/drift-functional.test.js`
 
@@ -123,7 +123,7 @@ Run: `npm test`
 
 Expected: 717/717 pass before later tasks add tests.
 
-- [ ] **Step 7: Commit only Task 1 hunks**
+- [x] **Step 7: Commit only Task 1 hunks**
 
 ```bash
 git add -p src/lib/tree/capturePlan.js src/lib/capture.js src/db/baselineTreeStore.js src/db/baselineStore.js test/tree-capture.test.js test/tree-storage.test.js test/controlled-transition-tree-acceptance.test.js test/drift-functional.test.js
@@ -158,7 +158,7 @@ git commit -m "fix: complete recursive baseline publication"
 - `executeTreeRestore({ ..., maxActions }) -> { state, attempted, completed, remaining, replacements }`.
 - Jira adapter methods throw typed failures and return Jira ids/keys; they never return unconditional `true`.
 
-- [ ] **Step 1: Write failing plan and journal tests**
+- [x] **Step 1: Write failing plan and journal tests**
 
 ```js
 test('move and field restore on one node have distinct durable keys', () => {
@@ -181,7 +181,7 @@ test('no Jira mutation occurs when preflight cannot prove permissions', async ()
 });
 ```
 
-- [ ] **Step 2: Add the action journal migration**
+- [x] **Step 2: Add the action journal migration**
 
 ```sql
 CREATE TABLE IF NOT EXISTS va_restore_action (
@@ -203,25 +203,25 @@ CREATE TABLE IF NOT EXISTS va_restore_action (
 
 Leave `va_restore_step` intact for historical evidence. All new work uses `va_restore_action`.
 
-- [ ] **Step 3: Make the plan deterministic and dependency-safe**
+- [x] **Step 3: Make the plan deterministic and dependency-safe**
 
 Order actions as: recreate missing baseline nodes parent-first; move surviving/recreated nodes parent-first; restore controlled values; delete added descendants deepest-first; verify. Each `RESTORE_FIELDS` step carries the raw retained value map, not field ids. Never delete the governed root. A deleted baseline root is not replaceable and fails closed.
 
-- [ ] **Step 4: Implement Jira adapters with response checking**
+- [x] **Step 4: Implement Jira adapters with response checking**
 
 `restoreAdapters.js` uses `api.asApp().requestJira` for preflight permissions, issue creation, parent updates, controlled-field edits with screen overrides where supported, and added-node deletion. Parse Jira error bodies into durable action detail. Treat 404 deletion as idempotent success only when the journal proves the same `DELETE_ADDED_NODE` action was previously claimed for a node proven absent from the baseline.
 
-- [ ] **Step 5: Replace placeholder restoration and verification**
+- [x] **Step 5: Replace placeholder restoration and verification**
 
 Pass `prepared.baselineTree` and `prepared.currentTree` explicitly. Use `readStableTree({ readTree, rootIssueKey, fieldIds })` with the actual signature. Map replacement ids to logical node ids, rebuild the current logical tree, run `diffTree`, and require zero node/edge/field changes. Also re-read `status` and require the root to equal `baseline.from_status_id` before terminal success.
 
-- [ ] **Step 6: Run restore and regression tests**
+- [x] **Step 6: Run restore and regression tests**
 
 Run: `node --test test/migrations.test.js test/tree-restore-plan.test.js test/tree-restore-execution.test.js test/tree-restore-verification.test.js test/restore-correctness.test.js test/restore-verification.test.js`
 
 Expected: all pass; no fake `moveIssue`/`editIssue`/permission adapter remains in production.
 
-- [ ] **Step 7: Commit only Task 2 hunks**
+- [x] **Step 7: Commit only Task 2 hunks**
 
 ```bash
 git add -p src/db/migrations.js src/db/restoreTreeStore.js src/lib/tree/restorePlan.js src/lib/tree/restoreExecutor.js src/lib/tree/restoreVerifier.js src/lib/tree/jira.js src/lib/tree/restoreAdapters.js src/usecases/restoreActions.js test/migrations.test.js test/tree-restore-plan.test.js test/tree-restore-execution.test.js test/tree-restore-verification.test.js test/restore-correctness.test.js
@@ -253,19 +253,19 @@ git commit -m "fix: journal and verify recursive restoration"
 - `listWorkflowTransitions(...) -> [{ transitionId, name, fromStatusId, fromStatusName, toStatusId, toStatusName, global, hasScreen, jiraRules, validatorAttached }]`
 - Resolver: `admin:listWorkflowTransitions`
 
-- [ ] **Step 1: Write failing exact-picker tests**
+- [x] **Step 1: Write failing exact-picker tests**
 
 Prove that two same-destination transitions remain two options, a global Jira transition is represented as `fromStatusId: '*'`, an edge with a screen reports `hasScreen`, and creation refuses a missing/detached VAtlassian validator or a transition no longer present in the workflow snapshot.
 
-- [ ] **Step 2: Extract the existing workflow read into one shared source**
+- [x] **Step 2: Extract the existing workflow read into one shared source**
 
 Move `fetchWorkflowForPair` and its one-project/one-issue-type request from `gatecheck.js` into `workflowSource.js`. Keep `asApp`, `POST /rest/api/3/workflows?expand=workflows.transitions`, the one-pair-per-request attribution rule, and fail-closed `null` behavior.
 
-- [ ] **Step 3: Add server-side normalized transition discovery**
+- [x] **Step 3: Add server-side normalized transition discovery**
 
 The admin resolver rechecks admin authority, reads the live workflow, normalizes source/destination/screen/rules, and marks whether the `va-gate` validator for this app identity is attached. It does not accept workflow facts from the browser.
 
-- [ ] **Step 4: Replace independent status inputs with one transition selector**
+- [x] **Step 4: Replace independent status inputs with one transition selector**
 
 After project and issue type are selected, render a labelled transition selector. Each option label is:
 
@@ -275,17 +275,17 @@ After project and issue type are selected, render a labelled transition selector
 
 On selection, populate `transitionId`, `fromStatusId`, and `toStatusId` from the server result and show screen/validator/Jira-rule facts read-only. Clear the selection when project or issue type changes. Disable save while discovery is loading, failed, stale, or reports a blocking finding.
 
-- [ ] **Step 5: Revalidate exact workflow facts on save**
+- [x] **Step 5: Revalidate exact workflow facts on save**
 
 `createControlledTransition` and `updateControlledTransition` re-read the selected live transition and compare id/from/to. They also require an eligible holder, an explicit valid provider, a retained value for every controlled field when capture is enabled, and no conflicting active exact scope.
 
-- [ ] **Step 6: Run admin/backend/frontend checks**
+- [x] **Step 6: Run admin/backend/frontend checks**
 
 Run: `node --test test/admin-configuration.test.js test/admin-health.test.js test/admin-workflow-transitions.test.js test/signing-context.test.js test/transition-policy.test.js`
 
 Run: `npm --prefix frontend test && npm --prefix frontend run build`
 
-- [ ] **Step 7: Commit only Task 3 hunks**
+- [x] **Step 7: Commit only Task 3 hunks**
 
 ```bash
 git add -p src/lib/workflowSource.js src/jobs/gatecheck.js src/usecases/adminDirectory.js src/usecases/admin.js src/usecases/transitionsValidation.js src/resolvers/admin.js frontend/src/admin/pages/TransitionsPage.tsx test/admin-configuration.test.js test/admin-health.test.js test/admin-workflow-transitions.test.js frontend/test/panel.test.mjs

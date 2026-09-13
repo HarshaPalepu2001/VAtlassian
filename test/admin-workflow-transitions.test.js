@@ -11,6 +11,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as admin from '../src/usecases/admin.js';
+import { readWorkflowForPair } from '../src/lib/workflowSource.js';
 import { request } from './admin-fixture.js';
 import { randomBytes } from 'node:crypto';
 
@@ -176,4 +177,19 @@ test('a live read is scoped to exactly the requested project and work item type'
   const d = deps({ workflow: { id: 'wf', transitions: [] } });
   await admin.listWorkflowTransitions(request({ projectId: '7', issueTypeId: '42' }), d);
   assert.deepEqual(d.calls[1], { projectId: '7', issueTypeId: '42' });
+});
+
+test('an ambiguous workflow response fails closed instead of selecting the first workflow', async () => {
+  const result = await readWorkflowForPair(
+    { projectId: '7', issueTypeId: '42' },
+    { request: async () => ({
+      ok: true,
+      json: async () => ({ workflows: [
+        { id: 'wf-a', transitions: [] },
+        { id: 'wf-b', transitions: [] }
+      ] })
+    }) }
+  );
+
+  assert.equal(result, null);
 });

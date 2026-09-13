@@ -56,12 +56,13 @@ export async function readWorkflowForPair({ projectId, issueTypeId }, { request 
       console.warn(`workflowSource: no workflow returned for ${projectId}/${issueTypeId}`);
       return null;
     }
-    // A single pair resolves to a single workflow. More than one would mean the
-    // endpoint's contract changed under us; take the first but say so, because
-    // silently picking one would produce findings — or a picker offer — against
-    // the wrong workflow.
+    // A single pair must resolve to exactly one workflow. More than one means
+    // the response can no longer be attributed safely, so never select one by
+    // position and risk configuring or clearing findings against the wrong
+    // workflow.
     if (workflows.length > 1) {
-      console.warn(`workflowSource: ${workflows.length} workflows for one pair ${projectId}/${issueTypeId}; using the first`);
+      console.error(`workflowSource: ambiguous response (${workflows.length} workflows) for one pair ${projectId}/${issueTypeId}`);
+      return null;
     }
     return workflows[0];
   } catch (e) {
