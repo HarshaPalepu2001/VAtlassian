@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { tally, OUTCOME, RESTORE_STATE } from '../src/lib/restore/outcome.js';
+import { describeResult } from '../src/lib/restore/verifier.js';
 
 test('a verified write with no unmatched fields is COMPLETE', () => {
   const { counters, state } = tally(
@@ -29,4 +30,13 @@ test('unmatched fields alone, with nothing written, is not COMPLETE either', () 
 test('tally without an unmatched argument keeps the old behaviour', () => {
   const { state } = tally([{ fieldId: 's', outcome: OUTCOME.SUCCEEDED, verified: true }]);
   assert.equal(state, RESTORE_STATE.COMPLETE);
+});
+
+test('a verified replacement restore is described as terminal, not partial', () => {
+  const message = describeResult({
+    state: 'COMPLETE_WITH_REPLACEMENTS',
+    counters: { succeeded: 2, failed: 0, skipped: 0, irreversible: 0, unmatched: 0 }
+  });
+  assert.match(message, /^Restored with replacements\./);
+  assert.doesNotMatch(message, /Partly restored/);
 });

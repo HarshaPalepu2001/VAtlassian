@@ -4,6 +4,7 @@ import { writeCapturedBaseline } from '../lib/capture.js';
 import { markDecided } from '../db/driftStore.js';
 import { canDecide, decide, undecidedCounters } from '../lib/decision.js';
 import { planRestore } from '../lib/restore/planner.js';
+import { planTreeRestore } from '../lib/tree/restorePlan.js';
 import { performRestore } from './restoreActions.js';
 import { meetsAssurance, effectiveAssurance } from '../lib/approval/levels.js';
 
@@ -32,12 +33,17 @@ export async function prepareApproval({ issue, actor, decision, expectedEvidence
     // baseline path. It must be allowed to recover a legacy DECIDING lock;
     // ordinary approvals/rejections remain fail-closed on busy state.
     if (!permission.allow && !(allowBusy && permission.reason === 'ALREADY_DECIDING')) fail(permission.reason);
-    const plan = decision === 'REJECT' ? planRestore({ diff: prepared.diff, baselineValues: prepared.baselineValues,
-      controlledFields: prepared.fields, editmeta: prepared.restoreEditmeta ?? prepared.editmeta }) : null;
-    // Tree approvals use aggregate evidence. Present that same hash domain to
-    // the pure decision rule; the legacy per-issue diff remains authoritative
-    // for rejection until recursive restoration supplies its own plan.
-    const decisionDiff = decision === 'APPROVE' && prepared.treeHash
+    const plan = decision === 'REJECT'
+      ? prepared.baselineTree && prepared.currentTree
+        ? planTreeRestore({ baselineTree: prepared.baselineTree, currentTree: prepared.currentTree,
+            controlledFields: prepared.fields })
+        : planRestore({ diff: prepared.diff, baselineValues: prepared.baselineValues,
+            controlledFields: prepared.fields, editmeta: prepared.restoreEditmeta ?? prepared.editmeta })
+      : null;
+    // Tree approvals and rejections use the same aggregate evidence domain.
+    // Their restore plan is structural and never falls back to the legacy
+    // field-only planner.
+    const decisionDiff = prepared.treeHash
       ? {
           changedFieldCount: prepared.treeDiff?.changes?.length ?? prepared.diff?.changedFieldCount ?? 0,
           evidenceHash: prepared.treeHash
@@ -47,10 +53,7 @@ export async function prepareApproval({ issue, actor, decision, expectedEvidence
       decision,
       diff: decisionDiff,
       plan,
-      // snapshot() has already checked the aggregate tree hash. A rejection
-      // still uses the legacy diff/restore plan until Task 2 replaces it, so
-      // comparing that different evidence domain here would reject valid work.
-      evidenceHash: prepared.treeHash && decision !== 'APPROVE' ? null : expectedEvidenceHash
+      evidenceHash: expectedEvidenceHash
     });
     if (!result.allow) fail(result.reason);
     prepared.plan = plan;

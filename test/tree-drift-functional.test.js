@@ -67,9 +67,10 @@ const FIELDS = [{ field_id: 'summary', field_name: 'summary', field_kind: 'TEXT'
 
 /** The raw { id, fields } shape the Jira tree reader would hand back for a root plus some children. */
 function rawNodes(children) {
+  const structural = { project: { id: '10' }, issuetype: { id: '20' }, status: { id: '30' } };
   return [
-    { id: '1', fields: { summary: 'root', parent: null } },
-    ...children.map(c => ({ id: c.id, fields: { summary: c.summary, parent: { id: '1' } } }))
+    { id: '1', fields: { summary: 'root', parent: null, ...structural } },
+    ...children.map(c => ({ id: c.id, fields: { summary: c.summary, parent: { id: '1' }, ...structural } }))
   ];
 }
 
@@ -105,12 +106,18 @@ function baseFixture({ baselineChildren = [{ id: '2', summary: 'story' }], liveC
         // a search for anyone else's children (i.e. a grandchild lookup)
         // comes back empty, keeping this a two-level tree.
         const issues = body.jql.includes('FEAT-1')
-          ? liveChildren.map(c => ({ id: c.id, key: `LIVE-${c.id}`, fields: { summary: c.summary, parent: { id: '1' } } }))
+          ? liveChildren.map(c => ({ id: c.id, key: `LIVE-${c.id}`, fields: {
+              summary: c.summary, parent: { id: '1' }, project: { id: '10' },
+              issuetype: { id: '20' }, status: { id: '30' }
+            } }))
           : [];
         return ok({ issues });
       }
       // GET root issue (called twice by readStableTree's two-read stability check).
-      return ok({ id: '1', key: 'FEAT-1', fields: { summary: 'root', parent: null } });
+      return ok({ id: '1', key: 'FEAT-1', fields: {
+        summary: 'root', parent: null, project: { id: '10' },
+        issuetype: { id: '20' }, status: { id: '30' }
+      } });
     }
   };
   globalThis.vaFlow = f;

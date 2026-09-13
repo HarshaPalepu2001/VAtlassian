@@ -24,6 +24,7 @@ const hooks = registerHooks({
 });
 const { executeRestore } = await import('../src/lib/restore/executor.js');
 const { verifyRestore } = await import('../src/lib/restore/verifier.js');
+const { createRestoreAdapters, JiraRestoreError } = await import('../src/lib/tree/restoreAdapters.js');
 hooks.deregister();
 
 const field = (id, kind = 'SCALAR') => ({ field_id: id, field_name: id, field_kind: kind, store_values: true });
@@ -156,6 +157,47 @@ test('notifying users is still honoured alongside the override', async () => {
   const put = f.calls.find(c => c.method === 'PUT');
   assert.doesNotMatch(put.url, /notifyUsers=false/);
   assert.match(put.url, /overrideScreenSecurity=true/);
+});
+
+test('tree restore Jira adapters preflight every permission before mutating', async () => {
+  const f = apiFixture(call => call.url.includes('/mypermissions')
+    ? response(200, { permissions: {
+      CREATE_ISSUES: { havePermission: true }, EDIT_ISSUES: { havePermission: true },
+      DELETE_ISSUES: { havePermission: false }
+    } })
+    : response(204));
+  const adapters = createRestoreAdapters({ api: f.api, route: (strings, ...values) => strings.reduce((out, part, index) => out + part + (values[index] ?? ''), '') });
+  const allowed = await adapters.checkPermissions({ steps: [
+    { kind: 'CREATE_REPLACEMENT' }, { kind: 'MOVE_NODE' }, { kind: 'RESTORE_FIELDS' }, { kind: 'DELETE_ADDED_NODE' }
+  ], rootIssueKey: 'ROOT-1' });
+  assert.equal(allowed, false);
+  assert.equal(f.calls.length, 1);
+  assert.match(f.calls[0].url, /CREATE_ISSUES/);
+  assert.match(f.calls[0].url, /EDIT_ISSUES/);
+  assert.match(f.calls[0].url, /DELETE_ISSUES/);
+});
+
+test('tree restore Jira adapters send real move and field mutations', async () => {
+  const f = apiFixture();
+  const adapters = createRestoreAdapters({ api: f.api, route: (strings, ...values) => strings.reduce((out, part, index) => out + part + (values[index] ?? ''), '') });
+  await adapters.moveIssue('ROOT-2', 'ROOT-1');
+  await adapters.editIssue('ROOT-2', { summary: 'Approved' });
+  assert.deepEqual(f.calls.filter(call => call.method === 'PUT').map(call => call.body), [
+    { fields: { parent: { key: 'ROOT-1' } } },
+    { fields: { summary: 'Approved' } }
+  ]);
+});
+
+test('tree restore Jira adapters throw typed failures with Jira details', async () => {
+  const f = apiFixture(() => response(400, { errorMessages: ['blocked by workflow'], errors: { summary: 'not editable' } }));
+  const adapters = createRestoreAdapters({ api: f.api, route: (strings, ...values) => strings.reduce((out, part, index) => out + part + (values[index] ?? ''), '') });
+  await assert.rejects(() => adapters.editIssue('ROOT-2', { summary: 'Approved' }), error => {
+    assert.equal(error instanceof JiraRestoreError, true);
+    assert.equal(error.status, 400);
+    assert.match(error.detail, /blocked by workflow/);
+    assert.match(error.detail, /not editable/);
+    return true;
+  });
 });
 
 

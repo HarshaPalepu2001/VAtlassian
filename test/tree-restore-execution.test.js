@@ -1,115 +1,155 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { executeTreeRestore } from '../src/lib/tree/restoreExecutor.js';
+import { claimRestoreAction, finishRestoreAction, readRestoreActions } from '../src/db/restoreTreeStore.js';
 
-function createMockAdapters(initialState = {}) {
-  const state = {
-    steps: initialState.steps || [],
-    replacements: initialState.replacements || [],
-    mutations: {
-      create: [], edit: [], move: [], delete: []
+function trees() {
+  return {
+    baselineTree: {
+      nodes: [
+        { logicalNodeId: 'root', id: '1', key: 'ROOT-1', parentLogicalId: null, digests: {} },
+        { logicalNodeId: 'child', id: '2', key: 'ROOT-2', parentLogicalId: 'root', digests: { summary: 'approved' } }
+      ],
+      values: { root: {}, child: { summary: 'approved' } }
     },
-    failOnDeleteOnce: initialState.failOnDeleteOnce || false,
-    preflightFail: initialState.preflightFail || false,
-    ledger: []
+    currentTree: {
+      nodes: [
+        { logicalNodeId: 'root', id: '1', key: 'ROOT-1', parentLogicalId: null, digests: {} },
+        { logicalNodeId: 'child', id: '2', key: 'ROOT-2', parentLogicalId: null, digests: { summary: 'changed' } }
+      ]
+    },
+    controlledFields: [{ field_id: 'summary' }]
   };
+}
 
+function createJournalAdapters(options = {}) {
+  const state = {
+    actions: [], replacements: [],
+    mutations: { create: [], edit: [], move: [], delete: [] },
+    failFieldOnce: options.failFieldOnce ?? false,
+    permissionResponse: options.permissionResponse ?? 200
+  };
   const adapters = {
-    checkPermissions: async (plan) => !state.preflightFail,
-    readRestoreSteps: async (restoreId) => state.steps,
-    claimRestoreStep: async (restoreId, logicalNodeId, issueId) => {
-      if (state.steps.some(s => s.logicalNodeId === logicalNodeId)) {
-        throw new Error('Duplicate claim');
+    checkPermissions: async () => state.permissionResponse === 200,
+    readRestoreActions: async () => state.actions.map(action => ({ ...action })),
+    claimRestoreAction: async (_restoreId, step, issueId) => {
+      const existing = state.actions.find(action => action.stepKey === step.stepKey);
+      if (existing?.state === 'COMPLETE') return false;
+      if (existing) {
+        existing.state = 'RUNNING';
+        existing.attempts += 1;
+        return true;
       }
-      state.steps.push({ logicalNodeId, issueId, success: false, finished: false, detail: null });
+      state.actions.push({ stepKey: step.stepKey, logicalNodeId: step.logicalNodeId, kind: step.kind,
+        issueId, state: 'RUNNING', attempts: 1 });
+      return true;
     },
-    finishRestoreStep: async (restoreId, logicalNodeId, success, detail) => {
-      const step = state.steps.find(s => s.logicalNodeId === logicalNodeId);
-      if (step) {
-        step.success = success;
-        step.finished = true;
-        step.detail = detail;
-      }
+    finishRestoreAction: async (_restoreId, stepKey, success, detail) => {
+      const action = state.actions.find(candidate => candidate.stepKey === stepKey);
+      action.state = success ? 'COMPLETE' : 'FAILED';
+      action.detail = detail;
+      return true;
     },
-    recordReplacement: async (restoreId, logicalNodeId, oldIssueId, newIssueId) => {
+    readReplacements: async () => state.replacements.map(replacement => ({ ...replacement })),
+    recordReplacement: async (_restoreId, logicalNodeId, oldIssueId, newIssueId) => {
       state.replacements.push({ logicalNodeId, oldIssueId, newIssueId });
     },
-    readReplacements: async (restoreId) => state.replacements,
-    createIssue: async (parentKey, node) => {
-      state.mutations.create.push({ parentKey, node });
-      return { newIssueId: 'new-' + node.logicalNodeId, newIssueKey: 'NEW-' + node.logicalNodeId };
+    createIssue: async (_parentKey, node) => {
+      state.mutations.create.push(node.logicalNodeId);
+      return { newIssueId: `new-${node.logicalNodeId}`, newIssueKey: `NEW-${node.logicalNodeId}` };
     },
+    moveIssue: async (issueId, parentKey) => { state.mutations.move.push({ issueId, parentKey }); },
     editIssue: async (issueId, fields) => {
       state.mutations.edit.push({ issueId, fields });
-      return true;
-    },
-    moveIssue: async (issueId, parentKey) => {
-      state.mutations.move.push({ issueId, parentKey });
-      return true;
-    },
-    deleteIssue: async (issueId) => {
-      if (state.failOnDeleteOnce) {
-        state.failOnDeleteOnce = false;
-        throw new Error('Mock network failure');
+      if (state.failFieldOnce) {
+        state.failFieldOnce = false;
+        throw new Error('field write refused');
       }
-      state.mutations.delete.push(issueId);
-      return true;
     },
-    appendLedger: async (eventType, payload) => {
-      state.ledger.push({ eventType, payload });
-    }
+    deleteIssue: async issueId => { state.mutations.delete.push(issueId); }
   };
   return { adapters, state };
 }
 
-test('an added descendant is deleted exactly once across retry', async () => {
-  const baselineTree = { nodes: [] };
-  const currentTree = { nodes: [{ logicalNodeId: 'added', digests: {}, parentLogicalId: 'root' }] };
+test('a failed field action resumes without replaying a completed move', async () => {
+  const fixture = trees();
+  const { adapters, state } = createJournalAdapters({ failFieldOnce: true });
+  const first = await executeTreeRestore({ restoreId: 'restore-1', rootIssueKey: 'ROOT-1', ...fixture, adapters, maxActions: 2 });
+  assert.equal(first.state, 'PARTIAL');
+  assert.equal(first.attempted, 2);
+  assert.equal(state.mutations.move.length, 1);
+  const second = await executeTreeRestore({ restoreId: 'restore-1', rootIssueKey: 'ROOT-1', ...fixture, adapters, maxActions: 10 });
+  assert.equal(second.state, 'READY_TO_VERIFY');
+  assert.equal(state.mutations.move.length, 1);
+  assert.equal(state.mutations.edit.length, 2);
+  assert.equal(second.remaining, 0);
+});
 
-  const { adapters, state } = createMockAdapters({ failOnDeleteOnce: true });
+test('no Jira mutation occurs when preflight cannot prove permissions', async () => {
+  const fixture = trees();
+  const { adapters, state } = createJournalAdapters({ permissionResponse: 403 });
+  const result = await executeTreeRestore({ restoreId: 'restore-2', rootIssueKey: 'ROOT-1', ...fixture, adapters, maxActions: 10 });
+  assert.equal(result.state, 'FAILED');
+  assert.deepEqual(state.mutations, { create: [], edit: [], move: [], delete: [] });
+  assert.equal(state.actions.length, 0);
+});
 
-  const first = await executeTreeRestore({
-    restoreId: 1, rootIssueKey: 'ROOT-1', baselineTree, currentTree, controlledFields: [], adapters
-  });
+test('maxActions bounds one invocation and reports durable progress', async () => {
+  const fixture = trees();
+  const { adapters } = createJournalAdapters();
+  const first = await executeTreeRestore({ restoreId: 'restore-3', rootIssueKey: 'ROOT-1', ...fixture, adapters, maxActions: 1 });
+  assert.deepEqual({ state: first.state, attempted: first.attempted, completed: first.completed, remaining: first.remaining },
+    { state: 'PARTIAL', attempted: 1, completed: 1, remaining: 1 });
+});
+
+test('a delete 404 is idempotent only after the same added-node action was previously claimed', async () => {
+  const baselineTree = { nodes: [{ logicalNodeId: 'root', id: '1', key: 'ROOT-1', parentLogicalId: null, digests: {} }], values: { root: {} } };
+  const currentTree = { nodes: [
+    { logicalNodeId: 'root', id: '1', key: 'ROOT-1', parentLogicalId: null, digests: {} },
+    { logicalNodeId: 'added', id: '9', key: 'ROOT-9', parentLogicalId: 'root', digests: {} }
+  ] };
+  const { adapters } = createJournalAdapters();
+  adapters.deleteIssue = async () => { const error = new Error('not found'); error.status = 404; throw error; };
+
+  const first = await executeTreeRestore({ restoreId: 'restore-404', rootIssueKey: 'ROOT-1', baselineTree, currentTree,
+    controlledFields: [], adapters, maxActions: 10 });
+  const second = await executeTreeRestore({ restoreId: 'restore-404', rootIssueKey: 'ROOT-1', baselineTree, currentTree,
+    controlledFields: [], adapters, maxActions: 10 });
 
   assert.equal(first.state, 'PARTIAL');
-  assert.equal(state.mutations.delete.length, 0); // threw before recording
-  assert.equal(state.steps[0].success, false); // claimed but failed
-
-  // Retry same plan
-  const second = await executeTreeRestore({
-    restoreId: 1, rootIssueKey: 'ROOT-1', baselineTree, currentTree, controlledFields: [], adapters
-  });
-
-  assert.equal(second.state, 'COMPLETE');
-  assert.equal(state.mutations.delete.length, 1);
-  assert.equal(state.steps.length, 1); // no double claim
-  assert.equal(state.steps[0].success, true);
+  assert.equal(second.state, 'READY_TO_VERIFY');
 });
 
-test('a deleted baseline node is recreated and mapped to its logical identity', async () => {
-  const baselineTree = { nodes: [{ logicalNodeId: 'story-logical', digests: {}, parentLogicalId: null }] };
-  const currentTree = { nodes: [] };
+test('a Jira mutation is not counted complete when its journal finish is not durable', async () => {
+  const fixture = trees();
+  const { adapters, state } = createJournalAdapters();
+  adapters.finishRestoreAction = async () => false;
 
-  const { adapters, state } = createMockAdapters();
-  const result = await executeTreeRestore({
-    restoreId: 2, rootIssueKey: 'ROOT-1', baselineTree, currentTree, controlledFields: [], adapters
-  });
+  const result = await executeTreeRestore({ restoreId: 'restore-finish-race', rootIssueKey: 'ROOT-1',
+    ...fixture, adapters, maxActions: 1 });
 
-  assert.equal(result.state, 'COMPLETE_WITH_REPLACEMENTS');
-  assert.deepEqual(state.replacements.map(r => r.logicalNodeId), ['story-logical']);
-  assert.equal(state.mutations.create.length, 1);
+  assert.equal(state.mutations.move.length, 1);
+  assert.equal(result.state, 'PARTIAL');
+  assert.equal(result.completed, 0);
+  assert.equal(result.remaining, 2);
 });
 
-test('preflight refuses a structural restore before the first Jira mutation', async () => {
-  const currentTree = { nodes: [{ logicalNodeId: 'added', digests: {}, parentLogicalId: 'root' }] };
-  const { adapters, state } = createMockAdapters({ preflightFail: true });
-
-  const result = await executeTreeRestore({
-    restoreId: 3, rootIssueKey: 'ROOT-1', baselineTree: { nodes: [] }, currentTree, controlledFields: [], adapters
-  });
-
-  assert.equal(result.state, 'FAILED');
-  assert.equal(state.mutations.delete.length, 0);
-  assert.equal(state.steps.length, 0); // no claims written!
+test('action journal store uses the step key rather than the node as its identity', async () => {
+  const calls = [];
+  const query = async (sql, params) => {
+    calls.push({ sql, params });
+    if (sql.includes('SELECT')) return [{
+      stepKey: 'a'.repeat(64), logicalNodeId: 'child', kind: 'MOVE_NODE', issueId: 2,
+      issueKey: 'ROOT-2', state: 'COMPLETE', attempts: 1, startedAt: 1, finishedAt: 2, detail: null
+    }];
+    return { affectedRows: 1 };
+  };
+  const step = { stepKey: 'a'.repeat(64), logicalNodeId: 'child', kind: 'MOVE_NODE' };
+  await claimRestoreAction('restore-id', step, { issueId: 2, issueKey: 'ROOT-2', now: 1 }, query);
+  await finishRestoreAction('restore-id', step.stepKey, true, { moved: true }, { now: 2 }, query);
+  const rows = await readRestoreActions('restore-id', query);
+  assert.ok(calls[0].sql.includes('step_key'));
+  assert.ok(calls[1].sql.includes('step_key = ?'));
+  assert.equal(rows[0].stepKey, step.stepKey);
+  assert.equal(rows[0].state, 'COMPLETE');
 });

@@ -326,9 +326,9 @@ test('panel returns structural drift and exact destructive consequences', async 
         const bodyStr = options.body;
         if (bodyStr.includes('T-10')) {
           return response({ issues: [
-            { id: '11', key: 'T-11', fields: { summary: 'story', parent: { id: '10' } } },
-            { id: '9', key: 'NEW-9', fields: { summary: 'new1', parent: { id: '10' } } },
-            { id: '100', key: 'NEW-10', fields: { summary: 'new2', parent: { id: '10' } } }
+            { id: '11', key: 'T-11', fields: { summary: 'story', parent: { id: '10' }, project: { id: '1' }, issuetype: { id: '1' }, status: { id: '100' } } },
+            { id: '9', key: 'NEW-9', fields: { summary: 'new1', parent: { id: '10' }, project: { id: '1' }, issuetype: { id: '1' }, status: { id: '100' } } },
+            { id: '100', key: 'NEW-10', fields: { summary: 'new2', parent: { id: '10' }, project: { id: '1' }, issuetype: { id: '1' }, status: { id: '100' } } }
           ]});
         }
         return response({ issues: [] });

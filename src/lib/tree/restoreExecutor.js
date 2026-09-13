@@ -1,108 +1,155 @@
 import { planTreeRestore } from './restorePlan.js';
 
+function nodeIdentity(node) {
+  return {
+    issueId: node?.currentIssueId ?? node?.id ?? node?.originalIssueId ?? null,
+    issueKey: node?.issueKey ?? node?.key ?? null
+  };
+}
+
+function errorDetail(error) {
+  return {
+    name: error?.name ?? 'Error',
+    code: error?.code ?? null,
+    status: error?.status ?? null,
+    operation: error?.operation ?? null,
+    detail: error?.detail ?? error?.message ?? String(error)
+  };
+}
+
 export async function executeTreeRestore({
-  restoreId, rootIssueKey, baselineTree, currentTree, controlledFields,
-  adapters
+  restoreId, rootIssueKey, baselineTree, currentTree, controlledFields, adapters,
+  maxActions = 25
 }) {
+  if (!Number.isSafeInteger(maxActions) || maxActions <= 0) throw new TypeError('maxActions must be a positive safe integer');
   const plan = planTreeRestore({ baselineTree, currentTree, controlledFields });
 
-  // Preflight
-  const preflightOk = await adapters.checkPermissions(plan);
-  if (!preflightOk) {
-    return { state: 'FAILED' };
+  let preflightOk = false;
+  try {
+    preflightOk = await adapters.checkPermissions({ ...plan, rootIssueKey });
+  } catch {
+    preflightOk = false;
+  }
+  if (preflightOk !== true) {
+    return { state: 'FAILED', attempted: 0, completed: 0, remaining: plan.steps.length, replacements: [] };
   }
 
   if (adapters.appendLedger) {
-    await adapters.appendLedger('TREE_RESTORE_PLAN_CREATED', { restoreId, plan: plan.steps.map(s => ({ kind: s.kind, id: s.logicalNodeId })) });
+    await adapters.appendLedger('TREE_RESTORE_PLAN_CREATED', {
+      restoreId,
+      plan: plan.steps.map(step => ({ stepKey: step.stepKey, kind: step.kind, logicalNodeId: step.logicalNodeId }))
+    });
   }
 
-  if (plan.steps.length === 0) {
-    return { state: 'COMPLETE' };
-  }
-
-  // Check previously claimed/completed steps
-  const stepsRecord = await adapters.readRestoreSteps(restoreId);
-  const completedSteps = new Set(stepsRecord.filter(s => s.success).map(s => s.logicalNodeId));
-  const claimedSteps = new Set(stepsRecord.map(s => s.logicalNodeId));
-
-  let state = 'COMPLETE';
-  let hasReplacements = false;
+  const existingActions = await adapters.readRestoreActions(restoreId);
+  const existingByKey = new Map(existingActions.map(action => [action.stepKey, action]));
+  const completedKeys = new Set(existingActions.filter(action => action.state === 'COMPLETE').map(action => action.stepKey));
+  let replacements = await adapters.readReplacements(restoreId);
+  const replacementsByLogical = new Map(replacements.map(replacement => [String(replacement.logicalNodeId), replacement]));
 
   const logicalToReal = new Map();
-  if (baselineTree && baselineTree.nodes) {
-    for (const n of baselineTree.nodes) logicalToReal.set(n.logicalNodeId, n.key || n.id);
+  for (const node of baselineTree?.nodes ?? []) {
+    const identity = nodeIdentity(node);
+    const real = identity.issueKey ?? identity.issueId;
+    if (real != null) logicalToReal.set(String(node.logicalNodeId), real);
   }
-  if (currentTree && currentTree.nodes) {
-    for (const n of currentTree.nodes) logicalToReal.set(n.logicalNodeId, n.key || n.id);
+  for (const node of currentTree?.nodes ?? []) {
+    const identity = nodeIdentity(node);
+    const real = identity.issueKey ?? identity.issueId;
+    if (real != null) logicalToReal.set(String(node.logicalNodeId), real);
+  }
+  for (const replacement of replacements) {
+    logicalToReal.set(String(replacement.logicalNodeId), replacement.newIssueKey ?? replacement.newIssueId);
   }
 
-  const reps = await adapters.readReplacements(restoreId);
-  for (const r of reps) {
-    logicalToReal.set(r.logicalNodeId, r.newIssueId);
-  }
-
+  let attempted = 0;
+  let stopped = false;
   for (const step of plan.steps) {
-    if (completedSteps.has(step.logicalNodeId)) {
-      if (step.kind === 'CREATE_REPLACEMENT') hasReplacements = true;
-      continue;
+    if (completedKeys.has(step.stepKey)) continue;
+    if (attempted >= maxActions) break;
+
+    const target = logicalToReal.get(step.logicalNodeId) ?? (step.parentLogicalNodeId == null ? rootIssueKey : null);
+    const baselineNode = (baselineTree?.nodes ?? []).find(node => String(node.logicalNodeId) === step.logicalNodeId);
+    const currentNode = (currentTree?.nodes ?? []).find(node => String(node.logicalNodeId) === step.logicalNodeId);
+    const identity = nodeIdentity(currentNode ?? baselineNode);
+    const claimed = await adapters.claimRestoreAction(restoreId, step, {
+      issueId: identity.issueId,
+      issueKey: identity.issueKey,
+      now: Date.now()
+    });
+    if (!claimed) {
+      stopped = true;
+      break;
+    }
+    attempted += 1;
+    if (adapters.appendLedger) {
+      await adapters.appendLedger('TREE_RESTORE_STEP_CLAIMED', {
+        restoreId, stepKey: step.stepKey, step: step.kind, node: step.logicalNodeId
+      });
     }
 
-    let issueIdOrKey = logicalToReal.get(step.logicalNodeId) || rootIssueKey;
-
-    // Claim step only if not already claimed (e.g. from a prior crash)
-    if (!claimedSteps.has(step.logicalNodeId)) {
-      try {
-        await adapters.claimRestoreStep(restoreId, step.logicalNodeId, issueIdOrKey);
-        if (adapters.appendLedger) await adapters.appendLedger('TREE_RESTORE_STEP_CLAIMED', { restoreId, step: step.kind, node: step.logicalNodeId });
-      } catch (e) {
-        // Idempotency: if duplicate key, another process claimed it. For simplicity we proceed.
-      }
-    }
-
-    let ok = false;
-    let detail = null;
     try {
       if (step.kind === 'CREATE_REPLACEMENT') {
-        const baselineNode = baselineTree.nodes.find(n => n.logicalNodeId === step.logicalNodeId);
-        const parentKey = logicalToReal.get(baselineNode.parentLogicalId || baselineNode.parent);
-        const { newIssueId, newIssueKey } = await adapters.createIssue(parentKey, baselineNode);
-        await adapters.recordReplacement(restoreId, step.logicalNodeId, baselineNode.id || baselineNode.key, newIssueId || newIssueKey);
-        logicalToReal.set(step.logicalNodeId, newIssueKey || newIssueId);
-        if (adapters.appendLedger) await adapters.appendLedger('TREE_RESTORE_REPLACEMENT_RECORDED', { restoreId, node: step.logicalNodeId });
-        ok = true;
-        hasReplacements = true;
+        const alreadyRecorded = replacementsByLogical.get(step.logicalNodeId);
+        if (alreadyRecorded) {
+          logicalToReal.set(step.logicalNodeId, alreadyRecorded.newIssueKey ?? alreadyRecorded.newIssueId);
+        } else {
+          const parentKey = step.parentLogicalNodeId == null ? null : logicalToReal.get(step.parentLogicalNodeId);
+          if (step.parentLogicalNodeId != null && parentKey == null) throw new Error('Replacement parent is unavailable');
+          const created = await adapters.createIssue(parentKey, baselineNode, baselineTree.values?.[step.logicalNodeId] ?? {});
+          if (!created?.newIssueId || !created?.newIssueKey) throw new Error('Jira did not return the replacement identity');
+          await adapters.recordReplacement(
+            restoreId, step.logicalNodeId,
+            baselineNode?.originalIssueId ?? baselineNode?.id,
+            created.newIssueId,
+            created.newIssueKey
+          );
+          const replacement = { logicalNodeId: step.logicalNodeId,
+            oldIssueId: baselineNode?.originalIssueId ?? baselineNode?.id,
+            newIssueId: created.newIssueId, newIssueKey: created.newIssueKey };
+          replacementsByLogical.set(step.logicalNodeId, replacement);
+          logicalToReal.set(step.logicalNodeId, created.newIssueKey);
+          if (adapters.appendLedger) {
+            await adapters.appendLedger('TREE_RESTORE_REPLACEMENT_RECORDED', {
+              restoreId, node: step.logicalNodeId, newIssueId: created.newIssueId
+            });
+          }
+        }
       } else if (step.kind === 'MOVE_NODE') {
-        const parentKey = logicalToReal.get(step.parent);
-        ok = await adapters.moveIssue(issueIdOrKey, parentKey);
+        const parentKey = step.parentLogicalNodeId == null ? null : logicalToReal.get(step.parentLogicalNodeId);
+        if (target == null || (step.parentLogicalNodeId != null && parentKey == null)) throw new Error('Move target is unavailable');
+        await adapters.moveIssue(target, parentKey);
       } else if (step.kind === 'RESTORE_FIELDS') {
-        ok = await adapters.editIssue(issueIdOrKey, step.fields);
+        if (target == null) throw new Error('Field restore target is unavailable');
+        await adapters.editIssue(target, step.fields);
       } else if (step.kind === 'DELETE_ADDED_NODE') {
-        const delRes = await adapters.deleteIssue(issueIdOrKey);
-        if (delRes === true) {
-          ok = true;
-        } else if (delRes === '404' && claimedSteps.has(step.logicalNodeId)) {
-          // Treat 404 as success ONLY if target was proven added for this baseline AND step had already been claimed.
-          ok = true;
+        if (target == null) throw new Error('Delete target is unavailable');
+        try {
+          await adapters.deleteIssue(target);
+        } catch (error) {
+          const wasPreviouslyClaimed = existingByKey.has(step.stepKey);
+          if (!(error?.status === 404 && wasPreviouslyClaimed)) throw error;
         }
       }
-    } catch (e) {
-      ok = false;
-      detail = String(e);
-    }
-
-    await adapters.finishRestoreStep(restoreId, step.logicalNodeId, ok, detail);
-
-    if (!ok) {
-      state = 'PARTIAL';
+      const finished = await adapters.finishRestoreAction(restoreId, step.stepKey, true, null, { now: Date.now() });
+      if (finished !== true) throw new Error('Restore action completion was not durable');
+      completedKeys.add(step.stepKey);
+    } catch (error) {
+      await adapters.finishRestoreAction(restoreId, step.stepKey, false, errorDetail(error), { now: Date.now() });
+      stopped = true;
       break;
     }
   }
 
-  if (state === 'COMPLETE') {
-    if (hasReplacements || reps.length > 0) {
-      state = 'COMPLETE_WITH_REPLACEMENTS';
-    }
-  }
-
-  return { state, replacements: reps };
+  replacements = await adapters.readReplacements(restoreId);
+  const completed = plan.steps.filter(step => completedKeys.has(step.stepKey)).length;
+  const remaining = plan.steps.length - completed;
+  return {
+    state: remaining === 0 ? 'READY_TO_VERIFY' : 'PARTIAL',
+    attempted,
+    completed,
+    remaining,
+    replacements,
+    stopped
+  };
 }

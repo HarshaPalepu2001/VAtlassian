@@ -13,6 +13,7 @@ const modules = {
   'db/itemStateStore.js': ['getReview','acquire','release','upsertBaselined'],
   'db/driftStore.js': ['driftForIssue','markDecided'],
   'db/restoreStore.js': ['startRestore','finishRestore','declareWrite'],
+  'db/restoreTreeStore.js': ['claimRestoreAction','finishRestoreAction','recordReplacement','readReplacements','readRestoreActions'],
   'db/store.js': ['tryAppend','newId','throwing','isDuplicateKey'],
   'lib/reviewer.js': ['isEligible','assignReviewer'],
   'db/baselineTreeStore.js': ['readBaselineTree','beginTreeBaseline','writeTreeCapture','verifyTreeCapture','publishTreeBaseline','activeRootsForNode'],
@@ -63,6 +64,7 @@ function fixture() {
     issue, fields, values, baselines:[baseline], saved:new Map([[1,clone(values)]]), rows:[], challenges:new Map(),
     review:{state:'DRIFTED',version:1,baseline_version:1,baseline_id:baseline.baseline_id,drift_count:1},
     drift:[{baseline_version:1,field_id:'summary',approval_id:null}], writes:[], audits:[], restores:[],
+    restoreActions:[], replacements:[],
     policy:{transition_id:'5',from_status_id:'1',to_status_id:'2',required_assurance:'ESIGNATURE',required_role:'reviewer',meaning:'Reviewed and approved',capture_baseline:true,block_on_drift:true},
     controlledFields:async()=>fields, projectConfig:async()=>({enabled:true,restore:{}}),
     gateActiveOutOf:async()=>({gated:true,...f.policy}), gatedTransition:async()=>f.policy, listGatedTransitions:async()=>[f.policy],
@@ -91,8 +93,30 @@ function fixture() {
     markDecided:async({baselineVersion,approvalId})=>{for(const d of f.drift)if(d.baseline_version===baselineVersion&&!d.approval_id)d.approval_id=approvalId;},
     startRestore:async(a)=>{f.restores.push({...a});return Buffer.alloc(16,7);},
     finishRestore:async(a)=>Object.assign(f.restores.at(-1),a),declareWrite:async()=>{},
+    readRestoreActions:async()=>clone(f.restoreActions),
+    claimRestoreAction:async(_restoreId,step,issueInfo={})=>{
+      const existing=f.restoreActions.find(action=>action.stepKey===step.stepKey);
+      if(existing?.state==='COMPLETE'||existing?.state==='RUNNING')return false;
+      if(existing){Object.assign(existing,{state:'RUNNING',attempts:existing.attempts+1,...issueInfo});return true;}
+      f.restoreActions.push({stepKey:step.stepKey,logicalNodeId:step.logicalNodeId,kind:step.kind,
+        state:'RUNNING',attempts:1,...issueInfo});
+      return true;
+    },
+    finishRestoreAction:async(_restoreId,stepKey,success,detail)=>{
+      const action=f.restoreActions.find(row=>row.stepKey===stepKey&&row.state==='RUNNING');
+      if(!action)return false;
+      Object.assign(action,{state:success?'COMPLETE':'FAILED',detail});
+      return true;
+    },
+    recordReplacement:async(_restoreId,logicalNodeId,oldIssueId,newIssueId,newIssueKey)=>{
+      f.replacements.push({logicalNodeId,oldIssueId,newIssueId,newIssueKey});
+    },
+    readReplacements:async()=>clone(f.replacements),
     tryAppend:async(a)=>f.audits.push(a),
-    readBaselineTree:async baselineId=>f.baselines.find(b=>b.baseline_id.equals(baselineId))?.tree ?? null,
+    readBaselineTree:async (...args)=>{
+      assert.equal(args.length,1,'production must use the tree store row-decoding contract');
+      return f.baselines.find(b=>b.baseline_id.equals(args[0]))?.tree ?? null;
+    },
     replaceTreeDrift:async()=>{},
     beginTreeBaseline:async({baseline,resume})=>{
       if(resume)return {baselineId:resume.baseline_id,version:resume.version};
@@ -128,6 +152,9 @@ function fixture() {
     },
     request:async(identity,url,options={})=>{
       const response=body=>({ok:true,status:200,json:async()=>clone(body)});
+      if(String(url).includes('/mypermissions'))return response({permissions:{
+        CREATE_ISSUES:{havePermission:true},EDIT_ISSUES:{havePermission:true},DELETE_ISSUES:{havePermission:true}
+      }});
       if(String(url).includes('/editmeta'))return response({fields:editmeta});
       if(String(url).includes('/changelog'))return response({values:[],total:0,isLast:true});
       if(String(url).includes('/search/jql'))return response({issues:[],total:0,isLast:true});
@@ -262,10 +289,14 @@ test('a delayed duplicate capture cannot erase new drift after v2',async()=>{
 
 test('after v2 approval, rejection restores v2 values and preserves v1 history',async()=>{
   const f=fixture();await f.sign();
+  // Baseline recall owns the status change; recursive restoration must verify
+  // that its caller has already returned the root to the review status.
+  f.issue.fields.status.id='1';
   f.issue.fields.summary='unreviewed after v2';f.review.state='DRIFTED';
   f.drift.push({baseline_version:2,field_id:'summary',approval_id:null});
   const result=await f.sign({decision:'REJECT'});
-  assert.equal(result.restore.state,'COMPLETE');assert.equal(f.baselines.length,2);
+  assert.equal(result.success,true,JSON.stringify(result));
+  assert.equal(result.restore.state,'COMPLETE',JSON.stringify(result.restore));assert.equal(f.baselines.length,2);
   assert.equal(f.issue.fields.summary,'reviewed drift');assert.equal(f.saved.get(1).summary,'v1 approved');
   assert.equal(f.saved.get(2).summary,'reviewed drift');assert.equal(f.review.baseline_version,2);
 });
@@ -277,6 +308,7 @@ test('standalone drift approval retains the configured baseline policy for the n
   assert.equal(approved.success,true,JSON.stringify(approved));assert.equal(f.baselines.at(-1).version,2);
   f.issue.fields.summary='later drift';f.review.state='DRIFTED';
   const rejected=await f.sign({decision:'REJECT',transitionId:undefined});
+  assert.equal(rejected.success,true,JSON.stringify(rejected));
   assert.equal(rejected.restore.state,'COMPLETE');assert.equal(f.issue.fields.summary,'reviewed drift');
 });
 test('approval preparation preserves a pending transition against its unchanged tree baseline',async()=>{

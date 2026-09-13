@@ -6,11 +6,14 @@ function sixteenFieldIds() {
   return Array.from({ length: 16 }, (_, i) => `field_${i}`);
 }
 
-test('reader walks every parent level and stops at 500 nodes', async () => {
+test('reader walks every parent level', async () => {
   const api = {
     asApp: () => ({
       requestJira: async (route, options) => {
-        const dummyFields = Object.fromEntries(sixteenFieldIds().map(f => [f, 'value']));
+        const dummyFields = {
+          ...Object.fromEntries(sixteenFieldIds().map(f => [f, 'value'])),
+          project: { id: '10' }, issuetype: { id: '20' }, status: { id: '30' }
+        };
         if (route.path.includes('/issue/FEAT-1')) {
           return { status: 200, json: async () => ({ id: '10001', key: 'FEAT-1', fields: { parent: null, ...dummyFields } }) };
         }
@@ -52,4 +55,70 @@ test('reader walks every parent level and stops at 500 nodes', async () => {
   const reader = createTreeReader({ api, route });
   const tree = await reader.read('FEAT-1', sixteenFieldIds());
   assert.deepEqual(tree.nodes.map(node => node.key), ['FEAT-1', 'STORY-1', 'SUB-1']);
+});
+
+test('reader always requests identity, structure, and status fields needed by capture and verification', async () => {
+  const calls = [];
+  const fields = { summary: 'Root', project: { id: '10' }, issuetype: { id: '20' }, status: { id: '30' }, parent: null };
+  const api = { asApp: () => ({ requestJira: async (request, options) => {
+    calls.push({ request: String(request), body: options?.body ? JSON.parse(options.body) : null });
+    return request.path.includes('/issue/')
+      ? { status: 200, json: async () => ({ id: '1', key: 'ROOT-1', fields }) }
+      : { status: 200, json: async () => ({ issues: [] }) };
+  } }) };
+  const route = (strings, ...values) => {
+    const path = strings.reduce((out, part, index) => out + part + encodeURIComponent(values[index] ?? ''), '').replace(/undefined$/, '');
+    return { path, toString: () => path };
+  };
+
+  await createTreeReader({ api, route }).read('ROOT-1', ['summary']);
+  for (const required of ['summary', 'project', 'issuetype', 'status', 'parent']) {
+    assert.match(calls[0].request, new RegExp(required));
+    assert.ok(calls[1].body.fields.includes(required));
+  }
+});
+
+test('reader fails closed instead of truncating a tree above 500 nodes', async () => {
+  const fieldIds = ['summary', 'project', 'issuetype', 'status', 'parent'];
+  const root = {
+    id: '1', key: 'ROOT-1',
+    fields: {
+      summary: 'Root', project: { id: '10' }, issuetype: { id: '20' },
+      status: { id: '30' }, parent: null
+    }
+  };
+  const children = Array.from({ length: 500 }, (_, index) => ({
+    id: String(index + 2), key: `CHILD-${index + 1}`,
+    fields: {
+      summary: `Child ${index + 1}`, project: { id: '10' }, issuetype: { id: '20' },
+      status: { id: '30' }, parent: { id: '1' }
+    }
+  }));
+  const api = {
+    asApp: () => ({
+      requestJira: async (request, options) => {
+        if (request.path.includes('/issue/ROOT-1')) {
+          return { status: 200, json: async () => root };
+        }
+        const body = JSON.parse(options.body);
+        return {
+          status: 200,
+          json: async () => ({ issues: body.jql === 'parent IN ("ROOT-1")' ? children : [] })
+        };
+      }
+    })
+  };
+  const route = (strings, ...values) => {
+    let path = strings[0];
+    for (let index = 0; index < values.length; index += 1) {
+      path += encodeURIComponent(values[index]) + strings[index + 1];
+    }
+    return { path, toString: () => path };
+  };
+
+  const reader = createTreeReader({ api, route });
+  await assert.rejects(
+    () => reader.read('ROOT-1', fieldIds),
+    error => error.reason === 'TREE_LIMIT_EXCEEDED'
+  );
 });

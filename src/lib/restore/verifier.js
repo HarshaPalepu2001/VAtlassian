@@ -115,6 +115,9 @@ export async function verifyRestore({ api, issueKey, controlledFields, baselineD
  * complete" with a footnote is not.
  */
 export function describeResult({ counters, state }) {
+  if (state === 'COMPLETE_WITH_REPLACEMENTS') {
+    return 'Restored with replacements. All controlled content and relationships match the approved baseline; recreated work items now have new Jira identities.';
+  }
   if (state === 'COMPLETE') {
     return counters.succeeded === 1
       ? 'Restored. 1 field is back to its approved value.'

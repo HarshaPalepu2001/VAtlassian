@@ -1,16 +1,23 @@
+import { FailClosed } from '../errors.js';
+import { TREE_LIMIT } from './model.js';
+
 export function createTreeReader({ api, route }) {
   return {
     async read(rootIssueKey, fieldIds) {
       const nodes = [];
       const edges = [];
       const visited = new Set();
-      
-      const fieldsParam = fieldIds.join(',');
+
+      const requestedFieldIds = [...new Set([
+        ...(fieldIds ?? []).map(String),
+        'project', 'issuetype', 'status', 'parent'
+      ])];
+      const fieldsParam = requestedFieldIds.join(',');
       const rootRes = await api.asApp().requestJira(route`/rest/api/3/issue/${rootIssueKey}?fields=${fieldsParam}`);
       if (rootRes.status >= 300) throw new Error('Failed to fetch root');
       const rootIssue = await rootRes.json();
       
-      for (const f of fieldIds) {
+      for (const f of requestedFieldIds) {
         if (!(f in rootIssue.fields)) {
           throw new Error(`Jira omitted requested field: ${f}`);
         }
@@ -19,17 +26,16 @@ export function createTreeReader({ api, route }) {
       nodes.push({ id: rootIssue.id, key: rootIssue.key, fields: rootIssue.fields });
       visited.add(rootIssue.id);
       
-      const MAX_NODES = 500;
       let queue = [rootIssue];
       
-      while (queue.length > 0 && nodes.length < MAX_NODES) {
+      while (queue.length > 0) {
         const parentNode = queue.shift();
         
         let startAt = 0;
         const maxResults = 100;
         let isLast = false;
         
-        while (!isLast && nodes.length < MAX_NODES) {
+        while (!isLast) {
           const escapedKey = parentNode.key.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
           const jql = `parent IN ("${escapedKey}")`;
           const req = {
@@ -39,7 +45,7 @@ export function createTreeReader({ api, route }) {
               jql,
               startAt,
               maxResults,
-              fields: fieldIds
+              fields: requestedFieldIds
             })
           };
           
@@ -49,7 +55,7 @@ export function createTreeReader({ api, route }) {
           
           const issues = searchData.issues || [];
           for (const child of issues) {
-            for (const f of fieldIds) {
+            for (const f of requestedFieldIds) {
               if (!(f in child.fields)) {
                 throw new Error(`Jira omitted requested field: ${f}`);
               }
@@ -64,16 +70,16 @@ export function createTreeReader({ api, route }) {
               // Otherwise it's a cycle or multi-parent
               throw new Error('Cycle detected');
             }
+            if (nodes.length >= TREE_LIMIT) throw new FailClosed('TREE_LIMIT_EXCEEDED');
             
             visited.add(child.id);
             nodes.push({ id: child.id, key: child.key, fields: child.fields });
             edges.push({ source: parentNode.id, target: child.id });
             queue.push(child);
-            if (nodes.length >= MAX_NODES) break;
           }
           
           startAt += issues.length;
-          if (issues.length < maxResults || nodes.length >= MAX_NODES) {
+          if (issues.length < maxResults) {
             isLast = true;
           }
         }

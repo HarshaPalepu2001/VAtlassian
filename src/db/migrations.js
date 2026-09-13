@@ -523,5 +523,20 @@ export const MIGRATIONS = [
   new_issue_id BIGINT NOT NULL,
   replaced_at BIGINT NOT NULL,
   PRIMARY KEY (restore_id, logical_node_id)
+)` },
+  { id: 'v038_restore_action', sql: `CREATE TABLE IF NOT EXISTS va_restore_action (
+  restore_id BINARY(16) NOT NULL,
+  step_key CHAR(64) NOT NULL,
+  logical_node_id CHAR(64) NOT NULL,
+  kind VARCHAR(32) NOT NULL,
+  issue_id BIGINT NULL,
+  issue_key VARCHAR(32) NULL,
+  state VARCHAR(16) NOT NULL,
+  attempts INT NOT NULL DEFAULT 0,
+  started_at BIGINT NOT NULL,
+  finished_at BIGINT NULL,
+  detail TEXT NULL,
+  PRIMARY KEY (restore_id, step_key),
+  KEY idx_restore_action_state (restore_id, state, started_at)
 )` }
 ];

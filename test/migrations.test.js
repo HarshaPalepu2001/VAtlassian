@@ -14,3 +14,10 @@ test('tree values are keyed by baseline and logical node', () => {
     /PRIMARY KEY \(baseline_id, logical_node_id, field_id, seq\)/
   );
 });
+
+test('tree restoration actions are journaled by restore and durable step key', () => {
+  const sql = sqlFor('v038_restore_action');
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS va_restore_action/);
+  assert.match(sql, /PRIMARY KEY \(restore_id, step_key\)/);
+  assert.match(sql, /KEY idx_restore_action_state \(restore_id, state, started_at\)/);
+});

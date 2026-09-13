@@ -14,7 +14,6 @@ import { planTreeCapture } from '../lib/tree/capturePlan.js';
 import { logicalNodeId } from '../lib/tree/model.js';
 import { diffTree } from '../lib/tree/diff.js';
 import { readBaselineTree } from '../db/baselineTreeStore.js';
-import { executeQuery } from '../lib/db.js';
 import { DENY } from '../lib/errors.js';
 
 export function fail(reason) { const error = new Error(reason); error.reason = reason; throw error; }
@@ -80,7 +79,7 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
     diff.historyUnavailable = changelog.failed === true;
   }
   
-  let tree = null, treeDiff = null, treeHash = null;
+  let tree = null, currentTree = null, baselineTree = null, treeDiff = null, treeHash = null;
   const useTree = gate?.capture_baseline || baseline?.tree_hash;
   if (useTree) {
     const stable = await readStableTree({
@@ -95,6 +94,7 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
       nodes: tree.nodes,
       controlledFields: fields
     });
+    currentTree = { nodes: plan.nodes, values: plan.values };
     tree = {
       ...stable.tree,
       nodes: stable.tree.nodes.map(n => ({ ...n, logicalNodeId: logicalNodeId(n.id) }))
@@ -102,10 +102,10 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
     treeHash = plan.treeHash;
     
     if (baseline?.tree_hash) {
-      const baselineTree = await readBaselineTree(baseline.baseline_id, executeQuery);
+      baselineTree = await readBaselineTree(baseline.baseline_id);
       treeDiff = diffTree({
         baselineTree,
-        currentTree: tree,
+        currentTree,
         controlledFields: fields
       });
     }
@@ -117,7 +117,7 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
     eligible, fields, editmeta, restoreEditmeta, baselineValues, driftRows, diff,
     contentHash: useTree ? treeHash : projection.contentHash, digests: projection.digests,
     evidenceHash: useTree ? treeHash : evidenceHash, baselineVersion: baseline?.version ?? 0,
-    tree, treeDiff, treeHash,
+    tree, currentTree, baselineTree, treeDiff, treeHash,
     driftCount: useTree ? (treeDiff?.changes?.length ?? 0) : Math.max(driftRows.length, diff?.changedFieldCount ?? 0), reportHash: null };
 }
 /** null, never {}, so the caller can tell "nothing extra" from "could not ask"
