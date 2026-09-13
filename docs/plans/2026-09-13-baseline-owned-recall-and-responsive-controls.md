@@ -448,7 +448,7 @@ Rejection never uses `reject_to_status_id`. Before restoration starts, require/r
 
 Run: `node --test test/approval-submit.test.js test/approval-assurance.test.js test/drift-functional.test.js test/gate-approval.test.js test/controlled-transition-tree-acceptance.test.js test/restore-correctness.test.js`
 
-- [ ] **Step 6: Commit only Task 6 hunks**
+- [x] **Step 6: Commit only Task 6 hunks**
 
 ```bash
 git add -p src/usecases/approval.js src/usecases/drift.js src/lib/approval/challenge.js src/lib/approval/runtime.js src/db/approvalStore.js src/lib/transitions.js src/usecases/restoreActions.js test/approval-submit.test.js test/approval-assurance.test.js test/drift-functional.test.js test/gate-approval.test.js test/controlled-transition-tree-acceptance.test.js
