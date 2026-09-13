@@ -514,7 +514,7 @@ Run: `node --test test/panel-state.test.js test/panel-response.test.js test/reso
 
 Run: `npm test`
 
-- [ ] **Step 6: Commit only Task 7 hunks**
+- [x] **Step 6: Commit only Task 7 hunks**
 
 ```bash
 git add -p src/usecases/panelSummary.js src/usecases/panelEvidence.js src/usecases/panel.js src/usecases/panelAccess.js src/db/approvalStore.js src/db/baselineStore.js src/db/incidentStore.js src/resolvers/panel.js test/panel-state.test.js test/panel-response.test.js test/resolver-wiring.test.js test/panel-performance-contract.test.js
