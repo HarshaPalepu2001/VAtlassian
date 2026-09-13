@@ -103,6 +103,17 @@ test('missing approved digest prevents claiming the whole tracked record is rest
   assert.deepEqual(result.unmatched.map(d => d.fieldId), ['labels']);
 });
 
+test('scalar restoration cannot complete when the fresh Jira read is outside the baseline review status', async () => {
+  const fields = [field('summary', 'TEXT')];
+  const approved = project({ summary: 'approved' }, fields).digests;
+  const f = apiFixture(() => response(200, { fields: { summary: 'approved', status: { id: '2' } } }));
+  const result = await verifyRestore({ api: f.api, issueKey: 'T-2', controlledFields: fields,
+    baselineDigests: approved, expectedStatusId: '1',
+    detail: [{ fieldId: 'summary', outcome: 'succeeded' }] });
+  assert.deepEqual(result.unmatched.map(item => item.fieldId), ['status']);
+  assert.notEqual(tally(result.detail, result.unmatched).state, 'COMPLETE');
+});
+
 const link = (id, direction, other) => ({ id, type: { id: '100', name: 'Blocks' }, [direction]: { id: other } });
 test('links reconcile added and removed relationships with their original direction', async () => {
   const keep = link('1', 'outwardIssue', '11');

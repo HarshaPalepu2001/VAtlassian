@@ -58,20 +58,49 @@ export function createApprovalUsecases(deps) {
     consume: deps.markChallengeConsumed ?? markChallengeConsumed
   };
 
+  async function decisionContext({ issue, actor, decision, requested = {}, expectedEvidenceHash }) {
+    // First discover the latest active baseline without allowing any client
+    // transition facts to influence drift authority.
+    let prepared = await deps.prepare({ issue, actor, decision, expectedEvidenceHash,
+      forTransition: false, transition: null });
+    let transition = null;
+    let ct = prepared.approvalPolicy ?? null;
+
+    if (prepared.baseline) {
+      if (!ct) fail('BASELINE_POLICY_INCOMPLETE');
+      if (decision === 'APPROVE') {
+        transition = await deps.transition(issue, { transitionId: ct.transition_id });
+        if (!transition || String(transition.id) !== String(ct.transition_id)
+            || String(transition.toStatusId) !== String(ct.to_status_id)
+            || String(issue.statusId) !== String(ct.from_status_id)) fail('CONTENT_CHANGED');
+      } else transition = { id: String(ct.transition_id), toStatusId: String(ct.to_status_id) };
+    } else {
+      const requestedTransition = decision === 'APPROVE'
+        && (requested.transitionId != null || requested.toStatusId != null);
+      transition = requestedTransition ? await deps.transition(issue, requested) : null;
+      if (requestedTransition && !transition) fail('NOT_CONFIGURED');
+      if (transition) {
+        prepared = await deps.prepare({ issue, actor, decision, expectedEvidenceHash,
+          forTransition: true, transition });
+      }
+      ct = await deps.edge(issue, transition, prepared);
+    }
+
+    checkPolicy(ct);
+    if (!await deps.eligible({ accountId: actor.accountId, projectId: issue.projectId,
+      issueTypeId: issue.issueTypeId, role: ct.required_role })) fail('NOT_ELIGIBLE');
+    return { prepared, transition, ct, hasTransition: decision === 'APPROVE' && transition != null };
+  }
+
   async function challenge({ payload = {}, context }) {
     try {
       const accountId = actorId(context);
       if (!['APPROVE', 'REJECT'].includes(payload.decision)) fail('NOT_CONFIGURED');
       const issue = await deps.issue({ payload, context });
       const actor = await deps.actor(accountId);
-      const hasTransition = payload.decision === 'APPROVE' && (payload.transitionId != null || payload.toStatusId != null);
-      const transition = hasTransition ? await deps.transition(issue, payload) : null;
-      if (hasTransition && !transition) fail('NOT_CONFIGURED');
-      const prepared = await deps.prepare({ issue, actor, decision: payload.decision, expectedEvidenceHash: payload.expectedEvidenceHash, forTransition: hasTransition, transition });
+      const { prepared, transition, ct } = await decisionContext({ issue, actor,
+        decision: payload.decision, requested: payload, expectedEvidenceHash: payload.expectedEvidenceHash });
       if (payload.expectedEvidenceHash != null && payload.expectedEvidenceHash !== prepared.evidenceHash) fail('CONTENT_CHANGED');
-      const ct = await deps.edge(issue, transition, prepared);
-      checkPolicy(ct);
-      if (!await deps.eligible({ accountId, projectId: issue.projectId, issueTypeId: issue.issueTypeId, role: ct.required_role })) fail('NOT_ELIGIBLE');
 
       const tenantId = context.siteUrl || 'local';
 
@@ -112,14 +141,10 @@ export function createApprovalUsecases(deps) {
         issue = await deps.issue({ payload: { issueKey: payload.issueKey }, context });
         if (issue.issueId !== challengeRow.issue_id) fail('NOT_CONFIGURED');
         actor = await deps.actor(accountId);
-        hasTransition = challengeRow.decision === 'APPROVE' && challengeRow.transition_id != null;
-        transition = hasTransition ? await deps.transition(issue, { transitionId: challengeRow.transition_id }) : null;
-        if (hasTransition && !transition) fail('NOT_CONFIGURED');
-        prepared = await deps.prepare({ issue, actor, decision: challengeRow.decision, forTransition: hasTransition, transition });
+        ({ prepared, transition, ct, hasTransition } = await decisionContext({ issue, actor,
+          decision: challengeRow.decision, requested: { transitionId: challengeRow.transition_id } }));
+        if (String(challengeRow.transition_id ?? '') !== String(transition?.id ?? '')) fail('CONTENT_CHANGED');
         if (prepared.contentHash !== challengeRow.candidate_hash) fail('CONTENT_CHANGED');
-        ct = await deps.edge(issue, transition, prepared);
-        checkPolicy(ct);
-        if (!await deps.eligible({ accountId, projectId: issue.projectId, issueTypeId: issue.issueTypeId, role: ct.required_role })) fail('NOT_ELIGIBLE');
         if (activeOperationLock(prepared.review, deps.now())) fail('RESTORE_IN_PROGRESS');
         // A signed capture resolves this drift in apply(), before a pending
         // transition capability is published. Non-capturing edges still block.
@@ -136,14 +161,9 @@ export function createApprovalUsecases(deps) {
         const approvalNote = note(payload);
         issue = await deps.issue({ payload, context });
         actor = await deps.actor(accountId);
-        hasTransition = payload.decision === 'APPROVE' && (payload.transitionId != null || payload.toStatusId != null);
-        transition = hasTransition ? await deps.transition(issue, payload) : null;
-        if (hasTransition && !transition) fail('NOT_CONFIGURED');
-        prepared = await deps.prepare({ issue, actor, decision: payload.decision, expectedEvidenceHash: payload.expectedEvidenceHash, forTransition: hasTransition, transition });
+        ({ prepared, transition, ct, hasTransition } = await decisionContext({ issue, actor,
+          decision: payload.decision, requested: payload, expectedEvidenceHash: payload.expectedEvidenceHash }));
         if (payload.expectedEvidenceHash != null && payload.expectedEvidenceHash !== prepared.evidenceHash) fail('CONTENT_CHANGED');
-        ct = await deps.edge(issue, transition, prepared);
-        checkPolicy(ct);
-        if (!await deps.eligible({ accountId, projectId: issue.projectId, issueTypeId: issue.issueTypeId, role: ct.required_role })) fail('NOT_ELIGIBLE');
         if (activeOperationLock(prepared.review, deps.now())) fail('RESTORE_IN_PROGRESS');
         if (hasTransition && !yes(ct.capture_baseline) && prepared.driftCount > 0) fail('UNDECIDED_DRIFT');
         binding = { accountId, issueId: issue.issueId, fromStatusId: issue.statusId,
@@ -190,10 +210,16 @@ export function createApprovalUsecases(deps) {
       const initialState = hasTransition ? 'PENDING' : 'CONSUMED';
       if (!await deps.activate({ approvalId: row.approval_id, now: deps.now(), state: initialState })) fail('SERVICE_UNAVAILABLE');
       const result = { success: true, approvalId: row.approval_id.toString('hex'), assuranceLevel: row.assurance_level,
-        printedName: row.printed_name, meaning: row.meaning, transitioned: false };
+        printedName: row.printed_name, meaning: row.meaning, transitioned: false,
+        baselinePublished: applied?.baselinePublished === true || applied?.capture?.captured === true,
+        retryableApprovalId: null };
       if (hasTransition && payload.preauthorize !== true) {
         try { Object.assign(result, await deps.performTransition(issue, transition, row)); }
         catch { result.transitionError = 'Approval recorded. Refresh the work item to check the transition result.'; }
+        if (result.transitioned !== true) {
+          if (prepared.baseline) await deps.invalidate?.({ approvalId: row.approval_id, now: deps.now() });
+          else result.retryableApprovalId = result.approvalId;
+        }
       }
       // Another Jira validator may refuse after ours has spent the approval.
       // Preserve the actual lifecycle; never reactivate a spent capability.
@@ -211,7 +237,7 @@ export function createApprovalUsecases(deps) {
       const row = await deps.byId(Buffer.from(payload.approvalId, 'hex'));
       if (!row || row.account_id !== accountId || String(row.issue_id) !== String(issue.issueId)
           || row.state !== 'PENDING' || row.decision !== 'APPROVE' || Number(row.expires_at) <= deps.now()
-          || row.from_status_id !== issue.statusId || !validEvidence(row)) fail('NO_DECISION');
+          || row.from_status_id !== issue.statusId || row.baseline_id != null || !validEvidence(row)) fail('NO_DECISION');
       const transition = await deps.transition(issue, { transitionId: payload.transitionId ?? row.transition_id });
       if (!transition || transition.toStatusId !== row.to_status_id || transition.id !== row.transition_id) fail('NO_DECISION');
       const ct = await deps.edge(issue, transition);

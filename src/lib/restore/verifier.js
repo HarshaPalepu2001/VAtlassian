@@ -36,13 +36,14 @@ import { OUTCOME } from './executor.js';
  * module exists to prevent, and "we could not confirm" is a fine thing to tell
  * a reviewer.
  */
-export async function verifyRestore({ api, issueKey, controlledFields, baselineDigests, detail }) {
-  let current;
+export async function verifyRestore({ api, issueKey, controlledFields, baselineDigests, detail, expectedStatusId = null }) {
+  let current, currentStatusId;
   try {
     const res = await api.asApp().requestJira(route`/rest/api/3/issue/${issueKey}?fields=*all`);
     if (!res.ok) throw new Error(`status ${res.status}`);
     const body = await res.json();
     current = body.fields ?? {};
+    currentStatusId = current.status?.id == null ? null : String(current.status.id);
   } catch (e) {
     console.error('restore: verification read failed', issueKey, e);
     // Deliberately pessimistic. An unverifiable restore reported as complete is
@@ -88,6 +89,15 @@ export async function verifyRestore({ api, issueKey, controlledFields, baselineD
   // we attempted landed", which is a different and much weaker claim.
   const byId = new Map(controlledFields.map((f) => [f.field_id, f]));
   const unmatched = [];
+  if (expectedStatusId != null && currentStatusId !== String(expectedStatusId)) {
+    unmatched.push({
+      fieldId: 'status',
+      fieldName: 'Status',
+      expected: String(expectedStatusId),
+      actual: currentStatusId,
+      reason: 'The work item is no longer in the baseline review status, so restoration cannot be confirmed.'
+    });
+  }
   for (const [fieldId, field] of byId) {
     const expected = baselineDigests?.[fieldId] ?? null;
     const present = Object.hasOwn(current, fieldId) && current[fieldId] !== undefined;

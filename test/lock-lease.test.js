@@ -124,8 +124,7 @@ test('approval.challenge() succeeds when prepareApproval passes', async () => {
     eligible: async () => true,
     prepare: async () => ({
       contentHash: 'hash1',
-      evidenceHash: 'ev1',
-      baseline: { baseline_id: Buffer.alloc(16, 1) }
+      evidenceHash: 'ev1'
     })
   };
 

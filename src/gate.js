@@ -40,8 +40,7 @@ export function createGate(deps) {
     try {
       const snapshot = await deps.load({ issueKey, fromStatusId, toStatusId, transitionId, modifiedFields: payload?.transition?.modifiedFields });
       const { ct, item, issueId, projectId, issueTypeId, contentHash, driftCount } = snapshot;
-      if (!ct || !isAssuranceLevel(ct.required_assurance) || !ct.required_role || !ct.meaning
-          || ![true, false, 0, 1, '0', '1'].includes(ct.block_on_drift)) return deny('NOT_CONFIGURED', 'INVALID_EDGE_POLICY');
+      if (snapshot.health?.enabled === false) return deny('NOT_CONFIGURED', 'PROJECT_DISABLED');
       if (['RESTORING', 'DECIDING', 'ERROR'].includes(item?.state) || item?.lock_token) return deny('RESTORE_IN_PROGRESS', 'ITEM_BUSY');
       if (item?.state === 'LOCKED') return deny('RECORD_LOCKED', 'ITEM_LOCKED');
       if (!Number.isSafeInteger(driftCount) || driftCount > 0) return deny('UNDECIDED_DRIFT', 'DRIFT_OUTSTANDING');
@@ -52,11 +51,16 @@ export function createGate(deps) {
       if (String(approval.issue_id) !== String(issueId) || String(approval.project_id) !== String(projectId)
           || String(approval.issue_type_id) !== String(issueTypeId) || approval.from_status_id !== fromStatusId
           || approval.to_status_id !== toStatusId || String(approval.transition_id) !== transitionId) return deny('NO_DECISION', 'EDGE_BINDING_MISMATCH');
-      const required = effectiveAssurance(ct.required_assurance);
+      const policy = approval.baseline_id != null
+        ? await deps.policyForApproval?.({ approval, issueId, projectId, issueTypeId })
+        : ct;
+      if (!policy || !isAssuranceLevel(policy.required_assurance) || !policy.required_role || !policy.meaning
+          || ![true, false, 0, 1, '0', '1'].includes(policy.block_on_drift)) return deny('NOT_CONFIGURED', 'INVALID_EDGE_POLICY');
+      const required = effectiveAssurance(policy.required_assurance);
       if (!meetsAssurance(approval.assurance_level, required)) return deny('INSUFFICIENT_ASSURANCE', 'ASSURANCE_FLOOR', { obtained: approval.assurance_level, required });
       if (!validEvidence(approval) || approval.content_hash !== contentHash) return deny('CONTENT_CHANGED', 'CONTENT_OR_EVIDENCE_CHANGED');
-      if (approval.signer_role !== ct.required_role || approval.meaning !== ct.meaning) return deny('NOT_CONFIGURED', 'POLICY_CHANGED');
-      if (!await deps.eligible({ accountId: approval.account_id, issueTypeId, projectId, role: ct.required_role })) return deny('ELIGIBILITY_REVOKED', 'ELIGIBILITY_REVOKED');
+      if (approval.signer_role !== policy.required_role || approval.meaning !== policy.meaning) return deny('NOT_CONFIGURED', 'POLICY_CHANGED');
+      if (!await deps.eligible({ accountId: approval.account_id, issueTypeId, projectId, role: policy.required_role })) return deny('ELIGIBILITY_REVOKED', 'ELIGIBILITY_REVOKED');
       const result = await deps.consume({ approvalId: approval.approval_id, now: deps.now() });
       if (!result?.consumed) return deny('NO_DECISION', 'CAS_LOST_RACE');
       // Consumed before the success audit; an audit failure spends the approval but never allows Jira.

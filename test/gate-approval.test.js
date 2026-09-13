@@ -3,17 +3,23 @@ import assert from 'node:assert/strict';
 import { createGate, rawCodeSubmitted } from '../src/gate.js';
 import { makeApproval } from '../src/lib/approval/record.js';
 import { providerFor } from '../src/lib/approval/registry.js';
+import { approvalContentHash } from '../src/lib/approval/runtime.js';
 
-async function fixture(level = 'ESIGNATURE') {
+async function fixture(level = 'ESIGNATURE', baselineControl = null) {
   const binding = { accountId: 'actor', issueId: 10, fromStatusId: '1', toStatusId: '2', contentHash: 'a'.repeat(64), decision: 'APPROVE', transitionId: '50' };
   const proof = level === 'NATIVE_TRANSITION'
     ? await providerFor('NATIVE_TRANSITION').verify({ binding, confirmed: true })
     : { ok: true, level, providerId: 'totp', evidence: { method: 'SESSION_AND_TOTP', verifiedAt: 100, binding } };
-  const row = { ...makeApproval({ ...binding, issueKey: 'T-10', projectId: 1, issueTypeId: '1', actorName: 'Actor', meaning: 'Approve', signerRole: 'reviewer', proof, transitionId: '50', now: 100 }), state: 'PENDING' };
+  const row = { ...makeApproval({ ...binding, issueKey: 'T-10', projectId: 1, issueTypeId: '1', actorName: 'Actor',
+    meaning: baselineControl?.meaning ?? 'Approve', signerRole: baselineControl?.required_role ?? 'reviewer',
+    proof, transitionId: '50', now: 100, baselineId: baselineControl?.baselineId,
+    baselineVersion: baselineControl?.version ?? 0 }), state: 'PENDING' };
   const snapshot = { issueId: 10, projectId: 1, issueTypeId: '1', contentHash: binding.contentHash, item: { state: 'BASELINED' }, driftCount: 0, ct: { required_assurance: 'NATIVE_TRANSITION', required_role: 'reviewer', meaning: 'Approve', block_on_drift: 1 } };
   let consumed = false;
   const events = [], logs = [];
-  const deps = { now: () => 200, log: (event) => logs.push(event), load: async () => snapshot, pending: async () => row, eligible: async () => true, consume: async () => { const won = !consumed; consumed = true; return { consumed: won }; }, voidOthers: async () => {}, audit: async (event) => events.push(event) };
+  const deps = { now: () => 200, log: (event) => logs.push(event), load: async () => snapshot, pending: async () => row,
+    policyForApproval: baselineControl ? async () => baselineControl : undefined,
+    eligible: async () => true, consume: async () => { const won = !consumed; consumed = true; return { consumed: won }; }, voidOthers: async () => {}, audit: async (event) => events.push(event) };
   const payload = { issue: { key: 'T-10' }, transition: { id: '50', from: { id: '1' }, to: { id: '2' } } };
   return { deps, row, snapshot, payload, logs, events };
 }
@@ -21,6 +27,30 @@ test('gate consumes a verified capability exactly once under concurrent requests
   const f = await fixture(), gate = createGate(f.deps);
   const results = await Promise.all([gate(f.payload), gate(f.payload)]);
   assert.equal(results.filter(r => r.result).length, 1);
+});
+test('validator recomputes the recursive tree hash for a tree-backed baseline', async () => {
+  const controlledFields = ['summary', 'description', 'issuelinks', 'subtasks'].map(field_id => ({
+    field_id, field_name: field_id, field_kind: field_id === 'description' ? 'ADF' : field_id === 'summary' ? 'TEXT' : 'MULTI',
+    store_values: true, writable: true
+  }));
+  const issue = { id: '10', key: 'T-10', fields: {
+    project: { id: '1' }, issuetype: { id: '1' }, status: { id: '1' }, parent: null,
+    summary: 'root', description: null, issuelinks: [], subtasks: []
+  } };
+  const tree = childSummary => ({ nodes: [
+    issue,
+    { id: '11', key: 'T-11', fields: { ...issue.fields, parent: { id: '10' }, summary: childSummary } }
+  ] });
+  const read = childSummary => async (_key, fieldIds) => fieldIds.length === 1 && fieldIds[0] === 'parent'
+    ? tree(childSummary) : tree(childSummary);
+
+  const first = await approvalContentHash({ issue, declared: controlledFields, modifiedFields: {},
+    activeBaseline: { tree_hash: 'stored-tree' }, readTree: read('child v1') });
+  const second = await approvalContentHash({ issue, declared: controlledFields, modifiedFields: {},
+    activeBaseline: { tree_hash: 'stored-tree' }, readTree: read('child v2') });
+
+  assert.match(first.contentHash, /^[a-f0-9]{64}$/);
+  assert.notEqual(first.contentHash, second.contentHash);
 });
 test('gate refuses legacy session-only approvals even if stored transition policy is weaker', async () => {
   const f = await fixture('NATIVE_TRANSITION');
@@ -30,6 +60,21 @@ test('gate refuses legacy session-only approvals even if stored transition polic
 test('gate refuses an item with an unresolved operation error', async () => {
   const f = await fixture(); f.snapshot.item.state = 'ERROR';
   assert.equal((await createGate(f.deps)(f.payload)).result, false);
+});
+test('validator uses the approval baseline policy even when current edge configuration was edited', async () => {
+  const baselineControl = {
+    baselineId: Buffer.alloc(16, 7), version: 4,
+    required_assurance: 'ESIGNATURE', required_role: 'baseline-reviewer',
+    meaning: 'Approve changes against baseline v4', block_on_drift: true
+  };
+  const f = await fixture('ESIGNATURE', baselineControl);
+  f.snapshot.ct = { required_assurance: 'BIOMETRIC', required_role: 'attacker',
+    meaning: 'Changed configuration', block_on_drift: true };
+  const checkedRoles = [];
+  f.deps.eligible = async ({ role }) => { checkedRoles.push(role); return role === 'baseline-reviewer'; };
+  const result = await createGate(f.deps)(f.payload);
+  assert.equal(result.result, true, JSON.stringify(result));
+  assert.deepEqual(checkedRoles, ['baseline-reviewer']);
 });
 test('gate fails closed on policy, eligibility, drift, content, expiry and token mismatch', async () => {
   const cases = [

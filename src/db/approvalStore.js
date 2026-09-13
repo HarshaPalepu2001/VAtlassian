@@ -31,6 +31,11 @@ export async function activateApproval({ approvalId, now, state = APPROVAL_STATE
   [state, state === 'CONSUMED' ? now : null, encode(approvalId), now]);
   return affectedRows(result) === 1;
 }
+export async function invalidateApproval({ approvalId }) {
+  const result = await query(`UPDATE va_approval SET state = 'VOID', consumed_at = NULL
+    WHERE approval_id = FROM_BASE64(?) AND state = 'PENDING'`, [encode(approvalId)]);
+  return affectedRows(result) === 1;
+}
 /**
  * The PENDING approval recorded for this exact Jira transition — not just this
  * status pair. `transitionId` is required for the same reason it is required
@@ -61,7 +66,8 @@ export async function pendingApprovalFor({ issueId, fromStatusId, toStatusId, tr
 export async function pendingApprovalForActor({ issueId, accountId, fromStatusId, now = Date.now() }) {
   if (!accountId) return null;
   const result = await query(`SELECT ${selection} FROM va_approval WHERE issue_id = ?
-    AND state = 'PENDING' AND decision = 'APPROVE' AND account_id = ? AND from_status_id = ? AND expires_at > ?
+    AND state = 'PENDING' AND decision = 'APPROVE' AND baseline_id IS NULL
+    AND account_id = ? AND from_status_id = ? AND expires_at > ?
     ORDER BY decided_at DESC LIMIT 1`, [issueId, accountId, fromStatusId, now]);
   return decode(result.data[0]);
 }

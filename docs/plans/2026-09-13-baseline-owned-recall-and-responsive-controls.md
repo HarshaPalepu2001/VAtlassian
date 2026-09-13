@@ -428,23 +428,23 @@ git commit -m "fix: recall drift from baseline provenance"
 - Server binding includes `{ baselineId, baselineVersion, transitionId, fromStatusId, toStatusId, requiredRole, requiredAssurance, contentHash, actorAccountId, decision }`.
 - Drift approve result distinguishes `{ baselinePublished, transitioned, transitionError, retryableApprovalId }`.
 
-- [ ] **Step 1: Add baseline-owned behavior and race tests**
+- [x] **Step 1: Add baseline-owned behavior and race tests**
 
 Prove the server ignores injected transition/role/provider values, uses the latest active baseline, rejects a challenge after N+1 appears, refuses a no-longer-eligible actor, publishes N+1 before calling Jira, never calls Jira if publication/audit fails, and makes a validator-denied transition retry require fresh review/signature.
 
-- [ ] **Step 2: Resolve drift authority without the current rule row**
+- [x] **Step 2: Resolve drift authority without the current rule row**
 
 `prepareApproval` loads `baselinePolicy(activeBaseline)` and checks current role membership using the recorded `required_role`. Select the provider from recorded `required_assurance`. The current config row may be consulted only for a health incident; it cannot change the control.
 
-- [ ] **Step 3: Bind and consume the exact baseline edge**
+- [x] **Step 3: Bind and consume the exact baseline edge**
 
 For drift approval, create the approval with baseline transition/from/to, capture tree/scalar baseline N+1 with the same provenance, append required audit entries, and only then call `applyTransition` with the exact stored transition id. Re-read Jira transitions first and require current status to equal review status and destination to match.
 
-- [ ] **Step 4: Keep rejection in review and verify status**
+- [x] **Step 4: Keep rejection in review and verify status**
 
 Rejection never uses `reject_to_status_id`. Before restoration starts, require/recall the root to baseline review status. Restore content/tree, then verify fields, relationships, and status. Clear drift only for `COMPLETE` or `COMPLETE_WITH_REPLACEMENTS`; update existing `markDecided`/`release` terminal checks accordingly.
 
-- [ ] **Step 5: Run approval, drift, gate, and tree journeys**
+- [x] **Step 5: Run approval, drift, gate, and tree journeys**
 
 Run: `node --test test/approval-submit.test.js test/approval-assurance.test.js test/drift-functional.test.js test/gate-approval.test.js test/controlled-transition-tree-acceptance.test.js test/restore-correctness.test.js`
 

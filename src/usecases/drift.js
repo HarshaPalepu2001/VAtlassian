@@ -7,6 +7,10 @@ import { planRestore } from '../lib/restore/planner.js';
 import { planTreeRestore } from '../lib/tree/restorePlan.js';
 import { performRestore } from './restoreActions.js';
 import { meetsAssurance, effectiveAssurance } from '../lib/approval/levels.js';
+import { activeBaseline } from '../db/baselineStore.js';
+import { baselinePolicy } from '../lib/baselinePolicy.js';
+import { isEligible } from '../lib/reviewer.js';
+import { baselineDecisionMeaning } from '../lib/approval/challenge.js';
 
 export async function getState(args) { return respond(async () => {
   const state = await load(args); return { drift: state.diff, review: state.review };
@@ -25,7 +29,32 @@ function withTimeout(promise, ms, message) {
 /** Called internally by the sole approval writer; no approval is inserted here. */
 export async function prepareApproval({ issue, actor, decision, expectedEvidenceHash, forTransition = false, transition = null, allowBusy = false, now = Date.now() }) {
   const fresh = await readableIssue({ payload: { issueId: issue.id }, context: { accountId: actor.accountId } });
-  const prepared = await snapshot({ issue: fresh, actor, requireAuthority: true, expectedEvidenceHash, transition });
+  const active = await activeBaseline(Number(fresh.id));
+  const immutable = active ? baselinePolicy(active) : null;
+  const approvalPolicy = immutable ? {
+    transition_id: immutable.transitionId,
+    from_status_id: immutable.reviewStatusId,
+    to_status_id: immutable.destinationStatusId,
+    required_role: immutable.requiredRole,
+    required_assurance: immutable.requiredAssurance,
+    meaning: baselineDecisionMeaning(decision, immutable.version),
+    capture_baseline: true,
+    block_on_drift: true
+  } : null;
+  const prepared = await snapshot({ issue: fresh, actor, requireAuthority: true, expectedEvidenceHash,
+    transition, authorityPolicy: approvalPolicy });
+  if (immutable) {
+    if (!prepared.baseline || !Buffer.from(prepared.baseline.baseline_id).equals(Buffer.from(immutable.baselineId))
+        || Number(prepared.baseline.version) !== immutable.version) fail('STALE_EVIDENCE');
+    if (String(fresh.fields.status?.id ?? '') !== immutable.reviewStatusId) fail('CONTENT_CHANGED');
+    const eligible = await isEligible({ accountId: actor.accountId, projectId: prepared.projectId,
+      issueTypeId: prepared.issueTypeId, role: immutable.requiredRole });
+    if (!eligible) fail('NOT_ELIGIBLE');
+    prepared.eligible = true;
+    prepared.baselinePolicy = immutable;
+    prepared.approvalPolicy = approvalPolicy;
+    prepared.gate = approvalPolicy;
+  }
   if (prepared.baseline) {
     const permission = canDecide({ review: prepared.review, baseline: prepared.baseline, isEligible: prepared.eligible, now });
     // A restore retry has already authenticated the original rejection and
@@ -72,10 +101,11 @@ export async function applyApproval({ issue, actor, approval, prepared, resuming
   let fresh = await prepareApproval({ issue, actor, decision: approval.decision,
     expectedEvidenceHash: resuming ? undefined : prepared?.evidenceHash, transition, allowBusy: resuming });
   const assertPolicy = current => {
+    const authoritative = current.approvalPolicy ?? current.gate;
     if (policy && ['required_role', 'required_assurance', 'meaning', 'capture_baseline', 'block_on_drift']
-      .some(key => String(policy[key]) !== String(current.gate?.[key]))) fail('POLICY_CHANGED');
+      .some(key => String(policy[key]) !== String(authoritative?.[key]))) fail('POLICY_CHANGED');
     if (Number(approval.baseline_version ?? current.baselineVersion) !== current.baselineVersion) fail('STALE_EVIDENCE');
-    if (!meetsAssurance(approval.assurance_level, effectiveAssurance(current.gate?.required_assurance))) fail('INSUFFICIENT_ASSURANCE');
+    if (!meetsAssurance(approval.assurance_level, effectiveAssurance(authoritative?.required_assurance))) fail('INSUFFICIENT_ASSURANCE');
   };
   assertPolicy(fresh);
 
@@ -104,9 +134,8 @@ export async function applyApproval({ issue, actor, approval, prepared, resuming
   }
   try {
     // Re-read after the CAS: a concurrent edit must not be silently accepted.
-    const checkedIssue = await readableIssue({ payload: { issueId: issue.id }, context: { accountId: actor.accountId } });
-    const checked = await snapshot({ issue: checkedIssue, actor, requireAuthority: true,
-      expectedEvidenceHash: fresh.evidenceHash, transition });
+    const checked = await prepareApproval({ issue, actor, decision: approval.decision,
+      expectedEvidenceHash: fresh.evidenceHash, transition, allowBusy: true });
     if (!resuming && checked.contentHash !== approval.content_hash) fail('STALE_EVIDENCE');
     if (approval.decision === 'REJECT') {
       return await withTimeout(
@@ -172,7 +201,7 @@ export async function applyApproval({ issue, actor, approval, prepared, resuming
       state: checked.diff?.changedFieldCount > 0 ? 'DRIFTED' : 'BASELINED', now: Date.now(),
       counters: undecidedCounters(checked.diff) });
     // writeCapturedBaseline publishes the new item state only after durable values.
-    return { success: true, capture };
+    return { success: true, capture, baselinePublished: capture.captured === true };
   } catch (error) {
     if (locked) await release({ issueId: fresh.issueId, state: 'ERROR', now: Date.now(),
       // `driftCount` here is the snapshot's, which also counts undecided drift

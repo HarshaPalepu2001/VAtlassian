@@ -101,7 +101,7 @@ export async function performRestore({ prepared, actor, approval }) {
         controlledFields: fields, ...config.restore });
       const verified = await verifyRestore({ api: forgeApi, issueKey: issue.key, controlledFields: fields,
         baselineDigests: typeof baseline.field_digests === 'string' ? JSON.parse(baseline.field_digests) : baseline.field_digests,
-        detail: executed.detail });
+        detail: executed.detail, expectedStatusId: baseline.from_status_id });
       detail = verified.detail;
       unmatched = verified.unmatched;
       const tal = tally(detail, unmatched);

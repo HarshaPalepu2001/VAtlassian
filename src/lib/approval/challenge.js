@@ -2,6 +2,12 @@ import crypto from 'crypto';
 import { FailClosed } from '../errors.js';
 import { canonical, sha256Hex } from '../hash.js';
 
+/** A stable signer-facing declaration derived from immutable baseline state. */
+export function baselineDecisionMeaning(decision, version) {
+  const action = decision === 'REJECT' ? 'Reject changes and restore' : 'Approve changes against';
+  return `${action} baseline v${Number(version)}`;
+}
+
 /** Bind the declaration and restore target as well as the current field values. */
 export function challengeContextHash({ issue, transition, prepared, policy }) {
   return sha256Hex(canonical({

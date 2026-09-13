@@ -15,6 +15,11 @@ function fixture() {
     prepare: async () => ({ contentHash: 'a'.repeat(64), evidenceHash: 'e'.repeat(64), baselineVersion: 1, driftCount: 0 }),
     apply: async () => ({ success: true }), record: async row => rows.push(row), audit: async event => events.push(event),
     activate: async ({ approvalId, state }) => { rows.find(r => r.approval_id.equals(approvalId)).state = state; return true; },
+    invalidate: async ({ approvalId }) => {
+      const row = rows.find(r => r.approval_id.equals(approvalId));
+      if (row?.state === 'PENDING') row.state = 'VOID';
+      return row?.state === 'VOID';
+    },
     performTransition: async (_issue, _transition, row) => { row.state = 'CONSUMED'; return { transitioned: true }; },
     byId: async id => rows.find(r => r.approval_id.equals(id)),
     totpDeps: {
@@ -50,6 +55,39 @@ function fixture() {
   };
   
   return { deps, rows, events, request, challenges };
+}
+
+function baselineDecisionPrepared(overrides = {}) {
+  const baselineId = Buffer.alloc(16, 9);
+  return {
+    contentHash: 'a'.repeat(64),
+    evidenceHash: 'e'.repeat(64),
+    baselineVersion: 4,
+    driftCount: 2,
+    review: { state: 'DRIFTED' },
+    baseline: {
+      baseline_id: baselineId,
+      version: 4,
+      content_hash: 'b'.repeat(64),
+      transition_id: '5',
+      from_status_id: '1',
+      to_status_id: '2',
+      required_role: 'baseline-reviewer',
+      required_assurance: 'ESIGNATURE',
+      controlled_fields_hash: 'c'.repeat(64)
+    },
+    approvalPolicy: {
+      transition_id: '5',
+      from_status_id: '1',
+      to_status_id: '2',
+      required_role: 'baseline-reviewer',
+      required_assurance: 'ESIGNATURE',
+      meaning: 'Approve changes against baseline v4',
+      capture_baseline: true,
+      block_on_drift: true
+    },
+    ...overrides
+  };
 }
 test('challenge response contains the nonce, meaning and expiry the UI must display', async () => {
   const f = fixture();
@@ -114,20 +152,19 @@ test('biometric challenge records a WebAuthn-backed approval through the same ap
 });
 
 for (const decision of ['APPROVE', 'REJECT']) {
-  test(`drift ${decision.toLowerCase()} follows the configured biometric assurance from the controlled transition`, async () => {
+  test(`drift ${decision.toLowerCase()} follows the biometric assurance frozen in the baseline`, async () => {
     const f = fixture();
     delete f.request.payload.transitionId;
     f.request.payload.decision = decision;
     f.request.payload.preauthorize = false;
-    const edge = await f.deps.edge();
-    f.deps.edge = async () => ({ ...edge, required_assurance: 'BIOMETRIC', meaning: 'Bug Done' });
-    const prepared = await f.deps.prepare();
-    f.deps.prepare = async () => ({
-      ...prepared,
-      driftCount: 2,
-      review: { state: 'DRIFTED' },
-      baseline: { baseline_id: Buffer.alloc(16, 1), content_hash: 'b'.repeat(64) }
-    });
+    const prepared = baselineDecisionPrepared();
+    prepared.baseline.required_assurance = 'BIOMETRIC';
+    prepared.approvalPolicy = {
+      ...prepared.approvalPolicy,
+      required_assurance: 'BIOMETRIC',
+      meaning: `${decision === 'REJECT' ? 'Reject changes and restore' : 'Approve changes against'} baseline v4`
+    };
+    f.deps.prepare = async () => prepared;
     let webauthnChecked = false;
     f.deps.webauthnDeps = {
       verifyAssertion: async ({ binding, payload }) => {
@@ -149,7 +186,7 @@ for (const decision of ['APPROVE', 'REJECT']) {
     const challenge = await api.challenge(f.request);
     assert.equal(challenge.success, true, JSON.stringify(challenge));
     assert.equal(challenge.requiredAssurance, 'BIOMETRIC');
-    assert.equal(challenge.meaning, 'Bug Done');
+    assert.equal(challenge.meaning, prepared.approvalPolicy.meaning);
 
     const result = await api.submit({
       context: { accountId: 'trusted' },
@@ -165,10 +202,151 @@ for (const decision of ['APPROVE', 'REJECT']) {
     assert.equal(webauthnChecked, true);
     assert.equal(f.rows[0].assurance_level, 'BIOMETRIC');
     assert.equal(f.rows[0].provider_id, 'webauthn');
-    assert.equal(f.rows[0].transition_id, null);
-    assert.equal(f.rows[0].meaning, 'Bug Done');
+    assert.equal(f.rows[0].transition_id, '5');
+    assert.equal(f.rows[0].meaning, prepared.approvalPolicy.meaning);
   });
 }
+
+test('drift challenge ignores injected transition and policy facts and resolves the exact baseline edge', async () => {
+  const f = fixture();
+  f.request.payload.transitionId = '999';
+  f.request.payload.toStatusId = '999';
+  f.request.payload.requiredRole = 'attacker';
+  f.request.payload.requiredAssurance = 'BIOMETRIC';
+  f.deps.prepare = async () => baselineDecisionPrepared();
+  const requestedTransitions = [];
+  f.deps.transition = async (_issue, payload) => {
+    requestedTransitions.push({ ...payload });
+    if (String(payload.transitionId) !== '5') return { id: String(payload.transitionId), toStatusId: '999' };
+    return { id: '5', toStatusId: '2' };
+  };
+
+  const challenge = await createApprovalUsecases(f.deps).challenge(f.request);
+
+  assert.equal(challenge.success, true, JSON.stringify(challenge));
+  assert.equal(challenge.meaning, 'Approve changes against baseline v4');
+  assert.equal(challenge.requiredAssurance, 'ESIGNATURE');
+  assert.deepEqual(requestedTransitions, [{ transitionId: '5' }]);
+  assert.equal(f.challenges.get(challenge.challengeId).transition_id, '5');
+});
+
+test('a refused Jira transition invalidates a baseline-owned approval and cannot be retried', async () => {
+  const f = fixture();
+  delete f.request.payload.transitionId;
+  delete f.request.payload.toStatusId;
+  f.request.payload.preauthorize = false;
+  f.deps.prepare = async () => baselineDecisionPrepared();
+  f.deps.transition = async (_issue, payload) => {
+    assert.equal(payload.transitionId, '5');
+    return { id: '5', toStatusId: '2' };
+  };
+  f.deps.apply = async () => ({ success: true, capture: { captured: true }, baselinePublished: true });
+  let transitionAttempts = 0;
+  f.deps.performTransition = async () => {
+    transitionAttempts += 1;
+    return { transitioned: false, transitionError: 'Jira refused the transition.' };
+  };
+
+  const result = await createApprovalUsecases(f.deps).submit(f.request);
+
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(result.baselinePublished, true);
+  assert.equal(result.transitioned, false);
+  assert.equal(result.retryableApprovalId, null);
+  assert.equal(f.rows[0].state, 'VOID');
+  const retry = await createApprovalUsecases(f.deps).retryTransition({
+    context: f.request.context,
+    payload: { issueKey: 'T-10', approvalId: result.approvalId }
+  });
+  assert.equal(retry.success, false);
+  assert.equal(retry.reason, 'NO_DECISION');
+  assert.equal(transitionAttempts, 1);
+});
+
+test('a newer active baseline invalidates the earlier drift challenge before proof is spent', async () => {
+  const f = fixture();
+  delete f.request.payload.transitionId;
+  let prepared = baselineDecisionPrepared();
+  f.deps.prepare = async () => prepared;
+  const api = createApprovalUsecases(f.deps);
+  const challenge = await api.challenge(f.request);
+  prepared = baselineDecisionPrepared({ baselineVersion: 5 });
+  prepared.baseline.version = 5;
+  prepared.baseline.baseline_id = Buffer.alloc(16, 10);
+  prepared.approvalPolicy = { ...prepared.approvalPolicy,
+    meaning: 'Approve changes against baseline v5' };
+  let proofSpent = false;
+  f.deps.totpDeps.consume = async () => { proofSpent = true; return true; };
+
+  const result = await api.submit({ context: f.request.context, payload: {
+    issueKey: 'T-10', challengeId: challenge.challengeId, confirmed: true, code: '007787'
+  } });
+
+  assert.equal(result.success, false);
+  assert.equal(result.reason, 'CONTENT_CHANGED');
+  assert.equal(proofSpent, false);
+  assert.equal(f.rows.length, 0);
+});
+
+test('role membership is rechecked at drift submit against the role frozen in the baseline', async () => {
+  const f = fixture();
+  delete f.request.payload.transitionId;
+  f.deps.prepare = async () => baselineDecisionPrepared();
+  const api = createApprovalUsecases(f.deps);
+  const challenge = await api.challenge(f.request);
+  const checkedRoles = [];
+  f.deps.eligible = async ({ role }) => { checkedRoles.push(role); return false; };
+
+  const result = await api.submit({ context: f.request.context, payload: {
+    issueKey: 'T-10', challengeId: challenge.challengeId, confirmed: true, code: '007787'
+  } });
+
+  assert.equal(result.success, false);
+  assert.equal(result.reason, 'NOT_ELIGIBLE');
+  assert.deepEqual(checkedRoles, ['baseline-reviewer']);
+  assert.equal(f.rows.length, 0);
+});
+
+test('baseline publication and capability audit finish before the exact Jira transition is called', async () => {
+  const f = fixture();
+  delete f.request.payload.transitionId;
+  f.request.payload.preauthorize = false;
+  f.deps.prepare = async () => baselineDecisionPrepared();
+  const order = [];
+  f.deps.record = async row => { order.push('record'); f.rows.push(row); };
+  f.deps.audit = async event => { if (event.eventType === 'APPROVAL_RECORDED') order.push('audit'); };
+  f.deps.apply = async () => { order.push('publish'); return {
+    success: true, capture: { captured: true }, baselinePublished: true
+  }; };
+  f.deps.activate = async ({ approvalId, state }) => {
+    order.push('capability');
+    f.rows.find(row => row.approval_id.equals(approvalId)).state = state;
+    return true;
+  };
+  f.deps.performTransition = async () => { order.push('jira'); return { transitioned: true }; };
+
+  const result = await createApprovalUsecases(f.deps).submit(f.request);
+
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(result.baselinePublished, true);
+  assert.deepEqual(order, ['record', 'audit', 'publish', 'capability', 'jira']);
+});
+
+test('failed N+1 publication never calls Jira and leaves the approval unusable', async () => {
+  const f = fixture();
+  delete f.request.payload.transitionId;
+  f.request.payload.preauthorize = false;
+  f.deps.prepare = async () => baselineDecisionPrepared();
+  f.deps.apply = async () => ({ success: false, capture: { captured: false } });
+  let jiraCalled = false;
+  f.deps.performTransition = async () => { jiraCalled = true; return { transitioned: true }; };
+
+  const result = await createApprovalUsecases(f.deps).submit(f.request);
+
+  assert.equal(result.success, false);
+  assert.equal(jiraCalled, false);
+  assert.equal(f.rows[0].state, 'VOID');
+});
 test('challenge submit rejects content that changed after the challenge was created', async () => {
   const f = fixture(), api = createApprovalUsecases(f.deps);
   const challenge = await api.challenge(f.request);
@@ -207,12 +385,7 @@ test('lost challenge consumption race cannot mint an approval', async () => {
 });
 test('challenge submit accepts an expired operation lock after challenge preparation allowed it', async () => {
   const f = fixture(), api = createApprovalUsecases(f.deps);
-  f.deps.prepare = async () => ({
-    contentHash: 'a'.repeat(64),
-    evidenceHash: 'e'.repeat(64),
-    baselineVersion: 1,
-    driftCount: 0,
-    baseline: { baseline_id: Buffer.alloc(16, 1), content_hash: 'b'.repeat(64) },
+  f.deps.prepare = async () => baselineDecisionPrepared({
     review: { state: 'DECIDING', last_checked_at: f.deps.now() - 61000 }
   });
 

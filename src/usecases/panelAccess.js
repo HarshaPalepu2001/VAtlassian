@@ -31,7 +31,8 @@ export async function readableIssue({ payload = {}, context }) {
   if (!issue.id || !issue.fields?.project?.id || !issue.fields?.issuetype?.id) fail('ISSUE_UNREADABLE');
   return issue;
 }
-export async function snapshot({ issue, actor, requireAuthority = false, expectedEvidenceHash, includeChangelog = true, transition = null }) {
+export async function snapshot({ issue, actor, requireAuthority = false, expectedEvidenceHash, includeChangelog = true,
+  transition = null, authorityPolicy = null }) {
   if (!actor?.accountId) fail('AUTHENTICATION_REQUIRED');
   const issueId = Number(issue.id);
   const projectId = Number(issue.fields.project.id);
@@ -44,12 +45,13 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
   ]);
   const editmeta = editResponse.ok ? (await editResponse.json()).fields ?? {} : {};
   const { fields } = scopeFromIssue({ declared, issueFields: issue.fields, editmetaFields: editmeta });
-  let gate = transition ? await gatedTransition({ projectId, issueTypeId, fromStatusId,
-    toStatusId: String(transition.toStatusId), transitionId: transition.id }) : null;
-  if (!transition && baseline) gate = await gatedTransition({ projectId, issueTypeId,
+  let gate = authorityPolicy;
+  if (!gate && transition) gate = await gatedTransition({ projectId, issueTypeId, fromStatusId,
+    toStatusId: String(transition.toStatusId), transitionId: transition.id });
+  if (!gate && !transition && baseline) gate = await gatedTransition({ projectId, issueTypeId,
     fromStatusId: baseline.from_status_id, toStatusId: baseline.to_status_id, transitionId: baseline.transition_id });
   // Drift outlives review status. Resolve authority from configured scope, never assignment.
-  if (!transition && !baseline) gate = edge.gated ? edge : null;
+  if (!gate && !transition && !baseline) gate = edge.gated ? edge : null;
   const eligible = !!gate && await isEligible({ accountId: actor.accountId, projectId, issueTypeId, role: gate.required_role });
   if (requireAuthority && (!config.enabled || !eligible)) fail(config.enabled ? 'NOT_ELIGIBLE' : 'DISABLED');
   if (requireAuthority && !fields.length) fail('NO_TRACKED_FIELDS');

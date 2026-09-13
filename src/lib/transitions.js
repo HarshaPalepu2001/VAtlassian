@@ -61,6 +61,15 @@ export async function availableTransitions(api, issueKey, { asApp = false } = {}
   }));
 }
 
+/** Resolve one currently available Jira transition by its immutable id. */
+export function exactAvailableTransition(transitions, { transitionId, toStatusId = null }) {
+  if (transitionId == null) return null;
+  const matches = (transitions ?? []).filter(transition => transition.isAvailable !== false
+    && String(transition.id) === String(transitionId)
+    && (toStatusId == null || String(transition.toStatusId) === String(toStatusId)));
+  return matches.length === 1 ? matches[0] : null;
+}
+
 /**
  * Perform the transition.
  *

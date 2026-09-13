@@ -28,6 +28,12 @@ function sortDesc(rows, keys) {
 
 function fakeQuery(sql, params) {
   const db = globalThis.vaTransitionPolicy;
+  if (sql.includes("UPDATE va_approval SET state = 'VOID'")) {
+    const [approvalId] = params;
+    const approval = db.approvals.find(row => row.approval_id === approvalId && row.state === 'PENDING');
+    if (approval) approval.state = 'VOID';
+    return { result: true, data: { affectedRows: approval ? 1 : 0 } };
+  }
   if (sql.includes('FROM va_controlled_transition')) {
     const [projectId, issueTypeId, fromStatusId, toStatusId, transitionId, state] = params;
     const matches = sortDesc(db.controlledTransitions.filter((r) =>
@@ -41,6 +47,14 @@ function fakeQuery(sql, params) {
     return { result: true, data: matches.slice(0, 1) };
   }
   if (sql.includes('FROM va_approval')) {
+    if (sql.includes('baseline_id IS NULL')) {
+      const [issueId, accountId, fromStatusId, now] = params;
+      const matches = db.approvals.filter(row => String(row.issue_id) === String(issueId)
+        && row.state === 'PENDING' && row.decision === 'APPROVE' && row.baseline_id == null
+        && row.account_id === accountId && row.from_status_id === fromStatusId
+        && Number(row.expires_at) > Number(now));
+      return { result: true, data: matches.slice(0, 1) };
+    }
     const [issueId, fromStatusId, toStatusId, transitionId, now, approvalIdB64] = params;
     const matches = db.approvals
       .filter((r) =>
@@ -81,7 +95,8 @@ const hooks = registerHooks({
   }
 });
 const { gatedTransition } = await import('../src/db/configStore.js');
-const { pendingApprovalFor } = await import('../src/db/approvalStore.js');
+const { pendingApprovalFor, pendingApprovalForActor, invalidateApproval } = await import('../src/db/approvalStore.js');
+const { exactAvailableTransition } = await import('../src/lib/transitions.js');
 hooks.deregister();
 
 function row(overrides = {}) {
@@ -110,6 +125,15 @@ test('two transitions to the same status resolve by transition id', async () => 
 
   assert.equal(exact.transition_id, '102');
   assert.equal(exact.required_assurance, 'BIOMETRIC');
+});
+
+test('live Jira transition selection keeps sibling transitions distinct by exact id', () => {
+  const transitions = [
+    { id: '101', toStatusId: '5', isAvailable: true },
+    { id: '102', toStatusId: '5', isAvailable: true }
+  ];
+  assert.deepEqual(exactAvailableTransition(transitions, { transitionId: '102', toStatusId: '5' }), transitions[1]);
+  assert.equal(exactAvailableTransition(transitions, { transitionId: '999', toStatusId: '5' }), null);
 });
 
 test('the sibling transition id resolves its own, different policy', async () => {
@@ -170,4 +194,24 @@ test('pendingApprovalFor never queries and returns null without an exact transit
 
   const result = await pendingApprovalFor({ issueId: 10, fromStatusId: '3', toStatusId: '5', transitionId: null, now: 0 });
   assert.equal(result, null);
+});
+
+test('panel retry lookup excludes approvals bound to an existing baseline', async () => {
+  const common = { issue_id: 10, issue_key: 'T-10', project_id: 1, issue_type_id: '10001',
+    account_id: 'actor', decision: 'APPROVE', state: 'PENDING', from_status_id: '3',
+    to_status_id: '5', transition_id: '101', expires_at: 999999999999, decided_at: 100 };
+  globalThis.vaTransitionPolicy = { controlledTransitions: [], approvals: [
+    { ...common, approval_id: Buffer.alloc(16, 1).toString('base64'), baseline_id: Buffer.alloc(16, 2).toString('base64') }
+  ], query: fakeQuery };
+  assert.equal(await pendingApprovalForActor({ issueId: 10, accountId: 'actor', fromStatusId: '3', now: 0 }), null);
+});
+
+test('Jira refusal invalidates only a still-pending approval capability', async () => {
+  const approvalId = Buffer.alloc(16, 3);
+  globalThis.vaTransitionPolicy = { controlledTransitions: [], approvals: [
+    { approval_id: approvalId.toString('base64'), state: 'PENDING' }
+  ], query: fakeQuery };
+  assert.equal(await invalidateApproval({ approvalId }), true);
+  assert.equal(globalThis.vaTransitionPolicy.approvals[0].state, 'VOID');
+  assert.equal(await invalidateApproval({ approvalId }), false);
 });
