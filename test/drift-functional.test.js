@@ -14,7 +14,9 @@ const modules = {
   'db/driftStore.js': ['driftForIssue','markDecided'],
   'db/restoreStore.js': ['startRestore','finishRestore','declareWrite'],
   'db/store.js': ['tryAppend','newId','throwing','isDuplicateKey'],
-  'lib/reviewer.js': ['isEligible','assignReviewer']
+  'lib/reviewer.js': ['isEligible','assignReviewer'],
+  'db/baselineTreeStore.js': ['readBaselineTree','beginTreeBaseline','writeTreeCapture','verifyTreeCapture','publishTreeBaseline','activeRootsForNode'],
+  'db/treeDriftStore.js': ['replaceTreeDrift']
 };
 const hooks = registerHooks({
   resolve(specifier, context, next) {
@@ -37,7 +39,7 @@ const hooks = registerHooks({
 const { createApprovalUsecases } = await import('../src/usecases/approval.js');
 const { prepareApproval, applyApproval } = await import('../src/usecases/drift.js');
 const { writeCapturedBaseline } = await import('../src/lib/capture.js');
-hooks.deregister();
+
 const clone = value => structuredClone(value);
 const now = () => 1700000000000;
 const doc = text => ({ type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text, marks: [{ type: 'strong' }] }] }] });
@@ -52,7 +54,7 @@ function fixture() {
   const values = { summary:'v1 approved', description:doc('original rich text'), labels:[], assignee:null,
     customfield_cascade:{id:'1',child:{id:'2'}},
     ...Object.fromEntries(Array.from({length:100},(_,i)=>[`customfield_${i}`,i])) };
-  const issue = { id:'10',key:'T-10',fields:{...clone(values),project:{id:'1'},issuetype:{id:'1'},status:{id:'1'}} };
+  const issue = { id:'10',key:'T-10',fields:{...clone(values),parent:null,project:{id:'1'},issuetype:{id:'1'},status:{id:'1'}} };
   const projected = project(values, fields);
   const baseline = { baseline_id:Buffer.alloc(16,1), issue_id:10, project_id:1, issue_type_id:'1', version:1,
     state:'ACTIVE',content_hash:projected.contentHash,field_digests:JSON.stringify(projected.digests),
@@ -61,7 +63,7 @@ function fixture() {
     issue, fields, values, baselines:[baseline], saved:new Map([[1,clone(values)]]), rows:[], challenges:new Map(),
     review:{state:'DRIFTED',version:1,baseline_version:1,baseline_id:baseline.baseline_id,drift_count:1},
     drift:[{baseline_version:1,field_id:'summary',approval_id:null}], writes:[], audits:[], restores:[],
-    policy:{required_assurance:'ESIGNATURE',required_role:'reviewer',meaning:'Reviewed and approved',capture_baseline:true,block_on_drift:true},
+    policy:{transition_id:'5',from_status_id:'1',to_status_id:'2',required_assurance:'ESIGNATURE',required_role:'reviewer',meaning:'Reviewed and approved',capture_baseline:true,block_on_drift:true},
     controlledFields:async()=>fields, projectConfig:async()=>({enabled:true,restore:{}}),
     gateActiveOutOf:async()=>({gated:true,...f.policy}), gatedTransition:async()=>f.policy, listGatedTransitions:async()=>[f.policy],
     isEligible:async()=>true, assignReviewer:async()=>({accountId:'trusted',displayName:'Reviewer'}),
@@ -90,10 +92,45 @@ function fixture() {
     startRestore:async(a)=>{f.restores.push({...a});return Buffer.alloc(16,7);},
     finishRestore:async(a)=>Object.assign(f.restores.at(-1),a),declareWrite:async()=>{},
     tryAppend:async(a)=>f.audits.push(a),
+    readBaselineTree:async baselineId=>f.baselines.find(b=>b.baseline_id.equals(baselineId))?.tree ?? null,
+    replaceTreeDrift:async()=>{},
+    beginTreeBaseline:async({baseline,resume})=>{
+      if(resume)return {baselineId:resume.baseline_id,version:resume.version};
+      const baselineId=Buffer.alloc(16,10+baseline.version);
+      f.baselines.push({...baseline,baseline_id:baselineId,state:'CAPTURING'});
+      return {baselineId,version:baseline.version};
+    },
+    writeTreeCapture:async({baselineId,treeHash,nodes,values})=>{
+      if(f.captureFails)throw new Error('storage unavailable');
+      const row=f.baselines.find(b=>b.baseline_id.equals(baselineId));
+      const flatValues = {};
+      for (const nodeVals of Object.values(values)) Object.assign(flatValues, nodeVals);
+      f.saved.set(row.version,clone(flatValues));
+      Object.assign(row,{
+        tree_hash:treeHash,
+        tree:{
+          nodes:nodes.map(node=>({
+            ...node,
+            parentLogicalId:node.parentLogicalNodeId,
+            digests:JSON.parse(node.fieldDigests)
+          })),
+          values:clone(values)
+        }
+      });
+      return {baselineId,valueBytes:0};
+    },
+    verifyTreeCapture:async()=>true,
+    publishTreeBaseline:async({baselineId,version})=>{
+      for(const b of f.baselines){
+        if(b.baseline_id.equals(baselineId))b.state='ACTIVE';
+        else if(b.version<version&&b.state==='ACTIVE')b.state='SUPERSEDED';
+      }
+    },
     request:async(identity,url,options={})=>{
       const response=body=>({ok:true,status:200,json:async()=>clone(body)});
       if(String(url).includes('/editmeta'))return response({fields:editmeta});
       if(String(url).includes('/changelog'))return response({values:[],total:0,isLast:true});
+      if(String(url).includes('/search/jql'))return response({issues:[],total:0,isLast:true});
       if(options.method==='PUT'){
         const writes=JSON.parse(options.body).fields;f.writes.push(writes);
         for(const [id,value] of Object.entries(writes))if(id!==f.dropWrite)f.issue.fields[id]=clone(value);
@@ -105,8 +142,16 @@ function fixture() {
   globalThis.vaFlow=f;
   const describe=()=>({...f.issue,issueId:10,issueKey:'T-10',projectId:1,issueTypeId:'1',statusId:f.issue.fields.status.id});
   const gate=createGate({now,log:()=>{},audit:async()=>{},eligible:async()=>true,
-    load:async()=>({issueId:10,projectId:1,issueTypeId:'1',ct:f.policy,item:f.review,
-      contentHash:project(f.issue.fields,fields).contentHash,driftCount:f.drift.filter(d=>!d.approval_id).length}),
+    load:async()=>{
+      let ch = project(f.issue.fields,fields).contentHash;
+      if (f.policy.capture_baseline) {
+        const { planTreeCapture } = await import('../src/lib/tree/capturePlan.js');
+        const treePlan = planTreeCapture({ rootIssueId: 10, nodes: [ { id: 10, key: 'T-10', fields: clone(f.issue.fields) } ], controlledFields: fields });
+        ch = treePlan.treeHash;
+      }
+      return {issueId:10,projectId:1,issueTypeId:'1',ct:f.policy,item:f.review,
+        contentHash: ch, driftCount:f.drift.filter(d=>!d.approval_id).length};
+    },
     pending:async()=>f.rows.find(r=>r.state==='PENDING'),
     consume:async({approvalId})=>{const r=f.rows.find(r=>r.approval_id.equals(approvalId));if(r.state!=='PENDING')return {consumed:false};r.state='CONSUMED';return {consumed:true};},voidOthers:async()=>{}});
   f.gate=()=>gate({issue:{key:'T-10'},transition:{id:'5',from:{id:'1'},to:{id:'2'}}});
@@ -131,6 +176,26 @@ function fixture() {
   f.issue.fields.summary='reviewed drift';
   return f;
 }
+
+test('aggregate tree evidence accepts the verified hash and rejects a stale hash', async () => {
+  const f = fixture();
+  const issue = { ...f.issue, id: '10' };
+  const actor = { accountId: 'trusted' };
+  const transition = { id: '5', toStatusId: '2' };
+  const prepared = await prepareApproval({ issue, actor, decision: 'APPROVE', transition });
+
+  const verified = await prepareApproval({
+    issue, actor, decision: 'APPROVE', transition,
+    expectedEvidenceHash: prepared.treeHash
+  });
+  assert.equal(verified.treeHash, prepared.treeHash);
+
+  f.issue.fields.summary = 'changed after aggregate review';
+  await assert.rejects(() => prepareApproval({
+    issue, actor, decision: 'APPROVE', transition,
+    expectedEvidenceHash: prepared.treeHash
+  }), error => error.reason === 'STALE_EVIDENCE');
+});
 
 for(const surface of ['panel','my approvals','Jira transition']){
   test(`${surface}: signed drift creates v2, clears review, and the real validator allows the transition`,async()=>{
@@ -181,7 +246,10 @@ test('an edit after acquiring the decision lock cannot become the new baseline',
 });
 test('failed baseline storage cannot activate a transition capability',async()=>{
   const f=fixture();f.captureFails=true;const result=await f.sign();
-  assert.equal(result.success,false);assert.equal(f.baselines.length,1);assert.equal(f.rows[0].state,'VOID');assert.equal((await f.gate()).result,false);
+  assert.equal(result.success,false);
+  assert.equal(f.baselines.filter(b=>b.state==='ACTIVE').length,1);
+  assert.equal(f.baselines.at(-1).state,'CAPTURING');
+  assert.equal(f.rows[0].state,'VOID');assert.equal((await f.gate()).result,false);
 });
 test('a delayed duplicate capture cannot erase new drift after v2',async()=>{
   const f=fixture();await f.sign();const row=f.rows[0];
@@ -210,6 +278,17 @@ test('standalone drift approval retains the configured baseline policy for the n
   f.issue.fields.summary='later drift';f.review.state='DRIFTED';
   const rejected=await f.sign({decision:'REJECT',transitionId:undefined});
   assert.equal(rejected.restore.state,'COMPLETE');assert.equal(f.issue.fields.summary,'reviewed drift');
+});
+test('approval preparation preserves a pending transition against its unchanged tree baseline',async()=>{
+  const f=fixture();await f.sign({preauthorize:true});
+  const active=f.baselines.at(-1);
+  const prepared=await prepareApproval({
+    issue:{...f.issue,id:'10'},actor:{accountId:'trusted'},decision:'APPROVE',
+    transition:{id:'5',toStatusId:'2'},expectedEvidenceHash:active.tree_hash
+  });
+  assert.equal(prepared.treeHash,active.tree_hash);
+  assert.equal(f.rows[0].state,'PENDING');
+  assert.equal(f.baselines.length,2);
 });
 test('a pending signed transition can be retried without minting another approval or baseline',async()=>{
   const f=fixture();const approved=await f.sign({preauthorize:true});

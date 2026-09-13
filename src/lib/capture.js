@@ -10,6 +10,12 @@ import { tryAppend } from '../db/store.js';
 import { EVENT } from './ledger.js';
 import { scopeFromIssue } from './trackedFields.js';
 import { meetsAssurance } from './approval/levels.js';
+import {
+  beginTreeBaseline,
+  publishTreeBaseline,
+  verifyTreeCapture,
+  writeTreeCapture
+} from '../db/baselineTreeStore.js';
 
 /** Trigger capture consumes an existing approval; it never manufactures one. */
 export async function captureBaseline(args) {
@@ -143,67 +149,158 @@ export function approvalFrom(record, requiredAssurance = 'NATIVE_TRANSITION') {
 export async function writeCapturedTreeBaseline({
   rootIssue, policy, approval, controlledFields, transitionAt, deps = {}
 }) {
-  const { readStableTree, planTreeCapture, writeTreeCapture, publishTreeBaseline, verifyTree, tryAppend } = deps;
-  
+  const services = {
+    baselineForApproval,
+    currentVersion,
+    beginTreeBaseline,
+    writeTreeCapture,
+    verifyTreeCapture,
+    publishTreeBaseline,
+    upsertBaselined,
+    tryAppend,
+    ...deps
+  };
+
+  if (!Array.isArray(controlledFields) || controlledFields.length === 0) {
+    return { captured: false, reason: 'NO_TRACKED_FIELDS' };
+  }
   const hasUnretained = controlledFields.some(f => f.store_values === false || f.store_values === 0);
   if (hasUnretained) {
     return { captured: false, reason: 'BASELINE_VALUES_REQUIRED' };
   }
-  
-  const stable = await readStableTree({
-    readTree: deps.readTree, rootIssueKey: rootIssue.key, fieldIds: controlledFields.map(field => field.field_id)
+  if (!approval?.approvalId || !approval.accountId || !approval.displayName
+    || !approval.assuranceLevel || !approval.content_hash) {
+    return { captured: false, reason: 'NO_APPROVAL' };
+  }
+
+  const existing = await services.baselineForApproval(rootIssue.id, approval.approvalId);
+  if (existing && existing.state !== 'CAPTURING') {
+    if (!['ACTIVE', 'SUPERSEDED'].includes(existing.state)
+      || !existing.tree_hash
+      || existing.content_hash !== approval.content_hash
+      || existing.tree_hash !== existing.content_hash
+      || Number(existing.node_count) < 1
+      || Number(existing.total_field_count) < 1) {
+      return { captured: false, reason: 'CAPTURE_INCOMPLETE' };
+    }
+    return {
+      captured: true,
+      alreadyCaptured: true,
+      baselineId: existing.baseline_id,
+      version: Number(existing.version),
+      treeHash: existing.tree_hash,
+      nodeCount: Number(existing.node_count),
+      fieldCount: Number(existing.total_field_count)
+    };
+  }
+
+  const fieldIds = [...new Set([
+    ...controlledFields.map(field => field.field_id),
+    'project', 'issuetype', 'status', 'parent'
+  ])];
+  const stable = await services.readStableTree({
+    readTree: services.readTree, rootIssueKey: rootIssue.key, fieldIds
   });
-  
-  const treePlan = planTreeCapture({
+  const treePlan = services.planTreeCapture({
     rootIssueId: rootIssue.id, nodes: stable.tree.nodes, controlledFields
   });
-  
-  if (approval && treePlan.treeHash !== approval.content_hash) {
+  if (treePlan.treeHash !== approval.content_hash) {
     return { captured: false, reason: 'CONTENT_CHANGED' };
   }
-  
+
+  if (existing?.content_hash && existing.content_hash !== treePlan.treeHash) {
+    return { captured: false, reason: 'CAPTURE_INCOMPLETE' };
+  }
+
+  const version = existing?.version ?? (await services.currentVersion(rootIssue.id)) + 1;
+  const rootNode = treePlan.nodes.find(node => Number(node.originalIssueId) === Number(rootIssue.id));
+  if (!rootNode) return { captured: false, reason: 'CAPTURE_INCOMPLETE' };
+  const capturedAt = Date.now();
   const baseline = {
-    issue_id: rootIssue.id,
+    issue_id: Number(rootIssue.id),
     issue_key: rootIssue.key,
+    project_id: rootNode.projectId,
+    issue_type_id: rootNode.issueTypeId,
+    version: Number(version),
+    state: 'CAPTURING',
+    content_hash: treePlan.treeHash,
+    field_digests: '{}',
     transition_id: policy?.transition_id ?? null,
     from_status_id: policy?.from_status_id ?? null,
     to_status_id: policy?.to_status_id ?? null,
-    approved_by: approval?.accountId ?? null,
-    approved_name: approval?.displayName ?? null,
+    approved_by: approval.accountId,
+    approved_name: approval.displayName,
     transition_at: transitionAt,
-    captured_at: Date.now(),
-    assurance_level: approval?.assuranceLevel ?? null,
-    approval_id: approval?.approvalId ?? null,
+    captured_at: capturedAt,
+    assurance_level: approval.assuranceLevel,
+    approval_id: approval.approvalId,
+    fidelity: FIDELITY.EXACT,
     field_count: treePlan.totalFieldCount,
+    value_bytes: 0,
+    tree_hash: treePlan.treeHash,
+    node_count: treePlan.nodeCount,
+    edge_count: treePlan.edgeCount,
+    total_field_count: treePlan.totalFieldCount
   };
-  
-  if (verifyTree) verifyTree();
-  
-  const stored = await writeTreeCapture(baseline.approval_id, baseline.issue_id, baseline.issue_key, treePlan.treeHash, treePlan.nodes, treePlan.values, deps.executeQuery);
-  
-  await publishTreeBaseline({
-    baselineId: stored.baselineId,
-    expectedNodes: treePlan.nodeCount,
-    expectedFields: treePlan.totalFieldCount,
-    treeHash: treePlan.treeHash
+
+  const reserved = await services.beginTreeBaseline({ baseline, resume: existing });
+  const stored = await services.writeTreeCapture({
+    baselineId: reserved.baselineId,
+    treeHash: treePlan.treeHash,
+    nodes: treePlan.nodes,
+    values: treePlan.values
   });
-  
-  if (tryAppend) {
-    await tryAppend({
-      actorAccountId: approval?.accountId ?? 'system',
+  await services.verifyTreeCapture({
+    baselineId: reserved.baselineId,
+    expectedNodeCount: treePlan.nodeCount,
+    expectedFieldCount: treePlan.totalFieldCount,
+    expectedTreeHash: treePlan.treeHash
+  });
+  await services.publishTreeBaseline({
+    baselineId: reserved.baselineId,
+    issueId: Number(rootIssue.id),
+    version: Number(version)
+  });
+
+  await services.upsertBaselined({
+    issueId: Number(rootIssue.id),
+    issueKey: rootIssue.key,
+    projectId: rootNode.projectId,
+    issueTypeId: rootNode.issueTypeId,
+    summary: rootIssue.fields?.summary ?? '',
+    reviewerAccountId: approval.accountId,
+    reviewerName: approval.displayName,
+    baselineId: reserved.baselineId,
+    baselineVersion: Number(version),
+    contentHash: treePlan.treeHash,
+    fieldDigests: {},
+    lastChangelogId: null,
+    now: capturedAt
+  });
+  if (services.tryAppend) {
+    await services.tryAppend({
+      actorAccountId: approval.accountId,
       eventType: EVENT.BASELINE_CAPTURED,
-      issueId: rootIssue.id,
-      approvalId: approval?.approvalId ?? null,
+      issueId: Number(rootIssue.id),
+      approvalId: approval.approvalId,
       payload: {
         treeHash: treePlan.treeHash,
         nodeCount: treePlan.nodeCount,
         fieldCount: treePlan.totalFieldCount,
-        assuranceLevel: approval?.assuranceLevel ?? null,
+        assuranceLevel: approval.assuranceLevel,
         fromStatusId: policy?.from_status_id ?? null,
-        toStatusId: policy?.to_status_id ?? null,
+        toStatusId: policy?.to_status_id ?? null
       }
     });
   }
-  
-  return { captured: true, nodeCount: treePlan.nodeCount, fieldCount: treePlan.totalFieldCount };
+
+  return {
+    captured: true,
+    nodeCount: treePlan.nodeCount,
+    fieldCount: treePlan.totalFieldCount,
+    baselineId: reserved.baselineId,
+    version: Number(version),
+    valueBytes: stored.valueBytes,
+    treeHash: treePlan.treeHash
+  };
 }

@@ -1,11 +1,43 @@
 import * as store from './store.js';
 import { toBinaryParam, fromBinaryColumn } from '../lib/db.js';
 import { encodeValue, decodeValue } from '../lib/valuestore.js';
+import { FailClosed } from '../lib/errors.js';
 
-export async function writeTreeCapture(baselineId, rootIssueId, rootIssueKey, treeHash, nodes, values, query = store.throwing) {
+export async function beginTreeBaseline({ baseline, resume = null, query = store.throwing }) {
+  if (resume) {
+    if (resume.state !== 'CAPTURING') throw new FailClosed('CAPTURE_INCOMPLETE');
+    return { baselineId: resume.baseline_id, version: Number(resume.version) };
+  }
+
+  const baselineId = store.newId();
+  await query(
+    `INSERT INTO va_baseline (
+      baseline_id, issue_id, project_id, issue_type_id, version, state, content_hash,
+      field_digests, transition_id, from_status_id, to_status_id, approved_by, approved_name,
+      transition_at, captured_at, assurance_level, approval_id, fidelity, field_count, value_bytes,
+      tree_hash, node_count, edge_count, total_field_count
+    ) VALUES (
+      FROM_BASE64(?), ?, ?, ?, ?, 'CAPTURING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FROM_BASE64(?),
+      ?, ?, ?, ?, ?, ?, ?
+    )`,
+    [
+      toBinaryParam(baselineId), baseline.issue_id, baseline.project_id,
+      baseline.issue_type_id, baseline.version, baseline.content_hash,
+      baseline.field_digests, baseline.transition_id, baseline.from_status_id,
+      baseline.to_status_id, baseline.approved_by, baseline.approved_name,
+      baseline.transition_at, baseline.captured_at, baseline.assurance_level,
+      toBinaryParam(baseline.approval_id), baseline.fidelity, baseline.field_count, 0,
+      baseline.tree_hash, 0, 0, 0
+    ]
+  );
+  return { baselineId, version: Number(baseline.version) };
+}
+
+export async function writeTreeCapture({ baselineId, treeHash, nodes, values, query = store.throwing }) {
   const bId = toBinaryParam(baselineId);
 
   let totalFieldCount = 0;
+  let valueBytes = 0;
   const edgeCount = nodes.filter(n => n.parentLogicalNodeId != null).length;
   const nodeCount = nodes.length;
 
@@ -14,11 +46,12 @@ export async function writeTreeCapture(baselineId, rootIssueId, rootIssueKey, tr
       `INSERT INTO va_baseline_node (
         baseline_id, logical_node_id, original_issue_id, current_issue_id, issue_key,
         parent_logical_node_id, project_id, issue_type_id, content_hash, field_digests, node_order
-      ) VALUES (FROM_BASE64(?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (FROM_BASE64(?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE logical_node_id = logical_node_id`,
       [
         bId, node.logicalNodeId, node.originalIssueId, node.currentIssueId, node.issueKey,
         node.parentLogicalNodeId || null, node.projectId, node.issueTypeId, node.contentHash,
-        node.fieldDigests || '{}', node.nodeOrder || 0
+        node.fieldDigests || '{}', node.nodeOrder ?? 0
       ]
     );
 
@@ -26,10 +59,12 @@ export async function writeTreeCapture(baselineId, rootIssueId, rootIssueKey, tr
     for (const [fieldId, rawValue] of Object.entries(nodeValues)) {
       totalFieldCount++;
       const { encoding, rawBytes, chunks } = encodeValue(rawValue);
+      valueBytes += rawBytes;
       for (let seq = 0; seq < chunks.length; seq++) {
         await query(
           `INSERT INTO va_baseline_node_value (baseline_id, logical_node_id, field_id, seq, encoding, raw_bytes, chunk)
-           VALUES (FROM_BASE64(?), ?, ?, ?, ?, ?, ?)`,
+           VALUES (FROM_BASE64(?), ?, ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE chunk = chunk`,
           [bId, node.logicalNodeId, fieldId, seq, encoding, rawBytes, chunks[seq]]
         );
       }
@@ -39,10 +74,71 @@ export async function writeTreeCapture(baselineId, rootIssueId, rootIssueKey, tr
   // Update va_baseline
   await query(
     `UPDATE va_baseline
-     SET tree_hash = ?, node_count = ?, edge_count = ?, total_field_count = ?
-     WHERE baseline_id = FROM_BASE64(?)`,
-    [treeHash, nodeCount, edgeCount, totalFieldCount, bId]
+     SET tree_hash = ?, node_count = ?, edge_count = ?, total_field_count = ?, value_bytes = ?
+     WHERE baseline_id = FROM_BASE64(?) AND state = 'CAPTURING'`,
+    [treeHash, nodeCount, edgeCount, totalFieldCount, valueBytes, bId]
   );
+  return { baselineId, valueBytes };
+}
+
+export async function verifyTreeCapture({ baselineId, expectedNodeCount, expectedFieldCount,
+  expectedTreeHash, query = store.throwing }) {
+  const rows = await query(
+    `SELECT b.state, b.tree_hash AS treeHash, b.node_count AS nodeCount,
+            b.total_field_count AS totalFieldCount,
+            COUNT(DISTINCT n.logical_node_id) AS storedNodeCount,
+            COUNT(DISTINCT CONCAT(v.logical_node_id, CHAR(0), v.field_id)) AS storedFieldCount
+     FROM va_baseline b
+     LEFT JOIN va_baseline_node n ON n.baseline_id = b.baseline_id
+     LEFT JOIN va_baseline_node_value v
+       ON v.baseline_id = n.baseline_id AND v.logical_node_id = n.logical_node_id
+     WHERE b.baseline_id = FROM_BASE64(?)
+     GROUP BY b.state, b.tree_hash, b.node_count, b.total_field_count`,
+    [toBinaryParam(baselineId)]
+  );
+  const row = rows[0];
+  if (!row || row.state !== 'CAPTURING'
+    || row.treeHash !== expectedTreeHash
+    || Number(row.nodeCount) !== Number(expectedNodeCount)
+    || Number(row.totalFieldCount) !== Number(expectedFieldCount)
+    || Number(row.storedNodeCount) !== Number(expectedNodeCount)
+    || Number(row.storedFieldCount) !== Number(expectedFieldCount)) {
+    throw new FailClosed('CAPTURE_INCOMPLETE');
+  }
+
+  const fieldRows = await query(
+    `SELECT logical_node_id AS logicalNodeId, field_id AS fieldId,
+            MIN(seq) AS minSeq, MAX(seq) AS maxSeq, COUNT(*) AS chunkCount,
+            COUNT(DISTINCT encoding) AS encodingCount,
+            COUNT(DISTINCT raw_bytes) AS rawBytesCount
+     FROM va_baseline_node_value
+     WHERE baseline_id = FROM_BASE64(?)
+     GROUP BY logical_node_id, field_id`,
+    [toBinaryParam(baselineId)]
+  );
+  const completeFields = fieldRows.length === Number(expectedFieldCount)
+    && fieldRows.every(field => Number(field.minSeq) === 0
+      && Number(field.maxSeq) + 1 === Number(field.chunkCount)
+      && Number(field.encodingCount) === 1
+      && Number(field.rawBytesCount) === 1);
+  if (!completeFields) throw new FailClosed('CAPTURE_INCOMPLETE');
+  return true;
+}
+
+export async function publishTreeBaseline({ baselineId, issueId, version, query = store.throwing }) {
+  const activated = await query(
+    `UPDATE va_baseline SET state = 'ACTIVE'
+     WHERE baseline_id = FROM_BASE64(?) AND state = 'CAPTURING'`,
+    [toBinaryParam(baselineId)]
+  );
+  if (Number(activated?.affectedRows) !== 1) throw new FailClosed('CAPTURE_INCOMPLETE');
+
+  await query(
+    `UPDATE va_baseline SET state = 'SUPERSEDED'
+     WHERE issue_id = ? AND version < ? AND state = 'ACTIVE'`,
+    [issueId, version]
+  );
+  return true;
 }
 
 export async function readBaselineTree(baselineId, query = store.throwing) {
@@ -86,7 +182,15 @@ export async function readBaselineTree(baselineId, query = store.throwing) {
     }
   }
 
-  return { nodes: dbNodes, values };
+  const nodes = dbNodes.map(node => {
+    if (node.fieldDigests == null) return node;
+    Object.defineProperties(node, {
+      parentLogicalId: { value: node.parentLogicalNodeId ?? null, enumerable: false },
+      digests: { value: JSON.parse(node.fieldDigests), enumerable: false }
+    });
+    return node;
+  });
+  return { nodes, values };
 }
 
 export async function activeRootsForNode(issueId, query = store.throwing) {

@@ -66,20 +66,35 @@ test('Acceptance: Auth Methods × Surfaces', async (t) => {
 
 test('Acceptance: Capture Baseline ON vs OFF', async (t) => {
   await t.test('7. capture_baseline: true records tree', async () => {
+    const rootNode = {
+      logicalNodeId: 'root', originalIssueId: 1, currentIssueId: 1,
+      issueKey: 'KEY-1', parentLogicalNodeId: null, projectId: 100,
+      issueTypeId: '200', contentHash: 'node-hash', fieldDigests: '{}', nodeOrder: 0
+    };
     const mockDeps = {
       readStableTree: async () => ({
-        tree: { nodes: [{ logicalNodeId: 'root', parentLogicalId: null, digests: { field_0: '123' } }] }
+        tree: { nodes: [{ id: '1', key: 'KEY-1', fields: {} }] }
       }),
-      planTreeCapture: () => ({ treeHash: 'abc', nodeCount: 1, totalFieldCount: 16 }),
-      writeTreeCapture: async () => ({ baselineId: 'base-1' }),
+      planTreeCapture: () => ({
+        treeHash: 'abc', nodeCount: 1, edgeCount: 0, totalFieldCount: 16,
+        nodes: [rootNode], values: { root: Object.fromEntries(SIXTEEN_FIELDS.map(field => [field.field_id, null])) }
+      }),
+      baselineForApproval: async () => null,
+      currentVersion: async () => 0,
+      beginTreeBaseline: async () => ({ baselineId: 'base-1', version: 1 }),
+      writeTreeCapture: async () => ({ baselineId: 'base-1', valueBytes: 0 }),
+      verifyTreeCapture: async () => true,
       publishTreeBaseline: async () => {},
-      verifyTree: () => {},
+      upsertBaselined: async () => {},
       tryAppend: async () => {}
     };
     const res = await writeCapturedTreeBaseline({
-      rootIssue: { id: '1', key: 'KEY-1' },
+      rootIssue: { id: '1', key: 'KEY-1', fields: { summary: 'Root' } },
       policy: {},
-      approval: { content_hash: 'abc' },
+      approval: {
+        approvalId: 'approval-1', accountId: 'user-1', displayName: 'Reviewer',
+        assuranceLevel: 'ESIGNATURE', content_hash: 'abc'
+      },
       controlledFields: SIXTEEN_FIELDS,
       transitionAt: Date.now(),
       deps: mockDeps
@@ -109,7 +124,7 @@ test('Acceptance: Capture Baseline ON vs OFF', async (t) => {
 
 test('Acceptance: Block on Drift ON vs OFF', async (t) => {
   await t.test('9. block_on_drift: true - drift produces steps', async () => {
-    const baselineTree = { nodes: [{ logicalNodeId: 'root', digests: {} }, { logicalNodeId: 'child', parentLogicalId: 'root', digests: { field_0: 'a' } }] };
+    const baselineTree = { nodes: [{ logicalNodeId: 'root', digests: {} }, { logicalNodeId: 'child', parentLogicalId: 'root', digests: { field_0: 'a' } }], values: { root: {}, child: { field_0: 'approved' } } };
     const currentTree = { nodes: [{ logicalNodeId: 'root', digests: {} }, { logicalNodeId: 'child', parentLogicalId: 'root', digests: { field_0: 'b' } }] };
     const diff = diffTree({ baselineTree, currentTree, controlledFields: SIXTEEN_FIELDS });
     assert.equal(diff.changes.length > 0, true);
@@ -176,65 +191,86 @@ test('Acceptance: Added/Moved/Removed Descendants', async (t) => {
   });
 });
 
-const defaultAdapters = {
-  checkPermissions: async () => true,
-  readRestoreSteps: async () => [],
-  readReplacements: async () => [],
-  claimRestoreStep: async () => {},
-  finishRestoreStep: async () => {},
-  editIssue: async () => true,
-  deleteIssue: async () => true,
-  createIssue: async () => ({ newIssueId: 'new-id', newIssueKey: 'NEW-1' }),
-  recordReplacement: async () => {},
-  moveIssue: async () => true,
-};
+function retained(nodes, overrides = {}) {
+  return Object.fromEntries(nodes.map(node => [node.logicalNodeId,
+    Object.fromEntries(SIXTEEN_FIELDS.map(field => [field.field_id, overrides[node.logicalNodeId]?.[field.field_id] ?? null]))]));
+}
+
+function defaultAdapters() {
+  const actions = [];
+  const replacements = [];
+  return {
+    checkPermissions: async () => true,
+    readRestoreActions: async () => actions,
+    readReplacements: async () => replacements,
+    claimRestoreAction: async (_restoreId, step) => {
+      const existing = actions.find(action => action.stepKey === step.stepKey);
+      if (existing?.state === 'COMPLETE') return false;
+      if (existing) existing.state = 'RUNNING';
+      else actions.push({ stepKey: step.stepKey, state: 'RUNNING' });
+      return true;
+    },
+    finishRestoreAction: async (_restoreId, stepKey, success) => {
+      actions.find(action => action.stepKey === stepKey).state = success ? 'COMPLETE' : 'FAILED';
+      return true;
+    },
+    editIssue: async () => {},
+    deleteIssue: async () => {},
+    createIssue: async () => ({ newIssueId: 'new-id', newIssueKey: 'NEW-1' }),
+    recordReplacement: async (_restoreId, logicalNodeId, oldIssueId, newIssueId) => {
+      replacements.push({ logicalNodeId, oldIssueId, newIssueId });
+    },
+    moveIssue: async () => {},
+  };
+}
 
 test('Acceptance: Restore Executions', async (t) => {
   await t.test('18. Restore without replacements (no CREATE_REPLACEMENT)', async () => {
-    const baselineTree = { nodes: [{ logicalNodeId: 'root', parentLogicalId: null, digests: { field_0: 'A' } }] };
-    const currentTree = { nodes: [{ logicalNodeId: 'root', parentLogicalId: null, digests: { field_0: 'B' } }, { logicalNodeId: 'extra', parentLogicalId: 'root', digests: {} }] };
-    const adapters = { ...defaultAdapters };
+    const nodes = [{ logicalNodeId: 'root', id: '1', key: 'KEY-1', parentLogicalId: null, digests: { field_0: 'A' } }];
+    const baselineTree = { nodes, values: retained(nodes, { root: { field_0: 'approved' } }) };
+    const currentTree = { nodes: [{ logicalNodeId: 'root', id: '1', key: 'KEY-1', parentLogicalId: null, digests: { field_0: 'B' } }, { logicalNodeId: 'extra', id: '9', key: 'KEY-9', parentLogicalId: 'root', digests: {} }] };
+    const adapters = defaultAdapters();
 
     const result = await executeTreeRestore({ restoreId: 'r1', rootIssueKey: 'KEY-1', baselineTree, currentTree, controlledFields: SIXTEEN_FIELDS, adapters });
-    assert.equal(result.state, 'COMPLETE');
+    assert.equal(result.state, 'READY_TO_VERIFY');
   });
 
   await t.test('19. Restore with replacement identities', async () => {
-    const baselineTree = { nodes: [{ logicalNodeId: 'root', parentLogicalId: null, digests: {} }, { logicalNodeId: 'child', parentLogicalId: 'root', digests: {} }] };
+    const nodes = [{ logicalNodeId: 'root', id: '1', key: 'KEY-1', parentLogicalId: null, digests: {} }, { logicalNodeId: 'child', id: '2', key: 'KEY-2', parentLogicalId: 'root', digests: {} }];
+    const baselineTree = { nodes, values: retained(nodes) };
     const currentTree = { nodes: [{ logicalNodeId: 'root', parentLogicalId: null, digests: {} }] };
-    let replacementMapping = {};
-    const adapters = {
-      ...defaultAdapters,
-      recordReplacement: async (rId, logId, oldId, newId) => { replacementMapping[logId] = newId; }
-    };
+    const adapters = defaultAdapters();
     const result = await executeTreeRestore({ restoreId: 'r2', rootIssueKey: 'KEY-1', baselineTree, currentTree, controlledFields: SIXTEEN_FIELDS, adapters });
-    assert.equal(result.state, 'COMPLETE_WITH_REPLACEMENTS');
-    assert.equal(replacementMapping['child'], 'new-id');
+    assert.equal(result.state, 'READY_TO_VERIFY');
+    assert.equal(result.replacements[0].logicalNodeId, 'child');
+    assert.equal(result.replacements[0].newIssueId, 'new-id');
   });
 
   await t.test('20. Duplicate Events (Idempotency)', async () => {
-    const baselineTree = { nodes: [{ logicalNodeId: 'root', digests: {} }, { logicalNodeId: 'child', parentLogicalId: 'root', digests: {} }] };
+    const nodes = [{ logicalNodeId: 'root', digests: {} }, { logicalNodeId: 'child', parentLogicalId: 'root', digests: {} }];
+    const baselineTree = { nodes, values: retained(nodes) };
     const currentTree = { nodes: [{ logicalNodeId: 'root', digests: {} }] };
     let mutations = 0;
     const adapters = {
-      ...defaultAdapters,
-      readRestoreSteps: async () => [{ logicalNodeId: 'child', success: true }],
+      ...defaultAdapters(),
+      readRestoreActions: async () => [{ stepKey: planTreeRestore({ baselineTree, currentTree, controlledFields: SIXTEEN_FIELDS }).steps[0].stepKey, state: 'COMPLETE' }],
       createIssue: async () => { mutations++; return { newIssueId: 'x', newIssueKey: 'y' }; },
       readReplacements: async () => [{ logicalNodeId: 'child', newIssueId: 'y' }]
     };
     const result = await executeTreeRestore({ restoreId: 'r3', rootIssueKey: 'KEY-1', baselineTree, currentTree, controlledFields: SIXTEEN_FIELDS, adapters });
-    assert.equal(result.state, 'COMPLETE_WITH_REPLACEMENTS');
+    assert.equal(result.state, 'READY_TO_VERIFY');
     assert.equal(mutations, 0);
   });
 
   await t.test('23. Failed Persistence', async () => {
-    const baselineTree = { nodes: [{ logicalNodeId: 'root', parentLogicalId: null, digests: { field_0: 'A' } }] };
+    const nodes = [{ logicalNodeId: 'root', parentLogicalId: null, digests: { field_0: 'A' } }];
+    const baselineTree = { nodes, values: retained(nodes, { root: { field_0: 'approved' } }) };
     const currentTree = { nodes: [{ logicalNodeId: 'root', parentLogicalId: null, digests: { field_0: 'B' } }] };
     let failedCalled = false;
     const adapters = {
-      ...defaultAdapters,
+      ...defaultAdapters(),
       editIssue: async () => { throw new Error('Persistence Error'); },
-      finishRestoreStep: async (rId, lId, ok, detail) => { if (!ok) failedCalled = true; }
+      finishRestoreAction: async (rId, lId, ok, detail) => { if (!ok) failedCalled = true; return true; }
     };
     const result = await executeTreeRestore({ restoreId: 'r4', rootIssueKey: 'KEY-1', baselineTree, currentTree, controlledFields: SIXTEEN_FIELDS, adapters });
     assert.equal(result.state, 'PARTIAL');
@@ -242,32 +278,34 @@ test('Acceptance: Restore Executions', async (t) => {
   });
 
   await t.test('24. Validator Denial', async () => {
-    const adapters = { ...defaultAdapters, checkPermissions: async () => false };
+    const adapters = { ...defaultAdapters(), checkPermissions: async () => false };
     const result = await executeTreeRestore({ restoreId: 'r5', rootIssueKey: 'KEY-1', baselineTree: { nodes: [] }, currentTree: { nodes: [] }, controlledFields: SIXTEEN_FIELDS, adapters });
     assert.equal(result.state, 'FAILED');
   });
 
   await t.test('25. Concurrent Approval', async () => {
-    const baselineTree = { nodes: [{ logicalNodeId: 'root', parentLogicalId: null, digests: { field_0: 'A' } }] };
+    const nodes = [{ logicalNodeId: 'root', parentLogicalId: null, digests: { field_0: 'A' } }];
+    const baselineTree = { nodes, values: retained(nodes, { root: { field_0: 'approved' } }) };
     const currentTree = { nodes: [{ logicalNodeId: 'root', parentLogicalId: null, digests: { field_0: 'B' } }] };
     const adapters = {
-      ...defaultAdapters,
-      claimRestoreStep: async () => { throw new Error('Already claimed'); },
-      editIssue: async () => true
+      ...defaultAdapters(),
+      claimRestoreAction: async () => false,
+      editIssue: async () => {}
     };
     const result = await executeTreeRestore({ restoreId: 'r6', rootIssueKey: 'KEY-1', baselineTree, currentTree, controlledFields: SIXTEEN_FIELDS, adapters });
-    assert.equal(result.state, 'COMPLETE');
+    assert.equal(result.state, 'PARTIAL');
   });
 
   await t.test('26. Partial Restore Recovery', async () => {
-    const baselineTree = { nodes: [{ logicalNodeId: 'root', parentLogicalId: null, digests: { field_0: 'A' } }] };
+    const nodes = [{ logicalNodeId: 'root', parentLogicalId: null, digests: { field_0: 'A' } }];
+    const baselineTree = { nodes, values: retained(nodes, { root: { field_0: 'approved' } }) };
     const currentTree = { nodes: [{ logicalNodeId: 'root', parentLogicalId: null, digests: { field_0: 'B' } }] };
     const adapters = {
-      ...defaultAdapters,
-      readRestoreSteps: async () => [{ logicalNodeId: 'root', success: true }]
+      ...defaultAdapters(),
+      readRestoreActions: async () => [{ stepKey: planTreeRestore({ baselineTree, currentTree, controlledFields: SIXTEEN_FIELDS }).steps[0].stepKey, state: 'COMPLETE' }]
     };
     const result = await executeTreeRestore({ restoreId: 'r7', rootIssueKey: 'KEY-1', baselineTree, currentTree, controlledFields: SIXTEEN_FIELDS, adapters });
-    assert.equal(result.state, 'COMPLETE');
+    assert.equal(result.state, 'READY_TO_VERIFY');
   });
 
   await t.test('27. Failed Final Read-Back', async () => {

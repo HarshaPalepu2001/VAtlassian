@@ -44,9 +44,10 @@ export async function activeBaseline(issueId) {
   return rows.length > 0 ? decode(rows[0]) : null;
 }
 
-export async function baselineByVersion(issueId, version) {
-  const rows = await throwing(
-    `SELECT ${BASELINE_COLUMNS} FROM va_baseline WHERE issue_id = ? AND version = ?`,
+export async function baselineByVersion(issueId, version, query = throwing) {
+  const rows = await query(
+    `SELECT ${BASELINE_COLUMNS} FROM va_baseline
+     WHERE issue_id = ? AND version = ? AND state <> 'CAPTURING'`,
     [issueId, version]
   );
   return rows.length > 0 ? decode(rows[0]) : null;
@@ -69,9 +70,10 @@ export async function baselineForApproval(issueId, approvalId) {
   return rows.length > 0 ? decode(rows[0]) : null;
 }
 
-export async function baselineHistory(issueId, limit = 20) {
-  const rows = await throwing(
+export async function baselineHistory(issueId, limit = 20, query = throwing) {
+  const rows = await query(
     `SELECT ${BASELINE_COLUMNS} FROM va_baseline WHERE issue_id = ?
+     AND state <> 'CAPTURING'
      ORDER BY version DESC LIMIT ${limitClause(limit)}`,
     [issueId]
   );

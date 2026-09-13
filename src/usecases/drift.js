@@ -34,7 +34,24 @@ export async function prepareApproval({ issue, actor, decision, expectedEvidence
     if (!permission.allow && !(allowBusy && permission.reason === 'ALREADY_DECIDING')) fail(permission.reason);
     const plan = decision === 'REJECT' ? planRestore({ diff: prepared.diff, baselineValues: prepared.baselineValues,
       controlledFields: prepared.fields, editmeta: prepared.restoreEditmeta ?? prepared.editmeta }) : null;
-    const result = decide({ decision, diff: prepared.diff, plan, evidenceHash: expectedEvidenceHash });
+    // Tree approvals use aggregate evidence. Present that same hash domain to
+    // the pure decision rule; the legacy per-issue diff remains authoritative
+    // for rejection until recursive restoration supplies its own plan.
+    const decisionDiff = decision === 'APPROVE' && prepared.treeHash
+      ? {
+          changedFieldCount: prepared.treeDiff?.changes?.length ?? prepared.diff?.changedFieldCount ?? 0,
+          evidenceHash: prepared.treeHash
+        }
+      : prepared.diff;
+    const result = decide({
+      decision,
+      diff: decisionDiff,
+      plan,
+      // snapshot() has already checked the aggregate tree hash. A rejection
+      // still uses the legacy diff/restore plan until Task 2 replaces it, so
+      // comparing that different evidence domain here would reject valid work.
+      evidenceHash: prepared.treeHash && decision !== 'APPROVE' ? null : expectedEvidenceHash
+    });
     if (!result.allow) fail(result.reason);
     prepared.plan = plan;
   } else if (decision === 'REJECT') fail('NO_BASELINE');
