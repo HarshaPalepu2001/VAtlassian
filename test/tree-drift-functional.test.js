@@ -27,7 +27,11 @@ const modules = {
   'db/itemStateStore.js': ['getReview', 'applyObservation', 'touch', 'refreshHeader', 'dueTreeRoots', 'recoverStaleLocks'],
   'db/restoreStore.js': ['suppressedFields'],
   'db/approvalStore.js': ['voidOthers', 'expireStale'],
-  'db/store.js': ['tryAppend'],
+  // newId/throwing: never called on this suite's paths (the aggregate tree
+  // collector never recalls), but db/incidentStore.js imports both at module
+  // scope, and collect.js now reaches it transitively through
+  // lib/restore/recall.js — see recordRecallFinding there.
+  'db/store.js': ['tryAppend', 'newId', 'throwing'],
   'db/observationStore.js': ['recordObservation'],
   'db/baselineTreeStore.js': ['activeRootsForNode', 'readBaselineTree'],
   'db/treeDriftStore.js': ['replaceTreeDrift']

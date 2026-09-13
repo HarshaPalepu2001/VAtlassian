@@ -1,14 +1,14 @@
-import { recallToReview } from './restore/recall.js';
+import { recallToReview, recordRecallFailure } from './restore/recall.js';
 import api, { route } from '@forge/api';
 import { observe, OUTCOME, REVIEW_STATE } from './interception.js';
 import { fetchChangelog, lastTouchByField, highestChangelogId, SOURCE } from './changelog.js';
 import { classify, maxMateriality, MATERIALITY, shouldQueue } from './materiality.js';
 import { summarise } from './valuestore.js';
 import { normaliseField } from './content.js';
-import { controlledFields, projectConfig, reviewStatusIds, recallTargetStatus } from '../db/configStore.js';
+import { controlledFields, projectConfig, reviewStatusIds } from '../db/configStore.js';
 import { scopeFromIssue } from './trackedFields.js';
-import { availableTransitions, applyTransition } from './transitions.js';
-import { recallPlan, RECALL } from './recall.js';
+import { baselinePolicy } from './baselinePolicy.js';
+import { FailClosed } from './errors.js';
 import { activeBaseline, readAllValues } from '../db/baselineStore.js';
 import { recordDrift, driftSummary, existingChangelogKeys } from '../db/driftStore.js';
 import { getReview, applyObservation, touch, refreshHeader } from '../db/itemStateStore.js';
@@ -197,7 +197,7 @@ async function run({ issueId, issueKey, detectedVia, actorAccountId, eventId, ev
         issueId, issueKey: key, projectId, issueTypeId,
         review, baseline, fields, config, result, detectedVia, actorAccountId, now,
         issueFields: issue.fields,
-        currentStatusId, reviewStatuses
+        currentStatusId
       });
 
     default:
@@ -210,7 +210,7 @@ async function run({ issueId, issueKey, detectedVia, actorAccountId, eventId, ev
  */
 async function recordAll({
   issueId, issueKey, projectId, issueTypeId, review, baseline, fields, config, result,
-  detectedVia, actorAccountId, now, issueFields, currentStatusId, reviewStatuses
+  detectedVia, actorAccountId, now, issueFields, currentStatusId
 }) {
   const changed = result.changedFields ?? [];
   const byId = new Map(fields.map((f) => [f.field_id, f]));
@@ -345,15 +345,39 @@ async function recordAll({
   // Everything here is best-effort by design. A recall that cannot happen must
   // not turn a successfully recorded drift into a failure: the drift row is the
   // evidence, and it is already safe.
+  //
+  // THE TARGET IS THE LATEST ACTIVE BASELINE'S OWN REVIEW STATUS, and nothing
+  // else — baselinePolicy() is the sole authority (lib/baselinePolicy.js), the
+  // same rule capture.js already enforces for publishing a baseline. A baseline
+  // captured before provenance was required has no role/assurance/edge of
+  // record, so there is no review status this app can vouch for; recall must
+  // fail closed rather than guess one from today's configuration.
   let recall = null;
   if (queueable) {
-    recall = await recallToReview({
-      issueId, issueKey, projectId, issueTypeId,
-      currentStatusId, reviewStatuses,
-      driftCount: summary.total,
-      baselineVersion: review.baseline_version,
-      now
-    });
+    let policy = null;
+    try {
+      policy = baselinePolicy(baseline);
+    } catch (e) {
+      if (!(e instanceof FailClosed) || e.reason !== 'BASELINE_POLICY_INCOMPLETE') throw e;
+      await recordRecallFailure({
+        issueId, issueKey, projectId, issueTypeId,
+        baselineId: baselineIdHex(review.baseline_id), baselineVersion: review.baseline_version,
+        failureType: 'BASELINE_POLICY_INCOMPLETE', currentStatusId, targetStatusId: null,
+        driftCount: summary.total, now
+      });
+      recall = { action: 'BASELINE_POLICY_INCOMPLETE' };
+    }
+    if (policy) {
+      recall = await recallToReview({
+        issueId, issueKey, projectId, issueTypeId,
+        currentStatusId,
+        baselineId: baselineIdHex(policy.baselineId),
+        baselineVersion: policy.version,
+        reviewStatusId: policy.reviewStatusId,
+        driftCount: summary.total,
+        now
+      });
+    }
   }
 
   if (inserted > 0) {
@@ -441,6 +465,13 @@ function safeParse(json) {
   if (json == null) return null;
   if (typeof json === 'object') return json;
   try { return JSON.parse(json); } catch { return null; }
+}
+
+/** baseline_id decodes off the row as a Buffer (see db/baselineStore.js); the
+ * recall path passes it around as the same hex string every other usecase
+ * puts in a ledger payload or a dedupe key. */
+function baselineIdHex(baselineId) {
+  return Buffer.isBuffer(baselineId) ? baselineId.toString('hex') : baselineId;
 }
 
 // Aggregate (whole-tree) drift collection lives in ./treeCollect.js, and is

@@ -254,6 +254,13 @@ export const EVENT = {
   DRIFT_RECONCILED: 'DRIFT_RECONCILED',
   DRIFT_SELF_REVERTED: 'DRIFT_SELF_REVERTED',
   DRIFT_RECALLED: 'DRIFT_RECALLED',
+  // 2026-09-13: `payload.reason` is one of NOT_GATED, NO_ROUTE, AMBIGUOUS_ROUTE,
+  // SCREEN_BLOCKED, JIRA_REFUSED, or BASELINE_POLICY_INCOMPLETE — see
+  // lib/recall.js's RECALL constants and lib/restore/recall.js's
+  // recordRecallFailure(). The same failure is also raised as a deduplicated
+  // administrator finding (db/incidentStore.js's recordRecallFinding); this
+  // ledger entry is this work item's own permanent record that it happened,
+  // the finding is the live, actionable one an admin works from.
   DRIFT_RECALL_FAILED: 'DRIFT_RECALL_FAILED',
   DECISION_RECORDED: 'DECISION_RECORDED',
   DECISION_CONSUMED: 'DECISION_CONSUMED',

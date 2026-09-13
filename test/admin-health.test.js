@@ -52,6 +52,37 @@ test('a fully configured controlled transition does not surface a missing-transi
   assert.equal(result.findings.some((f) => f.type === 'MISSING_TRANSITION_ID'), false);
 });
 
+test('a drift recall an administrator has to fix surfaces through the same admin health list', async () => {
+  // db/incidentStore.js's recordRecallFinding() writes RECALL_* rows into
+  // va_gate_finding using the same dedupe-key/last-seen shape gatecheck.js's
+  // own findings use, specifically so a stuck recall shows up here without
+  // adminAlerts.js needing to know anything about recall at all.
+  const deps = fixture({
+    query: (sql) => {
+      if (sql.includes('FROM va_controlled_transition')) return { result: true, data: [] };
+      if (sql.includes('FROM va_gate_finding')) {
+        return { result: true, data: [{
+          finding_key: 'RECALL:abc123:4:AMBIGUOUS_ROUTE', finding_type: 'RECALL_AMBIGUOUS_ROUTE', severity: 'WARNING',
+          project_id: '1', issue_type_id: '10004', workflow_id: null, transition_id: null,
+          from_status_id: '10426', to_status_id: '3',
+          detail: JSON.stringify({ issueId: 42, offeredTransitionIds: ['301', '302'], hasScreen: false, jiraResponse: null }),
+          first_seen_at: 1, last_seen_at: 2, cleared_at: null
+        }] };
+      }
+      return { result: true, data: [] };
+    }
+  });
+
+  const result = await listGateFindings(request({}), deps);
+
+  assert.equal(result.success, true);
+  const finding = result.findings.find((f) => f.type === 'RECALL_AMBIGUOUS_ROUTE');
+  assert.ok(finding, 'a stuck recall must be reported as a health finding');
+  assert.equal(finding.severity, 'WARNING');
+  assert.equal(finding.findingKey, 'RECALL:abc123:4:AMBIGUOUS_ROUTE');
+  assert.equal(JSON.parse(finding.detail).offeredTransitionIds.length, 2);
+});
+
 test('gatecheck workflow findings and missing-transition-id findings are both reported together', async () => {
   const deps = fixture({
     query: (sql) => {

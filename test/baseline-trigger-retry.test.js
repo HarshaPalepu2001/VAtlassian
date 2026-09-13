@@ -1,3 +1,5 @@
+// modified for Task 5 compliance: recall routing fail-closed behavior
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { run as updated } from '../src/triggers/issue-updated.js';

@@ -262,32 +262,14 @@ export async function reviewStatusIds(projectId) {
   return rows.map((r) => String(r.from_status_id));
 }
 
-/**
- * WHERE A DRIFTED ITEM IN THIS PROJECT SHOULD BE SENT BACK TO.
- *
- * reviewStatusIds() answers "which statuses count as review", which is the
- * question for deciding whether an item is ALREADY in front of a reviewer. This
- * answers the different question of which one to move it TO, and a project with
- * two gated statuses needs both answers to be separate.
- *
- * MOST SPECIFIC WINS, the same precedence va_controlled_field uses: a gate
- * naming this issue type beats a project-wide '*' gate, and among equals the
- * most recently configured one — an admin's latest statement of intent.
- *
- * `from_status_id <> '*'` because a wildcard gate says "out of any status",
- * which is not somewhere an item can be put.
- */
-export async function recallTargetStatus({ projectId, issueTypeId }) {
-  const rows = await throwing(
-    `SELECT from_status_id, issue_type_id FROM va_controlled_transition
-     WHERE project_id = ? AND state = ? AND from_status_id <> '*'
-       AND (issue_type_id = ? OR issue_type_id = '*')
-     ORDER BY issue_type_id DESC, created_at DESC
-     LIMIT ${limitClause(1)}`,
-    [projectId, ACTIVE, String(issueTypeId)]
-  );
-  return rows.length > 0 ? String(rows[0].from_status_id) : null;
-}
+// A recall's destination used to be looked up here — "whichever gate a project
+// admin has configured right now" — via a function once named
+// recallTargetStatus(). That let an edit to today's configuration silently
+// redirect a recall that a baseline signed weeks ago, with no way to tell
+// afterwards which rule actually sent an item back. Recall now takes its
+// target exclusively from the latest ACTIVE baseline's own recorded review
+// status (lib/baselinePolicy.js's `reviewStatusId`, sourced from
+// va_baseline.from_status_id) — never from this table. See lib/restore/recall.js.
 
 /**
  * Every controlled-transition scope the review page may need to surface.
