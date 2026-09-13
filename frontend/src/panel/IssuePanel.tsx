@@ -101,7 +101,7 @@ function IssuePanelBody({ issueKey, onDone }: Props) {
                 disabled={!!error || refreshing}
               />
             )}
-            <BaselineRecord record={state.record} />
+            <BaselineRecord record={state.record} baseline={state.baseline} />
             <RestoreStatus
               issueKey={issueKey ?? state.issue?.key}
               revision={`${state.record?.version}:${state.drift.evidenceHash ?? ''}`}

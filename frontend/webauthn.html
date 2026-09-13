@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VAtlassian Device Check</title>
+    <script>
+      // Top-level ceremony popup runs outside Jira's iframe sandbox.
+      // Shim __bridge so any @forge/bridge evaluation never throws.
+      if (typeof window !== 'undefined' && !window.__bridge) {
+        window.__bridge = {
+          callBridge: function() { return Promise.resolve({}); }
+        };
+      }
+      window.addEventListener('error', function(event) {
+        console.error('WebAuthn popup unhandled error:', event.error || event.message);
+        var root = document.getElementById('root');
+        if (root && !root.hasChildNodes()) {
+          root.innerHTML = '<div style="padding:24px;font-family:-apple-system,BlinkMacSystemFont,sans-serif;color:#ae2e24;">' +
+            '<h3 style="margin:0 0 8px;">Device check error</h3>' +
+            '<p style="margin:0;font-size:13px;">' + (event.message || 'An error occurred.') + '</p>' +
+            '</div>';
+        }
+      });
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/popup/main.tsx"></script>
+  </body>
+</html>
