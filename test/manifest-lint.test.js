@@ -22,3 +22,9 @@ test('manifest.yml edit.experience array must be exactly issue-transition or iss
   assert.equal(inline.includes('experience: [issue-view]'), true, 'experience must contain issue-view');
   assert.equal(inline.includes('experience: [issue-transition]'), true, 'experience must contain issue-transition');
 });
+
+test('manifest.yml declares the restore queue consumer and six-minute worker', () => {
+  const manifest = fs.readFileSync('manifest.yml', 'utf8');
+  assert.match(manifest, /key:\s*va-restore-consumer[\s\S]*queue:\s*va-restore-queue[\s\S]*function:\s*restore-worker/);
+  assert.match(manifest, /key:\s*restore-worker[\s\S]*handler:\s*jobs\/restoreWorker\.handler[\s\S]*timeoutSeconds:\s*600/);
+});

@@ -71,7 +71,7 @@ function fixture() {
     transitionRequests:[],
     restoreActions:[], replacements:[],
     policy:{transition_id:'5',from_status_id:'1',to_status_id:'2',required_assurance:'ESIGNATURE',required_role:'reviewer',meaning:'Reviewed and approved',capture_baseline:true,block_on_drift:true},
-    controlledFields:async()=>fields, projectConfig:async()=>({enabled:true,restore:{}}),
+    controlledFields:async()=>fields, projectConfig:async()=>({enabled:true,restore:{queue:false}}),
     gateActiveOutOf:async()=>({gated:true,...f.policy}), gatedTransition:async()=>f.policy, listGatedTransitions:async()=>[f.policy],
     isEligible:async()=>true, assignReviewer:async()=>({accountId:'trusted',displayName:'Reviewer'}),
     activeBaseline:async()=>f.baselines.at(-1), readAllValues:async(_id,v)=>clone(f.saved.get(v)),

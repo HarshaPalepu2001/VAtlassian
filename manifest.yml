@@ -4,6 +4,10 @@ app:
   runtime:
     name: nodejs22.x
 modules:
+  consumer:
+    - key: va-restore-consumer
+      queue: va-restore-queue
+      function: restore-worker
   sql:
     - key: main
       engine: mysql
@@ -176,6 +180,9 @@ modules:
       function: runner-daily
       interval: day
   function:
+    - key: restore-worker
+      handler: jobs/restoreWorker.handler
+      timeoutSeconds: 600
     - key: issue-status
       handler: resolvers/issueStatus.handler
     - key: panel-resolver

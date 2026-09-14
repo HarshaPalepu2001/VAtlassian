@@ -10,6 +10,7 @@ const RESTORE_COLUMNS = `
   issue_id, project_id, TO_BASE64(baseline_id) AS baseline_id, baseline_version,
   actor_account_id, started_at, finished_at,
   attempted, succeeded, failed, skipped, irreversible, state, detail, candidate_digests
+  ,job_id, queued_at, heartbeat_at, total_steps, completed_steps, last_checkpoint, last_error
 `;
 
 function decode(row) {
@@ -56,23 +57,116 @@ function decode(row) {
  */
 export async function startRestore({
   approvalId, issueId, projectId, baselineId, baselineVersion, actorAccountId, now,
-  candidateDigests = {}
+  candidateDigests = {}, state = 'RUNNING', totalSteps = 0, detail = null
 }) {
   const restoreId = newId();
   await throwing(
     `INSERT INTO va_restore
      (restore_id, approval_id, issue_id, project_id, baseline_id, baseline_version,
       actor_account_id, started_at, finished_at, attempted, succeeded, failed, skipped,
-      irreversible, state, detail, candidate_digests)
-     VALUES (FROM_BASE64(?), FROM_BASE64(?), ?, ?, FROM_BASE64(?), ?, ?, ?, NULL, 0, 0, 0, 0, 0, 'RUNNING', NULL, ?)`,
+      irreversible, state, detail, candidate_digests, job_id, queued_at, heartbeat_at,
+      total_steps, completed_steps, last_checkpoint, last_error)
+     VALUES (FROM_BASE64(?), FROM_BASE64(?), ?, ?, FROM_BASE64(?), ?, ?, ?, NULL, 0, 0, 0, 0, 0, ?, ?, ?, NULL, NULL, NULL, ?, 0, NULL, NULL)`,
     [
       toBinaryParam(restoreId), toBinaryParam(approvalId), issueId, projectId,
       toBinaryParam(baselineId), baselineVersion, actorAccountId, now,
-      JSON.stringify(candidateDigests ?? {})
+      state, detail == null ? null : JSON.stringify(detail), JSON.stringify(candidateDigests ?? {}),
+      totalSteps
     ]
   );
   return restoreId;
 }
+
+function changed(result) {
+  return Number(result?.affectedRows ?? result?.data?.affectedRows ?? 0) > 0;
+}
+
+function errorText(error) {
+  return String(error?.message ?? error ?? 'Unknown restore queue failure').slice(0, 2000);
+}
+
+/** Publish a queue job only after the restore row and action plan are durable. */
+export async function markRestoreQueued({ restoreId, jobId, now, totalSteps = undefined }) {
+  const result = await throwing(
+    `UPDATE va_restore SET state = 'QUEUING', job_id = ?, queued_at = ?, heartbeat_at = NULL,
+       finished_at = NULL, last_error = NULL, total_steps = COALESCE(?, total_steps)
+     WHERE restore_id = FROM_BASE64(?) AND state IN ('QUEUING', 'RESTORING', 'QUEUING_FAILED', 'FAILED', 'PARTIAL')`,
+    [jobId, now, totalSteps ?? null, toBinaryParam(restoreId)]
+  );
+  if (!changed(result)) throw new Error('Restore queue state was not durable');
+  return true;
+}
+
+/** A failed push is visible and retryable; it never erases the saved plan. */
+export async function markRestoreQueueFailure({ restoreId, error, now }) {
+  const result = await throwing(
+    `UPDATE va_restore SET state = 'QUEUING_FAILED', last_error = ?, heartbeat_at = NULL
+     WHERE restore_id = FROM_BASE64(?) AND state IN ('QUEUING', 'RESTORING', 'QUEUING_FAILED', 'FAILED', 'PARTIAL')`,
+    [errorText(error), toBinaryParam(restoreId)]
+  );
+  return changed(result);
+}
+
+/** Claim one delivery. A recent RESTORING heartbeat makes duplicate delivery a no-op. */
+export async function claimRestore({ restoreId, now, staleAfterMs = 60_000 }) {
+  const result = await throwing(
+    `UPDATE va_restore SET state = 'RESTORING', heartbeat_at = ?, last_error = NULL
+     WHERE restore_id = FROM_BASE64(?)
+       AND (state = 'QUEUING' OR (state = 'RESTORING' AND
+            (heartbeat_at IS NULL OR heartbeat_at <= ?)))`,
+    [now, toBinaryParam(restoreId), now - staleAfterMs]
+  );
+  return changed(result);
+}
+
+export async function heartbeatRestore({ restoreId, completedSteps, totalSteps, now }) {
+  const result = await throwing(
+    `UPDATE va_restore SET heartbeat_at = ?, completed_steps = ?, total_steps = ?, last_checkpoint = ?
+     WHERE restore_id = FROM_BASE64(?) AND state = 'RESTORING'`,
+    [now, completedSteps, totalSteps, now, toBinaryParam(restoreId)]
+  );
+  if (!changed(result)) throw new Error('Restore heartbeat was not durable');
+  return true;
+}
+
+export const updateRestoreProgress = heartbeatRestore;
+export const claimRestoreJob = claimRestore;
+
+/** Reserve terminal verification so duplicate deliveries cannot verify twice. */
+export async function beginRestoreVerification({ restoreId, now }) {
+  const result = await throwing(
+    `UPDATE va_restore SET state = 'VERIFYING', heartbeat_at = ?, last_checkpoint = ?
+     WHERE restore_id = FROM_BASE64(?) AND state = 'RESTORING'`,
+    [now, now, toBinaryParam(restoreId)]
+  );
+  return changed(result);
+}
+
+export async function finishQueuedRestore({ restoreId, now, counters, state, detail }) {
+  const result = await throwing(
+    `UPDATE va_restore SET finished_at = ?, attempted = ?, succeeded = ?, failed = ?,
+       skipped = ?, irreversible = ?, state = ?, detail = ?, heartbeat_at = NULL,
+       completed_steps = ?, last_checkpoint = ?, last_error = NULL
+     WHERE restore_id = FROM_BASE64(?) AND state = 'VERIFYING'`,
+    [now, counters.attempted, counters.succeeded, counters.failed, counters.skipped,
+      counters.irreversible, state, JSON.stringify(detail ?? []), counters.completedSteps ?? counters.succeeded,
+      now, toBinaryParam(restoreId)]
+  );
+  if (!changed(result)) throw new Error('Restore terminal state was not durable');
+  return true;
+}
+
+export async function failRestore({ restoreId, error, now, state = 'FAILED' }) {
+  const result = await throwing(
+    `UPDATE va_restore SET state = ?, finished_at = ?, heartbeat_at = NULL, last_error = ?
+     WHERE restore_id = FROM_BASE64(?) AND state NOT IN ('COMPLETE', 'COMPLETE_WITH_REPLACEMENTS', 'FAILED')`,
+    [state, now, errorText(error), toBinaryParam(restoreId)]
+  );
+  return changed(result);
+}
+
+export const completeRestore = finishQueuedRestore;
+export const markRestoreFailed = failRestore;
 
 /**
  * Close a restore record with VERIFIED counters.

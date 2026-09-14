@@ -29,3 +29,11 @@ test('baseline control provenance has its own append-only migration', () => {
   assert.match(sql, /ADD COLUMN required_assurance VARCHAR\(24\) NULL/);
   assert.match(sql, /ADD COLUMN controlled_fields_hash CHAR\(64\) NULL/);
 });
+
+test('restore progress has durable queue and checkpoint columns', () => {
+  const sql = sqlFor('v040_restore_progress');
+  assert.match(sql, /ALTER TABLE va_restore/);
+  for (const column of ['job_id', 'queued_at', 'heartbeat_at', 'total_steps', 'completed_steps', 'last_checkpoint', 'last_error']) {
+    assert.match(sql, new RegExp(`ADD COLUMN ${column}\\b`), `missing ${column}`);
+  }
+});

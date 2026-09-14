@@ -15,6 +15,46 @@ import { claimRestoreAction, finishRestoreAction, recordReplacement, readReplace
 import { createTreeReader } from '../lib/tree/jira.js';
 import { readStableTree } from '../lib/tree/stableRead.js';
 import { createRestoreAdapters } from '../lib/tree/restoreAdapters.js';
+import { planTreeRestore } from '../lib/tree/restorePlan.js';
+import { enqueueRestore } from '../lib/restore/queue.js';
+import * as restoreStore from '../db/restoreStore.js';
+
+function asBase64(value) {
+  return Buffer.isBuffer(value) ? value.toString('base64') : String(value);
+}
+
+/** Persist the full deterministic plan before asking Forge to deliver work. */
+export async function queueRestore({ prepared, actor, approval, stores = restoreStore,
+  enqueue = enqueueRestore, now = Date.now() }) {
+  if (!prepared?.baselineTree || !prepared?.currentTree) {
+    const error = new Error('Recursive restore requires the reviewed baseline and current tree snapshots.');
+    error.reason = 'CAPTURE_INCOMPLETE';
+    throw error;
+  }
+  const plan = planTreeRestore({ baselineTree: prepared.baselineTree, currentTree: prepared.currentTree,
+    controlledFields: prepared.fields });
+  const restoreId = await stores.startRestore({
+    approvalId: approval.approval_id, issueId: prepared.issueId, projectId: prepared.projectId,
+    baselineId: prepared.baseline.baseline_id, baselineVersion: prepared.baseline.version,
+    actorAccountId: actor.accountId, now, state: 'QUEUING', totalSteps: plan.steps.length,
+    actionPlan: plan.steps, detail: { actionPlan: plan.steps }, candidateDigests: prepared.digests ?? {}
+  });
+  const body = { restoreId: asBase64(restoreId), issueId: Number(prepared.issueId),
+    baselineId: asBase64(prepared.baseline.baseline_id), baselineVersion: Number(prepared.baseline.version) };
+  try {
+    const pushed = await enqueue(body);
+    if (!pushed?.jobId) throw new Error('Forge did not return a restore job id');
+    await stores.markRestoreQueued({ restoreId, jobId: pushed.jobId, now, totalSteps: plan.steps.length });
+    return { success: false, state: 'RESTORING', restoreId, jobId: pushed.jobId,
+      progress: { totalSteps: plan.steps.length, completedSteps: 0, remainingSteps: plan.steps.length } };
+  } catch (error) {
+    await stores.markRestoreQueueFailure({ restoreId, error: String(error?.message ?? error), now }).catch(failure =>
+      console.error('restore: could not persist queue failure', failure));
+    return { success: false, state: 'QUEUING_FAILED', restoreId,
+      progress: { totalSteps: plan.steps.length, completedSteps: 0, remainingSteps: plan.steps.length },
+      error: String(error?.message ?? error) };
+  }
+}
 
 /** Restore success is derived only from the post-write verification read. */
 export async function performRestore({ prepared, actor, approval }) {
@@ -23,6 +63,9 @@ export async function performRestore({ prepared, actor, approval }) {
   const isTree = Boolean(baseline?.tree_hash);
   const baselineTree = isTree ? prepared.baselineTree : null;
   const currentTree = isTree ? prepared.currentTree : null;
+  if (isTree && config?.restore?.queue !== false) {
+    return queueRestore({ prepared, actor, approval });
+  }
   if (isTree && (!baselineTree || !currentTree)) {
     const error = new Error('Recursive restore requires the reviewed baseline and current tree snapshots.');
     error.reason = 'CAPTURE_INCOMPLETE';

@@ -877,6 +877,15 @@ test('restoration in progress is reported with the exact required copy, and a re
  assert.match(text(),/Restoration in progress/);
 });
 
+test('a queueing failure stays actionable with Retry restore',async()=>{
+ let retries=0;
+ setup(key=>{if(key==='restore:getState')return Promise.resolve({restores:[{restore_id:'r3',state:'QUEUING_FAILED',last_error:'queue unavailable'}]});if(key==='restore:retry'){retries++;return Promise.resolve({success:true,state:'RESTORING'});}return Promise.resolve({});});
+ await act(()=>root.render(h(RestoreStatus,{issueKey:'T-1',restore:{restoreId:'r3',state:'QUEUING_FAILED',attempted:0,succeeded:0,failed:0,skipped:2},onDone:async()=>{}})));await flush();
+ assert.match(text(),/Queuing failed/);
+ await act(()=>clickButton('Retry restore').click());await flush();
+ assert.equal(retries,1);
+});
+
 test('restore completion refreshes the panel even when the issue content is unchanged',async()=>{
  let restoreState='PENDING';
  const listeners=setup(async key=>{

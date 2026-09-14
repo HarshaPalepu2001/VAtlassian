@@ -76,6 +76,12 @@ test('Panel summary/evidence resolvers are wired for the responsive read split',
   assert.ok(content.includes("resolver.define('panel:getState'"), 'panel:getState must remain until callers migrate');
 });
 
+test('restore recovery resolvers remain exposed', () => {
+  const content = fs.readFileSync(path.join(srcDir, 'resolvers', 'panel.js'), 'utf8');
+  assert.match(content, /resolver\.define\('restore:getState'/);
+  assert.match(content, /resolver\.define\('restore:retry'/);
+});
+
 test('Providers adhere to registry constraints', () => {
   const registryContent = fs.readFileSync(path.join(srcDir, 'lib', 'approval', 'registry.js'), 'utf8');
   assert.ok(registryContent, 'Registry must exist');

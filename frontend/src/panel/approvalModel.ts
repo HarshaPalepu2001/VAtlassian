@@ -93,6 +93,7 @@ export function restoreStateLabel(state: string): string {
     case 'COMPLETE': return 'Restored and verified';
     case 'PARTIAL': return 'Partly restored';
     case 'FAILED': return 'Restore failed';
+    case 'QUEUING_FAILED': return 'Queuing failed';
     default: return PROGRESS.restoreRunning;
   }
 }

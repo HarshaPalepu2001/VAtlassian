@@ -51,6 +51,13 @@ export type PanelRestore = {
   succeeded: number;
   failed: number;
   skipped: number;
+  jobId?: string | null;
+  queuedAt?: number | null;
+  heartbeatAt?: number | null;
+  totalSteps?: number;
+  completedSteps?: number;
+  lastCheckpoint?: number | null;
+  lastError?: string | null;
 };
 
 /** The compact read from `panel:getSummary` — everything the panel needs to

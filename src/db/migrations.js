@@ -542,5 +542,13 @@ export const MIGRATIONS = [
   { id: 'v039_baseline_control_provenance', sql: `ALTER TABLE va_baseline
   ADD COLUMN required_role VARCHAR(32) NULL,
   ADD COLUMN required_assurance VARCHAR(24) NULL,
-  ADD COLUMN controlled_fields_hash CHAR(64) NULL` }
+  ADD COLUMN controlled_fields_hash CHAR(64) NULL` },
+  { id: 'v040_restore_progress', sql: `ALTER TABLE va_restore
+  ADD COLUMN job_id VARCHAR(128) NULL,
+  ADD COLUMN queued_at BIGINT NULL,
+  ADD COLUMN heartbeat_at BIGINT NULL,
+  ADD COLUMN total_steps INT NOT NULL DEFAULT 0,
+  ADD COLUMN completed_steps INT NOT NULL DEFAULT 0,
+  ADD COLUMN last_checkpoint BIGINT NULL,
+  ADD COLUMN last_error TEXT NULL` },
 ];

@@ -19,10 +19,10 @@ function errorDetail(error) {
 
 export async function executeTreeRestore({
   restoreId, rootIssueKey, baselineTree, currentTree, controlledFields, adapters,
-  maxActions = 25
+  maxActions = 25, plan: persistedPlan = null
 }) {
   if (!Number.isSafeInteger(maxActions) || maxActions <= 0) throw new TypeError('maxActions must be a positive safe integer');
-  const plan = planTreeRestore({ baselineTree, currentTree, controlledFields });
+  const plan = persistedPlan ?? planTreeRestore({ baselineTree, currentTree, controlledFields });
 
   let preflightOk = false;
   try {

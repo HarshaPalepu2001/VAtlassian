@@ -173,7 +173,14 @@ export async function getSummary(args) { return respond(async () => {
     attempted: Number(restores[0].attempted ?? 0),
     succeeded: Number(restores[0].succeeded ?? 0),
     failed: Number(restores[0].failed ?? 0),
-    skipped: Number(restores[0].skipped ?? 0)
+    skipped: Number(restores[0].skipped ?? 0),
+    jobId: restores[0].job_id ?? null,
+    queuedAt: restores[0].queued_at != null ? Number(restores[0].queued_at) : null,
+    heartbeatAt: restores[0].heartbeat_at != null ? Number(restores[0].heartbeat_at) : null,
+    totalSteps: Number(restores[0].total_steps ?? 0),
+    completedSteps: Number(restores[0].completed_steps ?? 0),
+    lastCheckpoint: restores[0].last_checkpoint != null ? Number(restores[0].last_checkpoint) : null,
+    lastError: restores[0].last_error ?? null
   } : null;
 
   const payload = {
