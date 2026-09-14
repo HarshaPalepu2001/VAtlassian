@@ -188,6 +188,34 @@ test('tree restore Jira adapters preflight every permission before mutating', as
   assert.match(f.calls[0].url, /DELETE_ISSUES/);
 });
 
+test('a tree spanning two projects is preflighted per project, not only against the root', async () => {
+  const f = apiFixture(call => {
+    if (!call.url.includes('/mypermissions')) return response(204);
+    if (call.url.includes('projectId=10')) return response(200, { permissions: { CREATE_ISSUES: { havePermission: true } } });
+    if (call.url.includes('projectId=20')) return response(200, { permissions: { EDIT_ISSUES: { havePermission: false } } });
+    return response(200, { permissions: {} });
+  });
+  const adapters = createRestoreAdapters({ api: f.api, route: (strings, ...values) => strings.reduce((out, part, index) => out + part + (values[index] ?? ''), '') });
+  const allowed = await adapters.checkPermissions({
+    steps: [
+      { kind: 'CREATE_REPLACEMENT', logicalNodeId: 'n1', node: { projectId: '10' } },
+      { kind: 'RESTORE_FIELDS', logicalNodeId: 'n2' }
+    ],
+    rootIssueKey: 'ROOT-1',
+    currentTree: { nodes: [{ logicalNodeId: 'n2', projectId: '20' }] },
+    baselineTree: null
+  });
+  // Root's own project (unstated here) never had EDIT_ISSUES denied — only
+  // project 20, reached through the child node, did. A root-only preflight
+  // would have missed this and let the restore fail midway instead.
+  assert.equal(allowed, false);
+  const permissionCalls = f.calls.filter(c => c.url.includes('/mypermissions'));
+  assert.equal(permissionCalls.length, 2, 'one request per distinct project, not per node and not only the root');
+  assert.ok(permissionCalls.some(c => c.url.includes('projectId=10') && c.url.includes('CREATE_ISSUES')));
+  assert.ok(permissionCalls.some(c => c.url.includes('projectId=20') && c.url.includes('EDIT_ISSUES')));
+  assert.ok(!permissionCalls.some(c => c.url.includes('issueKey=ROOT-1')), 'both steps resolved a real project, so root fallback is never used');
+});
+
 test('tree restore Jira adapters send real move and field mutations', async () => {
   const f = apiFixture();
   const adapters = createRestoreAdapters({ api: f.api, route: (strings, ...values) => strings.reduce((out, part, index) => out + part + (values[index] ?? ''), '') });

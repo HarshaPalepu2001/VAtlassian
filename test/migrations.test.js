@@ -8,11 +8,18 @@ function sqlFor(id) {
   return m.sql;
 }
 
-test('tree values are keyed by baseline and logical node', () => {
+test('tree values are keyed by baseline and logical node and use MEDIUMTEXT', () => {
+  const sql = sqlFor('v034_baseline_node_value');
   assert.match(
-    sqlFor('v034_baseline_node_value'),
+    sql,
     /PRIMARY KEY \(baseline_id, logical_node_id, field_id, seq\)/
   );
+  assert.match(sql, /chunk MEDIUMTEXT NOT NULL/);
+});
+
+test('migration v041 modifies baseline_node_value chunk to MEDIUMTEXT', () => {
+  const sql = sqlFor('v041_baseline_node_value_mediumtext');
+  assert.match(sql, /ALTER TABLE va_baseline_node_value MODIFY COLUMN chunk MEDIUMTEXT NOT NULL/);
 });
 
 test('tree restoration actions are journaled by restore and durable step key', () => {

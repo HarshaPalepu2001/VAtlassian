@@ -133,6 +133,57 @@ async function overrideEditmeta(issueKey) {
   }
 }
 
+/**
+ * DESCENDANT ISSUE SECURITY SCHEMES, ENFORCED FOR THE VIEWER.
+ *
+ * createTreeReader walks the recursive hierarchy with asApp() (full tenant
+ * privilege, needed so capture/restore/drift-detection see the true tree
+ * regardless of who triggered them). That is correct for the authoritative
+ * computation in snapshot(), but wrong for anything handed back to a human:
+ * a reviewer who cannot browse a security-scheme-protected child issue must
+ * not receive its key or live field content just because the app can see it.
+ * readableIssue() already gates the root the same way; this is the same
+ * boundary applied to the rest of the tree, checked with the viewer's own
+ * privilege via the bulk permission-check endpoint (one request regardless
+ * of tree size, so this cannot reintroduce a per-node round-trip).
+ *
+ * Only the LIVE current tree needs this. Baseline-side history (removed
+ * nodes, retained digests) was already legitimately visible when it was
+ * captured and carries no current Jira read.
+ */
+export async function filterViewableTree(tree) {
+  if (!tree?.nodes?.length) return tree;
+  const ids = [...new Set(tree.nodes.map(n => String(n.id ?? '')).filter(Boolean))];
+  if (!ids.length) return { ...tree, nodes: [] };
+  let body;
+  try {
+    const response = await api.asUser().requestJira(route`/rest/api/3/permissions/check`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ issues: ids.map(id => ({ issue: id, permissions: ['BROWSE_PROJECTS'] })) })
+    });
+    // Fail closed: an unreadable permission check hides the whole tree
+    // rather than risk showing a node nobody proved the viewer can see.
+    if (!response.ok) return { ...tree, nodes: [] };
+    body = await response.json();
+  } catch {
+    return { ...tree, nodes: [] };
+  }
+  const visible = new Set((body?.issues ?? [])
+    .filter(entry => entry?.permissions?.BROWSE_PROJECTS?.havePermission === true)
+    .map(entry => String(entry.id)));
+  return { ...tree, nodes: tree.nodes.filter(n => visible.has(String(n.id ?? ''))) };
+}
+
+/** Drops treeDiff changes describing LIVE content on a node the viewer's
+ *  filtered tree no longer contains. NODE_REMOVED changes describe baseline
+ *  history, not live content, and are never filtered. */
+export function filterViewableTreeDiff(treeDiff, visibleTree) {
+  if (!treeDiff?.changes) return treeDiff;
+  const visibleIds = new Set((visibleTree?.nodes ?? []).map(n => n.logicalNodeId));
+  return { ...treeDiff, changes: treeDiff.changes.filter(c => c.kind === 'NODE_REMOVED' || visibleIds.has(c.logicalNodeId)) };
+}
+
 export async function load(args, options = {}) {
   const [issue, myself] = await Promise.all([
     readableIssue(args),

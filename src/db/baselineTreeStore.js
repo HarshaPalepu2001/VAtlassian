@@ -35,6 +35,20 @@ export async function beginTreeBaseline({ baseline, resume = null, query = store
   return { baselineId, version: Number(baseline.version) };
 }
 
+// Multi-row batching, not one query per node/chunk. A 500-node tree with ten
+// controlled fields each is 5,000+ rows; at one row per round trip (20-50ms
+// each over the Forge SQL HTTPS gateway) that alone can approach the 25s
+// Forge synchronous execution ceiling. Batches of 50 keep every statement
+// well under typical payload limits while cutting round trips by ~50x.
+const NODE_BATCH = 50;
+const VALUE_BATCH = 50;
+
+function chunked(array, size) {
+  const out = [];
+  for (let i = 0; i < array.length; i += size) out.push(array.slice(i, i + size));
+  return out;
+}
+
 export async function writeTreeCapture({ baselineId, treeHash, nodes, values, query = store.throwing }) {
   const bId = toBinaryParam(baselineId);
 
@@ -43,34 +57,50 @@ export async function writeTreeCapture({ baselineId, treeHash, nodes, values, qu
   const edgeCount = nodes.filter(n => n.parentLogicalNodeId != null).length;
   const nodeCount = nodes.length;
 
-  for (const node of nodes) {
+  for (const batch of chunked(nodes, NODE_BATCH)) {
+    const placeholders = batch.map(() => '(FROM_BASE64(?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
+    const params = [];
+    for (const node of batch) {
+      params.push(
+        bId, node.logicalNodeId, node.originalIssueId, node.currentIssueId, node.issueKey,
+        node.parentLogicalNodeId || null, node.projectId, node.issueTypeId, node.contentHash,
+        node.fieldDigests || '{}', node.nodeOrder ?? 0
+      );
+    }
     await query(
       `INSERT INTO va_baseline_node (
         baseline_id, logical_node_id, original_issue_id, current_issue_id, issue_key,
         parent_logical_node_id, project_id, issue_type_id, content_hash, field_digests, node_order
-      ) VALUES (FROM_BASE64(?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES ${placeholders}
       ON DUPLICATE KEY UPDATE logical_node_id = logical_node_id`,
-      [
-        bId, node.logicalNodeId, node.originalIssueId, node.currentIssueId, node.issueKey,
-        node.parentLogicalNodeId || null, node.projectId, node.issueTypeId, node.contentHash,
-        node.fieldDigests || '{}', node.nodeOrder ?? 0
-      ]
+      params
     );
+  }
 
+  const valueRows = [];
+  for (const node of nodes) {
     const nodeValues = values[node.logicalNodeId] || {};
     for (const [fieldId, rawValue] of Object.entries(nodeValues)) {
       totalFieldCount++;
       const { encoding, rawBytes, chunks } = encodeValue(rawValue);
       valueBytes += rawBytes;
       for (let seq = 0; seq < chunks.length; seq++) {
-        await query(
-          `INSERT INTO va_baseline_node_value (baseline_id, logical_node_id, field_id, seq, encoding, raw_bytes, chunk)
-           VALUES (FROM_BASE64(?), ?, ?, ?, ?, ?, ?)
-           ON DUPLICATE KEY UPDATE chunk = chunk`,
-          [bId, node.logicalNodeId, fieldId, seq, encoding, rawBytes, chunks[seq]]
-        );
+        valueRows.push({ logicalNodeId: node.logicalNodeId, fieldId, seq, encoding, rawBytes, chunk: chunks[seq] });
       }
     }
+  }
+  for (const batch of chunked(valueRows, VALUE_BATCH)) {
+    const placeholders = batch.map(() => '(FROM_BASE64(?), ?, ?, ?, ?, ?, ?)').join(', ');
+    const params = [];
+    for (const row of batch) {
+      params.push(bId, row.logicalNodeId, row.fieldId, row.seq, row.encoding, row.rawBytes, row.chunk);
+    }
+    await query(
+      `INSERT INTO va_baseline_node_value (baseline_id, logical_node_id, field_id, seq, encoding, raw_bytes, chunk)
+       VALUES ${placeholders}
+       ON DUPLICATE KEY UPDATE chunk = chunk`,
+      params
+    );
   }
 
   // Update va_baseline

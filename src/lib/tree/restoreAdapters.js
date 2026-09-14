@@ -44,23 +44,53 @@ function requestOptions(method, body) {
   return options;
 }
 
+const PERMISSION_FOR_KIND = {
+  CREATE_REPLACEMENT: 'CREATE_ISSUES',
+  MOVE_NODE: 'EDIT_ISSUES',
+  RESTORE_FIELDS: 'EDIT_ISSUES',
+  DELETE_ADDED_NODE: 'DELETE_ISSUES'
+};
+
 export function createRestoreAdapters({ api, route }) {
   const request = (path, options) => api.asApp().requestJira(path, options);
   return {
-    async checkPermissions({ steps, rootIssueKey }) {
-      const permissions = new Set();
+    /**
+     * A recursive hierarchy can span more than one Jira project. Checking
+     * permissions only against rootIssueKey lets a plan pass preflight and
+     * then fail midway on a child in a project the actor cannot touch.
+     * Grouped by project (never by node — that would reintroduce an
+     * unbounded-round-trip risk like the unbatched tree writer had), so
+     * this is at most one request per DISTINCT project the plan touches,
+     * not one per step.
+     */
+    async checkPermissions({ steps, rootIssueKey, baselineTree, currentTree }) {
+      const nodesByLogicalId = new Map();
+      for (const node of baselineTree?.nodes ?? []) nodesByLogicalId.set(String(node.logicalNodeId), node);
+      for (const node of currentTree?.nodes ?? []) nodesByLogicalId.set(String(node.logicalNodeId), node);
+
+      const groups = new Map(); // groupKey -> { projectId, permissions: Set }
       for (const step of steps) {
-        if (step.kind === 'CREATE_REPLACEMENT') permissions.add('CREATE_ISSUES');
-        if (step.kind === 'MOVE_NODE' || step.kind === 'RESTORE_FIELDS') permissions.add('EDIT_ISSUES');
-        if (step.kind === 'DELETE_ADDED_NODE') permissions.add('DELETE_ISSUES');
+        const permission = PERMISSION_FOR_KIND[step.kind];
+        if (!permission) continue;
+        const node = step.kind === 'CREATE_REPLACEMENT' ? step.node : nodesByLogicalId.get(String(step.logicalNodeId));
+        const projectId = node?.projectId != null ? String(node.projectId) : null;
+        const groupKey = projectId ?? `root:${rootIssueKey}`;
+        if (!groups.has(groupKey)) groups.set(groupKey, { projectId, permissions: new Set() });
+        groups.get(groupKey).permissions.add(permission);
       }
-      if (permissions.size === 0) return true;
-      const names = [...permissions].sort();
-      const response = await request(route`/rest/api/3/mypermissions?issueKey=${rootIssueKey}&permissions=${names.join(',')}`,
-        { headers: { Accept: 'application/json' } });
-      if (!ok(response)) return false;
-      const body = await responseBody(response);
-      return names.every(name => body?.permissions?.[name]?.havePermission === true);
+      if (groups.size === 0) return true;
+
+      for (const { projectId, permissions } of groups.values()) {
+        const names = [...permissions].sort();
+        const query = projectId != null
+          ? route`/rest/api/3/mypermissions?projectId=${projectId}&permissions=${names.join(',')}`
+          : route`/rest/api/3/mypermissions?issueKey=${rootIssueKey}&permissions=${names.join(',')}`;
+        const response = await request(query, { headers: { Accept: 'application/json' } });
+        if (!ok(response)) return false;
+        const body = await responseBody(response);
+        if (!names.every(name => body?.permissions?.[name]?.havePermission === true)) return false;
+      }
+      return true;
     },
 
     async createIssue(parentKey, node, retainedFields = {}) {

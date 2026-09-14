@@ -122,3 +122,39 @@ test('reader fails closed instead of truncating a tree above 500 nodes', async (
     error => error.reason === 'TREE_LIMIT_EXCEEDED'
   );
 });
+
+test('createTreeReader handles omitted parent field on top-level root issue and child issues', async () => {
+  const dummyFields = {
+    project: { id: '10' },
+    issuetype: { id: '20' },
+    status: { id: '30' },
+    summary: 'Root issue without parent'
+    // Notice: 'parent' property is completely absent, as in Jira REST API v3
+  };
+
+  const api = {
+    asApp: () => ({
+      requestJira: async (route) => {
+        if (route.path.includes('/issue/ROOT-1')) {
+          return { status: 200, json: async () => ({ id: '100', key: 'ROOT-1', fields: dummyFields }) };
+        }
+        if (route.path.includes('/search/jql')) {
+          return { status: 200, json: async () => ({ issues: [] }) };
+        }
+        throw new Error(`Unexpected request: ${route.path}`);
+      }
+    })
+  };
+
+  const route = (strings, ...values) => {
+    const path = strings.reduce((out, part, i) => out + part + (values[i] ?? ''), '');
+    return { path, toString: () => path };
+  };
+
+  const reader = createTreeReader({ api, route });
+  const tree = await reader.read('ROOT-1', ['summary']);
+
+  assert.equal(tree.nodes.length, 1);
+  assert.equal(tree.nodes[0].key, 'ROOT-1');
+  assert.equal(tree.nodes[0].fields.parent, null, 'Omitted parent should be normalized to null');
+});

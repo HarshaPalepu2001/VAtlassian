@@ -101,9 +101,17 @@ function stubCeremony(outcome={success:true,response:{id:'cred-1',rawId:'cred-1'
   const popup={closed:false,close(){popup.closed=true;},postMessage(data){
    if(!data||data.type!=='webauthn-options')return;
    seen.action=data.action;seen.optionsJSON=data.optionsJSON;
-   setTimeout(()=>window.postMessage({type:'webauthn-result',...outcome},window.location.origin),0);
+   setTimeout(()=>window.dispatchEvent(new window.MessageEvent('message',{
+    data:{type:'webauthn-result',...outcome},
+    origin:window.location.origin,
+    source:popup
+   })),0);
   }};
-  setTimeout(()=>window.postMessage({type:'webauthn-ready'},window.location.origin),0);
+  setTimeout(()=>window.dispatchEvent(new window.MessageEvent('message',{
+   data:{type:'webauthn-ready'},
+   origin:window.location.origin,
+   source:popup
+  })),0);
   return popup;
  };
  return seen;
@@ -501,7 +509,7 @@ test('a clean controlled transition is signed for the named move, not generic ap
 test('the signing screen displays the exact meaning returned by the server challenge',async()=>{
  setup(async key=>key==='signature:challenge'?challengeOk({meaning:'I reject and restore the approved record'}):{});
  const data=actor([transition({meaning:'Different transition declaration'})],{baseline:baseline(),drift:driftOn()});
- await act(()=>root.render(h(ApprovalControls,{summary:data,onDone:async()=>{}})));
+ await act(()=>root.render(h(ApprovalControls,{summary:data,evidence:evidence(),onDone:async()=>{}})));
  await act(()=>clickButton('Reject and restore').click());await flush();
  assert.match(text(),/I reject and restore the approved record/);
  assert.doesNotMatch(text(),/Different transition declaration/);
@@ -633,7 +641,7 @@ test('electronic-signature drift approval and rejection carry no client-selected
    if(key==='signature:submit')return {success:true,approvalId:'a',transitioned:false};
    return {};});
   const data=actor([transition({requiredAssurance:'BIOMETRIC',meaning:'Bug done'})],{baseline:baseline(),approval:{requiredRole:'QA',requiredAssurance:'ESIGNATURE',meaning:'x',pending:null},drift:driftOn()});
-  await act(()=>root.render(h(ApprovalControls,{summary:data,onDone:async()=>{}})));await settle();
+  await act(()=>root.render(h(ApprovalControls,{summary:data,evidence:evidence(),onDone:async()=>{}})));await settle();
   assert.match(text(),/Review the tracked changes since baseline/);
   assert.match(text(),/Electronic signature/);
   assert.doesNotMatch(text(),/Approval transition/);
@@ -661,7 +669,7 @@ test('biometric drift decisions follow the baseline-owned assurance without sign
   if(key==='signature:submit')return {success:true,approvalId:'a',transitioned:false};
   return {};});
  const data=actor([transition({requiredAssurance:'ESIGNATURE',meaning:'Bug done'})],{baseline:baseline(),approval:{requiredRole:'QA',requiredAssurance:'BIOMETRIC',meaning:'x',pending:null},drift:driftOn()});
- await act(()=>root.render(h(ApprovalControls,{summary:data,onDone:async()=>{}})));await settle();
+ await act(()=>root.render(h(ApprovalControls,{summary:data,evidence:evidence(),onDone:async()=>{}})));await settle();
  assert.match(text(),/Review the tracked changes since baseline/);
  assert.match(text(),/Biometric approval/);
  assert.doesNotMatch(text(),/Approval transition/);
@@ -836,7 +844,7 @@ test('a biometric edge announces "Checking biometric" while the device check run
 test('a drift rejection announces "Starting restoration"',async()=>{
  const submit=deferred();
  setup(key=>key==='signature:challenge'?Promise.resolve(challengeOk({meaning:'Reject'})):key==='signature:submit'?submit.promise:Promise.resolve({}));
- await act(()=>root.render(h(ApprovalControls,{summary:actor([],{baseline:baseline(),drift:driftOn()}),onDone:async()=>{}})));
+ await act(()=>root.render(h(ApprovalControls,{summary:actor([],{baseline:baseline(),drift:driftOn()}),evidence:evidence(),onDone:async()=>{}})));
  await act(()=>clickButton('Reject and restore').click());await flush();
  await act(()=>affirm().click());
  await act(()=>typeInto(codeBox(),'123456'));
@@ -1476,4 +1484,113 @@ test('a transition with no VAtlassian validator attached is a blocking finding, 
  assert.match(text(),/cannot be enforced yet/);
  assert.match(text(),/Attach the signature validator to this transition in Jira/);
  assert.equal(clickButton('Add rule').disabled,true);
+});
+
+test('a restore ERROR state is labelled "Restore error" and enables Retry restore', async () => {
+ let retries = 0;
+ setup(key => {
+  if (key === 'restore:getState') return Promise.resolve({ restores: [{ restore_id: 'r-err', state: 'ERROR', error: 'Terminal release failed' }] });
+  if (key === 'restore:retry') { retries++; return Promise.resolve({ success: true, state: 'RESTORING' }); }
+  return Promise.resolve({});
+ });
+ await act(() => root.render(h(RestoreStatus, {
+  issueKey: 'T-1',
+  restore: { restoreId: 'r-err', state: 'ERROR', attempted: 1, succeeded: 0, failed: 1, skipped: 0 },
+  onDone: async () => {}
+ })));
+ await flush();
+ assert.match(text(), /Restore error/);
+ const btn = clickButton('Retry restore');
+ assert.ok(btn, 'Retry restore button must be rendered for ERROR state');
+ assert.equal(btn.disabled, false);
+ await act(() => btn.click());
+ await flush();
+ assert.equal(retries, 1);
+});
+
+test('deviceAuth ignores messages from sources other than the ceremony popup', async () => {
+ const originalOpen = window.open;
+ try {
+  let popup;
+  window.open = () => (popup = { closed: false, close() {}, postMessage() {} });
+  setup(key => key === 'webauthn:assertStart' ? { ok: true, challengeId: 'c'.repeat(32), options: { challenge: 'abc' } } : {});
+  const outcome = deviceAuth.confirmBiometric({ approvalChallengeId: 'c'.repeat(32) });
+  await flush();
+  // Spoofed message posted with window or another frame as source
+  window.dispatchEvent(new window.MessageEvent('message', {
+   data: { type: 'webauthn-result', success: true, response: { id: 'spoofed' } },
+   origin: window.location.origin,
+   source: window
+  }));
+  await flush();
+  const probe = await Promise.race([outcome, new Promise(r => setTimeout(() => r('still waiting'), 20))]);
+  assert.equal(probe, 'still waiting', 'spoofed message from non-popup source must be ignored');
+  popup.closed = true;
+  window.dispatchEvent(new window.Event('focus'));
+  const closed = await outcome;
+  assert.equal(closed.ok, false);
+ } finally {
+  window.open = originalOpen;
+ }
+});
+
+test('drift challenge buttons are disabled when evidence is loading or missing', async () => {
+ setup(() => ({}));
+ const driftSummary = actor([], { baseline: baseline(), drift: driftOn() });
+
+ // 1. Evidence loading
+ await act(() => root.render(h(ApprovalControls, { summary: driftSummary, evidence: null, evidenceLoading: true, onDone: async () => {} })));
+ await flush();
+ assert.equal(clickButton('Approve changes').disabled, true, 'Approve must be disabled while evidence is loading');
+ assert.equal(clickButton('Reject and restore').disabled, true, 'Reject must be disabled while evidence is loading');
+
+ // 2. Evidence missing
+ await act(() => root.render(h(ApprovalControls, { summary: driftSummary, evidence: null, evidenceLoading: false, onDone: async () => {} })));
+ await flush();
+ assert.equal(clickButton('Approve changes').disabled, true, 'Approve must be disabled when evidence is missing');
+ assert.equal(clickButton('Reject and restore').disabled, true, 'Reject must be disabled when evidence is missing');
+
+ // 3. Evidence loaded
+ await act(() => root.render(h(ApprovalControls, { summary: driftSummary, evidence: evidence(), evidenceLoading: false, onDone: async () => {} })));
+ await flush();
+ assert.equal(clickButton('Approve changes').disabled, false, 'Approve must be enabled once evidence is loaded');
+ assert.equal(clickButton('Reject and restore').disabled, false, 'Reject must be enabled once evidence is loaded');
+});
+
+test('TransitionsPage drops stale project lookups when project selection changes rapidly', async () => {
+ let resolveP1, resolveP2;
+ setup(async (key, payload) => {
+  if (key === 'admin:listControlledTransitions') return { success: true, transitions: [] };
+  if (key === 'admin:listStatusesForProject') {
+   if (payload.projectId === 'P1') return new Promise(r => { resolveP1 = () => r({ success: true, statuses: [{ id: 's1', name: 'Status 1' }] }); });
+   if (payload.projectId === 'P2') return new Promise(r => { resolveP2 = () => r({ success: true, statuses: [{ id: 's2', name: 'Status 2' }] }); });
+  }
+  if (key === 'admin:listIssueTypesForProject') return { success: true, issueTypes: [{ id: 'it1', name: 'Story' }] };
+  return { success: true };
+ });
+ await act(() => root.render(h(TransitionsPage, { projects: [{ id: 'P1', name: 'Project 1' }, { id: 'P2', name: 'Project 2' }] })));
+ await flush();
+ await act(() => selectValue(fieldSelect('Project'), 'P1'));
+ await flush();
+ await act(() => selectValue(fieldSelect('Project'), 'P2'));
+ await flush();
+ // Resolve P1 AFTER P2
+ await act(() => resolveP2());
+ await flush();
+ await act(() => resolveP1());
+ await flush();
+ assert.doesNotMatch(text(), /Status 1/, 'Stale P1 status response must not overwrite P2 statuses');
+});
+
+test('UI Kit edit renders explicit error banner when evidenceHash is unavailable and does not initiate challenge', async () => {
+ const calls = [];
+ setup(async (key, payload) => {
+  calls.push([key, payload]);
+  if (key === 'signing:context') return fieldState('ESIGNATURE', { drift: { evidenceHash: null } });
+  return {};
+ }, { context: fieldContext });
+ await act(() => root.render(UiKitEdit));
+ await settle();
+ assert.match(text(), /Evidence hash (could not be loaded|is unavailable)/);
+ assert.ok(!calls.some(([k]) => k === 'approval:challenge'), 'challenge must not be called when evidenceHash is missing');
 });

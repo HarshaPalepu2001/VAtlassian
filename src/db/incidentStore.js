@@ -99,8 +99,8 @@ export async function recordRecallFinding({
       projectId != null ? String(projectId) : null,
       issueTypeId != null ? String(issueTypeId) : null,
       offered.length === 1 ? String(offered[0]) : null,
-      targetStatusId != null ? String(targetStatusId) : null,
       currentStatusId != null ? String(currentStatusId) : null,
+      targetStatusId != null ? String(targetStatusId) : null,
       detail, now, now
     ]
   );

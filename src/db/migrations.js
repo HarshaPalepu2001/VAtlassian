@@ -492,7 +492,7 @@ export const MIGRATIONS = [
   seq INT NOT NULL DEFAULT 0,
   encoding VARCHAR(16) NOT NULL,
   raw_bytes INT NOT NULL,
-  chunk TEXT NOT NULL,
+  chunk MEDIUMTEXT NOT NULL,
   PRIMARY KEY (baseline_id, logical_node_id, field_id, seq)
 )` },
   { id: 'v035_tree_drift', sql: `CREATE TABLE IF NOT EXISTS va_tree_drift (
@@ -551,4 +551,5 @@ export const MIGRATIONS = [
   ADD COLUMN completed_steps INT NOT NULL DEFAULT 0,
   ADD COLUMN last_checkpoint BIGINT NULL,
   ADD COLUMN last_error TEXT NULL` },
+  { id: 'v041_baseline_node_value_mediumtext', sql: `ALTER TABLE va_baseline_node_value MODIFY COLUMN chunk MEDIUMTEXT NOT NULL` }
 ];

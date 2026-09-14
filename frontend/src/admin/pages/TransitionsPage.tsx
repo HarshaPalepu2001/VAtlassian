@@ -119,33 +119,43 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
   useEffect(() => { loadTransitions(); }, []);
 
   useEffect(() => {
-    if (!projectId) { setIssueTypes([]); return; }
+    let active = true;
+    if (!projectId) { setIssueTypes([]); setProjectStatuses([]); return () => { active = false; }; }
+    setIssueTypes([]);
     invoke('admin:listStatusesForProject', { projectId, issueTypeId: '' })
-      .then((r: any) => { if (r.success) setProjectStatuses(r.statuses ?? []); });
+      .then((r: any) => { if (active && r.success) setProjectStatuses(r.statuses ?? []); });
 
     invoke('admin:listIssueTypesForProject', { projectId })
-      .then((r: any) => { if (r.success) setIssueTypes(r.issueTypes ?? []); });
+      .then((r: any) => { if (active && r.success) setIssueTypes(r.issueTypes ?? []); });
+    return () => { active = false; };
   }, [projectId]);
 
   useEffect(() => {
-    if (!projectId || !issueTypeId) { setProjectStatuses([]); return; }
+    let active = true;
+    if (!projectId || !issueTypeId) { setProjectStatuses([]); return () => { active = false; }; }
     invoke('admin:listStatusesForProject', { projectId, issueTypeId })
-      .then((r: any) => { if (r.success) setProjectStatuses(r.statuses ?? []); });
+      .then((r: any) => { if (active && r.success) setProjectStatuses(r.statuses ?? []); });
+    return () => { active = false; };
   }, [projectId, issueTypeId]);
 
   useEffect(() => {
+    let active = true;
     if (!projectId || !issueTypeId) {
       setAvailableRoles([]);
       setRole('');
-      return;
+      return () => { active = false; };
     }
+    setAvailableRoles([]);
     invoke('admin:listAvailableRoles', { projectId, issueTypeId })
       .then((r: any) => {
+        if (!active) return;
         if (r.success) {
-          setAvailableRoles(r.roles ?? []);
-          if (role && !(r.roles ?? []).includes(role)) setRole('');
+          const roles = r.roles ?? [];
+          setAvailableRoles(roles);
+          setRole(cur => (cur && !roles.includes(cur) ? '' : cur));
         }
       });
+    return () => { active = false; };
   }, [projectId, issueTypeId]);
 
   // The transition picker. A change to either scope input invalidates

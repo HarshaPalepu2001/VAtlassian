@@ -127,15 +127,44 @@ test('writeTreeCapture executes proper queries with treeHash and calculated edge
   };
   
   const result = await writeTreeCapture({ baselineId, treeHash: 'fakeTreeHash', nodes, values, query });
-  
-  // 2 insert node, 1 insert value, 1 update baseline
-  assert.equal(queries.length, 4);
-  
-  const updateQuery = queries[3];
+
+  // Both nodes batch into one multi-row insert, the one value chunk batches
+  // into another, then the baseline row is updated: 3 queries total, not
+  // one round trip per node/chunk.
+  assert.equal(queries.length, 3);
+  assert.match(queries[0].sql, /INSERT INTO va_baseline_node \(/);
+  assert.equal((queries[0].sql.match(/\(FROM_BASE64/g) || []).length, 2, 'both nodes in one statement');
+  assert.match(queries[1].sql, /INSERT INTO va_baseline_node_value/);
+  assert.equal((queries[1].sql.match(/\(FROM_BASE64/g) || []).length, 1);
+
+  const updateQuery = queries[2];
   assert.match(updateQuery.sql, /UPDATE va_baseline/);
   // Params: treeHash, nodeCount, edgeCount, totalFieldCount, bId
   assert.deepEqual(updateQuery.params.slice(0, 4), ['fakeTreeHash', 2, 1, 1]);
   assert.deepEqual(result, { baselineId, valueBytes: 8 });
+});
+
+test('writeTreeCapture batches large trees into fixed-size statements instead of one query per row', async () => {
+  const queries = [];
+  const query = async (sql, params) => { queries.push({ sql, params }); };
+
+  const baselineId = Buffer.alloc(16, 3);
+  const nodes = Array.from({ length: 120 }, (_, i) => ({
+    logicalNodeId: `node${i}`, originalIssueId: i, currentIssueId: i, issueKey: `KEY-${i}`,
+    parentLogicalNodeId: i === 0 ? null : 'node0', projectId: 1, issueTypeId: 1,
+    contentHash: `hash${i}`, fieldDigests: '{}', nodeOrder: i
+  }));
+  const values = Object.fromEntries(nodes.map((n, i) => [n.logicalNodeId, { field1: `v${i}` }]));
+
+  await writeTreeCapture({ baselineId, treeHash: 'fakeTreeHash', nodes, values, query });
+
+  const nodeInserts = queries.filter(q => /INSERT INTO va_baseline_node \(/.test(q.sql));
+  const valueInserts = queries.filter(q => /INSERT INTO va_baseline_node_value/.test(q.sql));
+  // 120 nodes / 50-row batches = 3 statements, never 120.
+  assert.equal(nodeInserts.length, 3);
+  assert.equal(valueInserts.length, 3);
+  assert.equal(nodeInserts.map(q => (q.sql.match(/\(FROM_BASE64/g) || []).length).reduce((a, b) => a + b, 0), 120);
+  assert.equal(queries.length, 3 + 3 + 1, 'batched inserts plus the single baseline update, not one query per row');
 });
 
 test('verifyTreeCapture proves node, field, and tree metadata are complete', async () => {
@@ -292,4 +321,32 @@ test('recordReplacement records node replacement', async (t) => {
   await recordReplacement(Buffer.alloc(16), 'node1', 1, 2, query);
   assert.equal(queries.length, 1);
   assert.match(queries[0].sql, /INSERT INTO va_restore_replacement/);
+});
+
+test('encodeValue and decodeValue handle values exceeding 64KB across chunks', async () => {
+  const { encodeValue, decodeValue, CHUNK_CHARS } = await import('../src/lib/valuestore.js');
+  assert.equal(CHUNK_CHARS, 60_000);
+
+  // Large document payload (120 KB text)
+  const largeText = 'A'.repeat(120_000);
+  const largeObject = { description: largeText, comments: ['first comment', 'second comment'] };
+
+  const encoded = encodeValue(largeObject);
+  assert.ok(encoded.rawBytes > 100_000);
+
+  for (const chunk of encoded.chunks) {
+    assert.ok(chunk.length <= CHUNK_CHARS, `Chunk length ${chunk.length} exceeds CHUNK_CHARS ${CHUNK_CHARS}`);
+    assert.ok(Buffer.byteLength(chunk, 'utf8') <= 65_535, 'Chunk must fit MySQL TEXT limit if un-migrated');
+  }
+
+  const rows = encoded.chunks.map((chunk, seq) => ({
+    seq,
+    encoding: encoded.encoding,
+    raw_bytes: encoded.rawBytes,
+    data: chunk
+  }));
+
+  const decoded = decodeValue(rows);
+  assert.equal(decoded.present, true);
+  assert.deepEqual(decoded.value, largeObject);
 });

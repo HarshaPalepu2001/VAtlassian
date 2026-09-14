@@ -47,6 +47,46 @@ test('new exact capture publishes only after all values are durable', async () =
   assert.deepEqual(calls, ['write', 'publish', 'audit']);
 });
 
+// ── Concurrent version allocation ─────────────────────────────────────────
+//
+// Two DIFFERENT approvals racing the same issue can both read MAX(version)
+// before either commits. idx_baseline_version(issue_id, version) turns the
+// second write into a duplicate-key error rather than silent corruption;
+// this proves that error is retried with a freshly read version instead of
+// surfacing as a raw capture failure.
+
+test('a version collision from a concurrent capture is retried with a freshly read version, not surfaced as a failure', async () => {
+  const { args, deps, calls } = fixture();
+  let versionReads = 0;
+  deps.currentVersion = async () => { versionReads++; return versionReads === 1 ? 0 : 1; };
+  let attempts = 0;
+  deps.writeBaseline = async writeArgs => {
+    attempts++;
+    calls.push('write');
+    if (attempts === 1) {
+      const err = new Error('Duplicate entry for key idx_baseline_version');
+      err.code = 'ER_DUP_ENTRY';
+      throw err;
+    }
+    return { baselineId: Buffer.alloc(16, 2), version: writeArgs.baseline.version };
+  };
+
+  const result = await writeCapturedBaseline(args, deps);
+
+  assert.equal(result.captured, true);
+  assert.equal(attempts, 2, 'the collided write is retried, not abandoned');
+  assert.equal(versionReads, 2, 'the retry re-reads the table rather than blindly incrementing');
+  assert.equal(result.version, 2, 'the retry publishes under the freshly read version, not the stale collided one');
+  assert.deepEqual(calls, ['write', 'write', 'publish', 'audit']);
+});
+
+test('a non-collision write failure is never retried or mistaken for a version race', async () => {
+  const { args, deps, calls } = fixture();
+  deps.writeBaseline = async () => { calls.push('write'); throw new Error('ECONNRESET'); };
+  await assert.rejects(() => writeCapturedBaseline(args, deps), /ECONNRESET/);
+  assert.deepEqual(calls, ['write'], 'a real failure surfaces on the first attempt, no retry loop consumed');
+});
+
 test('scalar capture freezes required policy separately from achieved assurance', async () => {
   const { args, deps, written } = fixture();
   args.approver.assuranceLevel = 'BIOMETRIC';

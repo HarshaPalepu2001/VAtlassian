@@ -1,5 +1,5 @@
 import api from '@forge/api';
-import { load, respond, actorFrom, fail } from './panelAccess.js';
+import { load, respond, actorFrom, fail, filterViewableTree, filterViewableTreeDiff } from './panelAccess.js';
 import { getReview } from '../db/itemStateStore.js';
 import { baselineHistory } from '../db/baselineStore.js';
 import { buildRecord } from '../lib/record.js';
@@ -134,7 +134,9 @@ export async function getState(args) { return respond(async () => {
     }));
   }
   const { description, descriptionEmpty, descriptionTruncated } = extractDescription(issue.fields.description);
-  const { groupedDrift, deleteIssueKeys, recreateCount } = buildTreeRejection(state);
+  const viewableTree = state.tree ? await filterViewableTree(state.tree) : state.tree;
+  const viewableTreeDiff = filterViewableTreeDiff(state.treeDiff, viewableTree);
+  const { groupedDrift, deleteIssueKeys, recreateCount } = buildTreeRejection({ tree: viewableTree, treeDiff: viewableTreeDiff });
 
   const base = {
     issue: { id: issue.id, key: issue.key, summary: issue.fields.summary, status: issue.fields.status,

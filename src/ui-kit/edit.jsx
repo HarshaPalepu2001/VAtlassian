@@ -206,7 +206,8 @@ const Edit = () => {
         }
         setIssue(res.issue ?? null);
         setSignerName(res.actorName ?? null);
-        setEvidenceHash(res.drift?.evidenceHash ?? null);
+        const hash = res.drift?.evidenceHash ?? null;
+        setEvidenceHash(hash);
 
         const list = res.actions || (res.transitions || []).filter(t => t.eligible !== false);
         const opts = list.map(t => ({
@@ -259,6 +260,13 @@ const Edit = () => {
         setBlocker(blockerMsg);
         setOptions(opts);
         if (opts.length === 1) setCtId(opts[0].ctId);
+        if (opts.length === 1 && !blockerMsg && !hash) {
+          setStatus({
+            kind: 'error',
+            message: 'Evidence hash could not be loaded for this work item. Signing cannot proceed without verified content.'
+          });
+          return;
+        }
         setStatus({ kind: 'idle' });
       })
       .catch((e) => { if (!cancelled) setStatus({ kind: 'error', message: e.message }); });
@@ -276,7 +284,14 @@ const Edit = () => {
   // frontend/src/panel/SignaturePanel.tsx): a code verified without one
   // records an identity check and calls it an attestation.
   useEffect(() => {
-    if (!issueKey || !ctId || !affirmed || !evidenceHash || code.length !== CODE_LENGTH) return;
+    if (!issueKey || !ctId || !affirmed || code.length !== CODE_LENGTH) return;
+    if (!evidenceHash) {
+      setStatus({
+        kind: 'error',
+        message: 'Evidence hash is unavailable. Cannot create a signature without verified content.'
+      });
+      return;
+    }
     let cancelled = false;
     const capturing = options?.find((o) => o.ctId === ctId)?.capturesBaseline === true;
     setToken('');
@@ -474,7 +489,7 @@ const Edit = () => {
               placeholder="6-digit code"
               value={code}
               onChange={onChange}
-              isDisabled={!ctId || !affirmed || status.kind === 'verifying'}
+              isDisabled={!ctId || !affirmed || !evidenceHash || status.kind === 'verifying'}
             />
             {status.kind === 'idle' && ctId && affirmed && (
               <Text size="small" color="color.text.subtlest">

@@ -44,6 +44,7 @@ export default function WebAuthnPopup() {
     };
     const onMessage = async (event: MessageEvent) => {
       if (event.origin !== window.location.origin) return;
+      if (event.source !== opener) return;
       const data = event.data;
       if (!data || typeof data !== 'object' || data.type !== 'webauthn-options' || done) return;
       stopTimers();

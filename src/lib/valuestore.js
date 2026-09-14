@@ -34,7 +34,7 @@ export const ENCODING = {
  * data, which for ADF is on the order of a megabyte of source document, so the
  * overwhelming majority of fields are a single row and chunking costs nothing.
  */
-export const CHUNK_CHARS = 180_000;
+export const CHUNK_CHARS = 60_000;
 
 /**
  * Encode one field value into chunk payloads.

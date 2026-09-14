@@ -1,4 +1,4 @@
-import { load, respond, fail } from './panelAccess.js';
+import { load, respond, fail, filterViewableTree, filterViewableTreeDiff } from './panelAccess.js';
 import { baselineHistory } from '../db/baselineStore.js';
 import { restoresForIssue } from '../db/restoreStore.js';
 import { approvalById } from '../db/approvalStore.js';
@@ -98,7 +98,9 @@ export async function getEvidence(args) { return respond(async () => {
   }
 
   const { description, descriptionEmpty, descriptionTruncated } = extractDescription(issue.fields.description);
-  const { groupedDrift, deleteIssueKeys, recreateCount } = buildTreeRejection(prepared);
+  const viewableTree = prepared.tree ? await filterViewableTree(prepared.tree) : prepared.tree;
+  const viewableTreeDiff = filterViewableTreeDiff(prepared.treeDiff, viewableTree);
+  const { groupedDrift, deleteIssueKeys, recreateCount } = buildTreeRejection({ tree: viewableTree, treeDiff: viewableTreeDiff });
 
   return {
     baselineId: baseline?.baseline_id ? Buffer.from(baseline.baseline_id).toString('hex') : null,

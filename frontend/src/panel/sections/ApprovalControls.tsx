@@ -124,6 +124,7 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
   const canSign = session.challenge?.decision === 'REJECT' ? canRejectDecision : canApproveDecision;
   const ready = approvalReady({ level, code: session.code, confirmed: session.confirmed, busy: busy || disabled, eligible: canSign });
   const pending = summary.approval.pending;
+  const driftEvidenceBlocked = reviewingDrift && (Boolean(evidenceLoading) || !evidence);
 
   function choose(transitionId: string) {
     generation.current += 1;
@@ -152,6 +153,7 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
   }
 
   async function requestChallenge(decision: Decision) {
+    if (driftEvidenceBlocked) return;
     const gen = begin('challenge', PROGRESS.preparing, decision);
     if (gen === null) return;
     try {
@@ -334,12 +336,12 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
         </Field>
         <div className="va-row">
           {canApproveDecision && (
-            <Button appearance="primary" isDisabled={busy || disabled || !deviceReady} onClick={() => void requestChallenge('APPROVE')}>
+            <Button appearance="primary" isDisabled={busy || disabled || !deviceReady || driftEvidenceBlocked} onClick={() => void requestChallenge('APPROVE')}>
               {decisionLabel('APPROVE', reviewingDrift ? 'Approve changes' : transitionApproveLabel(transition!))}
             </Button>
           )}
           {canRejectDecision && (
-            <Button appearance="danger" isDisabled={busy || disabled || !deviceReady} onClick={() => void requestChallenge('REJECT')}>{decisionLabel('REJECT', 'Reject and restore')}</Button>
+            <Button appearance="danger" isDisabled={busy || disabled || !deviceReady || driftEvidenceBlocked} onClick={() => void requestChallenge('REJECT')}>{decisionLabel('REJECT', 'Reject and restore')}</Button>
           )}
           <span className="va-spacer" />
           <AssuranceChip level={level} />

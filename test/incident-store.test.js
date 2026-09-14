@@ -54,8 +54,8 @@ test('recordRecallFinding builds a deduplicated finding with correct parameters'
   assert.equal(params[1], 'RECALL_SCREEN_BLOCKED'); // finding_type
   assert.equal(params[3], '20'); // project_id
   assert.equal(params[5], '60'); // transition_id
-  assert.equal(params[6], '50'); // from_status_id (targetStatusId)
-  assert.equal(params[7], '40'); // to_status_id (currentStatusId)
+  assert.equal(params[6], '40'); // from_status_id (currentStatusId)
+  assert.equal(params[7], '50'); // to_status_id (targetStatusId)
 });
 
 test('clearRecallFindings clears findings for a baseline', async () => {

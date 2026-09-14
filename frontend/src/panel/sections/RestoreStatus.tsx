@@ -11,7 +11,7 @@ import { PROGRESS, restoreStateLabel } from '../approvalModel';
 
 type Restore = { restore_id: string; state: string; field_name?: string; error?: string; last_error?: string; report?: unknown; detail?: any };
 
-const tone = (state: string) => state.startsWith('COMPLETE') ? 'success' : state === 'PARTIAL' ? 'warning' : ['FAILED', 'QUEUING_FAILED'].includes(state) ? 'danger' : 'neutral';
+const tone = (state: string) => state.startsWith('COMPLETE') ? 'success' : state === 'PARTIAL' ? 'warning' : ['FAILED', 'QUEUING_FAILED', 'ERROR'].includes(state) ? 'danger' : 'neutral';
 
 /**
  * Restoration detail, read only once the summary reports a restoration and
@@ -68,7 +68,7 @@ export default function RestoreStatus({ issueKey, restore, onDone }: { issueKey?
         <div className="va-row">
           <Badge tone={tone(r.state)}>{restoreStateLabel(r.state)}</Badge>
           <span className="va-grow va-truncate">{r.field_name ?? 'All tracked fields'}</span>
-          {['FAILED', 'PARTIAL', 'PENDING', 'QUEUING_FAILED'].includes(r.state) && (
+          {['FAILED', 'PARTIAL', 'PENDING', 'QUEUING_FAILED', 'ERROR'].includes(r.state) && (
             <Button isDisabled={!!retrying} onClick={() => void retry(r.restore_id)}>{retrying === r.restore_id ? PROGRESS.restoreRunning : 'Retry restore'}</Button>
           )}
         </div>

@@ -45,6 +45,7 @@ function runInPopup(popup: Window | null, action: CeremonyAction, optionsJSON: u
 
     const onMessage = (event: MessageEvent) => {
       if (event.origin !== window.location.origin) return;
+      if (event.source !== popup) return;
       const data = event.data;
       if (!data || typeof data !== 'object') return;
       if (data.type === 'webauthn-ready') {

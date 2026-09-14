@@ -26,7 +26,7 @@ export async function executeTreeRestore({
 
   let preflightOk = false;
   try {
-    preflightOk = await adapters.checkPermissions({ ...plan, rootIssueKey });
+    preflightOk = await adapters.checkPermissions({ ...plan, rootIssueKey, baselineTree, currentTree });
   } catch {
     preflightOk = false;
   }

@@ -6,7 +6,7 @@ import { controlledFields, projectConfig, gatedTransition } from '../db/configSt
 import { writeBaseline, currentVersion, baselineForApproval } from '../db/baselineStore.js';
 import { upsertBaselined, getReview } from '../db/itemStateStore.js';
 import { executeQuery, fromBinaryColumn } from './db.js';
-import { tryAppend } from '../db/store.js';
+import { tryAppend, isDuplicateKey } from '../db/store.js';
 import { EVENT } from './ledger.js';
 import { scopeFromIssue } from './trackedFields.js';
 import { meetsAssurance } from './approval/levels.js';
@@ -17,6 +17,34 @@ import {
   verifyTreeCapture,
   writeTreeCapture
 } from '../db/baselineTreeStore.js';
+
+const MAX_VERSION_ATTEMPTS = 3;
+
+/**
+ * Two DIFFERENT approvals racing the same issue can both read the same
+ * MAX(version) before either write commits. idx_baseline_version(issue_id,
+ * version) already turns that into a clean duplicate-key error instead of
+ * silent corruption — nobody turned it into a retry. Same shape as
+ * lib/ledger.js's append(): read again, try again, bounded attempts.
+ * A resumed capture (existing.version already fixed) never retries here;
+ * only a fresh version allocation can collide.
+ */
+async function writeWithVersionRetry(currentVersionFn, issueId, initialVersion, attempt) {
+  let version = initialVersion;
+  let lastError;
+  for (let i = 0; i < MAX_VERSION_ATTEMPTS; i++) {
+    try {
+      return await attempt(version);
+    } catch (error) {
+      if (!isDuplicateKey(error)) throw error;
+      lastError = error;
+      // Someone else took that version. Read the table again — a plain
+      // increment would just collide a second time.
+      version = (await currentVersionFn(issueId)) + 1;
+    }
+  }
+  throw lastError;
+}
 
 /** Trigger capture consumes an existing approval; it never manufactures one. */
 export async function captureBaseline(args) {
@@ -49,7 +77,6 @@ async function run({ issueId, issueKey, transition, transitionAt, now }) {
   if (!config.enabled) return { captured: false, reason: 'DISABLED' };
   if (!gate) return { captured: false, reason: 'NOT_A_GATE' };
   if (!gate.capture_baseline) return { captured: false, reason: 'CAPTURE_DISABLED' };
-  if (gate.capture_baseline && fields.some(f => f.store_values === false || f.store_values === 0)) return { captured: false, reason: 'BASELINE_VALUES_REQUIRED' };
   const consumed = await recentConsumedApproval(issueId, fromStatusId, toStatusId, transitionAt ?? now);
   const approval = approvalFrom(consumed, gate.required_assurance);
   if (!approval.ok) return { captured: false, reason: approval.reason };
@@ -83,7 +110,7 @@ export async function writeCapturedBaseline({ issueId, issueKey, projectId, issu
         version: existing.version, fidelity: existing.fidelity };
     }
   }
-  const version = existing?.version ?? (await deps.currentVersion(issueId)) + 1;
+  let version = existing?.version ?? (await deps.currentVersion(issueId)) + 1;
   const plan = planCapture({ issueId, issueKey, projectId, issueTypeId, version,
     controlledFields: fields, issueFields, editmetaFields, transitionAt, capturedAt,
     actorId: approver.accountId, actorName: approver.displayName ?? 'Unknown',
@@ -109,8 +136,13 @@ export async function writeCapturedBaseline({ issueId, issueKey, projectId, issu
     return { captured: false, reason: 'CAPTURE_INCOMPLETE' };
   }
   const result = existing && existing.state !== 'CAPTURING' ? { baselineId: existing.baseline_id }
-    : await deps.writeBaseline({ ...plan, resume: existing });
-  const baseline = existing ?? plan.baseline;
+    : existing
+      ? await deps.writeBaseline({ ...plan, resume: existing })
+      : await writeWithVersionRetry(deps.currentVersion, issueId, version, async freshVersion => {
+          version = freshVersion;
+          return deps.writeBaseline({ ...plan, baseline: { ...plan.baseline, version: freshVersion }, resume: existing });
+        });
+  const baseline = existing ?? { ...plan.baseline, version };
   const reviewer = await deps.assignReviewer({ baseline, issueFields, projectId, issueTypeId,
     role: requiredRole, reviewerFieldId });
   // An already durable baseline can repair an interrupted publication to item state.
@@ -241,7 +273,7 @@ export async function writeCapturedTreeBaseline({
     return { captured: false, reason: 'CAPTURE_INCOMPLETE' };
   }
 
-  const version = existing?.version ?? (await services.currentVersion(rootIssue.id)) + 1;
+  let version = existing?.version ?? (await services.currentVersion(rootIssue.id)) + 1;
   const rootNode = treePlan.nodes.find(node => Number(node.originalIssueId) === Number(rootIssue.id));
   if (!rootNode) return { captured: false, reason: 'CAPTURE_INCOMPLETE' };
   const capturedAt = Date.now();
@@ -270,7 +302,12 @@ export async function writeCapturedTreeBaseline({
     total_field_count: treePlan.totalFieldCount
   };
 
-  const reserved = await services.beginTreeBaseline({ baseline, resume: existing });
+  const reserved = existing
+    ? await services.beginTreeBaseline({ baseline, resume: existing })
+    : await writeWithVersionRetry(services.currentVersion, rootIssue.id, version, async freshVersion => {
+        version = freshVersion;
+        return services.beginTreeBaseline({ baseline: { ...baseline, version: Number(freshVersion) }, resume: existing });
+      });
   const stored = await services.writeTreeCapture({
     baselineId: reserved.baselineId,
     treeHash: treePlan.treeHash,

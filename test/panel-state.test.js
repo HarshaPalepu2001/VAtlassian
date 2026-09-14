@@ -327,6 +327,10 @@ test('panel returns structural drift and exact destructive consequences', async 
     request: async (_identity, url, options = {}) => {
       const response = body => ({ ok: true, status: 200, json: async () => body });
       if (String(url).includes('/editmeta')) return response({ fields: {} });
+      if (options.method === 'POST' && String(url).includes('/permissions/check')) {
+        const body = JSON.parse(options.body);
+        return response({ issues: body.issues.map(({ issue }) => ({ id: issue, permissions: { BROWSE_PROJECTS: { havePermission: true } } })) });
+      }
       if (options.method === 'POST' && String(url).includes('/search/jql')) {
         const bodyStr = options.body;
         if (bodyStr.includes('T-10')) {
@@ -396,6 +400,10 @@ test('evidence reports structural rejection detail identically to the compatibil
     request: async (_identity, url, options = {}) => {
       const response = body => ({ ok: true, status: 200, json: async () => body });
       if (String(url).includes('/editmeta')) return response({ fields: {} });
+      if (options.method === 'POST' && String(url).includes('/permissions/check')) {
+        const body = JSON.parse(options.body);
+        return response({ issues: body.issues.map(({ issue }) => ({ id: issue, permissions: { BROWSE_PROJECTS: { havePermission: true } } })) });
+      }
       if (options.method === 'POST' && String(url).includes('/search/jql')) {
         const bodyStr = options.body;
         if (bodyStr.includes('T-10')) {
@@ -413,4 +421,61 @@ test('evidence reports structural rejection detail identically to the compatibil
   const evidence = await getEvidence(args);
   assert.deepEqual(evidence.rejection.deleteIssueKeys.sort(), ['NEW-10', 'NEW-9'].sort());
   assert.equal(evidence.rejection.recreateCount, 1);
+});
+
+// ── Issue Security Scheme enforcement on descendant tree nodes ───────────────
+//
+// createTreeReader walks the recursive hierarchy with asApp(), which has full
+// tenant privilege and does not honour Jira Issue Security Schemes. Without a
+// viewer-scoped filter, a reviewer who cannot see a security-scheme-protected
+// child issue would still receive its key and live field content through
+// evidence.rejection / evidence.drift. The root issue is already asUser()
+// gated by readableIssue(); this proves the same boundary holds recursively.
+
+test('evidence excludes a descendant node the viewer cannot browse, and checks with the viewer\'s own privilege', async () => {
+  const requestedIdentities = [];
+  const f = fixture({
+    activeBaseline: async () => ({
+      baseline_id: Buffer.alloc(16, 1), tree_hash: 'abc', node_count: 5, edge_count: 4, total_field_count: 48,
+      from_status_id: '100', to_status_id: '200', transition_id: '31'
+    }),
+    readBaselineTree: async () => ({
+      nodes: [
+        { logicalNodeId: logicalNodeId('10'), issueKey: 'T-10', parentLogicalId: null, digests: {} }
+      ],
+      values: {}
+    }),
+    request: async (identity, url, options = {}) => {
+      requestedIdentities.push({ identity, url: String(url) });
+      const response = body => ({ ok: true, status: 200, json: async () => body });
+      if (String(url).includes('/editmeta')) return response({ fields: {} });
+      if (options.method === 'POST' && String(url).includes('/permissions/check')) {
+        const body = JSON.parse(options.body);
+        return response({ issues: body.issues.map(({ issue }) => ({
+          id: issue,
+          // Every descendant is visible except NEW-9's id (9): simulates an
+          // Issue Security Scheme that hides that one issue from this viewer.
+          permissions: { BROWSE_PROJECTS: { havePermission: issue !== '9' } }
+        })) });
+      }
+      if (options.method === 'POST' && String(url).includes('/search/jql')) {
+        if (String(options.body).includes('T-10')) {
+          return response({ issues: [
+            { id: '9', key: 'NEW-9', fields: { summary: 'secret', parent: { id: '10' }, project: { id: '1' }, issuetype: { id: '1' }, status: { id: '100' } } },
+            { id: '100', key: 'NEW-10', fields: { summary: 'visible', parent: { id: '10' }, project: { id: '1' }, issuetype: { id: '1' }, status: { id: '100' } } }
+          ] });
+        }
+        return response({ issues: [] });
+      }
+      return response({ ...f.issue, fields: { ...f.issue.fields, parent: null } });
+    }
+  });
+  const evidence = await getEvidence(args);
+  assert.deepEqual(evidence.rejection.deleteIssueKeys, ['NEW-10'],
+    'NEW-9 must not appear anywhere in evidence once BROWSE_PROJECTS denies it');
+  assert.ok(!JSON.stringify(evidence).includes('secret'),
+    'the hidden descendant\'s live field content must never reach the response');
+  const permCheck = requestedIdentities.find(r => r.url.includes('/permissions/check'));
+  assert.ok(permCheck, 'evidence must check descendant visibility before returning tree content');
+  assert.equal(permCheck.identity, 'user', 'visibility must be checked with the viewer\'s own privilege, not asApp()');
 });
