@@ -34,26 +34,27 @@ export function createTreeReader({ api, route }) {
       while (queue.length > 0) {
         const parentNode = queue.shift();
 
-        let startAt = 0;
+        let nextPageToken = null;
         const maxResults = 100;
         let isLast = false;
 
         while (!isLast) {
           const escapedKey = parentNode.key.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
           const jql = `parent IN ("${escapedKey}")`;
+          
           const req = {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              jql,
-              startAt,
-              maxResults,
-              fields: requestedFieldIds
-            })
+            method: 'GET',
+            headers: { 'Accept': 'application/json' }
           };
 
-          const searchRes = await api.asApp().requestJira(route`/rest/api/3/search/jql`, req);
-          if (searchRes.status >= 300) throw new Error('Failed search');
+          const fieldsParam = requestedFieldIds.join(',');
+          const searchRes = nextPageToken
+            ? await api.asApp().requestJira(route`/rest/api/3/search/jql?jql=${jql}&maxResults=100&fields=${fieldsParam}&nextPageToken=${nextPageToken}`, req)
+            : await api.asApp().requestJira(route`/rest/api/3/search/jql?jql=${jql}&maxResults=100&fields=${fieldsParam}`, req);
+          if (searchRes.status >= 300) {
+            const errBody = await searchRes.text();
+            throw new Error(`Failed search: ${searchRes.status} ${errBody}`);
+          }
           const searchData = await searchRes.json();
 
           const issues = searchData.issues || [];
@@ -84,8 +85,9 @@ export function createTreeReader({ api, route }) {
             queue.push(child);
           }
 
-          startAt += issues.length;
-          if (issues.length < maxResults) {
+          if (searchData.nextPageToken) {
+            nextPageToken = searchData.nextPageToken;
+          } else {
             isLast = true;
           }
         }

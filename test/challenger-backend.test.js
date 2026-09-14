@@ -178,10 +178,10 @@ test('Challenge 1.1: captureBaseline with unretained fields returns BASELINE_VAL
     content_hash: 'dummy_hash'
   }];
   globalThis.vaChallenger.handleJira = async (route) => {
-    if (route.path.includes('/changelog')) {
+    if (String(route).includes('/changelog')) {
       return { ok: true, json: async () => ({ values: [], total: 0 }) };
     }
-    if (route.path.includes('/editmeta')) {
+    if (String(route).includes('/editmeta')) {
       return { ok: true, json: async () => ({ fields: { summary: { name: 'Summary' } } }) };
     }
     return {
@@ -368,7 +368,7 @@ test('Challenge 3.1: createTreeReader normalizes omitted parent field on root AN
   const api = {
     asApp: () => ({
       requestJira: async (route, options) => {
-        if (route.path.includes('/issue/ROOT-1')) {
+        if (String(route).includes('/issue/ROOT-1')) {
           // Jira REST v3: 'parent' property is completely absent on top-level root
           return {
             status: 200,
@@ -384,8 +384,8 @@ test('Challenge 3.1: createTreeReader normalizes omitted parent field on root AN
             })
           };
         }
-        if (route.path.includes('/search/jql')) {
-          const body = JSON.parse(options.body);
+        if (String(route).includes('/search/jql')) {
+          const body = String(request || '').includes('/search') ? Object.fromEntries(new URL('https://test.com' + String(request)).searchParams.entries()) : JSON.parse(options.body);
           if (body.jql === 'parent IN ("ROOT-1")') {
             return {
               status: 200,
@@ -419,7 +419,7 @@ test('Challenge 3.1: createTreeReader normalizes omitted parent field on root AN
           }
           return { status: 200, json: async () => ({ issues: [] }) };
         }
-        throw new Error('Unexpected route: ' + route.path);
+        throw new Error('Unexpected route: ' + String(route));
       }
     })
   };
@@ -455,7 +455,7 @@ test('Challenge 3.2: createTreeReader detects cyclical issue graphs and aborts',
   const api = {
     asApp: () => ({
       requestJira: async (route, options) => {
-        if (route.path.includes('/issue/ROOT-1')) {
+        if (String(route).includes('/issue/ROOT-1')) {
           return {
             status: 200,
             json: async () => ({
@@ -464,9 +464,9 @@ test('Challenge 3.2: createTreeReader detects cyclical issue graphs and aborts',
             })
           };
         }
-        if (route.path.includes('/search/jql')) {
+        if (String(route).includes('/search/jql')) {
           // Cycle: ROOT-1 has child CHILD-1, which has child ROOT-1
-          const body = JSON.parse(options.body);
+          const body = String(request || '').includes('/search') ? Object.fromEntries(new URL('https://test.com' + String(request)).searchParams.entries()) : JSON.parse(options.body);
           if (body.jql === 'parent IN ("ROOT-1")') {
             return {
               status: 200,

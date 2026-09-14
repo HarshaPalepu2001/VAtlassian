@@ -328,11 +328,11 @@ test('panel returns structural drift and exact destructive consequences', async 
       const response = body => ({ ok: true, status: 200, json: async () => body });
       if (String(url).includes('/editmeta')) return response({ fields: {} });
       if (options.method === 'POST' && String(url).includes('/permissions/check')) {
-        const body = JSON.parse(options.body);
+        const body = String(request || '').includes('/search') ? Object.fromEntries(new URL('https://test.com' + String(request)).searchParams.entries()) : JSON.parse(options.body);
         return response({ issues: body.issues.map(({ issue }) => ({ id: issue, permissions: { BROWSE_PROJECTS: { havePermission: true } } })) });
       }
       if (options.method === 'POST' && String(url).includes('/search/jql')) {
-        const bodyStr = options.body;
+        const bodyStr = String(url).includes('/search') ? String(url) : options.body;
         if (bodyStr.includes('T-10')) {
           return response({ issues: [
             { id: '11', key: 'T-11', fields: { summary: 'story', parent: { id: '10' }, project: { id: '1' }, issuetype: { id: '1' }, status: { id: '100' } } },
@@ -401,11 +401,11 @@ test('evidence reports structural rejection detail identically to the compatibil
       const response = body => ({ ok: true, status: 200, json: async () => body });
       if (String(url).includes('/editmeta')) return response({ fields: {} });
       if (options.method === 'POST' && String(url).includes('/permissions/check')) {
-        const body = JSON.parse(options.body);
+        const body = String(request || '').includes('/search') ? Object.fromEntries(new URL('https://test.com' + String(request)).searchParams.entries()) : JSON.parse(options.body);
         return response({ issues: body.issues.map(({ issue }) => ({ id: issue, permissions: { BROWSE_PROJECTS: { havePermission: true } } })) });
       }
       if (options.method === 'POST' && String(url).includes('/search/jql')) {
-        const bodyStr = options.body;
+        const bodyStr = String(url).includes('/search') ? String(url) : options.body;
         if (bodyStr.includes('T-10')) {
           return response({ issues: [
             { id: '11', key: 'T-11', fields: { summary: 'story', parent: { id: '10' }, project: { id: '1' }, issuetype: { id: '1' }, status: { id: '100' } } },
@@ -450,7 +450,7 @@ test('evidence excludes a descendant node the viewer cannot browse, and checks w
       const response = body => ({ ok: true, status: 200, json: async () => body });
       if (String(url).includes('/editmeta')) return response({ fields: {} });
       if (options.method === 'POST' && String(url).includes('/permissions/check')) {
-        const body = JSON.parse(options.body);
+        const body = String(request || '').includes('/search') ? Object.fromEntries(new URL('https://test.com' + String(request)).searchParams.entries()) : JSON.parse(options.body);
         return response({ issues: body.issues.map(({ issue }) => ({
           id: issue,
           // Every descendant is visible except NEW-9's id (9): simulates an
@@ -459,7 +459,7 @@ test('evidence excludes a descendant node the viewer cannot browse, and checks w
         })) });
       }
       if (options.method === 'POST' && String(url).includes('/search/jql')) {
-        if (String(options.body).includes('T-10')) {
+        if ((String(url).includes('/search') ? String(url) : String(options.body)).includes('T-10')) {
           return response({ issues: [
             { id: '9', key: 'NEW-9', fields: { summary: 'secret', parent: { id: '10' }, project: { id: '1' }, issuetype: { id: '1' }, status: { id: '100' } } },
             { id: '100', key: 'NEW-10', fields: { summary: 'visible', parent: { id: '10' }, project: { id: '1' }, issuetype: { id: '1' }, status: { id: '100' } } }
