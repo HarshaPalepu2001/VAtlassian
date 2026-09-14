@@ -40,29 +40,50 @@ export async function upsertBaselined({
   reviewerAccountId, reviewerName, baselineId, baselineVersion,
   contentHash, fieldDigests, lastChangelogId, now
 }) {
-  const newer = '(baseline_version IS NULL OR baseline_version < VALUES(baseline_version))';
-  const columns = ['issue_key', 'project_id', 'issue_type_id', 'summary', 'reviewer_account_id', 'reviewer_name',
-    'state', 'baseline_id', 'content_hash', 'field_digests', 'drift_count', 'drifted_field_count',
-    'max_materiality', 'last_drift_at', 'last_drift_by', 'last_checked_at', 'last_changelog_id'];
-  const updates = columns.map(column => `${column} = CASE WHEN ${newer} THEN VALUES(${column}) ELSE ${column} END`);
-  // baseline_version is assigned last because MySQL evaluates assignments in order.
-  updates.push(`version = CASE WHEN ${newer} THEN version + 1 ELSE version END`);
-  updates.push(`baseline_version = CASE WHEN ${newer} THEN VALUES(baseline_version) ELSE baseline_version END`);
+  const args = [
+    issueId, issueKey, projectId, issueTypeId, truncate(summary, 255),
+    reviewerAccountId ?? null, reviewerName ?? null,
+    REVIEW_STATE.BASELINED,
+    toBinaryParam(baselineId), baselineVersion,
+    contentHash, fieldDigests,
+    now, lastChangelogId ?? null
+  ];
+
+  const existing = await executeQuery('SELECT baseline_version FROM va_item_state WHERE issue_id = ?', [issueId]);
+  
+  if (existing.length === 0) {
+    try {
+      await executeQuery(
+        `INSERT INTO va_item_state
+         (issue_id, issue_key, project_id, issue_type_id, summary, reviewer_account_id, reviewer_name,
+          state, baseline_id, baseline_version, content_hash, field_digests,
+          drift_count, drifted_field_count, max_materiality,
+          last_drift_at, last_drift_by, last_checked_at, last_changelog_id, version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, FROM_BASE64(?), ?, ?, ?, 0, 0, NULL, NULL, NULL, ?, ?, 0)`,
+        args
+      );
+      return;
+    } catch (e) {
+      // Fall through to update in case of race condition
+    }
+  }
+
   await throwing(
-    `INSERT INTO va_item_state
-     (issue_id, issue_key, project_id, issue_type_id, summary, reviewer_account_id, reviewer_name,
-      state, baseline_id, baseline_version, content_hash, field_digests,
-      drift_count, drifted_field_count, max_materiality,
-      last_drift_at, last_drift_by, last_checked_at, last_changelog_id, version)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, FROM_BASE64(?), ?, ?, ?, 0, 0, NULL, NULL, NULL, ?, ?, 0)
-     ON DUPLICATE KEY UPDATE ${updates.join(', ')}`,
+    `UPDATE va_item_state SET
+     issue_key = ?, project_id = ?, issue_type_id = ?, summary = ?, reviewer_account_id = ?, reviewer_name = ?,
+     state = ?, baseline_id = FROM_BASE64(?), baseline_version = ?, content_hash = ?, field_digests = ?,
+     drift_count = 0, drifted_field_count = 0, max_materiality = NULL,
+     last_drift_at = NULL, last_drift_by = NULL, last_checked_at = ?, last_changelog_id = ?,
+     version = version + 1
+     WHERE issue_id = ? AND (baseline_version IS NULL OR baseline_version < ?)`,
     [
-      issueId, issueKey, projectId, issueTypeId, truncate(summary, 255),
+      issueKey, projectId, issueTypeId, truncate(summary, 255),
       reviewerAccountId ?? null, reviewerName ?? null,
       REVIEW_STATE.BASELINED,
       toBinaryParam(baselineId), baselineVersion,
       contentHash, fieldDigests,
-      now, lastChangelogId ?? null
+      now, lastChangelogId ?? null,
+      issueId, baselineVersion
     ]
   );
 }
