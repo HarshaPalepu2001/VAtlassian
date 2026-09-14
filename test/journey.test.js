@@ -205,3 +205,23 @@ test('being asked, not holding a role, is what makes somebody an actor', () => {
   });
   assert.equal(tierFor(actions), 'observer');
 });
+
+test('adversarial edge matrix preserves sibling identities and wildcard scope', () => {
+  const offered = [
+    { id: '41', name: 'Normal approve', toStatusId: '2', toStatusName: 'Done', isAvailable: true },
+    { id: '42', name: 'Fast approve', toStatusId: '2', toStatusName: 'Done', isAvailable: true },
+    { id: '43', name: 'Close from anywhere', toStatusId: '2', toStatusName: 'Done', isAvailable: true }
+  ];
+  const gates = [
+    { required_role: 'QA', required_assurance: 'ESIGNATURE', matched_any_status: false },
+    { required_role: 'QA', required_assurance: 'ESIGNATURE', matched_any_status: false },
+    { required_role: 'QA', required_assurance: 'BIOMETRIC', matched_any_status: true }
+  ];
+
+  const { actions } = resolveActions({ offered, gates, eligible: [true, true, true], surface: 'panel' });
+
+  assert.deepEqual(actions.map(action => action.transitionId), ['41', '42', '43']);
+  assert.deepEqual(actions.map(action => action.anyStatus), [false, false, true]);
+  assert.deepEqual(actions.map(action => action.requiredAssurance), ['ESIGNATURE', 'ESIGNATURE', 'BIOMETRIC']);
+  assert.equal(new Set(actions.map(action => action.transitionId)).size, 3);
+});

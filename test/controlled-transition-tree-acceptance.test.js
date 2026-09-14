@@ -346,3 +346,95 @@ test('Acceptance: Approval Validations', async (t) => {
     assert.equal(res.reason, 'replayed');
   });
 });
+
+function crashThenResume({ baselineTree, currentTree, crashMethod, kind }) {
+  return (async () => {
+    const adapters = defaultAdapters();
+    let crashed = false;
+    let successfulMutations = 0;
+    adapters[crashMethod] = async (...args) => {
+      if (!crashed) {
+        crashed = true;
+        throw new Error(`simulated worker crash in ${kind}`);
+      }
+      successfulMutations += 1;
+      if (crashMethod === 'createIssue') return { newIssueId: 'replacement-id', newIssueKey: 'REPLACED-1' };
+      return undefined;
+    };
+
+    const first = await executeTreeRestore({
+      restoreId: `crash-${kind}`,
+      rootIssueKey: 'KEY-1',
+      baselineTree,
+      currentTree,
+      controlledFields: SIXTEEN_FIELDS,
+      adapters,
+      maxActions: 10
+    });
+    assert.equal(first.state, 'PARTIAL', `${kind} crash must leave unfinished work`);
+
+    const second = await executeTreeRestore({
+      restoreId: `crash-${kind}`,
+      rootIssueKey: 'KEY-1',
+      baselineTree,
+      currentTree,
+      controlledFields: SIXTEEN_FIELDS,
+      adapters,
+      maxActions: 10
+    });
+    assert.equal(second.state, 'READY_TO_VERIFY', `${kind} must resume to verification`);
+    assert.equal(successfulMutations, 1, `${kind} must run exactly once after the crash`);
+  })();
+}
+
+test('adversarial worker crashes leave every restore action resumable and idempotent', async () => {
+  const root = { logicalNodeId: 'root', id: '1', key: 'KEY-1', parentLogicalId: null, digests: {} };
+  const child = { logicalNodeId: 'child', id: '2', key: 'KEY-2', parentLogicalId: 'root', digests: {} };
+
+  await crashThenResume({
+    kind: 'CREATE_REPLACEMENT',
+    crashMethod: 'createIssue',
+    baselineTree: { nodes: [root, child], values: retained([root, child]) },
+    currentTree: { nodes: [root] }
+  });
+
+  await crashThenResume({
+    kind: 'MOVE_NODE',
+    crashMethod: 'moveIssue',
+    baselineTree: { nodes: [root, { ...child, parentLogicalId: 'root' }, { logicalNodeId: 'parent', id: '3', key: 'KEY-3', parentLogicalId: 'root', digests: {} }] },
+    currentTree: { nodes: [root, { ...child, parentLogicalId: 'parent' }, { logicalNodeId: 'parent', id: '3', key: 'KEY-3', parentLogicalId: 'root', digests: {} }] }
+  });
+
+  await crashThenResume({
+    kind: 'RESTORE_FIELDS',
+    crashMethod: 'editIssue',
+    baselineTree: { nodes: [{ ...root, digests: { field_0: 'approved' } }], values: retained([root], { root: { field_0: 'approved' } }) },
+    currentTree: { nodes: [{ ...root, digests: { field_0: 'changed' } }] }
+  });
+
+  await crashThenResume({
+    kind: 'DELETE_ADDED_NODE',
+    crashMethod: 'deleteIssue',
+    baselineTree: { nodes: [root] },
+    currentTree: { nodes: [root, { logicalNodeId: 'extra', id: '9', key: 'KEY-9', parentLogicalId: 'root', digests: {} }] }
+  });
+});
+
+test('unsupported retained fields and wrong-status read-back remain fail-closed', async () => {
+  const root = { logicalNodeId: 'root', id: '1', key: 'KEY-1', parentLogicalId: null, digests: { unsupported: 'approved' } };
+  assert.throws(() => planTreeRestore({
+    baselineTree: { nodes: [root], values: { root: {} } },
+    currentTree: { nodes: [{ ...root, digests: { unsupported: 'changed' } }] },
+    controlledFields: [{ field_id: 'unsupported' }]
+  }), error => error.code === 'BASELINE_VALUES_REQUIRED');
+
+  const verified = await verifyTreeRestore({
+    readStableTree: async () => ({ tree: { nodes: [{ id: '1', key: 'KEY-1', fields: { status: { id: '2' } } }] } }),
+    rootIssueKey: 'KEY-1',
+    baselineTree: { nodes: [{ logicalNodeId: 'root', originalIssueId: 1, currentIssueId: 1, issueKey: 'KEY-1', parentLogicalId: null, digests: {} }] },
+    controlledFields: [],
+    expectedRootStatusId: '1'
+  });
+  assert.equal(verified.matches, false);
+  assert.equal(verified.statusMatches, false);
+});
