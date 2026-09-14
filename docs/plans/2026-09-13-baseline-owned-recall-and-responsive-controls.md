@@ -549,27 +549,27 @@ git commit -m "perf: split panel summary from evidence"
 - Panel/My Approvals: selector appears for 2+ applicable actions and uses the shared `IssuePanel` component.
 - Summary refresh is single-flight with sequence protection; evidence is lazy and keyed by selected action plus baseline version.
 
-- [ ] **Step 1: Write rendering, reset, refresh, and timing tests**
+- [x] **Step 1: Write rendering, reset, refresh, and timing tests**
 
 Prove that all eligible buttons render without a disclosure; the button says `Approve -> <destination>`; drift shows `Approve changes` and `Reject and restore`; every viewer sees baseline/approval facts; switching between `Any status -> Done` and `In Progress -> Done` clears code, confirmation, WebAuthn challenge, evidence, and messages; transition screen has no selector; no interval timer exists; two refresh requests coalesce; an older response cannot replace newer state; button progress text appears synchronously.
 
-- [ ] **Step 2: Render a useful shell before network completion**
+- [x] **Step 2: Render a useful shell before network completion**
 
 Render issue identity when available from Forge context plus labelled skeleton rows for control state, latest baseline, latest approval, and actions. Do not render an empty panel or indefinite unlabelled spinner.
 
-- [ ] **Step 3: Use the compact summary first and evidence on demand**
+- [x] **Step 3: Use the compact summary first and evidence on demand**
 
 `usePanelState` invokes `panel:getSummary`. `usePanelEvidence` invokes `panel:getEvidence` only when the evidence section opens or an approval flow requires review. Existing visible controls stay rendered while evidence loads. If evidence reports a newer baseline/version, refresh summary and discard that evidence.
 
-- [ ] **Step 4: Implement exact action selection and all visible controls**
+- [x] **Step 4: Implement exact action selection and all visible controls**
 
 Use `transition.label`, never only `transition.name`, for options. Keep all role-eligible actions visible. Drift actions carry no client transition/provider/role facts. Disable duplicate submits immediately and use state-specific copy: `Preparing signature`, `Checking biometric`, `Publishing baseline`, `Moving to Done`, `Starting restoration`, and `Restoration in progress`.
 
-- [ ] **Step 5: Remove polling and duplicate events**
+- [x] **Step 5: Remove polling and duplicate events**
 
 Delete `window.setInterval`. Retain `JIRA_ISSUE_CHANGED`, `VA_ISSUE_CHANGED`, focus, visibility return, manual Refresh, and post-action refresh. Centralize one `VA_ISSUE_CHANGED` emission in the bridge after a successful durable mutation; remove component-level duplicate emits.
 
-- [ ] **Step 6: Run frontend tests, lint, and build**
+- [x] **Step 6: Run frontend tests, lint, and build**
 
 Run: `npm --prefix frontend test`
 
@@ -579,7 +579,7 @@ Run: `npm --prefix frontend run build`
 
 Expected: tests/build/lint pass and no production `setInterval` remains under `frontend/src`.
 
-- [ ] **Step 7: Commit only Task 8 hunks**
+- [x] **Step 7: Commit only Task 8 hunks**
 
 ```bash
 git add -p frontend/src/panel/types.ts frontend/src/panel/usePanelState.ts frontend/src/panel/usePanelEvidence.ts frontend/src/panel/IssuePanel.tsx frontend/src/panel/sections/ApprovalControls.tsx frontend/src/panel/sections/BaselineRecord.tsx frontend/src/panel/sections/DriftSection.tsx frontend/src/panel/sections/RestoreStatus.tsx frontend/src/panel/approvalModel.ts frontend/src/lib/issueUpdates.ts frontend/src/lib/bridge.ts frontend/src/field/ApprovalField.tsx src/ui-kit/edit.jsx frontend/test/panel.test.mjs

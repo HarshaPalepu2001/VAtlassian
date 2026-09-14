@@ -35,7 +35,7 @@ function runInPopup(popup: Window | null, action: CeremonyAction, optionsJSON: u
       if (settled) return;
       settled = true;
       window.removeEventListener('message', onMessage);
-      clearInterval(closeWatch);
+      for (const [target, type] of returnSignals) target.removeEventListener(type, onReturn);
       clearTimeout(deadline);
       if (close) {
         try { popup.close(); } catch { /* already gone */ }
@@ -58,9 +58,22 @@ function runInPopup(popup: Window | null, action: CeremonyAction, optionsJSON: u
     };
 
     window.addEventListener('message', onMessage);
-    const closeWatch = setInterval(() => {
-      if (popup.closed) finish(reject, errorWithName('NotAllowedError', 'The device confirmation window was closed.'));
-    }, 750);
+
+    // The device window can be closed without answering. Rather than poll
+    // `popup.closed`, check it whenever the reviewer comes back to this frame:
+    // focus returning, the tab becoming visible, or a click inside the iframe
+    // (focus may land on the top-level Jira page instead). Each return also
+    // schedules one follow-up check, because `closed` can lag the focus change.
+    const returnSignals: Array<[Window | Document, string]> = [[window, 'focus'], [document, 'visibilitychange'], [document, 'pointerdown']];
+    function checkClosed() {
+      if (!settled && popup?.closed) finish(reject, errorWithName('NotAllowedError', 'The device confirmation window was closed.'));
+    }
+    function onReturn() {
+      checkClosed();
+      if (!settled) setTimeout(checkClosed, 500);
+    }
+    for (const [target, type] of returnSignals) target.addEventListener(type, onReturn);
+
     const deadline = setTimeout(() => {
       finish(reject, errorWithName('TimeoutError', 'The device confirmation timed out.'), true);
     }, 100_000);

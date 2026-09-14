@@ -1,8 +1,11 @@
-import { Component, useState, type ReactNode } from 'react';
+import { Component, useEffect, useState, type ReactNode } from 'react';
+import { view } from '@forge/bridge';
 import Button from '@atlaskit/button';
-import { Card, Loading, Page } from '../ui/primitives';
-import { Notice, When } from '../ui/feedback';
+import { Card, Page } from '../ui/primitives';
+import { Notice } from '../ui/feedback';
 import usePanelState from './usePanelState';
+import usePanelEvidence from './usePanelEvidence';
+import { resolveSelectedAction } from './approvalModel';
 import DriftSection from './sections/DriftSection';
 import ApprovalControls from './sections/ApprovalControls';
 import BaselineRecord from './sections/BaselineRecord';
@@ -10,7 +13,7 @@ import RestoreStatus from './sections/RestoreStatus';
 
 type Props = { issueKey?: string; onDone?: () => void };
 
-class PanelBoundary extends Component<{children: ReactNode}, {failed: boolean}> {
+class PanelBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   state = { failed: false };
   static getDerivedStateFromError() { return { failed: true }; }
   render() {
@@ -21,6 +24,7 @@ class PanelBoundary extends Component<{children: ReactNode}, {failed: boolean}> 
 }
 
 // The shell survives both failed requests and render errors in the body.
+// My Approvals (QueueList.tsx) embeds this same component with an issueKey.
 export default function IssuePanel(props: Props) {
   const [revision, setRevision] = useState(0);
   return <Page variant="panel">
@@ -34,81 +38,110 @@ export default function IssuePanel(props: Props) {
   </Page>;
 }
 
-function IssuePanelBody({ issueKey, onDone }: Props) {
-  const { state, error, refresh, refreshing } = usePanelState(issueKey);
+/** A labelled row standing in for a fact that has not resolved yet — never a
+ *  bare/unlabelled spinner, and never an empty panel. */
+function SkeletonRow({ label, failed }: { label: string; failed: boolean }) {
+  return <div className="va-row"><span className="va-secondary">{label}</span><span className="va-muted">{failed ? 'Not available' : 'Loading…'}</span></div>;
+}
 
-  if (!state && !error) return <Loading label="Loading approval and baseline…" />;
+function IssuePanelBody({ issueKey: issueKeyProp, onDone }: Props) {
+  // The Forge issue-panel module renders <IssuePanel/> with no props. Read the
+  // issue identity from the Forge context so the shell names the work item
+  // before the summary lands; `panel:getSummary` resolves the same issue from
+  // the request context server-side, so data fetching does not wait for this.
+  const [contextIssue, setContextIssue] = useState<{ key?: string; id?: string } | null>(null);
+  useEffect(() => {
+    if (issueKeyProp) return;
+    let active = true;
+    view.getContext().then(ctx => { if (active) setContextIssue((ctx?.extension as { issue?: { key?: string; id?: string } })?.issue ?? null); }).catch(() => {});
+    return () => { active = false; };
+  }, [issueKeyProp]);
+
+  const { state: summary, error, refresh, refreshing } = usePanelState(issueKeyProp);
+  const issueKey = issueKeyProp ?? summary?.issue?.key ?? contextIssue?.key;
+
+  // The selected action lives here so the evidence read is keyed to exactly
+  // the action ApprovalControls is deciding.
+  const [selectedTransitionId, setSelectedTransitionId] = useState('');
+  const [baselineDisclosureOpen, setBaselineDisclosureOpen] = useState(false);
+  const action = resolveSelectedAction(summary, selectedTransitionId);
+  const { evidence, loading: evidenceLoading, error: evidenceError, retry: retryEvidence } = usePanelEvidence({
+    issueKey,
+    actionId: action.actionKey || 'none',
+    baselineVersion: summary?.baseline?.version ?? null,
+    baselineId: summary?.baseline?.baselineId ?? null,
+    // Drift review is an approval flow that requires the evidence; otherwise
+    // it loads only when the baseline record is opened.
+    enabled: action.reviewingDrift || baselineDisclosureOpen,
+    onStale: refresh
+  });
 
   return (
     <div className="va-stack">
-        {error && <Notice danger>{error} Refresh before making an approval decision.</Notice>}
+      {error && (
+        <Notice danger>
+          {error} Refresh before making an approval decision.
+          {' '}<Button appearance="subtle" isDisabled={refreshing} onClick={() => void refresh()}>{refreshing ? 'Refreshing…' : 'Try again'}</Button>
+        </Notice>
+      )}
 
-        {state?.controls && (
-          <>
-            {state.controls.unavailable && (
-              <Notice danger>
-                Workflow control alerts could not be checked. Refresh before relying on this approval.
-              </Notice>
-            )}
+      {/* A meaningful shell before the first response, and kept in place if
+          that response fails — never an empty panel or a bare spinner. */}
+      {!summary && (
+        <div className="va-stack" aria-busy={!error} aria-label="Approval summary">
+          {(issueKeyProp ?? contextIssue?.key) && <p className="va-secondary">{issueKeyProp ?? contextIssue?.key}</p>}
+          <Card title="Approval"><SkeletonRow label="Control state" failed={!!error} /><SkeletonRow label="Available actions" failed={!!error} /></Card>
+          <Card title="Baseline record"><SkeletonRow label="Latest baseline" failed={!!error} /><SkeletonRow label="Latest approval" failed={!!error} /></Card>
+        </div>
+      )}
 
-            {!!state.controls.gateFindings?.length && (
-              <Notice danger>
-                <strong>Workflow protection needs attention.</strong>
-                <p>
-                  A workflow check found a missing or changed approval control for this issue type.
-                  Ask a Jira administrator to review the workflow validator.
-                </p>
-                {state.controls.gateFindings.map((finding, index) => (
-                  <p key={index}>{finding.detail} — last checked <When ms={finding.last_seen_at} /></p>
-                ))}
-              </Notice>
-            )}
+      {summary && (
+        <>
+          {/* Admin-only fact. Ordinary users never receive adminIncidentCount
+              at all, so this never renders as an operational task for them. */}
+          {summary.adminIncidentCount != null && summary.adminIncidentCount > 0 && (
+            <Notice>
+              {summary.adminIncidentCount} workflow control {summary.adminIncidentCount === 1 ? 'incident has' : 'incidents have'} been recorded
+              for this configuration. Review them in the admin console.
+            </Notice>
+          )}
 
-            {!!state.controls.incidents?.length && (
-              <Notice danger>
-                <strong>A control incident was recorded on this work item.</strong>
-                {state.controls.incidents.map((incident, index) => (
-                  <p key={index}>
-                    {incident.event_type === 'UNAUTHORIZED_TRANSITION'
-                      ? 'A controlled transition occurred without verified approval.'
-                      : incident.event_type === 'BASELINE_CAPTURE_FAILED'
-                        ? 'An approved transition did not produce a complete baseline.'
-                        : 'A workflow control incident was recorded.'}{' '}
-                    <When ms={incident.occurred_at} />
-                  </p>
-                ))}
-                <p>
-                  Review the issue history and workflow controls with an administrator. These are
-                  historical records; a later approval does not erase them.
-                </p>
-              </Notice>
-            )}
-          </>
-        )}
+          {summary.baseline && (
+            <DriftSection drift={summary.drift} evidence={evidence} issueKey={issueKey} />
+          )}
 
-        {state && (
-          <>
-            {state.record && <DriftSection drift={state.drift} issueKey={issueKey ?? state.issue?.key} />}
-            {state.tier === 'observer' ? (
-              <Card title="Approval">
-                <Notice>{state.state ?? 'Waiting on signature'}</Notice>
-              </Card>
-            ) : (
-              <ApprovalControls
-                state={state}
-                issueKey={issueKey}
-                onDone={async () => { await refresh(); onDone?.(); }}
-                disabled={!!error || refreshing}
-              />
-            )}
-            <BaselineRecord record={state.record} baseline={state.baseline} />
-            <RestoreStatus
-              issueKey={issueKey ?? state.issue?.key}
-              revision={`${state.record?.version}:${state.drift.evidenceHash ?? ''}`}
-            />
-          </>
-        )}
+          {action.reviewingDrift && evidenceError && (
+            <Notice>
+              Change details could not be loaded. {evidenceError}
+              {' '}<Button appearance="subtle" onClick={retryEvidence}>Reload evidence</Button>
+            </Notice>
+          )}
+
+          <ApprovalControls
+            summary={summary}
+            issueKey={issueKey}
+            onDone={async () => { await refresh(); onDone?.(); }}
+            disabled={!!error}
+            evidence={evidence}
+            evidenceLoading={evidenceLoading}
+            evidenceError={evidenceError}
+            selectedTransitionId={selectedTransitionId}
+            onSelectTransition={setSelectedTransitionId}
+          />
+
+          <BaselineRecord
+            baseline={summary.baseline}
+            latestApproval={summary.latestApproval}
+            record={evidence?.record ?? null}
+            evidenceLoading={evidenceLoading}
+            evidenceError={evidenceError}
+            onOpen={() => setBaselineDisclosureOpen(true)}
+            onRetryEvidence={retryEvidence}
+          />
+
+          <RestoreStatus issueKey={issueKey} restore={summary.restore} onDone={refresh} />
+        </>
+      )}
     </div>
   );
 }
-

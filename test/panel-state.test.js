@@ -363,6 +363,16 @@ test('evidence returns the retained-value record, live diff fields, and tree rej
   assert.deepEqual(evidence.restoreHistory, []);
 });
 
+test('evidence carries the same content-binding hash that the compatibility adapter gave drift decisions', async () => {
+  const f = fixture();
+  f.issue.fields.summary = 'edited after approval';
+  const state = await getState(args);
+  const evidence = await getEvidence(args);
+
+  assert.equal(typeof evidence.evidenceHash, 'string', 'a drift decision binds its challenge to the reviewed evidence');
+  assert.equal(evidence.evidenceHash, state.drift.evidenceHash);
+});
+
 test('evidence refuses a stale expected baseline version rather than mixing vintages', async () => {
   fixture();
   const evidence = await getEvidence({ ...args, payload: { ...args.payload, expectedBaselineVersion: 99 } });

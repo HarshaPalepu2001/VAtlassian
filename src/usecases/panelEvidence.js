@@ -103,6 +103,7 @@ export async function getEvidence(args) { return respond(async () => {
   return {
     baselineId: baseline?.baseline_id ? Buffer.from(baseline.baseline_id).toString('hex') : null,
     baselineVersion: baseline?.version ?? 0,
+    evidenceHash: prepared.evidenceHash ?? null,
     description, descriptionEmpty, descriptionTruncated,
     assignee: issue.fields.assignee, reporter: issue.fields.reporter,
     record,

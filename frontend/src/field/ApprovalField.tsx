@@ -15,6 +15,12 @@
  * assurance that edge requires. This one reads the requirement and serves
  * every level, so it is the safe default for a screen shared by several rules.
  *
+ * ONE EXACT ACTION, NEVER A CHOICE. Jira has already chosen the transition:
+ * `context.extension.issueTransition.id`. The server resolves the rule for
+ * that id, and this screen shows it as read-only facts. A missing id, more
+ * than one matching rule, or a rule for any other transition — including a
+ * sibling that reaches the same status — fails closed.
+ *
  * THE SUBMITTED VALUE CARRIES NO AUTHORITY. It is a receipt. The approval is
  * recorded server-side first, and src/gate.js finds the row by scanning the
  * modified fields for its 32-hex id — a forged field value has no matching
@@ -23,41 +29,70 @@
  * authenticator code leaking into the work item's change history and refuses
  * the transition outright.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { invoke } from '../lib/bridge';
 import { view } from '@forge/bridge';
 import Button from '@atlaskit/button';
-import { Affirmation, CodeInput, Field, Loading, Select } from '../ui/primitives';
+import { Affirmation, CodeInput, Field, Loading } from '../ui/primitives';
 import { AssuranceChip, Notice } from '../ui/feedback';
 import { approvalMode } from '../lib/assurance';
 import type { AssuranceLevel } from '../lib/assurance';
 import { assertResult, errorMessage } from '../lib/result';
 import type { Result } from '../lib/result';
+import { PROGRESS, captureFact, driftFact, transitionScopeLabel } from '../panel/approvalModel';
 import { biometricStatus, confirmBiometric, enrolBiometric } from '../panel/deviceAuth';
 
 const CODE_LENGTH = 6;
 
-type Option = { transitionId: string; toStatusId?: string; name?: string; meaning?: string; requiredRole?: string; requiredAssurance?: AssuranceLevel; eligible?: boolean };
+/** Legible copy for the reasons this screen fails closed outright. */
+const FAIL_CLOSED_MESSAGES: Record<string, string> = {
+  TRANSITION_ID_REQUIRED: 'This screen could not determine which transition is being performed, so nothing can be signed here. Reopen the transition dialog and try again.',
+  ISSUE_REQUIRED: 'This screen could not determine which work item is being transitioned.',
+  ISSUE_ACCESS_DENIED: 'This work item could not be read, so nothing can be signed here.'
+};
+const AMBIGUOUS = 'More than one signing rule matched this exact transition. Ask a Jira administrator to remove the conflicting configuration.';
+const MISMATCH = 'The approval rule returned for this screen does not match the transition being performed, so nothing can be signed here. Reopen the transition dialog and try again.';
+
+type Action = {
+  transitionId: string; toStatusId?: string; toStatusName?: string | null; name?: string | null; label?: string | null;
+  meaning?: string | null; requiredRole?: string | null; requiredAssurance?: AssuranceLevel;
+  capturesBaseline?: boolean; blocksOnDrift?: boolean; anyStatus?: boolean; eligible?: boolean;
+};
+type SigningContext = {
+  actions?: Action[]; transitions?: Action[]; blocker?: string | null; requiredRole?: string | null;
+  issue?: { key?: string; summary?: string; statusName?: string }; actorName?: string; drift?: { evidenceHash?: string }; error?: string;
+};
 type Challenge = Result & { challengeId: string; meaning: string; requiredAssurance: AssuranceLevel };
 type Submitted = Result & { approvalId: string; printedName?: string; meaning?: string };
 
-export default function ApprovalField({ context }: { context?: { extension?: { issue?: { key?: string; id?: string }; issueTransition?: { id?: string } } } }) {
+/** The one action this screen may sign for `transitionId`, or why none. */
+function exactAction(state: SigningContext, transitionId: string): { action: Action | null; blocker: string } {
+  const list = state.actions ?? (state.transitions ?? []).filter(t => t.eligible !== false);
+  if (list.length > 1) return { action: null, blocker: AMBIGUOUS };
+  if (list.length === 1) {
+    return String(list[0].transitionId) === transitionId ? { action: list[0], blocker: '' } : { action: null, blocker: MISMATCH };
+  }
+  const requiredRole = state.requiredRole ?? (state.transitions ?? []).find(t => t.requiredRole)?.requiredRole;
+  const notEligible = state.blocker === 'NOT_ELIGIBLE_FOR_RULE' || (!state.blocker && (state.transitions ?? []).some(t => t.eligible === false));
+  if (state.blocker === 'GATE_NOT_ENFORCED') return { action: null, blocker: 'The approval rule exists, but the VAtlassian validator is not attached to this transition in Jira. Ask a Jira administrator to re-attach it.' };
+  if (state.blocker === 'WRONG_FIELD_FOR_RULE') return { action: null, blocker: 'This transition is signed with an authenticator code. Ask an administrator to put the "Electronic Signature" field on this transition screen.' };
+  if (notEligible) {
+    return { action: null, blocker: requiredRole ? `This transition is signed by ${requiredRole}. You do not hold the approver role on this work item.` : 'You do not hold the approver role this transition requires.' };
+  }
+  return { action: null, blocker: 'No configured approval rule applies to this transition. Ask a Jira administrator to check the controlled transition.' };
+}
+
+export default function ApprovalField({ context }: { context?: { extension?: { issue?: { key?: string; id?: string }; issueTransition?: { id?: string | number } } } }) {
   // A custom field in the `issue-transition` experience does not reliably
-  // carry extension.issue, so neither value is treated as required here. Both
-  // are sent, and readableIssue() in usecases/panelAccess.js falls back to the
-  // Forge context server-side. Refusing on the client before asking is how
-  // this surface previously died with "could not tell which work item".
+  // carry extension.issue, so the issue is not required here: readableIssue()
+  // in usecases/panelAccess.js falls back to the Forge context server-side.
   const contextKey = context?.extension?.issue?.key;
   const contextId = context?.extension?.issue?.id;
-  // Jira's issue-transition field context carries the exact transition the
-  // signer is acting on. This is the disambiguator: an administrator places
-  // whichever field matches the rule's required assurance on that screen, so
-  // the field already knows which transition it is for and must not offer a
-  // dropdown to select another one.
-  const transitionId = context?.extension?.issueTransition?.id;
+  const rawTransitionId = context?.extension?.issueTransition?.id;
+  const transitionId = rawTransitionId == null ? '' : String(rawTransitionId);
   const [resolvedKey, setResolvedKey] = useState<string | undefined>(contextKey);
-  const [options, setOptions] = useState<Option[] | null>(null);
-  const [selected, setSelected] = useState('');
+  const [loaded, setLoaded] = useState(false);
+  const [action, setAction] = useState<Action | null>(null);
   const [issue, setIssue] = useState<{ key?: string; summary?: string; statusName?: string } | null>(null);
   const [signerName, setSignerName] = useState<string | null>(null);
   const [evidenceHash, setEvidenceHash] = useState<string | undefined>();
@@ -66,68 +101,47 @@ export default function ApprovalField({ context }: { context?: { extension?: { i
   const [code, setCode] = useState('');
   const [device, setDevice] = useState<{ enrolled: boolean; usableHere: boolean } | null>(null);
   const [deviceNonce, setDeviceNonce] = useState(0);
-  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState('');
   const [signed, setSigned] = useState('');
   const [message, setMessage] = useState('');
   const [failed, setFailed] = useState(false);
+  const lock = useRef(false);
 
-  const transition = options?.find(o => o.transitionId === selected) ?? options?.[0];
-  const level = transition?.requiredAssurance;
+  const level = action?.requiredAssurance;
   const mode = approvalMode(level);
+  const busy = progress !== '';
 
   useEffect(() => {
     let active = true;
-    invoke<{
-      actions?: Option[];
-      transitions?: Option[];
-      blocker?: string | null;
-      requiredRole?: string | null;
-      issue?: { key?: string; summary?: string; statusName?: string };
-      actorName?: string;
-      drift?: { evidenceHash?: string };
-      error?: string;
-    }>('signing:context', { issueKey: contextKey, issueId: contextId, transitionId, surface: 'device-field' })
-      .catch(() => invoke<{
-        actions?: Option[];
-        transitions?: Option[];
-        blocker?: string | null;
-        requiredRole?: string | null;
-        issue?: { key?: string; summary?: string; statusName?: string };
-        actorName?: string;
-        drift?: { evidenceHash?: string };
-        error?: string;
-      }>('panel:getState', { issueKey: contextKey, issueId: contextId }))
+    // Whatever this screen showed before is withdrawn, receipt included: a
+    // token minted for one action must never travel with another.
+    view.submit('');
+    setAction(null); setBlocker(''); setAffirmed(false); setCode(''); setSigned(''); setMessage(''); setFailed(false);
+    if (!transitionId) {
+      setBlocker(FAIL_CLOSED_MESSAGES.TRANSITION_ID_REQUIRED);
+      setLoaded(true);
+      return;
+    }
+    setLoaded(false);
+    invoke<SigningContext>('signing:context', { issueKey: contextKey, issueId: contextId, transitionId, surface: 'device-field' })
       .then(state => {
         if (!active) return;
-        if (!state?.issue) { setOptions([]); setBlocker(state?.error ?? 'Could not load the approval requirement for this transition.'); return; }
+        if (!state?.issue) {
+          setBlocker(FAIL_CLOSED_MESSAGES[state?.error ?? ''] ?? state?.error ?? 'Could not load the approval requirement for this transition.');
+          setLoaded(true);
+          return;
+        }
         setIssue(state.issue);
-        // The key the server resolved wins: every later call is made with it,
-        // so a missing extension.issue on this surface costs nothing.
+        // The key the server resolved wins: every later call is made with it.
         setResolvedKey(state.issue.key ?? contextKey);
         setSignerName(state.actorName ?? null);
         setEvidenceHash(state.drift?.evidenceHash);
-        const list = state.actions ?? (state.transitions ?? []).filter(t => t.eligible !== false);
-        setOptions(list);
-        if (list.length === 1) setSelected(list[0].transitionId);
-        let blockerMsg = '';
-        if (list.length === 0) {
-          const reqRole = state.requiredRole ?? (state.transitions ?? []).find(t => t.requiredRole)?.requiredRole;
-          const isNotEligible = state.blocker === 'NOT_ELIGIBLE_FOR_RULE' || (!state.blocker && (state.transitions ?? []).some(t => t.eligible === false));
-          if (state.blocker === 'GATE_NOT_ENFORCED') {
-            blockerMsg = 'The approval rule exists, but the VAtlassian validator is not attached to this transition in Jira. Ask a Jira administrator to re-attach it.';
-          } else if (state.blocker === 'WRONG_FIELD_FOR_RULE') {
-            blockerMsg = 'This transition is signed with an authenticator code. Ask an administrator to put the "Electronic Signature" field on this transition screen.';
-          } else if (isNotEligible) {
-            blockerMsg = reqRole
-              ? `This transition is signed by ${reqRole}. You do not hold the approver role on this work item.`
-              : 'You do not hold the approver role this transition requires.';
-          } else {
-            blockerMsg = 'No configured approval rule applies to this transition. Ask a Jira administrator to check the controlled transition.';
-          }
-        }
-        setBlocker(blockerMsg);
+        const resolved = exactAction(state, transitionId);
+        setAction(resolved.action);
+        setBlocker(resolved.blocker);
+        setLoaded(true);
       })
-      .catch(e => { if (active) { setFailed(true); setMessage(errorMessage(e)); } });
+      .catch(e => { if (active) { setFailed(true); setMessage(errorMessage(e)); setLoaded(true); } });
     return () => { active = false; };
   }, [contextKey, contextId, transitionId]);
 
@@ -142,29 +156,24 @@ export default function ApprovalField({ context }: { context?: { extension?: { i
     return () => { active = false; };
   }, [mode, deviceNonce]);
 
-  // Changing what is being signed withdraws the affirmation and the receipt:
-  // an affirmation is a declaration of one statement, and a token minted under
-  // the old one must not travel with the new selection.
-  useEffect(() => {
-    setAffirmed(false); setCode(''); setSigned(''); setMessage(''); setFailed(false);
-    view.submit('');
-  }, [selected]);
-
-  const record = useCallback(async (withCode: string) => {
-    if (!transition || !resolvedKey) return;
-    setBusy(true); setMessage(''); setFailed(false);
+  async function record(withCode: string) {
+    if (!action || !resolvedKey || lock.current) return;
+    lock.current = true;
+    setProgress(PROGRESS.preparing); setMessage(''); setFailed(false);
     try {
       const challenge = assertResult(await invoke<Challenge>('approval:challenge', {
-        issueKey: resolvedKey, transitionId: transition.transitionId, toStatusId: transition.toStatusId,
+        issueKey: resolvedKey, transitionId: action.transitionId, toStatusId: action.toStatusId,
         decision: 'APPROVE', confirmed: true, expectedEvidenceHash: evidenceHash
       }));
       let webauthn;
       if (approvalMode(challenge.requiredAssurance) === 'biometric') {
+        setProgress(PROGRESS.biometric);
         const check = await confirmBiometric({ approvalChallengeId: challenge.challengeId })
           .catch(e => ({ ok: false as const, error: errorMessage(e) }));
         if (!check.ok) { setFailed(true); setMessage(check.error ?? 'The device check did not complete. Nothing has been recorded.'); return; }
         webauthn = check.assertion;
       }
+      setProgress(action.capturesBaseline ? PROGRESS.publishing : 'Recording signature');
       const result = assertResult(await invoke<Submitted>('approval:submit', {
         issueKey: resolvedKey, challengeId: challenge.challengeId, confirmed: true, preauthorize: true,
         ...(approvalMode(challenge.requiredAssurance) === 'totp' ? { code: withCode } : {}),
@@ -179,25 +188,28 @@ export default function ApprovalField({ context }: { context?: { extension?: { i
     } catch (e) {
       setFailed(true); setMessage(errorMessage(e));
     } finally {
-      setCode(''); setBusy(false);
+      lock.current = false;
+      setCode(''); setProgress('');
     }
-  }, [transition, resolvedKey, evidenceHash, signerName]);
+  }
 
   async function setupDevice() {
-    setBusy(true); setFailed(false); setMessage('');
+    if (lock.current) return;
+    lock.current = true;
+    setProgress('Setting up biometric approval'); setFailed(false); setMessage('');
     try {
       const result = await enrolBiometric();
       if (result.ok === false) { setFailed(true); setMessage(result.error ?? 'The device setup did not complete.'); }
       else { setMessage('This device is registered. You can now confirm the transition with a device check.'); setDeviceNonce(n => n + 1); }
-    } catch (e) { setFailed(true); setMessage(errorMessage(e)); } finally { setBusy(false); }
+    } catch (e) { setFailed(true); setMessage(errorMessage(e)); } finally { lock.current = false; setProgress(''); }
   }
 
   function onCode(next: string) {
     setCode(next);
-    if (next.length === CODE_LENGTH && affirmed && !busy && !signed) void record(next);
+    if (next.length === CODE_LENGTH && affirmed && !signed) void record(next);
   }
 
-  if (options === null) return <Loading label="Loading this work item…" />;
+  if (!loaded) return <Loading label="Loading this work item…" />;
 
   const deviceReady = mode !== 'biometric' || device === null || device.usableHere;
   return (
@@ -205,35 +217,36 @@ export default function ApprovalField({ context }: { context?: { extension?: { i
       <p className="va-secondary">
         {issue?.key ? `${issue.key} — ${issue.summary ?? '(no summary)'}` : 'Approval'}
       </p>
+      <div role="status" aria-live="polite" className="va-secondary">{progress}</div>
       {message && <Notice danger={failed}>{message}</Notice>}
       {blocker && <Notice>{blocker}</Notice>}
 
-      {options.length > 1 && (
-        <Field label="What are you approving?">
-          <Select value={selected} placeholder="Choose what you are signing for"
-            onChange={setSelected}
-            options={options.map(o => ({ value: o.transitionId, label: `${o.meaning ?? 'Approve'} (${o.requiredRole ?? 'approver'} → ${o.name ?? o.toStatusId})` }))} />
-        </Field>
+      {/* The exact action Jira is performing, read-only. There is no selector
+          on this surface, even when the issue has other eligible transitions. */}
+      {action && (
+        <dl className="va-stack va-stack--tight" style={{ margin: 0 }}>
+          <div className="va-row"><dt className="va-secondary">Transition</dt><dd style={{ margin: 0 }}>{transitionScopeLabel(action, issue?.statusName)}</dd></div>
+          <div className="va-row"><dt className="va-secondary">Role</dt><dd style={{ margin: 0 }}>{action.requiredRole ?? 'Any approver role'}</dd></div>
+          <div className="va-row"><dt className="va-secondary">Meaning</dt><dd style={{ margin: 0 }}>{action.meaning ?? 'Approved'}</dd></div>
+          <div className="va-row"><dt className="va-secondary">Authentication</dt><dd style={{ margin: 0 }}><AssuranceChip level={level} /></dd></div>
+          <div className="va-row"><dt className="va-secondary">Baseline</dt><dd style={{ margin: 0 }}>{captureFact(action)}</dd></div>
+          <div className="va-row"><dt className="va-secondary">Unapproved changes</dt><dd style={{ margin: 0 }}>{driftFact(action)}</dd></div>
+        </dl>
       )}
 
-      {transition && !signed && (
+      {action && !signed && (
         <>
-          <div className="va-row">
-            <AssuranceChip level={level} />
-            <span className="va-secondary">{transition.meaning}</span>
-          </div>
-
           {mode === 'biometric' && device && !device.usableHere && (
             <Notice>
               {device.enrolled
                 ? 'Your registered device cannot be used at this address. Register this browser to approve here.'
                 : 'This transition is confirmed with a device check. Register this device before approving.'}
-              {' '}<Button isDisabled={busy} onClick={setupDevice}>{busy ? 'Setting up…' : 'Set up biometric approval'}</Button>
+              {' '}<Button isDisabled={busy} onClick={() => void setupDevice()}>{busy ? progress : 'Set up biometric approval'}</Button>
             </Notice>
           )}
 
           <Affirmation checked={affirmed} onChange={setAffirmed} disabled={busy || !deviceReady}>
-            {`I, ${signerName ?? 'the signer'}, have reviewed ${issue?.key ?? 'this work item'} and I declare: ${transition.meaning ?? 'Approved'}. I am signing as ${transition.requiredRole ?? 'approver'} and I understand this electronic signature is the legally binding equivalent of my handwritten signature.`}
+            {`I, ${signerName ?? 'the signer'}, have reviewed ${issue?.key ?? 'this work item'} and I declare: ${action.meaning ?? 'Approved'}. I am signing as ${action.requiredRole ?? 'approver'} and I understand this electronic signature is the legally binding equivalent of my handwritten signature.`}
           </Affirmation>
 
           {affirmed && mode === 'totp' && (
@@ -245,7 +258,7 @@ export default function ApprovalField({ context }: { context?: { extension?: { i
           {affirmed && mode === 'biometric' && (
             <div className="va-row">
               <Button appearance="primary" isDisabled={busy || !deviceReady} onClick={() => void record('')}>
-                {busy ? 'Confirming…' : 'Confirm with your device'}
+                {busy ? progress : 'Confirm with your device'}
               </Button>
               <span className="va-secondary">Opens a separate window for Face ID, Touch ID, or Windows Hello.</span>
             </div>

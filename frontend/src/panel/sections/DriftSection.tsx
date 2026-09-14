@@ -2,7 +2,7 @@ import { lazy, Suspense, useState } from 'react';
 import Button from '@atlaskit/button';
 import { Loading } from '../../ui/primitives';
 import { plural } from '../../ui/format';
-import type { PanelState } from '../types';
+import type { PanelEvidence, PanelSummary } from '../types';
 
 const ReviewWorkspace = lazy(() => import('../../review/ReviewWorkspace'));
 
@@ -14,8 +14,13 @@ const ReviewWorkspace = lazy(() => import('../../review/ReviewWorkspace'));
  * of the screen should say "here is what needs deciding", not "something went
  * wrong". So it reads as a heading with a count, the way an inbox does, and the
  * colour is spent on the individual changes below where it encodes materiality.
+ *
+ * The count and material count are summary facts, present immediately. The
+ * added/removed/moved node breakdown is evidence — loaded lazily by the
+ * parent (IssuePanel) once this section is in drift mode — and is shown only
+ * once it has arrived; its absence never blocks the count or the decision.
  */
-export default function DriftSection({ drift, issueKey }: {drift: PanelState['drift']; issueKey?: string}) {
+export default function DriftSection({ drift, evidence, issueKey }: { drift: PanelSummary['drift']; evidence?: PanelEvidence | null; issueKey?: string }) {
   const [open, setOpen] = useState(false);
 
   if (!drift.count) {
@@ -27,6 +32,8 @@ export default function DriftSection({ drift, issueKey }: {drift: PanelState['dr
     );
   }
 
+  const hasBreakdown = !!(evidence?.drift?.addedNodes?.length || evidence?.drift?.removedNodes?.length || evidence?.drift?.movedNodes?.length || evidence?.drift?.changedFields?.length);
+
   return (
     <section className="va-stack">
       <div className="va-review-head">
@@ -34,12 +41,12 @@ export default function DriftSection({ drift, issueKey }: {drift: PanelState['dr
           {plural(drift.count, 'change')} since approval
         </span>
         <span className="va-review-head__detail va-grow">
-          {(drift.addedNodes || drift.removedNodes || drift.movedNodes) ? (
+          {hasBreakdown ? (
             [
-              drift.changedFields?.length ? `${drift.changedFields.length} changed fields` : '',
-              drift.addedNodes?.length ? `${drift.addedNodes.length} added nodes` : '',
-              drift.removedNodes?.length ? `${drift.removedNodes.length} removed nodes` : '',
-              drift.movedNodes?.length ? `${drift.movedNodes.length} moved nodes` : ''
+              evidence?.drift?.changedFields?.length ? `${evidence.drift.changedFields.length} changed fields` : '',
+              evidence?.drift?.addedNodes?.length ? `${evidence.drift.addedNodes.length} added nodes` : '',
+              evidence?.drift?.removedNodes?.length ? `${evidence.drift.removedNodes.length} removed nodes` : '',
+              evidence?.drift?.movedNodes?.length ? `${evidence.drift.movedNodes.length} moved nodes` : ''
             ].filter(Boolean).join(', ')
           ) : (
             drift.materialCount === 0
@@ -53,7 +60,7 @@ export default function DriftSection({ drift, issueKey }: {drift: PanelState['dr
       </div>
       {open && (
         <Suspense fallback={<Loading label="Opening review…" />}>
-          <ReviewWorkspace issueKey={issueKey} evidenceHash={drift.evidenceHash} />
+          <ReviewWorkspace issueKey={issueKey} evidenceHash={evidence?.evidenceHash ?? undefined} />
         </Suspense>
       )}
     </section>

@@ -92,14 +92,40 @@
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import ForgeReconciler, {
-  Box, Checkbox, Heading, Inline, Lozenge, Select, SectionMessage, Spinner, Stack, Text, Textfield,
+  Box, Checkbox, Heading, Inline, Lozenge, SectionMessage, Spinner, Stack, Text, Textfield,
   useProductContext
 } from '@forge/react';
 import { CustomFieldEdit } from '@forge/react/jira';
-import { invoke, view } from '@forge/bridge';
+import { events, invoke, view } from '@forge/bridge';
 
 const CODE_LENGTH = 6;
 const DIGITS_ONLY = /^\d*$/;
+
+/** Legible copy for the reasons this screen fails closed outright. */
+const FAIL_CLOSED_MESSAGES = {
+  TRANSITION_ID_REQUIRED: 'This screen could not determine which transition is being performed, so nothing can be signed here. Reopen the transition dialog and try again.',
+  ISSUE_REQUIRED: 'This screen could not determine which work item is being transitioned.',
+  ISSUE_ACCESS_DENIED: 'This work item could not be read, so nothing can be signed here.'
+};
+const AMBIGUOUS_MESSAGE = 'More than one signing rule matched this exact transition. Ask a Jira administrator to remove the conflicting configuration.';
+const MISMATCH_MESSAGE = 'The approval rule returned for this screen does not match the transition being performed, so nothing can be signed here. Reopen the transition dialog and try again.';
+// Mirrors frontend/src/lib/assurance.ts. Deliberately no cross-directory
+// import — see the bundle caution further down.
+const ASSURANCE_LABELS = { ESIGNATURE: 'Electronic signature', BIOMETRIC: 'Biometric approval' };
+
+/**
+ * THIS RUNTIME'S BRIDGE LAYER FOR MUTATIONS. The UI Kit bundle cannot import
+ * frontend/src/lib/bridge.ts, so it applies the same rule here: emit
+ * VA_ISSUE_CHANGED exactly once, and only when the resolver reports a durable
+ * success — never on a denied, refused, or failed attempt.
+ */
+async function invokeMutation(key, payload) {
+  const result = await invoke(key, payload);
+  const durable = !!result && typeof result === 'object'
+    && result.success !== false && result.ok !== false && !result.error && !result.transitionError;
+  if (durable) events.emit('VA_ISSUE_CHANGED', { issueKey: payload?.issueKey }).catch(() => {});
+  return result;
+}
 
 /** One labelled line of work-item context. */
 const Detail = ({ label, value }) => (
@@ -146,13 +172,11 @@ const Edit = () => {
   const [evidenceHash, setEvidenceHash] = useState(null);
   const [status, setStatus] = useState({ kind: 'idle' });
 
-  // Which controlled transition is being signed? The field's context tells
-  // us the issue but not the destination status, so ask the same resolver
-  // the issue panel uses: every ACTIVE rule leaving the current status that
-  // Jira will actually accept right now. One rule (the common case) is
-  // resolved silently; more than one has to be an explicit choice, because
-  // WHICH statement of meaning is being attested to is the signature —
-  // guessing it on the signer's behalf would be exactly the wrong thing.
+  // Which controlled transition is being signed? Exactly the one Jira named
+  // in `issueTransition.id`. The server resolves the rule for that id; this
+  // screen accepts it only when there is one rule and it is for that id.
+  // Anything else fails closed, because WHICH statement of meaning is being
+  // attested to is the signature — guessing it would be exactly wrong.
   useEffect(() => {
     // Previously `if (!issueKey) return;` — which left options null, ctId
     // null, status 'idle' and every message below suppressed, so the
@@ -166,31 +190,56 @@ const Edit = () => {
       });
       return;
     }
+    if (transitionId == null || transitionId === '') {
+      setOptions([]);
+      setStatus({ kind: 'error', message: FAIL_CLOSED_MESSAGES.TRANSITION_ID_REQUIRED });
+      return;
+    }
     let cancelled = false;
     invoke('signing:context', { issueKey, issueId, transitionId, surface: 'esignature-field' })
       .then((res) => {
         if (cancelled) return;
         if (!res?.issue) {
           setOptions([]);
-          setStatus({ kind: 'error', message: res?.error ?? 'Could not load the signature requirement for this transition.' });
+          setStatus({ kind: 'error', message: FAIL_CLOSED_MESSAGES[res?.error] ?? res?.error ?? 'Could not load the signature requirement for this transition.' });
           return;
         }
         setIssue(res.issue ?? null);
         setSignerName(res.actorName ?? null);
         setEvidenceHash(res.drift?.evidenceHash ?? null);
-        
+
         const list = res.actions || (res.transitions || []).filter(t => t.eligible !== false);
         const opts = list.map(t => ({
           ctId: t.transitionId,
           meaning: t.meaning,
           requiredRole: t.requiredRole,
-          toStatusName: t.toStatusName || t.name,
+          toStatusName: t.toStatusName || t.toStatusId,
           toStatusId: t.toStatusId,
           eligible: t.eligible !== false,
-          requiredAssurance: t.requiredAssurance
+          requiredAssurance: t.requiredAssurance,
+          anyStatus: t.anyStatus === true,
+          capturesBaseline: t.capturesBaseline === true,
+          blocksOnDrift: t.blocksOnDrift === true
         }));
-        
+
         let blockerMsg = null;
+        if (opts.length > 1) {
+          // signing:context exact-matches this screen's transitionId, so this
+          // should be structurally impossible. Fail closed rather than ever
+          // offering a picker on this surface — see the header note above.
+          setBlocker(AMBIGUOUS_MESSAGE);
+          setOptions([]);
+          setStatus({ kind: 'idle' });
+          return;
+        }
+        if (opts.length === 1 && String(opts[0].ctId) !== String(transitionId)) {
+          // Never sign a sibling in place of the exact transition, even one
+          // that reaches the same status.
+          setBlocker(MISMATCH_MESSAGE);
+          setOptions([]);
+          setStatus({ kind: 'idle' });
+          return;
+        }
         if (opts.length === 0) {
           const reqRole = res.requiredRole || (res.transitions || []).find(t => t.requiredRole)?.requiredRole;
           const isNotEligible = res.blocker === 'NOT_ELIGIBLE_FOR_RULE' || (!res.blocker && (res.transitions || []).some(t => t.eligible === false));
@@ -206,7 +255,7 @@ const Edit = () => {
             blockerMsg = "No configured signing transition is available. Ask a Jira administrator to check the published validator and the matching VAtlassian controlled transition.";
           }
         }
-        
+
         setBlocker(blockerMsg);
         setOptions(opts);
         if (opts.length === 1) setCtId(opts[0].ctId);
@@ -229,12 +278,14 @@ const Edit = () => {
   useEffect(() => {
     if (!issueKey || !ctId || !affirmed || !evidenceHash || code.length !== CODE_LENGTH) return;
     let cancelled = false;
+    const capturing = options?.find((o) => o.ctId === ctId)?.capturesBaseline === true;
     setToken('');
-    setStatus({ kind: 'verifying' });
+    setStatus({ kind: 'verifying', message: 'Preparing signature' });
     invoke('approval:challenge', { issueKey, transitionId: ctId, decision: 'APPROVE', expectedEvidenceHash: evidenceHash })
       .then(challenge => {
         if (!challenge?.success) throw new Error(challenge?.error ?? 'The reviewed content changed. Reopen the transition and review it again.');
-        return invoke('approval:submit', { issueKey, challengeId: challenge.challengeId, code, confirmed: true, preauthorize: true });
+        if (!cancelled) setStatus({ kind: 'verifying', message: capturing ? 'Publishing baseline' : 'Recording signature' });
+        return invokeMutation('approval:submit', { issueKey, challengeId: challenge.challengeId, code, confirmed: true, preauthorize: true });
       })
       .then((res) => {
         if (cancelled) return;
@@ -253,19 +304,21 @@ const Edit = () => {
       })
       .catch((e) => { if (!cancelled) setStatus({ kind: 'error', message: e.message }); });
     return () => { cancelled = true; };
-  }, [issueKey, ctId, affirmed, code, evidenceHash]);
+  }, [issueKey, ctId, affirmed, code, evidenceHash, options]);
 
   // Changing WHICH statement is being signed withdraws the affirmation, and
   // clears any code and token already gathered under the old one. An
   // affirmation is a declaration of one specific meaning; carrying a tick
   // across from "Approved for release" to "Reviewed for accuracy" would
   // attribute to the signer a statement they never read.
+  // An error already on screen is kept: this also runs on mount, after the
+  // load effect above may have failed closed, and must not erase the reason.
   useEffect(() => {
     setAffirmed(false);
     setCode('');
     setToken('');
     view.submit('');
-    setStatus({ kind: 'idle' });
+    setStatus((current) => (current.kind === 'error' ? current : { kind: 'idle' }));
   }, [ctId]);
 
   // Never submit the raw code as the field value — see the panel:preauthorize
@@ -358,16 +411,20 @@ const Edit = () => {
           </SectionMessage>
         )}
 
-        {options && options.length > 1 && (
-          <Select
-            appearance="default"
-            placeholder="What are you signing for?"
-            options={options.map((o) => ({
-              label: `${o.meaning} (${o.requiredRole} → ${o.toStatusName})`,
-              value: o.ctId
-            }))}
-            onChange={(e) => setCtId(e?.value ?? null)}
-          />
+        {/* This exact-transition surface never offers a selector, even when
+            Jira has other eligible transitions on this issue — signing:context
+            already narrows to the single transition Jira put this field on,
+            and anything else fails closed above rather than reaching here. */}
+
+        {/* THE EXACT ACTION, AS READ-ONLY FACTS. */}
+        {selected && (
+          <Stack space="space.050">
+            <Detail label="Transition:" value={`${selected.anyStatus ? 'Any status' : (issue?.statusName || 'the current status')} -> ${selected.toStatusName}`} />
+            <Detail label="Role:" value={selected.requiredRole ?? 'Any approver role'} />
+            <Detail label="Authentication:" value={ASSURANCE_LABELS[selected.requiredAssurance] ?? ASSURANCE_LABELS.ESIGNATURE} />
+            <Detail label="Baseline:" value={selected.capturesBaseline ? 'Captures a new baseline' : 'Does not capture a baseline'} />
+            <Detail label="Unapproved changes:" value={selected.blocksOnDrift ? 'Blocked while changes are unapproved' : 'Not blocked by unapproved changes'} />
+          </Stack>
         )}
 
         {/* THE STATEMENT OF MEANING. This is the sentence the signature
@@ -417,7 +474,7 @@ const Edit = () => {
               placeholder="6-digit code"
               value={code}
               onChange={onChange}
-              isDisabled={!ctId || !affirmed}
+              isDisabled={!ctId || !affirmed || status.kind === 'verifying'}
             />
             {status.kind === 'idle' && ctId && affirmed && (
               <Text size="small" color="color.text.subtlest">
@@ -429,18 +486,13 @@ const Edit = () => {
                 Read and accept the statement above to enable the code box.
               </Text>
             )}
-            {status.kind === 'idle' && !ctId && (
-              <Text size="small" color="color.text.subtlest">
-                Choose what you are signing for above to continue.
-              </Text>
-            )}
           </Stack>
         )}
 
         {status.kind === 'verifying' && (
           <Inline space="space.075" alignBlock="center">
             <Spinner size="small" />
-            <Text>Verifying…</Text>
+            <Text>{status.message ?? 'Preparing signature'}</Text>
           </Inline>
         )}
         {status.kind === 'ok' && (
