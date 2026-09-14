@@ -105,7 +105,7 @@ function baseFixture({ baselineChildren = [{ id: '2', summary: 'story' }], liveC
     request: async (identity, url, options = {}) => {
       const ok = body => ({ status: 200, json: async () => body });
       if (options.method === 'POST' && String(url).includes('/search/jql')) {
-        const body = String(request || '').includes('/search') ? Object.fromEntries(new URL('https://test.com' + String(request)).searchParams.entries()) : JSON.parse(options.body);
+        const body = JSON.parse(options.body);
         // Only the root's own children are ever asked for in this fixture —
         // a search for anyone else's children (i.e. a grandchild lookup)
         // comes back empty, keeping this a two-level tree.

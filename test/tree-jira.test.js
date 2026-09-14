@@ -14,11 +14,11 @@ test('reader walks every parent level', async () => {
           ...Object.fromEntries(sixteenFieldIds().map(f => [f, 'value'])),
           project: { id: '10' }, issuetype: { id: '20' }, status: { id: '30' }
         };
-        if (String(route).includes('/issue/FEAT-1')) {
+        if (route.path.includes('/issue/FEAT-1')) {
           return { status: 200, json: async () => ({ id: '10001', key: 'FEAT-1', fields: { parent: null, ...dummyFields } }) };
         }
-        if (String(route).includes('/search/jql') && options && options.body) {
-          const body = String(request || '').includes('/search') ? Object.fromEntries(new URL('https://test.com' + String(request)).searchParams.entries()) : JSON.parse(options.body);
+        if (route.path.includes('/search/jql') && options && options.body) {
+          const body = JSON.parse(options.body);
           if (body.jql === 'parent IN ("FEAT-1")') {
             return {
               status: 200,
@@ -61,8 +61,8 @@ test('reader always requests identity, structure, and status fields needed by ca
   const calls = [];
   const fields = { summary: 'Root', project: { id: '10' }, issuetype: { id: '20' }, status: { id: '30' }, parent: null };
   const api = { asApp: () => ({ requestJira: async (request, options) => {
-    calls.push({ request: String(request), body: String(request || '').includes('/search') ? Object.fromEntries(new URL('https://test.com' + String(request)).searchParams.entries()) : (options?.body ? JSON.parse(options.body) : null) });
-    return String(request).includes('/issue/')
+    calls.push({ request: String(request), body: options?.body ? JSON.parse(options.body) : null });
+    return request.path.includes('/issue/')
       ? { status: 200, json: async () => ({ id: '1', key: 'ROOT-1', fields }) }
       : { status: 200, json: async () => ({ issues: [] }) };
   } }) };
@@ -97,10 +97,10 @@ test('reader fails closed instead of truncating a tree above 500 nodes', async (
   const api = {
     asApp: () => ({
       requestJira: async (request, options) => {
-        if (String(request).includes('/issue/ROOT-1')) {
+        if (request.path.includes('/issue/ROOT-1')) {
           return { status: 200, json: async () => root };
         }
-        const body = String(request || '').includes('/search') ? Object.fromEntries(new URL('https://test.com' + String(request)).searchParams.entries()) : JSON.parse(options.body);
+        const body = JSON.parse(options.body);
         return {
           status: 200,
           json: async () => ({ issues: body.jql === 'parent IN ("ROOT-1")' ? children : [] })
@@ -135,13 +135,13 @@ test('createTreeReader handles omitted parent field on top-level root issue and 
   const api = {
     asApp: () => ({
       requestJira: async (route) => {
-        if (String(route).includes('/issue/ROOT-1')) {
+        if (route.path.includes('/issue/ROOT-1')) {
           return { status: 200, json: async () => ({ id: '100', key: 'ROOT-1', fields: dummyFields }) };
         }
-        if (String(route).includes('/search/jql')) {
+        if (route.path.includes('/search/jql')) {
           return { status: 200, json: async () => ({ issues: [] }) };
         }
-        throw new Error(`Unexpected request: ${String(route)}`);
+        throw new Error(`Unexpected request: ${route.path}`);
       }
     })
   };

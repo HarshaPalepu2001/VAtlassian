@@ -182,7 +182,6 @@ const Edit = () => {
     // null, status 'idle' and every message below suppressed, so the
     // component rendered a single disabled textbox and NOTHING else. Never
     // fail silently here.
-    if (!context) return;
     if (!issueKey) {
       setOptions([]);
       setStatus({
