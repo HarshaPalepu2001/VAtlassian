@@ -712,9 +712,9 @@ test('switching between "In Progress -> Done" and "Any status -> Done" clears co
  assert.doesNotMatch(text(),/That code was not accepted/,'errors from the old edge are cleared');
  assert.equal(codeBox(),null,'the code typed for the old edge is gone');
  assert.equal(affirm(),null,'the confirmation for the old edge is gone');
- assert.doesNotMatch(text(),/Evidence field/,'evidence loaded for the old edge is not shown for the new one');
+ assert.match(text(),/Evidence field/,'the current baseline evidence remains shared across workflow actions');
  await flush();
- assert.equal(calls.filter(([k])=>k==='panel:getEvidence').length,2,'evidence reloads for the new action key');
+ assert.equal(calls.filter(([k])=>k==='panel:getEvidence').length,1,'action selection does not create a competing evidence read');
  await act(()=>clickButton('Approve -> Done').click());await flush();
  assert.match(text(),/Statement for edge 6/);
  assert.equal(affirm().checked,false,'confirmation must not carry to the new edge');
@@ -928,16 +928,16 @@ test('the selector is labelled, progress is a live status, and Enter in the code
  await act(()=>submit.resolve({success:true,approvalId:'a',transitioned:true}));await flush();
 });
 
-// ── Evidence: lazy, scoped, keyed, and never blocking controls ───────────
+// ── Evidence: authoritative, shared, and never shown as clean while loading ─
 
-test('evidence is not requested during ordinary summary loading',async()=>{
+test('evidence is requested for every baselined item before clean state is shown',async()=>{
  const calls=[];
  setup(async key=>{calls.push(key);return key==='panel:getSummary'?summary({baseline:baseline()}):{restores:[]};});
  await act(()=>root.render(h(IssuePanel,{issueKey:'T-1'})));await flush();
- assert.ok(!calls.includes('panel:getEvidence'),'evidence must not be requested until the disclosure opens or drift review requires it');
+ assert.ok(calls.includes('panel:getEvidence'),'a baselined item must receive a current evidence read');
 });
 
-test('evidence loads lazily once the baseline disclosure is opened, and controls stay visible while it loads',async()=>{
+test('controls stay visible but disabled while authoritative evidence loads',async()=>{
  const evidenceRead=deferred();const calls=[];
  setup(key=>{calls.push(key);
   if(key==='panel:getSummary')return Promise.resolve(actor([transition()],{baseline:baseline()}));
@@ -945,12 +945,12 @@ test('evidence loads lazily once the baseline disclosure is opened, and controls
   return Promise.resolve({restores:[]});
  });
  await act(()=>root.render(h(IssuePanel,{issueKey:'T-1'})));await flush();
- assert.ok(!calls.includes('panel:getEvidence'));
+ assert.ok(calls.includes('panel:getEvidence'));
  await act(()=>disclosure().click());await flush();
  assert.ok(calls.includes('panel:getEvidence'));
  assert.match(text(),/Loading tracked fields/);
- assert.ok(clickButton('Approve -> Done'),'the primary control must remain usable while evidence is still loading');
- assert.equal(clickButton('Approve -> Done').disabled,false);
+ assert.ok(clickButton('Approve -> Done'),'the primary control remains visible while evidence is loading');
+ assert.equal(clickButton('Approve -> Done').disabled,true,'the primary control stays disabled until current evidence arrives');
  await act(()=>evidenceRead.resolve(evidence()));await flush();
  assert.match(text(),/Summary/);
 });
@@ -978,14 +978,15 @@ test('a failed evidence load keeps the summary and controls visible, with a scop
  await act(()=>root.render(h(IssuePanel,{issueKey:'T-1'})));await flush();
  await act(()=>disclosure().click());await flush();
  assert.match(text(),/could not be loaded/);
- assert.ok(clickButton('Approve -> Done'),'controls must remain usable after an evidence failure');
+ assert.ok(clickButton('Approve -> Done'),'controls remain visible after an evidence failure');
+ assert.equal(clickButton('Approve -> Done').disabled,true,'controls stay disabled until a current evidence retry succeeds');
  await act(()=>clickButton('Retry').click());await flush();
  assert.equal(evidenceCalls,2);
  assert.equal(summaryCalls,1,'an evidence retry must not reset the whole panel');
  assert.doesNotMatch(text(),/could not be loaded/);
 });
 
-test('evidence is keyed by the selected action: a late answer for the old action is never shown',async()=>{
+test('one authoritative evidence read is shared when the selected workflow action changes',async()=>{
  const requests=[];
  setup(key=>{
   if(key==='panel:getSummary')return Promise.resolve(actor([transition(),blocked()],{baseline:baseline()}));
@@ -997,14 +998,11 @@ test('evidence is keyed by the selected action: a late answer for the old action
  await act(()=>disclosure().click());await flush();
  assert.equal(requests.length,1);
  await act(()=>selectValue(fieldSelect('Approval transition'),'6'));await flush();
- assert.equal(requests.length,2,'the new action gets its own evidence read');
+ assert.equal(requests.length,1,'action selection does not create a second competing evidence read');
  await act(()=>requests[0].resolve(evidenceWithField('Old action field')));await flush();
- assert.doesNotMatch(text(),/Old action field/);
- assert.match(text(),/Loading tracked fields/);
- await act(()=>requests[1].resolve(evidenceWithField('New action field')));await flush();
- assert.match(text(),/New action field/);
+ assert.match(text(),/Old action field/,'the loaded evidence belongs to the current baseline, not to one transition option');
  await act(()=>selectValue(fieldSelect('Approval transition'),'5'));
- assert.doesNotMatch(text(),/New action field/,'evidence for one action is never displayed under another');
+ assert.match(text(),/Old action field/,'switching workflow actions must not create a contradictory evidence projection');
 });
 
 test('evidence for a superseded baseline is discarded unseen, refreshes the summary, and reloads for the new version',async()=>{
@@ -1014,7 +1012,7 @@ test('evidence for a superseded baseline is discarded unseen, refreshes the summ
   if(key==='panel:getEvidence'){evidenceRequests.push(payload);
    return payload.expectedBaselineVersion===1
     ?evidence({baselineVersion:2,drift:{fields:[],changedFields:[1,2,3,4,5,6,7]}})
-    :evidence({baselineVersion:2,drift:{fields:[],changedFields:[1,2]}});}
+    :evidence({baselineVersion:2,drift:{fields:[{fieldId:'a',fieldName:'A',kind:'scalar'},{fieldId:'b',fieldName:'B',kind:'scalar'}],changedFields:[1,2]}});}
   return {restores:[]};
  });
  await act(()=>root.render(h(IssuePanel,{issueKey:'T-1'})));

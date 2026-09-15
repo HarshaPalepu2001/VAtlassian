@@ -53,6 +53,16 @@ export async function pendingApprovalFor({ issueId, fromStatusId, toStatusId, tr
     ORDER BY decided_at DESC LIMIT 1`, params);
   return decode(result.data[0]);
 }
+
+/** A transition-screen capability is itself the exact edge binding. */
+export async function pendingApprovalByToken({ issueId, fromStatusId, toStatusId, approvalId, now = Date.now() }) {
+  if (!approvalId) return null;
+  const result = await query(`SELECT ${selection} FROM va_approval WHERE issue_id = ?
+    AND state = 'PENDING' AND decision = 'APPROVE' AND from_status_id = ? AND to_status_id = ?
+    AND expires_at > ? AND approval_id = FROM_BASE64(?) LIMIT 1`,
+  [issueId, fromStatusId, toStatusId, now, encode(Buffer.isBuffer(approvalId) ? approvalId : Buffer.from(approvalId, 'hex'))]);
+  return decode(result.data[0]);
+}
 /**
  * The approval this reviewer signed whose transition never landed.
  *

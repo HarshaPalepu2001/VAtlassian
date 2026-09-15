@@ -109,13 +109,32 @@ export async function gateRuntime() {
         block_on_drift: true
       };
     },
-    load: async ({ issueKey, fromStatusId, toStatusId, transitionId, modifiedFields }) => {
+    load: async ({ issueKey, fromStatusId, toStatusId, transitionId, approvalId, modifiedFields }) => {
       const response = await api.asUser().requestJira(route`/rest/api/3/issue/${issueKey}?fields=*all`);
       if (!response.ok) throw new FailClosed('SERVICE_UNAVAILABLE');
       const issue = describeIssue(await response.json());
       if (issue.statusId !== fromStatusId) throw new FailClosed('CONTENT_CHANGED');
+      let effectiveTransitionId = transitionId == null ? null : String(transitionId);
+      if (!effectiveTransitionId && approvalId) {
+        const signedApproval = await approvals.pendingApprovalByToken({
+          issueId: issue.issueId, fromStatusId, toStatusId,
+          approvalId: Buffer.from(approvalId, 'hex'), now: Date.now()
+        });
+        if (signedApproval?.transition_id != null) effectiveTransitionId = String(signedApproval.transition_id);
+      }
+      if (!effectiveTransitionId) {
+        const transitions = await availableTransitions(api, issueKey).catch(() => {
+          throw new FailClosed('SERVICE_UNAVAILABLE');
+        });
+        const matches = transitions.filter(candidate => candidate.isAvailable !== false
+          && String(candidate.toStatusId) === String(toStatusId));
+        // A status pair is only a safe substitute when Jira exposes one and
+        // only one outbound transition for it. Sibling transitions fail closed.
+        if (matches.length !== 1) throw new FailClosed(matches.length === 0 ? 'NOT_CONFIGURED' : 'SERVICE_UNAVAILABLE');
+        effectiveTransitionId = String(matches[0].id);
+      }
       const [ct, items, declared, drift, health, active] = await Promise.all([
-        config.gatedTransition({ projectId: issue.projectId, issueTypeId: issue.issueTypeId, fromStatusId, toStatusId, transitionId }),
+        config.gatedTransition({ projectId: issue.projectId, issueTypeId: issue.issueTypeId, fromStatusId, toStatusId, transitionId: effectiveTransitionId }),
         query('SELECT state, baseline_version FROM va_item_state WHERE issue_id = ?', [issue.issueId]),
         config.controlledFields({ projectId: issue.projectId, issueTypeId: issue.issueTypeId }),
         query('SELECT COUNT(*) AS count FROM va_drift WHERE issue_id = ? AND approval_id IS NULL', [issue.issueId]),
@@ -126,7 +145,8 @@ export async function gateRuntime() {
       if (active && Number(item?.baseline_version) !== Number(active.version)) throw new FailClosed('CONTENT_CHANGED');
       const content = await approvalContentHash({ issue, declared, modifiedFields, activeBaseline: active,
         readTree: active?.tree_hash ? createTreeReader({ api, route }).read : null });
-      return { ...issue, ct, health, item, contentHash: content.contentHash, driftCount: Number(drift[0]?.count) };
+      return { ...issue, ct, health, item, transitionId: effectiveTransitionId,
+        contentHash: content.contentHash, driftCount: Number(drift[0]?.count) };
     }
   };
 }

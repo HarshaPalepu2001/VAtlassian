@@ -5,7 +5,6 @@ import { Card, Page } from '../ui/primitives';
 import { Notice } from '../ui/feedback';
 import usePanelState from './usePanelState';
 import usePanelEvidence from './usePanelEvidence';
-import { resolveSelectedAction } from './approvalModel';
 import DriftSection from './sections/DriftSection';
 import ApprovalControls from './sections/ApprovalControls';
 import BaselineRecord from './sections/BaselineRecord';
@@ -60,21 +59,38 @@ function IssuePanelBody({ issueKey: issueKeyProp, onDone }: Props) {
   const { state: summary, error, refresh, refreshing } = usePanelState(issueKeyProp);
   const issueKey = issueKeyProp ?? summary?.issue?.key ?? contextIssue?.key;
 
-  // The selected action lives here so the evidence read is keyed to exactly
-  // the action ApprovalControls is deciding.
+  // The selected action belongs to the controls. Evidence is keyed to the
+  // current baseline, because it is shared by every action surface.
   const [selectedTransitionId, setSelectedTransitionId] = useState('');
   const [baselineDisclosureOpen, setBaselineDisclosureOpen] = useState(false);
-  const action = resolveSelectedAction(summary, selectedTransitionId);
   const { evidence, loading: evidenceLoading, error: evidenceError, retry: retryEvidence } = usePanelEvidence({
     issueKey,
-    actionId: action.actionKey || 'none',
+    // Evidence is the one current-record read shared by the clean banner,
+    // control facts, and review workspace. It must not be keyed to a summary
+    // action whose drift count may change after this read arrives.
+    actionId: 'current-record',
     baselineVersion: summary?.baseline?.version ?? null,
     baselineId: summary?.baseline?.baselineId ?? null,
-    // Drift review is an approval flow that requires the evidence; otherwise
-    // it loads only when the baseline record is opened.
-    enabled: action.reviewingDrift || baselineDisclosureOpen,
+    enabled: Boolean(summary?.baseline) || baselineDisclosureOpen,
     onStale: refresh
   });
+  const evidenceReady = !summary?.baseline || Boolean(evidence);
+  const evidenceFieldCount = evidence?.drift?.fields?.length ?? 0;
+  const evidenceStructuralCount = (evidence?.drift?.changedFields?.length ?? 0)
+    + (evidence?.drift?.addedNodes?.length ?? 0) + (evidence?.drift?.removedNodes?.length ?? 0)
+    + (evidence?.drift?.movedNodes?.length ?? 0);
+  const evidenceDriftCount = evidence
+    ? Number(evidence.drift.count ?? (evidenceFieldCount || evidenceStructuralCount || summary?.drift.count || 0))
+    : 0;
+  const evidenceMaterialFields = evidence?.drift?.fields?.filter(field => field.semanticChange && field.materiality !== 'COSMETIC').length ?? 0;
+  const evidenceMaterialCount = evidence
+    ? Number(evidence.drift.materialCount ?? (evidenceMaterialFields || summary?.drift.materialCount || 0))
+    : 0;
+  const displaySummary = summary && evidence
+    ? { ...summary, drift: { ...summary.drift, count: evidenceDriftCount, materialCount: evidenceMaterialCount,
+      decidesDrift: evidenceDriftCount > 0 && summary.drift.canApprove } }
+    : summary;
+  const authoritativeSummary = displaySummary ?? summary;
 
   return (
     <div className="va-stack">
@@ -107,10 +123,10 @@ function IssuePanelBody({ issueKey: issueKeyProp, onDone }: Props) {
           )}
 
           {summary.baseline && (
-            <DriftSection drift={summary.drift} evidence={evidence} issueKey={issueKey} />
+            <DriftSection drift={authoritativeSummary!.drift} evidence={evidence} evidenceReady={evidenceReady} issueKey={issueKey} />
           )}
 
-          {action.reviewingDrift && evidenceError && (
+          {!evidenceReady && evidenceError && (
             <Notice>
               Change details could not be loaded. {evidenceError}
               {' '}<Button appearance="subtle" onClick={retryEvidence}>Reload evidence</Button>
@@ -118,10 +134,10 @@ function IssuePanelBody({ issueKey: issueKeyProp, onDone }: Props) {
           )}
 
           <ApprovalControls
-            summary={summary}
+            summary={authoritativeSummary!}
             issueKey={issueKey}
             onDone={async () => { await refresh(); onDone?.(); }}
-            disabled={!!error}
+            disabled={!!error || !evidenceReady}
             evidence={evidence}
             evidenceLoading={evidenceLoading}
             evidenceError={evidenceError}

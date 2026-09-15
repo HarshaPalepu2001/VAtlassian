@@ -121,7 +121,22 @@ export async function executeTreeRestore({
         await adapters.moveIssue(target, parentKey);
       } else if (step.kind === 'RESTORE_FIELDS') {
         if (target == null) throw new Error('Field restore target is unavailable');
-        await adapters.editIssue(target, step.fields);
+        // Compatibility for plans persisted before links became their own
+        // action.  Jira does not restore issue links through the ordinary
+        // issue-field PUT, so split the legacy step at execution time.
+        const legacyLinks = step.fields?.issuelinks;
+        const regularFields = { ...(step.fields ?? {}) };
+        delete regularFields.issuelinks;
+        if (Object.keys(regularFields).length > 0) {
+          await adapters.editIssue(target, regularFields);
+        }
+        if (legacyLinks !== undefined) {
+          if (typeof adapters.restoreLinks !== 'function') throw new Error('Link restore adapter is unavailable');
+          await adapters.restoreLinks(target, legacyLinks);
+        }
+      } else if (step.kind === 'RESTORE_LINKS') {
+        if (target == null) throw new Error('Link restore target is unavailable');
+        await adapters.restoreLinks(target, step.links ?? []);
       } else if (step.kind === 'DELETE_ADDED_NODE') {
         if (target == null) throw new Error('Delete target is unavailable');
         try {

@@ -148,6 +148,11 @@ export async function runRestoreWorker(eventOrBody, overrides = {}) {
       maxActions: WORKER_BATCH });
     const totalSteps = Number(restore.total_steps ?? plan.steps.length);
     if (executed.state === 'PARTIAL' || Number(executed.remaining) > 0) {
+      const previousCompleted = Number(restore.completed_steps ?? 0);
+      const completed = Number(executed.completed ?? 0);
+      if (executed.stopped === true && Number(executed.attempted ?? 0) > 0 && completed <= previousCompleted) {
+        throw new Error('Restore made no progress; inspect the failed action before retrying.');
+      }
       await deps.heartbeatRestore({ restoreId, completedSteps: Number(executed.completed ?? 0),
         totalSteps, now: Date.now() });
       try {

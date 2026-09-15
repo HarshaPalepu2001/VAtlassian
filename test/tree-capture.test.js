@@ -215,6 +215,17 @@ test('tree capture reserves a baseline id, writes all nodes, then publishes', as
   assert.equal(result.version, 1);
 });
 
+test('tree capture passes JSON text for the item-state digest column', async () => {
+  const fixture = publicationFixture();
+  let itemState;
+  fixture.deps.upsertBaselined = async args => { itemState = args; };
+
+  await writeCapturedTreeBaseline(fixture);
+
+  assert.equal(typeof itemState.fieldDigests, 'string');
+  assert.deepEqual(JSON.parse(itemState.fieldDigests), {});
+});
+
 test('approval id is never used as a baseline id', async () => {
   const fixture = publicationFixture();
   await writeCapturedTreeBaseline(fixture);
@@ -259,6 +270,7 @@ test('a completed capture is idempotent without rereading changed Jira content',
         content_hash: 'signed-tree-hash', tree_hash: 'signed-tree-hash',
         node_count: 1, total_field_count: 1
       }),
+      upsertBaselined: async () => {},
       readStableTree: async () => assert.fail('completed capture must not reread Jira')
     }
   });
@@ -267,6 +279,36 @@ test('a completed capture is idempotent without rereading changed Jira content',
   assert.equal(result.alreadyCaptured, true);
   assert.deepEqual(result.baselineId, baselineId);
   assert.equal(result.version, 2);
+});
+
+test('a published tree capture repairs a missing item-state index without rereading Jira', async () => {
+  const baselineId = Buffer.alloc(16, 9);
+  let itemState;
+  const result = await writeCapturedTreeBaseline({
+    rootIssue: { id: '1', key: 'VA-1', fields: { summary: 'current' } },
+    policy: { transition_id: '5', from_status_id: '1', to_status_id: '2' },
+    approval: {
+      approvalId: Buffer.alloc(16, 7), accountId: 'user-1', displayName: 'Reviewer',
+      assuranceLevel: 'ESIGNATURE', content_hash: 'signed-tree-hash'
+    },
+    controlledFields: [{ field_id: 'summary', field_kind: 'TEXT', store_values: true }],
+    transitionAt: 1700000000000,
+    deps: {
+      baselineForApproval: async () => ({
+        baseline_id: baselineId, issue_id: 1, project_id: 100, issue_type_id: '200',
+        state: 'ACTIVE', version: 2, content_hash: 'signed-tree-hash', tree_hash: 'signed-tree-hash',
+        field_digests: '{}', approved_by: 'user-1', approved_name: 'Reviewer', captured_at: 1700000000000,
+        node_count: 1, total_field_count: 1
+      }),
+      readStableTree: async () => assert.fail('published capture must not reread Jira'),
+      upsertBaselined: async args => { itemState = args; }
+    }
+  });
+
+  assert.equal(result.alreadyCaptured, true);
+  assert.equal(itemState.baselineId, baselineId);
+  assert.equal(itemState.baselineVersion, 2);
+  assert.equal(itemState.fieldDigests, '{}');
 });
 
 test('a completed capture cannot be borrowed by mismatched signed evidence', async () => {

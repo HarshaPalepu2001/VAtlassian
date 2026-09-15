@@ -119,3 +119,29 @@ test('transition screen refuses a missing exact transition id', async () => {
   });
   assert.equal(result.reason, 'TRANSITION_ID_REQUIRED');
 });
+
+// The signing screen (src/ui-kit/edit.jsx) renders issue.assignee,
+// issue.reporter, issue.issueTypeName and issue.description* directly from
+// this resolver's response. Dropping them here does not make the field
+// "stale" — it makes it wrong: the signer sees "Unassigned" / "Unknown" /
+// a blank description regardless of the work item's actual current values,
+// which is exactly the attestation-content mismatch a signature is supposed
+// to prevent.
+test('signing context carries the current assignee, reporter, issue type and description through to the signer', async () => {
+  const f = fixture({
+    available: [{ id: '101', toStatusId: '4', name: 'Create Baseline', toStatusName: 'Selected for Development' }]
+  });
+  f.issue.fields.issuetype.name = 'Bug';
+  f.issue.fields.assignee = { displayName: 'Ada Lovelace' };
+  f.issue.fields.reporter = { displayName: 'Grace Hopper' };
+  f.issue.fields.description = { content: [{ type: 'paragraph', content: [{ text: 'Real current description.' }] }] };
+
+  const usecase = createSigningUsecases(f.deps);
+  const result = await usecase.signingContext({ payload: { surface: 'esignature-field', transitionId: '101' }, context: { accountId: 'actor-1' } });
+
+  assert.equal(result.issue.issueTypeName, 'Bug');
+  assert.equal(result.issue.assignee.displayName, 'Ada Lovelace');
+  assert.equal(result.issue.reporter.displayName, 'Grace Hopper');
+  assert.equal(result.issue.description, 'Real current description.');
+  assert.equal(result.issue.descriptionEmpty, false);
+});

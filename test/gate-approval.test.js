@@ -28,6 +28,20 @@ test('gate consumes a verified capability exactly once under concurrent requests
   const results = await Promise.all([gate(f.payload), gate(f.payload)]);
   assert.equal(results.filter(r => r.result).length, 1);
 });
+test('validator accepts Jira Lambda payloads without transition.id when trusted loading resolves it', async () => {
+  const f = await fixture();
+  f.payload.transition.id = null;
+  let loaded;
+  f.deps.load = async args => {
+    loaded = args;
+    return { ...f.snapshot, transitionId: '50' };
+  };
+
+  const result = await createGate(f.deps)(f.payload);
+
+  assert.equal(result.result, true, JSON.stringify(result));
+  assert.equal(loaded.transitionId, null);
+});
 test('validator recomputes the recursive tree hash for a tree-backed baseline', async () => {
   const controlledFields = ['summary', 'description', 'issuelinks', 'subtasks'].map(field_id => ({
     field_id, field_name: field_id, field_kind: field_id === 'description' ? 'ADF' : field_id === 'summary' ? 'TEXT' : 'MULTI',

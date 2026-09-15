@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { planTreeRestore } from '../src/lib/tree/restorePlan.js';
+import { FIELD_KIND } from '../src/lib/content.js';
 
 function treeRestoreFixture() {
   return {
@@ -79,4 +80,24 @@ test('a deleted governed root fails closed instead of creating a replacement', (
     currentTree: { nodes: [] },
     controlledFields: []
   }), /BASELINE_ROOT_MISSING/);
+});
+
+test('issue links get a dedicated restore step instead of being sent as ordinary fields', () => {
+  const fields = [
+    { field_id: 'summary', field_name: 'summary', field_kind: 'TEXT' },
+    { field_id: 'issuelinks', field_name: 'Linked Issues', field_kind: FIELD_KIND.LINKS }
+  ];
+  const link = { id: '100', type: { id: '10', name: 'Blocks' }, outwardIssue: { id: '20', key: 'T-20' }, inwardIssue: { id: '1', key: 'T-1' } };
+  const baselineTree = {
+    nodes: [{ logicalNodeId: 'root', parentLogicalId: null, digests: { summary: 'approved', issuelinks: 'approved-link' } }],
+    values: { root: { summary: 'approved', issuelinks: [link] } }
+  };
+  const currentTree = {
+    nodes: [{ logicalNodeId: 'root', parentLogicalId: null, digests: { summary: 'changed', issuelinks: 'changed-link' } }]
+  };
+  const plan = planTreeRestore({ baselineTree, currentTree, controlledFields: fields });
+
+  assert.deepEqual(plan.steps.map(step => step.kind), ['RESTORE_FIELDS', 'RESTORE_LINKS']);
+  assert.deepEqual(plan.steps[0].fields, { summary: 'approved' });
+  assert.deepEqual(plan.steps[1].links, [link]);
 });

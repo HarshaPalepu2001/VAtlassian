@@ -13,6 +13,7 @@ import { readStableTree } from '../lib/tree/stableRead.js';
 import { planTreeCapture } from '../lib/tree/capturePlan.js';
 import { logicalNodeId } from '../lib/tree/model.js';
 import { diffTree } from '../lib/tree/diff.js';
+import { treeReviewDiff } from '../lib/tree/reviewDiff.js';
 import { readBaselineTree } from '../db/baselineTreeStore.js';
 import { fail, actorFrom, serialise, respond } from './access.js';
 
@@ -109,14 +110,21 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
     }
   }
   
+  const reviewDiff = treeDiff
+    ? treeReviewDiff({ baseline, baselineTree, currentTree, treeDiff, controlledFields: fields,
+      changelogEntries: changelog.entries, changelogUnavailable: changelog.failed === true,
+      changelogTruncated: changelog.truncated === true })
+    : diff;
+  if (reviewDiff && treeDiff) reviewDiff.evidenceHash = treeHash;
   const evidenceHash = treeDiff ? null : (diff?.evidenceHash ?? projection.contentHash);
   if (expectedEvidenceHash != null && expectedEvidenceHash !== (useTree ? treeHash : evidenceHash)) fail('STALE_EVIDENCE');
+  const reviewDriftCount = reviewDiff?.changedFieldCount ?? treeDiff?.changes?.length ?? 0;
   return { issue, actor, issueId, projectId, issueTypeId, config, baseline, review, gate,
     eligible, fields, editmeta, restoreEditmeta, baselineValues, driftRows, diff,
     contentHash: useTree ? treeHash : projection.contentHash, digests: projection.digests,
     evidenceHash: useTree ? treeHash : evidenceHash, baselineVersion: baseline?.version ?? 0,
     tree, currentTree, baselineTree, treeDiff, treeHash,
-    driftCount: useTree ? (treeDiff?.changes?.length ?? 0) : Math.max(driftRows.length, diff?.changedFieldCount ?? 0), reportHash: null };
+    reviewDiff, driftCount: useTree ? reviewDriftCount : Math.max(driftRows.length, diff?.changedFieldCount ?? 0), reportHash: null };
 }
 /** null, never {}, so the caller can tell "nothing extra" from "could not ask"
  *  and fall back to the user-scoped map rather than refusing every field. */

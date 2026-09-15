@@ -6,7 +6,7 @@ import type { PanelEvidence } from './types';
 
 type Options = {
   issueKey?: string;
-  /** The selected action identity — 'drift', 'transition:<id>', or 'none'. */
+  /** Stable record identity for the current baseline evidence read. */
   actionId: string;
   /** The summary's latest baseline version; null when there is no baseline. */
   baselineVersion: number | null;
@@ -21,12 +21,13 @@ type Loaded = { cacheKey: string; evidence: PanelEvidence | null; loading: boole
 export const STALE_EVIDENCE_MESSAGE = 'The evidence changed while it was loading. Reload it to see the current baseline.';
 
 /**
- * THE HEAVY READ — `panel:getEvidence`, loaded only when a caller asks for it.
+ * THE HEAVY READ — `panel:getEvidence`, shared by the panel's current-record
+ * surfaces.
  *
- * Keyed by the selected action plus the baseline id/version it is reviewed
- * against. Whatever was loaded under another key is never returned, including
- * for the one render before a new request starts, and a late response for an
- * old key is dropped by sequence.
+ * Keyed by the current record plus the baseline id/version it is reviewed
+ * against. Selecting a different workflow action must not create a competing
+ * authority read for the same record. A late response for an old key is
+ * dropped by sequence.
  *
  * Evidence that belongs to another baseline — refused as STALE_EVIDENCE, or
  * returned for a different version — is discarded without being exposed, and

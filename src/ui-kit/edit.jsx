@@ -296,7 +296,7 @@ const Edit = () => {
     const capturing = options?.find((o) => o.ctId === ctId)?.capturesBaseline === true;
     setToken('');
     setStatus({ kind: 'verifying', message: 'Preparing signature' });
-    invoke('approval:challenge', { issueKey, transitionId: ctId, decision: 'APPROVE', expectedEvidenceHash: evidenceHash })
+    invoke('approval:challenge', { issueKey, transitionId: ctId, intent: 'WORKFLOW', decision: 'APPROVE', expectedEvidenceHash: evidenceHash })
       .then(challenge => {
         if (!challenge?.success) throw new Error(challenge?.error ?? 'The reviewed content changed. Reopen the transition and review it again.');
         if (!cancelled) setStatus({ kind: 'verifying', message: capturing ? 'Publishing baseline' : 'Recording signature' });

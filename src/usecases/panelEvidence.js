@@ -109,7 +109,11 @@ export async function getEvidence(args) { return respond(async () => {
     description, descriptionEmpty, descriptionTruncated,
     assignee: issue.fields.assignee, reporter: issue.fields.reporter,
     record,
-    drift: { fields: prepared.diff?.fields ?? [], ...groupedDrift },
+    drift: {
+      count: Number(prepared.driftCount ?? prepared.reviewDiff?.changedFieldCount ?? prepared.diff?.changedFieldCount ?? 0),
+      materialCount: Number(prepared.reviewDiff?.materialFieldCount ?? prepared.diff?.materialFieldCount ?? 0),
+      fields: prepared.reviewDiff?.fields ?? prepared.diff?.fields ?? [], ...groupedDrift
+    },
     rejection: { deleteIssueKeys, recreateCount },
     restoreHistory: restores
   };

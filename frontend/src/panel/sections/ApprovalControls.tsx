@@ -50,11 +50,10 @@ const WITHDRAWN = 'The action you selected is no longer available to you. Nothin
 const DD = { margin: 0 };
 
 /**
- * `evidence`/`evidenceLoading`/`evidenceError` are the lazily-loaded
- * `panel:getEvidence` read owned by IssuePanel — see usePanelEvidence.ts —
- * already keyed to the same action this component resolves. Selection is
- * controlled by the parent when `onSelectTransition` is given, so both key the
- * same action; otherwise it is held here.
+ * `evidence`/`evidenceLoading`/`evidenceError` are the authoritative current
+ * record read owned by IssuePanel — see usePanelEvidence.ts. Selection is
+ * controlled by the parent when `onSelectTransition` is given; it does not
+ * create a competing evidence read.
  */
 export default function ApprovalControls({ summary, issueKey, onDone, disabled = false, evidence, evidenceLoading, evidenceError, selectedTransitionId, onSelectTransition }: {
   summary: PanelSummary;
@@ -161,6 +160,7 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
         issueKey: targetKey,
         transitionId: reviewingDrift ? undefined : transition?.transitionId,
         toStatusId: reviewingDrift ? undefined : transition?.toStatusId,
+        intent: reviewingDrift ? 'DRIFT' : 'WORKFLOW',
         decision, code: '', note: session.note, evidenceHash: reviewingDrift ? evidence?.evidenceHash : undefined, confirmed: true, level
       })));
       patch(gen, { challenge: { id: result.challengeId, nonce: result.nonce, decision, expiresAt: result.expiresAt, meaning: result.meaning, requiredAssurance: result.requiredAssurance } });
@@ -309,7 +309,7 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
   return <Card title="Approval" subtitle={canAct ? 'Your decision is recorded against your name and cannot be edited afterwards.' : undefined}><div className="va-stack">
     {/* Every viewer — eligible or not — sees the exact rule this work item is
         controlled by. Nothing here is hidden behind a disclosure. */}
-    <ControlFacts summary={summary} fromStatusName={fromStatusName} />
+    <ControlFacts summary={summary} fromStatusName={fromStatusName} authoritativeReady={!summary.baseline || Boolean(evidence)} />
     {liveRegion}
     {outcome && <Notice danger={outcome.failed}>{outcome.message}</Notice>}
     {session.message && <Notice danger={session.failed}>{session.message}</Notice>}
@@ -364,7 +364,7 @@ function noActionExplanation(summary: PanelSummary, reviewingDrift: boolean): st
 }
 
 /** The control summary every viewer receives from `panel:getSummary`. */
-function ControlFacts({ summary, fromStatusName }: { summary: PanelSummary; fromStatusName?: string }) {
+function ControlFacts({ summary, fromStatusName, authoritativeReady = true }: { summary: PanelSummary; fromStatusName?: string; authoritativeReady?: boolean }) {
   const { baseline, drift, approval, restore } = summary;
   const transitions = summary.transitions ?? [];
   return (
@@ -399,6 +399,7 @@ function ControlFacts({ summary, fromStatusName }: { summary: PanelSummary; from
         <dt className="va-secondary">Changes since approval</dt>
         <dd className="va-grow" style={DD}>
           {!baseline ? 'Not tracked until a baseline is captured'
+            : !authoritativeReady ? 'Checking the current record…'
             : drift.count ? <>{plural(drift.count, 'change')} to decide{approval.requiredRole ? ` by ${approval.requiredRole}` : ''} {approval.requiredAssurance && <AssuranceChip level={approval.requiredAssurance} />}</>
               : 'None since the latest baseline'}
         </dd>

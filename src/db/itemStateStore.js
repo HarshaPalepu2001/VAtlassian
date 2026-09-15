@@ -1,5 +1,5 @@
 import { executeQuery, toBinaryParam, fromBinaryColumn, limitClause, affectedRows } from '../lib/db.js';
-import { throwing } from './store.js';
+import { throwing, isDuplicateKey } from './store.js';
 import { REVIEW_STATE } from '../lib/interception.js';
 
 /**
@@ -49,11 +49,11 @@ export async function upsertBaselined({
     now, lastChangelogId ?? null
   ];
 
-  const existing = await executeQuery('SELECT baseline_version FROM va_item_state WHERE issue_id = ?', [issueId]);
-  
+  const existing = await throwing('SELECT baseline_version FROM va_item_state WHERE issue_id = ?', [issueId]);
+
   if (existing.length === 0) {
     try {
-      await executeQuery(
+      await throwing(
         `INSERT INTO va_item_state
          (issue_id, issue_key, project_id, issue_type_id, summary, reviewer_account_id, reviewer_name,
           state, baseline_id, baseline_version, content_hash, field_digests,
@@ -64,6 +64,7 @@ export async function upsertBaselined({
       );
       return;
     } catch (e) {
+      if (!isDuplicateKey(e)) throw e;
       // Fall through to update in case of race condition
     }
   }

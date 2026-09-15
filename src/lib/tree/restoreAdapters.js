@@ -48,6 +48,7 @@ const PERMISSION_FOR_KIND = {
   CREATE_REPLACEMENT: 'CREATE_ISSUES',
   MOVE_NODE: 'EDIT_ISSUES',
   RESTORE_FIELDS: 'EDIT_ISSUES',
+  RESTORE_LINKS: 'EDIT_ISSUES',
   DELETE_ADDED_NODE: 'DELETE_ISSUES'
 };
 
@@ -128,9 +129,62 @@ export function createRestoreAdapters({ api, route }) {
       return { issueIdOrKey, fieldIds: Object.keys(fields).sort() };
     },
 
+    async restoreLinks(issueIdOrKey, target) {
+      if (!Array.isArray(target)) {
+        throw new JiraRestoreError({ operation: 'RESTORE_LINKS', status: null,
+          detail: 'The approved issue-link list is not complete.' });
+      }
+      const read = await request(route`/rest/api/3/issue/${issueIdOrKey}?fields=issuelinks`, { headers: { Accept: 'application/json' } });
+      if (!ok(read)) throw new JiraRestoreError({ operation: 'READ_LINKS', status: Number(read.status) || null,
+        detail: errorText(await responseBody(read)) });
+      const current = (await responseBody(read))?.fields?.issuelinks;
+      if (!Array.isArray(current)) {
+        throw new JiraRestoreError({ operation: 'READ_LINKS', status: null,
+          detail: 'Jira omitted the current issue links; no links were changed.' });
+      }
+
+      const desired = new Map(target.map(link => [linkIdentity(link), link]));
+      const existing = new Map(current.map(link => [linkIdentity(link), link]));
+      const additions = [...desired].filter(([key]) => !existing.has(key));
+      const removals = [...existing].filter(([key]) => !desired.has(key));
+      if (removals.some(([, link]) => !link.id)) {
+        throw new JiraRestoreError({ operation: 'RESTORE_LINKS', status: null,
+          detail: 'A current issue link has no deletion id; the link set cannot be restored exactly.' });
+      }
+
+      await Promise.all(additions.map(async ([, link]) => {
+        const direction = link.inwardIssue ? 'inwardIssue' : 'outwardIssue';
+        const opposite = direction === 'inwardIssue' ? 'outwardIssue' : 'inwardIssue';
+        const other = link[direction];
+        const body = { type: link.type.id != null ? { id: String(link.type.id) } : { name: link.type.name },
+          [direction]: other.id != null ? { id: String(other.id) } : { key: other.key },
+          [opposite]: { key: String(issueIdOrKey) } };
+        await checked(await request(route`/rest/api/3/issueLink`, requestOptions('POST', body)), 'RESTORE_LINKS');
+      }));
+      await Promise.all(removals.map(async ([, link]) => {
+        const response = await request(route`/rest/api/3/issueLink/${link.id}`, { method: 'DELETE', headers: { Accept: 'application/json' } });
+        if (!ok(response) && Number(response.status) !== 404) {
+          throw new JiraRestoreError({ operation: 'RESTORE_LINKS', status: Number(response.status) || null,
+            detail: errorText(await responseBody(response)) });
+        }
+      }));
+      return { issueIdOrKey, added: additions.length, removed: removals.length };
+    },
+
     async deleteIssue(issueIdOrKey) {
       await checked(await request(route`/rest/api/3/issue/${issueIdOrKey}`, requestOptions('DELETE')), 'DELETE_ADDED_NODE');
       return { issueIdOrKey };
     }
   };
+}
+
+function linkIdentity(link) {
+  const direction = link?.inwardIssue ? 'inwardIssue' : 'outwardIssue';
+  const other = link?.[direction];
+  const type = link?.type?.id ?? link?.type?.name;
+  if (!type || !other || !(other.id ?? other.key) || (link.inwardIssue && link.outwardIssue)) {
+    throw new JiraRestoreError({ operation: 'RESTORE_LINKS', status: null,
+      detail: 'A link is missing its type, direction or linked issue identity.' });
+  }
+  return JSON.stringify([String(type), direction, String(other.id ?? other.key)]);
 }

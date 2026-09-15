@@ -34,7 +34,8 @@ const modules = {
   'db/store.js': ['tryAppend', 'newId', 'throwing'],
   'db/observationStore.js': ['recordObservation'],
   'db/baselineTreeStore.js': ['activeRootsForNode', 'readBaselineTree'],
-  'db/treeDriftStore.js': ['replaceTreeDrift']
+  'db/treeDriftStore.js': ['replaceTreeDrift'],
+  'lib/restore/recall.js': ['recallToReview', 'recordRecallFailure']
 };
 const hooks = registerHooks({
   resolve(specifier, context, next) {
@@ -92,11 +93,23 @@ function baseFixture({ baselineChildren = [{ id: '2', summary: 'story' }], liveC
   const tryAppendCalls = [];
   const baselineTree = planTreeCapture({ rootIssueId: '1', nodes: rawNodes(baselineChildren), controlledFields: FIELDS });
   const f = {
-    review: { baseline_id: Buffer.alloc(16, 1), baseline_version: 1, state: 'BASELINED', last_checked_at: 0 },
+    review: { baseline_id: Buffer.alloc(16, 1), baseline_version: 1, version: 1, state: 'BASELINED', last_checked_at: 0,
+      project_id: 10, issue_type_id: '20' },
     baselineTree,
     replaceTreeDriftCalls,
     tryAppendCalls,
     getReview: async () => f.review,
+    activeBaseline: async () => ({ baseline_id: f.review.baseline_id, version: 1,
+      transition_id: '2', from_status_id: '20', to_status_id: '30', required_role: 'Reviewer',
+      required_assurance: 'ESIGNATURE', controlled_fields_hash: 'a'.repeat(64) }),
+    applyObservation: async ({ review, counters }) => {
+      f.review = { ...f.review, ...review, drift_count: counters.driftCount,
+        drifted_field_count: counters.driftedFieldCount, max_materiality: counters.maxMateriality,
+        version: Number(f.review.version ?? 0) + 1 };
+      return { updated: true };
+    },
+    voidOthers: async () => 0,
+    recallToReview: async () => ({ action: 'RECALL', applied: true }),
     controlledFields: async () => FIELDS,
     activeRootsForNode: async () => [],
     readBaselineTree: async () => f.baselineTree,
@@ -143,6 +156,18 @@ test('a review whose baseline was never captured (baseline_id null) is also NO_B
   const result = await collectTree({ rootIssueId: 1, rootIssueKey: 'FEAT-1', now: 1000 });
   assert.equal(result.outcome, 'NO_BASELINE');
   assert.equal(f.replaceTreeDriftCalls.length, 0);
+});
+
+test('tree drift loads the controlled fields for the baselined project and issue type', async () => {
+  const f = baseFixture();
+  f.review.project_id = 10;
+  f.review.issue_type_id = '20';
+  let scope;
+  f.controlledFields = async args => { scope = args; return FIELDS; };
+
+  await collectTree({ rootIssueId: 1, rootIssueKey: 'FEAT-1', now: 1000 });
+
+  assert.deepEqual(scope, { projectId: 10, issueTypeId: '20' });
 });
 
 test('a root mid-decision or mid-restore is BUSY and is left alone', async () => {

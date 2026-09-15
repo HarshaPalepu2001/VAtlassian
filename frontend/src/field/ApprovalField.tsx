@@ -162,7 +162,7 @@ export default function ApprovalField({ context }: { context?: { extension?: { i
     setProgress(PROGRESS.preparing); setMessage(''); setFailed(false);
     try {
       const challenge = assertResult(await invoke<Challenge>('approval:challenge', {
-        issueKey: resolvedKey, transitionId: action.transitionId, toStatusId: action.toStatusId,
+        issueKey: resolvedKey, transitionId: action.transitionId, toStatusId: action.toStatusId, intent: 'WORKFLOW',
         decision: 'APPROVE', confirmed: true, expectedEvidenceHash: evidenceHash
       }));
       let webauthn;

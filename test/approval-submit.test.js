@@ -151,6 +151,59 @@ test('biometric challenge records a WebAuthn-backed approval through the same ap
   assert.equal(JSON.parse(f.rows[0].provider_evidence).method, 'SESSION_AND_WEBAUTHN');
 });
 
+test('biometric workflow approval after an existing baseline uses the current transition policy', async () => {
+  const f = fixture();
+  f.request.payload.transitionId = '7';
+  f.request.payload.intent = 'WORKFLOW';
+  delete f.request.payload.code;
+  f.deps.issue = async () => ({ issueId: 10, issueKey: 'T-10', projectId: 1, issueTypeId: '1', statusId: '3' });
+  const currentPolicy = {
+    required_assurance: 'BIOMETRIC', required_role: 'reviewer', meaning: 'Assigned for Development',
+    capture_baseline: false, block_on_drift: true
+  };
+  f.deps.transition = async (_issue, requested) => String(requested.transitionId) === '7'
+    ? { id: '7', toStatusId: '4' } : { id: '5', toStatusId: '2' };
+  f.deps.edge = async (_issue, transition) => String(transition?.id) === '7'
+    ? currentPolicy : { ...currentPolicy, required_assurance: 'ESIGNATURE', transition_id: '5' };
+  const prepared = baselineDecisionPrepared({
+    driftCount: 0,
+    review: { state: 'BASELINED' },
+    approvalPolicy: currentPolicy,
+    gate: currentPolicy
+  });
+  const prepareCalls = [];
+  f.deps.prepare = async options => { prepareCalls.push(options); return { ...prepared }; };
+  let totpSpent = false;
+  f.deps.totpDeps.consume = async () => { totpSpent = true; return true; };
+  f.deps.webauthnDeps = {
+    verifyAssertion: async ({ binding, payload }) => {
+      assert.equal(binding.transitionId, '7');
+      assert.equal(binding.fromStatusId, '3');
+      assert.equal(binding.toStatusId, '4');
+      assert.equal(payload.challengeId, 'current-device-challenge');
+      return {
+        ok: true, credentialId: 'credential-1', assertionAssurance: 'DEVICE_BOUND_UV',
+        rpId: 'app.cdn.prod.atlassian-dev.net', origin: 'https://app.cdn.prod.atlassian-dev.net', verifiedAt: f.deps.now()
+      };
+    }
+  };
+
+  const api = createApprovalUsecases(f.deps);
+  const challenge = await api.challenge(f.request);
+  assert.equal(challenge.success, true, JSON.stringify(challenge));
+  const result = await api.submit({ context: f.request.context, payload: {
+    issueKey: 'T-10', challengeId: challenge.challengeId, confirmed: true,
+    webauthn: { challengeId: 'current-device-challenge', response: { id: 'credential-1' } }
+  } });
+
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(totpSpent, false);
+  assert.equal(f.rows[0].transition_id, '7');
+  assert.equal(f.rows[0].assurance_level, 'BIOMETRIC');
+  assert.ok(prepareCalls.length >= 2);
+  assert.ok(prepareCalls.every(call => call.forTransition === true), 'every workflow read must use transition authority');
+});
+
 for (const decision of ['APPROVE', 'REJECT']) {
   test(`drift ${decision.toLowerCase()} follows the biometric assurance frozen in the baseline`, async () => {
     const f = fixture();
@@ -209,6 +262,7 @@ for (const decision of ['APPROVE', 'REJECT']) {
 
 test('drift challenge ignores injected transition and policy facts and resolves the exact baseline edge', async () => {
   const f = fixture();
+  f.request.payload.intent = 'DRIFT';
   f.request.payload.transitionId = '999';
   f.request.payload.toStatusId = '999';
   f.request.payload.requiredRole = 'attacker';
@@ -227,7 +281,7 @@ test('drift challenge ignores injected transition and policy facts and resolves 
   assert.equal(challenge.meaning, 'Approve changes against baseline v4');
   assert.equal(challenge.requiredAssurance, 'ESIGNATURE');
   assert.deepEqual(requestedTransitions, [{ transitionId: '5' }]);
-  assert.equal(f.challenges.get(challenge.challengeId).transition_id, '5');
+  assert.equal(f.challenges.get(challenge.challengeId).transition_id, null);
 });
 
 test('a refused Jira transition invalidates a baseline-owned approval and cannot be retried', async () => {

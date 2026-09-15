@@ -25,7 +25,7 @@ function trees() {
 function createJournalAdapters(options = {}) {
   const state = {
     actions: [], replacements: [],
-    mutations: { create: [], edit: [], move: [], delete: [] },
+    mutations: { create: [], edit: [], move: [], delete: [], links: [] },
     failFieldOnce: options.failFieldOnce ?? false,
     permissionResponse: options.permissionResponse ?? 200
   };
@@ -66,7 +66,8 @@ function createJournalAdapters(options = {}) {
         throw new Error('field write refused');
       }
     },
-    deleteIssue: async issueId => { state.mutations.delete.push(issueId); }
+    deleteIssue: async issueId => { state.mutations.delete.push(issueId); },
+    restoreLinks: async (issueId, links) => { state.mutations.links.push({ issueId, links }); }
   };
   return { adapters, state };
 }
@@ -90,7 +91,7 @@ test('no Jira mutation occurs when preflight cannot prove permissions', async ()
   const { adapters, state } = createJournalAdapters({ permissionResponse: 403 });
   const result = await executeTreeRestore({ restoreId: 'restore-2', rootIssueKey: 'ROOT-1', ...fixture, adapters, maxActions: 10 });
   assert.equal(result.state, 'FAILED');
-  assert.deepEqual(state.mutations, { create: [], edit: [], move: [], delete: [] });
+  assert.deepEqual(state.mutations, { create: [], edit: [], move: [], delete: [], links: [] });
   assert.equal(state.actions.length, 0);
 });
 
@@ -132,6 +133,23 @@ test('a Jira mutation is not counted complete when its journal finish is not dur
   assert.equal(result.state, 'PARTIAL');
   assert.equal(result.completed, 0);
   assert.equal(result.remaining, 2);
+});
+
+test('legacy field restore plans reconcile links separately from ordinary fields', async () => {
+  const fixture = trees();
+  const { adapters, state } = createJournalAdapters();
+  const links = [{ id: 'link-1' }];
+  const persistedPlan = {
+    steps: [{ stepKey: 'legacy-links', logicalNodeId: 'root', parentLogicalNodeId: null,
+      kind: 'RESTORE_FIELDS', fields: { summary: 'approved', issuelinks: links } }]
+  };
+
+  const result = await executeTreeRestore({ restoreId: 'restore-legacy-links', rootIssueKey: 'ROOT-1',
+    ...fixture, adapters, plan: persistedPlan, maxActions: 10 });
+
+  assert.equal(result.state, 'READY_TO_VERIFY');
+  assert.deepEqual(state.mutations.edit, [{ issueId: 'ROOT-1', fields: { summary: 'approved' } }]);
+  assert.deepEqual(state.mutations.links, [{ issueId: 'ROOT-1', links }]);
 });
 
 test('action journal store uses the step key rather than the node as its identity', async () => {

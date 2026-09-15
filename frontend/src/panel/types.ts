@@ -85,7 +85,7 @@ export type PanelSummary = {
 export type BaselineField = { fieldId: string; fieldName: string; materiality?: string; retained: boolean; digest?: string; preview?: { text?: string; empty?: boolean; truncated?: boolean; more?: number } | null };
 export type BaselineRecordData = { version: number; approvedName?: string; approvedAt?: number; capturedAt?: number; assuranceLevel?: AssuranceLevel; fidelity?: string; contentHash?: string; fieldCount: number; retainedCount: number; fields: BaselineField[]; history?: { version: number; approvedName?: string; approvedAt?: number; assuranceLevel?: AssuranceLevel }[] };
 
-/** The heavy, lazily-loaded read from `panel:getEvidence`. Rejected server-side
+/** The heavy, authoritative current-record read from `panel:getEvidence`. Rejected server-side
  *  as STALE_EVIDENCE when the caller's expected baseline id/version no longer
  *  matches the latest active baseline — see usePanelEvidence.ts. */
 export type PanelEvidence = {
@@ -98,7 +98,7 @@ export type PanelEvidence = {
   assignee?: unknown;
   reporter?: unknown;
   record: BaselineRecordData | null;
-  drift: { fields: DiffField[]; addedNodes?: any[]; removedNodes?: any[]; movedNodes?: any[]; changedFields?: any[] };
+  drift: { count: number; materialCount: number; fields: DiffField[]; addedNodes?: any[]; removedNodes?: any[]; movedNodes?: any[]; changedFields?: any[] };
   rejection: { deleteIssueKeys: string[]; recreateCount: number };
   restoreHistory: any[];
 };

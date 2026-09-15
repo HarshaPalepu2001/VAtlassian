@@ -7,8 +7,8 @@ export function approvalReady({ level, confirmed, code, busy, eligible }: { leve
   return eligible && !busy && confirmed && mode !== 'unavailable' && (mode !== 'totp' || /^\d{6}$/.test(code));
 }
 
-export function approvalPayload({ issueKey, transitionId, toStatusId, decision, code, note, evidenceHash, confirmed, level }: { issueKey?: string; transitionId?: string; toStatusId?: string; decision: 'APPROVE' | 'REJECT'; code: string; note: string; evidenceHash?: string | null; confirmed: boolean; level: AssuranceLevel }) {
-  return { issueKey, transitionId, toStatusId, decision, confirmed, note: note.trim() || undefined, expectedEvidenceHash: evidenceHash ?? undefined, ...(approvalMode(level) === 'totp' ? { code } : {}) };
+export function approvalPayload({ issueKey, transitionId, toStatusId, intent, decision, code, note, evidenceHash, confirmed, level }: { issueKey?: string; transitionId?: string; toStatusId?: string; intent?: 'WORKFLOW' | 'DRIFT'; decision: 'APPROVE' | 'REJECT'; code: string; note: string; evidenceHash?: string | null; confirmed: boolean; level: AssuranceLevel }) {
+  return { issueKey, transitionId, toStatusId, intent, decision, confirmed, note: note.trim() || undefined, expectedEvidenceHash: evidenceHash ?? undefined, ...(approvalMode(level) === 'totp' ? { code } : {}) };
 }
 
 /** The facts a panel transition and a transition-screen action share. */

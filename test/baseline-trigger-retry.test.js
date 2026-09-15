@@ -2,11 +2,15 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { run as updated } from '../src/triggers/issue-updated.js';
+import { isDependencyBundle, run as updated } from '../src/triggers/issue-updated.js';
 import { run as transitioned } from '../src/triggers/issue-transitioned.js';
 import { collectAffectedTrees } from '../src/lib/collect.js';
 import { retryEvent } from '../src/triggers/retry.js';
 const event = { issue: { id: '1', key: 'VA-1' }, eventId: 'update-1', timestamp: 100 };
+test('Forge trigger context is not mistaken for injected dependencies', () => {
+  assert.equal(isDependencyBundle({ cloudId: 'cloud', moduleKey: 'on-issue-updated' }), false);
+  assert.equal(isDependencyBundle({ collectAffectedTrees: async () => [] }), true);
+});
 test('failed observations request supported Forge retry without recording success receipt', async () => {
   const result = await updated(event, { collectAffectedTrees: async () => [{ outcome: 'ERROR' }],
     recordReceipt: async () => assert.fail('failure must not be receipted') });

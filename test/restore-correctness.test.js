@@ -227,6 +227,21 @@ test('tree restore Jira adapters send real move and field mutations', async () =
   ]);
 });
 
+test('tree restore adapter reconciles links by removing extras and recreating approved links', async () => {
+  const keep = link('1', 'outwardIssue', '11');
+  const remove = link('2', 'inwardIssue', '12');
+  const add = link('3', 'inwardIssue', '13');
+  const f = apiFixture(c => c.method === 'GET'
+    ? response(200, { fields: { issuelinks: [keep, remove] } })
+    : response(c.method === 'POST' ? 201 : 204));
+  const adapters = createRestoreAdapters({ api: f.api, route: (strings, ...values) => strings.reduce((out, part, index) => out + part + (values[index] ?? ''), '') });
+  const result = await adapters.restoreLinks('ROOT-1', [keep, add]);
+
+  assert.deepEqual(result, { issueIdOrKey: 'ROOT-1', added: 1, removed: 1 });
+  assert.deepEqual(f.calls.filter(c => c.method === 'DELETE').map(c => c.url), ['/rest/api/3/issueLink/2']);
+  assert.deepEqual(f.calls.find(c => c.method === 'POST')?.body, { type: { id: '100' }, inwardIssue: { id: '13' }, outwardIssue: { key: 'ROOT-1' } });
+});
+
 test('tree restore Jira adapters throw typed failures with Jira details', async () => {
   const f = apiFixture(() => response(400, { errorMessages: ['blocked by workflow'], errors: { summary: 'not editable' } }));
   const adapters = createRestoreAdapters({ api: f.api, route: (strings, ...values) => strings.reduce((out, part, index) => out + part + (values[index] ?? ''), '') });

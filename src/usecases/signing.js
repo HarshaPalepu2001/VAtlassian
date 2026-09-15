@@ -21,6 +21,7 @@ import { availableTransitions } from '../lib/transitions.js';
 import { gatedTransition } from '../db/configStore.js';
 import { isEligible } from '../lib/reviewer.js';
 import { resolveActions } from '../lib/journey.js';
+import { extractDescription } from './panelEvidence.js';
 
 export function createSigningUsecases(deps = {}) {
   const loadFn = deps.load ?? load;
@@ -100,7 +101,11 @@ export function createSigningUsecases(deps = {}) {
           id: String(issue.id),
           key: issue.key,
           summary: issue.fields?.summary ?? '',
-          statusName: issue.fields?.status?.name ?? ''
+          statusName: issue.fields?.status?.name ?? '',
+          issueTypeName: issue.fields?.issuetype?.name ?? '',
+          assignee: issue.fields?.assignee ?? null,
+          reporter: issue.fields?.reporter ?? null,
+          ...extractDescription(issue.fields?.description)
         },
         actorName: actor?.displayName ?? null,
         drift: { evidenceHash: state.evidenceHash }

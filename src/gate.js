@@ -23,7 +23,7 @@ export function createGate(deps) {
     // The exact Jira transition, not just the status pair it moves between.
     // Two sibling transitions can share a destination status, and this is what
     // stops a receipt signed for one from completing the other.
-    const transitionId = payload?.transition?.id == null ? null : String(payload.transition.id);
+    let transitionId = payload?.transition?.id == null ? null : String(payload.transition.id);
     const token = submittedApprovalToken(payload?.transition?.modifiedFields);
     const rawCode = rawCodeSubmitted(payload?.transition?.modifiedFields);
     const facts = { issueKey, fromStatusId, toStatusId, transitionId, hasToken: token != null, hasRawCode: rawCode };
@@ -35,10 +35,17 @@ export function createGate(deps) {
       const assurance = extra.required ? ` Obtained: ${extra.obtained ?? 'none'}. Required: ${extra.required}.` : '';
       return { result: false, errorMessage: (DENY[reason] ?? DENY.SERVICE_UNAVAILABLE) + assurance };
     };
-    if (!issueKey || !fromStatusId || !toStatusId || !transitionId) return deny('SERVICE_UNAVAILABLE', 'MALFORMED_PAYLOAD');
+    if (!issueKey || !fromStatusId || !toStatusId) return deny('SERVICE_UNAVAILABLE', 'MALFORMED_PAYLOAD');
     if (rawCode) return deny('RAW_CODE_ON_SCREEN', 'RAW_TOTP_CODE_IN_MODIFIED_FIELDS');
     try {
-      const snapshot = await deps.load({ issueKey, fromStatusId, toStatusId, transitionId, modifiedFields: payload?.transition?.modifiedFields });
+      const snapshot = await deps.load({ issueKey, fromStatusId, toStatusId, transitionId,
+        approvalId: token, modifiedFields: payload?.transition?.modifiedFields });
+      // Jira's workflow-validator Lambda payload does not include transition.id.
+      // Runtime loading may recover it from Jira's live transition list, but the
+      // edge remains exact before the approval capability is queried or spent.
+      transitionId = transitionId ?? (snapshot.transitionId == null ? null : String(snapshot.transitionId));
+      facts.transitionId = transitionId;
+      if (!transitionId) return deny('SERVICE_UNAVAILABLE', 'MALFORMED_PAYLOAD');
       const { ct, item, issueId, projectId, issueTypeId, contentHash, driftCount } = snapshot;
       if (snapshot.health?.enabled === false) return deny('NOT_CONFIGURED', 'PROJECT_DISABLED');
       if (['RESTORING', 'DECIDING', 'ERROR'].includes(item?.state) || item?.lock_token) return deny('RESTORE_IN_PROGRESS', 'ITEM_BUSY');

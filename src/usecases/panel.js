@@ -69,29 +69,10 @@ export async function getState(args) { return respond(async () => {
   // move. `state.eligible` is authority over THIS item's baseline edge, already
   // resolved by snapshot() — an item can sit for weeks in a status no rule
   // fires out of and still carry a change somebody has to decide.
-  const pendingDrift = Boolean(state.baseline) && (state.diff?.changedFieldCount ?? 0) > 0;
+  const pendingDrift = Boolean(state.baseline)
+    && (state.reviewDiff?.changedFieldCount ?? state.diff?.changedFieldCount ?? state.treeDiff?.changes?.length ?? 0) > 0;
   const decidesDrift = pendingDrift && state.eligible === true;
   const tier = tierFor(actions, { decidesDrift });
-
-  // TEMPORARY DIAGNOSTIC — remove once the missing-controls report is closed.
-  // Prints both authority lookups side by side: the baseline's own edge (which
-  // governs the drift decision) and the gates out of the current status (which
-  // govern transition signing). Every value the tier depends on, in one line.
-  console.log('panel: diag', JSON.stringify({
-    issueKey: issue.key, projectId, issueTypeId, fromStatusId,
-    baseline: state.baseline
-      ? { version: state.baseline.version, from: String(state.baseline.from_status_id),
-          to: String(state.baseline.to_status_id) }
-      : null,
-    baselineGate: state.gate ? { role: state.gate.required_role, assurance: state.gate.required_assurance,
-      matchedType: state.gate.issue_type_id, matchedFrom: state.gate.from_status_id, matchedTo: state.gate.to_status_id } : null,
-    eligibleForBaselineGate: state.eligible,
-    offered: validTransitions.map(t => ({ id: String(t.id), to: String(t.toStatusId) })),
-    transitionGates: gateResults.map(g => g ? g.required_role : null),
-    transitionEligibility: eligibilityResults,
-    changedFieldCount: state.diff?.changedFieldCount ?? 0,
-    pendingDrift, decidesDrift, gatedCount, blocker, actions: actions.length, tier
-  }));
 
   let livingState = "Waiting on signature";
   if (decidesDrift) {
@@ -151,8 +132,8 @@ export async function getState(args) { return respond(async () => {
       treeHash: state.baseline.tree_hash ?? null
     } : undefined,
     drift: {
-      count: state.baseline ? (state.diff?.changedFieldCount ?? state.treeDiff?.changes?.length ?? 0) : 0,
-      materialCount: state.baseline ? (state.diff?.materialFieldCount ?? state.treeDiff?.changes?.length ?? 0) : 0,
+      count: state.baseline ? (state.reviewDiff?.changedFieldCount ?? state.diff?.changedFieldCount ?? state.treeDiff?.changes?.length ?? 0) : 0,
+      materialCount: state.baseline ? (state.reviewDiff?.materialFieldCount ?? state.diff?.materialFieldCount ?? state.treeDiff?.changes?.length ?? 0) : 0,
       evidenceHash: state.evidenceHash,
       ...groupedDrift
     },
@@ -169,7 +150,7 @@ export async function getState(args) { return respond(async () => {
     eligibility: { eligible: true, reason: null },
     drift: {
       ...base.drift,
-      fields: state.diff?.fields ?? []
+      fields: state.reviewDiff?.fields ?? state.diff?.fields ?? []
     },
     transitions: actions,
     credentialEnrolled: credential,

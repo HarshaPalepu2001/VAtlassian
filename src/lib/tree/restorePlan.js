@@ -1,6 +1,7 @@
 import { canonical, sha256Hex } from '../hash.js';
 import { diffTree } from './diff.js';
 import { FailClosed } from './stableRead.js';
+import { FIELD_KIND } from '../content.js';
 
 const parentOf = node => node?.parentLogicalNodeId ?? node?.parentLogicalId ?? node?.parent ?? null;
 const idOf = node => String(node?.logicalNodeId ?? '');
@@ -59,6 +60,9 @@ export function planTreeRestore({ baselineTree, currentTree, controlledFields })
   const changedById = new Map(diff.changes.filter(change => change.kind === 'FIELD_CHANGED')
     .map(change => [String(change.logicalNodeId), [...change.fields].map(String).sort()]));
   const addedIds = new Set(diff.changes.filter(change => change.kind === 'NODE_ADDED').map(change => String(change.logicalNodeId)));
+  const linkFieldIds = new Set(controlledFields
+    .filter(field => field.field_kind === FIELD_KIND.LINKS || field.field_id === 'issuelinks')
+    .map(field => String(field.field_id)));
 
   const removed = baselineNodes.filter(node => removedIds.has(idOf(node))).sort(compareByDepthThenId(baselineById));
   const moved = baselineNodes.filter(node => movedIds.has(idOf(node))).sort(compareByDepthThenId(baselineById));
@@ -74,10 +78,26 @@ export function planTreeRestore({ baselineTree, currentTree, controlledFields })
       const fieldIds = removedIds.has(idOf(node))
         ? controlledFields.map(field => String(field.field_id)).filter(fieldId => fieldId !== 'parent').sort()
         : (changedById.get(idOf(node)) ?? []).filter(fieldId => fieldId !== 'parent');
-      if (fieldIds.length === 0) return [];
-      return [action('RESTORE_FIELDS', idOf(node), parentOf(node), fieldIds, {
-        fields: retainedFields(baselineTree, idOf(node), fieldIds)
-      })];
+      const regularFieldIds = fieldIds.filter(fieldId => !linkFieldIds.has(fieldId));
+      const steps = [];
+      if (regularFieldIds.length > 0) {
+        steps.push(action('RESTORE_FIELDS', idOf(node), parentOf(node), regularFieldIds, {
+          fields: retainedFields(baselineTree, idOf(node), regularFieldIds)
+        }));
+      }
+      // Existing nodes can reconcile links against their current identity.
+      // Removed descendants are intentionally left to the existing replacement
+      // path; their external link identities need a separate rewire policy.
+      if (!removedIds.has(idOf(node))) {
+        const nodeLinkIds = fieldIds.filter(fieldId => linkFieldIds.has(fieldId));
+        if (nodeLinkIds.length > 0) {
+          const values = retainedFields(baselineTree, idOf(node), nodeLinkIds);
+          steps.push(action('RESTORE_LINKS', idOf(node), parentOf(node), nodeLinkIds, {
+            links: values[nodeLinkIds[0]]
+          }));
+        }
+      }
+      return steps;
     });
   const deleteSteps = added
     .filter(node => parentOf(node) != null)

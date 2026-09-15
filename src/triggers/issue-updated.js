@@ -2,6 +2,10 @@ import { collectAffectedTrees, affectedTreeRoots, collectTree } from '../lib/col
 import { executeQuery } from '../lib/db.js';
 import { retryEvent } from './retry.js';
 
+export function isDependencyBundle(value) {
+  return typeof value?.collectAffectedTrees === 'function';
+}
+
 /**
  * avi:jira:updated:issue — the fast path for aggregate drift detection.
  *
@@ -19,7 +23,12 @@ import { retryEvent } from './retry.js';
  *
  * NEVER THROWS.
  */
-export async function run(event, deps = { collectAffectedTrees, affectedTreeRoots, collectTree, recordReceipt }) {
+export async function run(event, suppliedDeps = null) {
+  // Forge invokes a trigger as (event, context). Context is not our test
+  // dependency bundle; treating it as one silently skipped every update.
+  const deps = isDependencyBundle(suppliedDeps)
+    ? { recordReceipt, ...suppliedDeps }
+    : { collectAffectedTrees, affectedTreeRoots, collectTree, recordReceipt };
   const issue = event?.issue;
   if (!issue?.id || !issue?.key) return;
 

@@ -113,3 +113,12 @@ test('a bounded worker batch republishes only while actions remain', async () =>
   assert.equal(f.calls.filter(call => call?.[0] === 'enqueue').length, 1);
   assert.equal(f.calls.includes('verify'), false);
 });
+
+test('a worker does not requeue a restore batch that made no progress', async () => {
+  const f = storeFixture();
+  f.executeBatch = async () => { f.calls.push('execute'); return { state: 'PARTIAL', completed: 0, remaining: 1, attempted: 1, stopped: true }; };
+  const result = await runRestoreWorker(body, f);
+  assert.equal(result.state, 'FAILED');
+  assert.equal(f.calls.filter(call => call?.[0] === 'enqueue').length, 0);
+  assert.equal(f.calls.some(call => call?.[0] === 'fail'), true);
+});

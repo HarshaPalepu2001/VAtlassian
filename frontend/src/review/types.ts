@@ -4,6 +4,7 @@ export type DiffBlock = { op: string; before?: { text?: string }; after?: { text
 export type DiffItem = string | { id?: string; filename?: string; type?: string; inward?: string; outward?: string };
 export type DiffField = {
  fieldId: string; fieldName: string; summary?: string; driftIds?: string[]; semanticChange?: boolean; materiality?: string;
+ attributionStatus?: 'AVAILABLE' | 'UNAVAILABLE' | 'NOT_COLLECTED';
  retained?: boolean; restorable?: string; kind: string; blocks?: DiffBlock[]; ops?: DiffOp[]; added?: DiffItem[]; removed?: DiffItem[]; replaced?: DiffItem[];
  before?: unknown; after?: unknown; churned?: boolean; attribution?: {at: number; authorName?: string; authorId?: string; source?: string; detected?:boolean; fromString?:string|null; toString?:string|null}[];
  /** { storedIdentifier: displayName } for values the comparison reduced to ids. */

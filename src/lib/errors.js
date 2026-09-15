@@ -7,6 +7,7 @@ export const DENY = {
   RESTORE_IN_PROGRESS: 'Baseline is currently restoring this work item to its approved state. Wait for that to finish, then try this transition again.',
   ALREADY_DECIDING: 'A restore is already in progress for this work item. Use Retry restore in the Approval & Baseline panel to resume it; do not submit another rejection.',
   SERVICE_UNAVAILABLE: 'The signature service could not be reached, so this transition was blocked. No changes were made.',
+  RESTORE_STATUS_UNAVAILABLE: 'The work item could not be returned to its approved review status, so no changes were restored. Ask an administrator to check the workflow route.',
   NOT_CONFIGURED: 'This transition is gated but has not been configured. Contact your VAtlassian administrator.',
   LEDGER_UNAVAILABLE: 'The audit ledger could not record this action, so the transition was blocked. No changes were made.',
   NO_PENDING_SIGNATURE: 'This transition requires an electronic signature. Please open the "My Signatures" app from the top navigation bar to sign and complete this transition, or use the Approval & Baseline panel on the issue.',

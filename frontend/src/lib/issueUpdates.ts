@@ -7,7 +7,16 @@ import { events } from '@forge/bridge';
 export function subscribeIssueUpdates(refresh: () => void | Promise<void>) {
   let stopped = false;
   const subscriptions: { unsubscribe: () => void }[] = [];
-  const update = () => { if (!stopped && document.visibilityState !== 'hidden') void refresh(); };
+  const update = () => {
+    if (!stopped && document.visibilityState !== 'hidden') {
+      void refresh();
+      // Jira REST API has read replica lag. When JIRA_ISSUE_CHANGED fires, a synchronous
+      // fetch might return the old data. We schedule follow-up refreshes to ensure we
+      // capture the drifted state once the replicas converge.
+      setTimeout(() => { if (!stopped && document.visibilityState !== 'hidden') void refresh(); }, 2000);
+      setTimeout(() => { if (!stopped && document.visibilityState !== 'hidden') void refresh(); }, 5000);
+    }
+  };
   window.addEventListener('focus', update);
   document.addEventListener('visibilitychange', update);
   for (const event of ['JIRA_ISSUE_CHANGED', 'VA_ISSUE_CHANGED']) {

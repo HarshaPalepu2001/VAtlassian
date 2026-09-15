@@ -46,7 +46,7 @@ export async function prepareApproval({ issue, actor, decision, expectedEvidence
   if (immutable) {
     if (!prepared.baseline || !Buffer.from(prepared.baseline.baseline_id).equals(Buffer.from(immutable.baselineId))
         || Number(prepared.baseline.version) !== immutable.version) fail('STALE_EVIDENCE');
-    if (String(fresh.fields.status?.id ?? '') !== immutable.reviewStatusId) fail('CONTENT_CHANGED');
+    if (decision === 'APPROVE' && String(fresh.fields.status?.id ?? '') !== immutable.reviewStatusId) fail('CONTENT_CHANGED');
     const eligible = await isEligible({ accountId: actor.accountId, projectId: prepared.projectId,
       issueTypeId: prepared.issueTypeId, role: immutable.requiredRole });
     if (!eligible) fail('NOT_ELIGIBLE');
@@ -138,6 +138,22 @@ export async function applyApproval({ issue, actor, approval, prepared, resuming
       expectedEvidenceHash: fresh.evidenceHash, transition, allowBusy: true });
     if (!resuming && checked.contentHash !== approval.content_hash) fail('STALE_EVIDENCE');
     if (approval.decision === 'REJECT') {
+      if (checked.baseline && checked.issue.fields.status?.id && String(checked.issue.fields.status.id) !== checked.baseline.from_status_id) {
+        const { recallToReview } = await import('../lib/restore/recall.js');
+        const recallResult = await recallToReview({
+          issueId: checked.issueId,
+          issueKey: checked.issue.key,
+          projectId: checked.projectId,
+          issueTypeId: checked.issueTypeId,
+          currentStatusId: String(checked.issue.fields.status.id),
+          driftCount: checked.driftCount,
+          baselineId: checked.baseline.baseline_id,
+          baselineVersion: checked.baseline.version,
+          reviewStatusId: checked.baseline.from_status_id,
+          now: Date.now()
+        });
+        // If recall fails (e.g. no route), we still proceed with restoring the content.
+      }
       return await withTimeout(
         performRestore({ prepared: checked, actor, approval }),
         RESTORE_TIMEOUT_MS,

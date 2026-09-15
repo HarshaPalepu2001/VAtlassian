@@ -15,13 +15,21 @@ const ReviewWorkspace = lazy(() => import('../../review/ReviewWorkspace'));
  * wrong". So it reads as a heading with a count, the way an inbox does, and the
  * colour is spent on the individual changes below where it encodes materiality.
  *
- * The count and material count are summary facts, present immediately. The
- * added/removed/moved node breakdown is evidence — loaded lazily by the
- * parent (IssuePanel) once this section is in drift mode — and is shown only
- * once it has arrived; its absence never blocks the count or the decision.
+ * The parent supplies one authoritative current-record evidence read. Until
+ * it arrives, this section shows a neutral checking state rather than a clean
+ * result or an actionable drift decision.
  */
-export default function DriftSection({ drift, evidence, issueKey }: { drift: PanelSummary['drift']; evidence?: PanelEvidence | null; issueKey?: string }) {
+export default function DriftSection({ drift, evidence, evidenceReady = true, issueKey }: { drift: PanelSummary['drift']; evidence?: PanelEvidence | null; evidenceReady?: boolean; issueKey?: string }) {
   const [open, setOpen] = useState(false);
+
+  if (!evidenceReady) {
+    return (
+      <div className="va-banner" aria-busy="true">
+        <strong>Checking the current record…</strong>
+        <p>The approved baseline is being compared with the latest Jira content.</p>
+      </div>
+    );
+  }
 
   if (!drift.count) {
     return (
@@ -60,7 +68,7 @@ export default function DriftSection({ drift, evidence, issueKey }: { drift: Pan
       </div>
       {open && (
         <Suspense fallback={<Loading label="Opening review…" />}>
-          <ReviewWorkspace issueKey={issueKey} evidenceHash={evidence?.evidenceHash ?? undefined} />
+          <ReviewWorkspace issueKey={issueKey} evidenceHash={evidence?.evidenceHash ?? undefined} evidence={evidence} />
         </Suspense>
       )}
     </section>

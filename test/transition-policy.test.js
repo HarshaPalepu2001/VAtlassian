@@ -47,6 +47,16 @@ function fakeQuery(sql, params) {
     return { result: true, data: matches.slice(0, 1) };
   }
   if (sql.includes('FROM va_approval')) {
+    if (sql.includes('approval_id = FROM_BASE64(?)') && !sql.includes('transition_id = ?')) {
+      const [issueId, fromStatusId, toStatusId, now, approvalId] = params;
+      const matches = db.approvals.filter(row => String(row.issue_id) === String(issueId)
+        && row.state === 'PENDING' && row.decision === 'APPROVE'
+        && String(row.from_status_id) === String(fromStatusId)
+        && String(row.to_status_id) === String(toStatusId)
+        && Number(row.expires_at) > Number(now)
+        && row.approval_id === Buffer.from(approvalId, 'base64').toString('base64'));
+      return { result: true, data: matches.slice(0, 1) };
+    }
     if (sql.includes('baseline_id IS NULL')) {
       const [issueId, accountId, fromStatusId, now] = params;
       const matches = db.approvals.filter(row => String(row.issue_id) === String(issueId)
@@ -95,7 +105,7 @@ const hooks = registerHooks({
   }
 });
 const { gatedTransition } = await import('../src/db/configStore.js');
-const { pendingApprovalFor, pendingApprovalForActor, invalidateApproval } = await import('../src/db/approvalStore.js');
+const { pendingApprovalFor, pendingApprovalByToken, pendingApprovalForActor, invalidateApproval } = await import('../src/db/approvalStore.js');
 const { exactAvailableTransition } = await import('../src/lib/transitions.js');
 hooks.deregister();
 
@@ -194,6 +204,17 @@ test('pendingApprovalFor never queries and returns null without an exact transit
 
   const result = await pendingApprovalFor({ issueId: 10, fromStatusId: '3', toStatusId: '5', transitionId: null, now: 0 });
   assert.equal(result, null);
+});
+
+test('a transition-screen capability resolves its exact pending approval without transition.id', async () => {
+  const approvalId = Buffer.alloc(16, 4);
+  const row = { approval_id: approvalId.toString('base64'), issue_id: 10, decision: 'APPROVE',
+    state: 'PENDING', from_status_id: '3', to_status_id: '5', transition_id: '101', expires_at: 999999999999, decided_at: 100 };
+  globalThis.vaTransitionPolicy = { controlledTransitions: [], approvals: [row], query: fakeQuery };
+
+  const result = await pendingApprovalByToken({ issueId: 10, fromStatusId: '3', toStatusId: '5', approvalId, now: 0 });
+
+  assert.equal(result.transition_id, '101');
 });
 
 test('panel retry lookup excludes approvals bound to an existing baseline', async () => {

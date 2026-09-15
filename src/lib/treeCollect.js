@@ -1,9 +1,13 @@
 import api, { route } from '@forge/api';
 import { OUTCOME, REVIEW_STATE } from './interception.js';
 import { controlledFields } from '../db/configStore.js';
-import { getReview } from '../db/itemStateStore.js';
+import { getReview, applyObservation } from '../db/itemStateStore.js';
+import { activeBaseline } from '../db/baselineStore.js';
+import { voidOthers } from '../db/approvalStore.js';
 import { tryAppend } from '../db/store.js';
 import { EVENT } from './ledger.js';
+import { baselinePolicy } from './baselinePolicy.js';
+import { recallToReview } from './restore/recall.js';
 import { activeRootsForNode, readBaselineTree } from '../db/baselineTreeStore.js';
 import { replaceTreeDrift } from '../db/treeDriftStore.js';
 import { createTreeReader } from './tree/jira.js';
@@ -109,7 +113,13 @@ export async function collectTree({ rootIssueId, rootIssueKey, detectedVia = DET
     return { outcome: OUTCOME.BUSY };
   }
 
-  const cFields = await controlledFields();
+  // The baseline was captured for this exact project/type scope. Reusing the
+  // scope from its queue index keeps tree drift on the same tracked field set;
+  // an unscoped lookup silently misses custom fields and makes edits invisible.
+  const cFields = await controlledFields({
+    projectId: Number(review.project_id),
+    issueTypeId: String(review.issue_type_id)
+  });
   const fieldIds = cFields.map(f => f.field_id);
 
   const reader = createTreeReader({ api, route });
@@ -122,6 +132,7 @@ export async function collectTree({ rootIssueId, rootIssueKey, detectedVia = DET
   }
 
   const baselineTree = await readBaselineTree(review.baseline_id);
+  const currentStatusId = String(currentTree.nodes?.[0]?.fields?.status?.id ?? '');
   const plannedCurrentTree = planTreeCapture({ rootIssueId, nodes: currentTree.nodes, controlledFields: cFields });
 
   const { changes } = diffTree({ baselineTree, currentTree: plannedCurrentTree, controlledFields: cFields });
@@ -138,12 +149,76 @@ export async function collectTree({ rootIssueId, rootIssueKey, detectedVia = DET
     detectedAt: now
   }));
 
+  // The durable queue counters use the same reviewer-facing unit as the diff:
+  // one changed field, or one structural tree change when no field list exists.
+  // The tree drift table remains one row per changed node/category for durable
+  // reconciliation, but the panel must not compare that node count with a
+  // field-level detail list.
+  const reviewChangeCount = changes.reduce((count, change) => count
+    + (change.kind === 'FIELD_CHANGED' ? Math.max(1, change.fields?.length ?? 0) : 1), 0);
+
   // REPLACE, NEVER APPEND. The whole tree was just re-diffed against the
   // signed baseline, so this call's rows ARE the tree's current drift set.
   // Writing anything less than the full replacement would leave a stale row
   // from an already-fixed node sitting next to fresh ones from a moved one —
   // exactly the double interpretation this collector exists to prevent.
   await replaceTreeDrift(review.baseline_id, driftRows);
+
+  // The tree drift table is the detailed evidence; va_item_state is the
+  // queue/glance index. Both must move together or the panel says BASELINED
+  // while the tree already has a real difference. The CAS keeps concurrent
+  // Jira update deliveries from losing the state transition.
+  const applied = await applyObservation({
+    issueId: rootIssueId,
+    expectedVersion: review.version,
+    review: {
+      ...review,
+      state: REVIEW_STATE.DRIFTED,
+      last_drift_at: now,
+      last_drift_by: actorAccountId ?? null,
+      last_checked_at: now
+    },
+    counters: {
+      driftCount: reviewChangeCount,
+      driftedFieldCount: reviewChangeCount,
+      maxMateriality: 'MAJOR'
+    }
+  });
+  if (!applied?.updated) return { outcome: 'ERROR', error: 'CONCURRENT_OBSERVATION' };
+
+  // Any approval for the prior signed content is now unusable. Voiding it is
+  // deliberately best effort: the drift row and DRIFTED queue state are the
+  // authoritative evidence, and a retry must not duplicate them.
+  try {
+    await voidOthers({ issueId: rootIssueId });
+  } catch {
+    console.error('tree: could not void stale decisions', JSON.stringify({ issueKey: rootIssueKey }));
+  }
+
+  // Put the item back behind the exact review status recorded by its latest
+  // active baseline. This is the same recall contract as flat-field drift:
+  // reject restores that baseline, approve cuts a new snapshot.
+  let recall = null;
+  try {
+    const baseline = await activeBaseline(rootIssueId);
+    const policy = baselinePolicy(baseline);
+    recall = await recallToReview({
+      issueId: rootIssueId,
+      issueKey: rootIssueKey,
+      projectId: Number(review.project_id),
+      issueTypeId: String(review.issue_type_id),
+      currentStatusId,
+      baselineId: baselineIdHex(policy.baselineId),
+      baselineVersion: policy.version,
+      reviewStatusId: policy.reviewStatusId,
+      driftCount: reviewChangeCount,
+      now
+    });
+  } catch {
+    // The drift evidence remains valid if automatic recall cannot run. The
+    // item stays DRIFTED and the administrator can resolve the workflow route.
+    console.error('tree: drift recall failed', JSON.stringify({ issueKey: rootIssueKey }));
+  }
 
   await tryAppend({
     actorAccountId: actorAccountId ?? 'system',
@@ -160,7 +235,12 @@ export async function collectTree({ rootIssueId, rootIssueKey, detectedVia = DET
     }
   });
 
-  return { outcome: OUTCOME.DRIFT_RECORDED, kinds: changes.map(c => c.kind), inserted: changes.length };
+  return { outcome: OUTCOME.DRIFT_RECORDED, kinds: changes.map(c => c.kind), inserted: changes.length,
+    recall: recall?.action ?? null };
+}
+
+function baselineIdHex(value) {
+  return Buffer.isBuffer(value) ? value.toString('hex') : String(value ?? '');
 }
 
 /**

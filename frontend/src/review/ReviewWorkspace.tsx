@@ -6,20 +6,24 @@ import { Notice } from '../ui/feedback';
 import { assertResult, errorMessage } from '../lib/result';
 import type { Result } from '../lib/result';
 import type { DiffField, ReportMeta, ReviewReport } from './types';
+import type { PanelEvidence } from '../panel/types';
 import DiffView from './DiffView';
 import ReportView from './ReportView';
 type ReportEnvelope=ReportMeta&{body?:ReviewReport};
-export default function ReviewWorkspace({issueKey,evidenceHash}:{issueKey?:string;evidenceHash?:string}){
+export default function ReviewWorkspace({issueKey,evidenceHash,evidence}:{issueKey?:string;evidenceHash?:string;evidence?:PanelEvidence|null}){
  const [fields,setFields]=useState<DiffField[]|null>(null);const [report,setReport]=useState<ReportEnvelope|null>(null);const [error,setError]=useState('');const [busy,setBusy]=useState(false);const [focus,setFocus]=useState<string>();const [historyLimited,setHistoryLimited]=useState(false);
- useEffect(()=>{let active=true;setFields(null);setReport(null);setError('');
-  invoke<Result&{diff:{fields:DiffField[];historyTruncated?:boolean;historyUnavailable?:boolean}}>('drift:getDiff',{issueKey})
-   .then(d=>{assertResult(d);if(active){setFields(d.diff.fields);setHistoryLimited(!!(d.diff.historyTruncated||d.diff.historyUnavailable));}})
+ useEffect(()=>{let active=true;setFields(evidence?.drift?.fields ?? null);setReport(null);setError('');setHistoryLimited(false);
+  const diffRead: Promise<Result&{diff:{fields:DiffField[];historyTruncated?:boolean;historyUnavailable?:boolean}}> = evidence
+   ? Promise.resolve({ diff: evidence.drift } as Result&{diff:{fields:DiffField[];historyTruncated?:boolean;historyUnavailable?:boolean}})
+   : invoke<Result&{diff:{fields:DiffField[];historyTruncated?:boolean;historyUnavailable?:boolean}}>('drift:getDiff',{issueKey});
+  diffRead
+   .then(d=>{assertResult(d);const diff=d?.diff;if(!diff||!Array.isArray(diff.fields))throw new Error('The change comparison is unavailable. Reload the review.');if(active){setFields(diff.fields);setHistoryLimited(!!(diff.historyTruncated||diff.historyUnavailable));}})
    .catch(e=>{if(active)setError(errorMessage(e));});
   invoke<Result&{report:ReportEnvelope|null}>('report:get',{issueKey})
    .then(r=>{assertResult(r);if(active)setReport(r.report);})
    .catch(()=>{ /* The deterministic diff remains available without AI or its cache. */ });
   return()=>{active=false;};
- },[issueKey,evidenceHash]);
+ },[issueKey,evidenceHash,evidence]);
  async function generate(){setBusy(true);setError('');try{const r=assertResult(await invoke<Result&{report:ReportEnvelope}>('report:generate',{issueKey}));setReport(r.report);}catch(e){setError(errorMessage(e));}finally{setBusy(false);}}
  function cite(id:string){const field=fields?.find(f=>f.driftIds?.includes(id));if(!field)return;setFocus(id);document.getElementById(`field-${field.fieldId}`)?.scrollIntoView({behavior:'smooth',block:'center'});}
  // Which fields changed, named. A reviewer opening this wants to know the shape

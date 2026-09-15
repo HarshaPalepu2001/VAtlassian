@@ -68,7 +68,7 @@ function fixture() {
     issue, fields, values, baselines:[baseline], saved:new Map([[1,clone(values)]]), rows:[], challenges:new Map(),
     review:{state:'DRIFTED',version:1,baseline_version:1,baseline_id:baseline.baseline_id,drift_count:1},
     drift:[{baseline_version:1,field_id:'summary',approval_id:null}], writes:[], audits:[], restores:[],
-    transitionRequests:[],
+    transitionRequests:[], statusTransitions:[{id:'21',name:'In-Review',toStatusId:'1',hasScreen:false,isAvailable:true}],
     restoreActions:[], replacements:[],
     policy:{transition_id:'5',from_status_id:'1',to_status_id:'2',required_assurance:'ESIGNATURE',required_role:'reviewer',meaning:'Reviewed and approved',capture_baseline:true,block_on_drift:true},
     controlledFields:async()=>fields, projectConfig:async()=>({enabled:true,restore:{queue:false}}),
@@ -163,6 +163,16 @@ function fixture() {
       if(String(url).includes('/editmeta'))return response({fields:editmeta});
       if(String(url).includes('/changelog'))return response({values:[],total:0,isLast:true});
       if(String(url).includes('/search/jql'))return response({issues:[],total:0,isLast:true});
+      if(String(url).includes('/transitions')){
+        if(options.method==='POST'){
+          const transition=JSON.parse(options.body).transition;
+          const route=f.statusTransitions.find(item=>String(item.id)===String(transition.id));
+          if(!route)return {ok:false,status:400,json:async()=>({})};
+          f.issue.fields.status.id=route.toStatusId;
+          return response({});
+        }
+        return response({transitions:f.statusTransitions.map(item=>({...item,to:{id:item.toStatusId,name:item.name}}))});
+      }
       if(options.method==='PUT'){
         const writes=JSON.parse(options.body).fields;f.writes.push(writes);
         for(const [id,value] of Object.entries(writes))if(id!==f.dropWrite)f.issue.fields[id]=clone(value);
@@ -209,7 +219,7 @@ function fixture() {
     markChallengeConsumed:async id=>{const row=f.challenges.get(id.toString('hex'));if(row.state!=='PENDING')return false;row.state='CONSUMED';return true;}
   };
   f.api=createApprovalUsecases(deps);
-  f.args={context:{accountId:'trusted'},payload:{issueKey:'T-10',transitionId:'5',decision:'APPROVE',confirmed:true,code:'007787'}};
+  f.args={context:{accountId:'trusted'},payload:{issueKey:'T-10',transitionId:'5',intent:'DRIFT',decision:'APPROVE',confirmed:true,code:'007787'}};
   f.sign=async(extra={})=>{
     const args={...f.args,payload:{...f.args.payload,...extra}};
     const c=await f.api.challenge(args);assert.equal(c.success,true,JSON.stringify(c));
@@ -281,14 +291,14 @@ test('rejection restores all 105 changed fields including rich text, empty value
   for(const [id,value] of Object.entries(f.values))assert.deepEqual(f.issue.fields[id],value,id);
   assert.equal(f.review.state,'BASELINED');assert.equal(f.rows[0].decision,'REJECT');assert.equal(f.rows[0].state,'CONSUMED');
 });
-test('rejection refuses to write until baseline recall has returned the root to review',async()=>{
+test('rejection can be challenged while drift leaves the root outside review',async()=>{
   const f=fixture();
   f.issue.fields.status.id='2';
   f.issue.fields.summary='must not be restored outside review';
   const args={...f.args,payload:{...f.args.payload,decision:'REJECT',transitionId:undefined}};
   const result=await f.api.challenge(args);
-  assert.equal(result.success,false,JSON.stringify(result));
-  assert.equal(result.reason,'CONTENT_CHANGED');
+  assert.equal(result.success,true,JSON.stringify(result));
+  
   assert.equal(f.writes.length,0);
   assert.equal(f.restores.length,0);
   assert.equal(f.drift[0].approval_id,null);
@@ -374,4 +384,14 @@ test('a pending baseline-owned transition requires a fresh signature instead of 
   const result=await f.api.retryTransition({context:f.args.context,payload:{issueKey:'T-10',approvalId:approved.approvalId}});
   assert.equal(result.success,false,JSON.stringify(result));assert.equal(result.reason,'NO_DECISION');
   assert.equal(f.rows.length,1);assert.equal(f.baselines.length,2);
+});
+test('rejection from Done recalls the item to review before restoring the baseline',async()=>{
+  const f=fixture();
+  f.issue.fields.status.id='2';
+  f.issue.fields.summary='content changed after approval';
+  const result=await f.sign({decision:'REJECT',transitionId:undefined});
+  assert.equal(result.success,true,JSON.stringify(result));
+  assert.equal(f.issue.fields.status.id,'1');
+  assert.equal(f.issue.fields.summary,'v1 approved');
+  assert.equal(result.restore.state,'COMPLETE',JSON.stringify(result.restore));
 });

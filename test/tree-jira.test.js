@@ -158,3 +158,24 @@ test('createTreeReader handles omitted parent field on top-level root issue and 
   assert.equal(tree.nodes[0].key, 'ROOT-1');
   assert.equal(tree.nodes[0].fields.parent, null, 'Omitted parent should be normalized to null');
 });
+
+test('reader does not expose Jira error response bodies', async () => {
+  const api = {
+    asApp: () => ({
+      requestJira: async request => request.path.includes('/issue/')
+        ? { status: 200, json: async () => ({ id: '1', key: 'ROOT-1', fields: {
+          summary: 'Root', project: { id: '10' }, issuetype: { id: '20' }, status: { id: '30' }, parent: null
+        } }) }
+        : { status: 403, text: async () => '{"secret":"do-not-log"}' }
+    })
+  };
+  const route = (strings, ...values) => {
+    const path = strings.reduce((out, part, index) => out + part + (values[index] ?? ''), '');
+    return { path, toString: () => path };
+  };
+
+  await assert.rejects(
+    () => createTreeReader({ api, route }).read('ROOT-1', ['summary']),
+    error => error.message === 'Failed search: 403'
+  );
+});

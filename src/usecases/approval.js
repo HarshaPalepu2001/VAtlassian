@@ -37,6 +37,11 @@ function checkPolicy(ct) {
       || ![true, false, 0, 1, '0', '1'].includes(ct.block_on_drift)) fail('NOT_CONFIGURED');
 }
 function failure(error) {
+  if (!error?.reason) console.error('approval: unhandled failure', {
+    name: error?.name ?? 'Error',
+    code: error?.code ?? null,
+    reason: error?.reason ?? null
+  });
   return { success: false, reason: error.reason ?? 'SERVICE_UNAVAILABLE', error: DENY[error.reason] ?? DENY.SERVICE_UNAVAILABLE };
 }
 function note(payload) {
@@ -59,8 +64,28 @@ export function createApprovalUsecases(deps) {
   };
 
   async function decisionContext({ issue, actor, decision, requested = {}, expectedEvidenceHash }) {
-    // First discover the latest active baseline without allowing any client
-    // transition facts to influence drift authority.
+    const requestedTransition = decision === 'APPROVE'
+      && requested.intent !== 'DRIFT'
+      && (requested.transitionId != null || requested.toStatusId != null);
+
+    // An explicit workflow action is a different intent from a baseline drift
+    // decision. Resolve and prepare that exact edge first, even when an older
+    // active baseline is present; otherwise the baseline's historical edge is
+    // incorrectly replayed against the item's current status.
+    if (requestedTransition) {
+      const transition = await deps.transition(issue, requested);
+      if (!transition) fail('NOT_CONFIGURED');
+      const prepared = await deps.prepare({ issue, actor, decision, expectedEvidenceHash,
+        forTransition: true, transition });
+      const ct = await deps.edge(issue, transition, prepared);
+      checkPolicy(ct);
+      if (!await deps.eligible({ accountId: actor.accountId, projectId: issue.projectId,
+        issueTypeId: issue.issueTypeId, role: ct.required_role })) fail('NOT_ELIGIBLE');
+      return { prepared, transition, ct, hasTransition: true, workflowTransition: true };
+    }
+
+    // No transition means this is baseline-owned drift authority. Client
+    // transition facts are deliberately ignored on this path.
     let prepared = await deps.prepare({ issue, actor, decision, expectedEvidenceHash,
       forTransition: false, transition: null });
     let transition = null;
@@ -74,22 +99,13 @@ export function createApprovalUsecases(deps) {
             || String(transition.toStatusId) !== String(ct.to_status_id)
             || String(issue.statusId) !== String(ct.from_status_id)) fail('CONTENT_CHANGED');
       } else transition = { id: String(ct.transition_id), toStatusId: String(ct.to_status_id) };
-    } else {
-      const requestedTransition = decision === 'APPROVE'
-        && (requested.transitionId != null || requested.toStatusId != null);
-      transition = requestedTransition ? await deps.transition(issue, requested) : null;
-      if (requestedTransition && !transition) fail('NOT_CONFIGURED');
-      if (transition) {
-        prepared = await deps.prepare({ issue, actor, decision, expectedEvidenceHash,
-          forTransition: true, transition });
-      }
-      ct = await deps.edge(issue, transition, prepared);
-    }
+    } else ct = await deps.edge(issue, transition, prepared);
 
     checkPolicy(ct);
     if (!await deps.eligible({ accountId: actor.accountId, projectId: issue.projectId,
       issueTypeId: issue.issueTypeId, role: ct.required_role })) fail('NOT_ELIGIBLE');
-    return { prepared, transition, ct, hasTransition: decision === 'APPROVE' && transition != null };
+    return { prepared, transition, ct, hasTransition: decision === 'APPROVE' && transition != null,
+      workflowTransition: false };
   }
 
   async function challenge({ payload = {}, context }) {
@@ -98,7 +114,7 @@ export function createApprovalUsecases(deps) {
       if (!['APPROVE', 'REJECT'].includes(payload.decision)) fail('NOT_CONFIGURED');
       const issue = await deps.issue({ payload, context });
       const actor = await deps.actor(accountId);
-      const { prepared, transition, ct } = await decisionContext({ issue, actor,
+      const { prepared, transition, ct, workflowTransition } = await decisionContext({ issue, actor,
         decision: payload.decision, requested: payload, expectedEvidenceHash: payload.expectedEvidenceHash });
       if (payload.expectedEvidenceHash != null && payload.expectedEvidenceHash !== prepared.evidenceHash) fail('CONTENT_CHANGED');
 
@@ -111,7 +127,11 @@ export function createApprovalUsecases(deps) {
         decision: payload.decision,
         meaning: ct.meaning,
         candidateHash: prepared.contentHash,
-        transitionId: transition?.id,
+        // A baseline-owned drift decision uses the baseline edge internally for
+        // its declaration, but it is not a workflow transition request. Keeping
+        // this null lets submit recover the same intent instead of replaying the
+        // historical edge as current workflow intent.
+        transitionId: workflowTransition ? transition?.id : null,
         baselineId: prepared.baseline?.baseline_id,
         operationPlanHash: challengeContextHash({ issue, transition, prepared, policy: ct }),
         now: deps.now()
@@ -127,7 +147,7 @@ export function createApprovalUsecases(deps) {
   async function submit({ payload = {}, context }) {
     try {
       const accountId = actorId(context);
-      let issue, actor, ct, prepared, hasTransition, transition, required, binding;
+      let issue, actor, ct, prepared, hasTransition, workflowTransition, transition, required, binding;
       let challengeRow = null;
 
       if (payload.challengeId) {
@@ -141,9 +161,13 @@ export function createApprovalUsecases(deps) {
         issue = await deps.issue({ payload: { issueKey: payload.issueKey }, context });
         if (issue.issueId !== challengeRow.issue_id) fail('NOT_CONFIGURED');
         actor = await deps.actor(accountId);
-        ({ prepared, transition, ct, hasTransition } = await decisionContext({ issue, actor,
-          decision: challengeRow.decision, requested: { transitionId: challengeRow.transition_id } }));
-        if (String(challengeRow.transition_id ?? '') !== String(transition?.id ?? '')) fail('CONTENT_CHANGED');
+        ({ prepared, transition, ct, hasTransition, workflowTransition } = await decisionContext({ issue, actor,
+          decision: challengeRow.decision,
+          requested: challengeRow.transition_id != null
+            ? { intent: 'WORKFLOW', transitionId: challengeRow.transition_id }
+            : { intent: 'DRIFT' } }));
+        if (challengeRow.transition_id != null && String(challengeRow.transition_id) !== String(transition?.id ?? '')) fail('CONTENT_CHANGED');
+        if (challengeRow.transition_id == null && workflowTransition) fail('CONTENT_CHANGED');
         if (prepared.contentHash !== challengeRow.candidate_hash) fail('CONTENT_CHANGED');
         if (activeOperationLock(prepared.review, deps.now())) fail('RESTORE_IN_PROGRESS');
         // A signed capture resolves this drift in apply(), before a pending
@@ -161,7 +185,7 @@ export function createApprovalUsecases(deps) {
         const approvalNote = note(payload);
         issue = await deps.issue({ payload, context });
         actor = await deps.actor(accountId);
-        ({ prepared, transition, ct, hasTransition } = await decisionContext({ issue, actor,
+        ({ prepared, transition, ct, hasTransition, workflowTransition } = await decisionContext({ issue, actor,
           decision: payload.decision, requested: payload, expectedEvidenceHash: payload.expectedEvidenceHash }));
         if (payload.expectedEvidenceHash != null && payload.expectedEvidenceHash !== prepared.evidenceHash) fail('CONTENT_CHANGED');
         if (activeOperationLock(prepared.review, deps.now())) fail('RESTORE_IN_PROGRESS');
@@ -196,14 +220,16 @@ export function createApprovalUsecases(deps) {
 
       const row = makeApproval({ ...binding, issueKey: issue.issueKey, projectId: issue.projectId, issueTypeId: issue.issueTypeId,
         actorName: actor.displayName, signerRole: ct.required_role, meaning: ct.meaning, transitionId: transition?.id,
-        proof, now: deps.now(), baselineId: prepared.baseline?.baseline_id, baselineVersion: prepared.baselineVersion,
-        coversFromHash: prepared.baseline?.content_hash, driftCount: prepared.driftCount, reportHash: prepared.reportHash, note: payload.note || null });
+        proof, now: deps.now(), baselineId: workflowTransition ? null : prepared.baseline?.baseline_id,
+        baselineVersion: workflowTransition ? null : prepared.baselineVersion,
+        coversFromHash: workflowTransition ? null : prepared.baseline?.content_hash,
+        driftCount: prepared.driftCount, reportHash: prepared.reportHash, note: payload.note || null });
       await deps.record(row);
       await deps.audit({ eventType: 'APPROVAL_RECORDED', actorAccountId: accountId, issueId: issue.issueId, approvalId: row.approval_id,
         payload: { decision: row.decision, meaning: row.meaning, printedName: row.printed_name, assuranceLevel: row.assurance_level,
           providerId: row.provider_id, evidenceHash: row.evidence_hash, contentHash: row.content_hash, fromStatusId: row.from_status_id, toStatusId: row.to_status_id } });
 
-      const applied = await deps.apply({ issue, actor, approval: row, prepared, context, policy: ct });
+      const applied = await deps.apply({ issue, actor, approval: row, prepared, context, policy: ct, workflowTransition });
       if (applied?.success !== true && !(row.decision === 'REJECT' && applied?.state)) fail('SERVICE_UNAVAILABLE');
       // Publish only after the approval audit and application are durable. Jira's
       // synchronous validator must be able to consume this row during the POST.

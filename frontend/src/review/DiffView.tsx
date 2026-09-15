@@ -337,8 +337,11 @@ function Attribution({ field }: {field:DiffField}) {
     return (
       <div className="va-trace">
         <span className="va-subtlest">
-          Jira did not record who made this change — it may have been an import, a bulk
-          edit, or a project type that does not keep field history.
+          {field.attributionStatus === 'NOT_COLLECTED'
+            ? 'Detailed change history for descendant issues is not included in this root review.'
+            : field.attributionStatus === 'UNAVAILABLE'
+              ? 'Jira change history could not be loaded for this review. The value comparison remains available, but who and when is unknown.'
+              : 'Jira did not record who made this change — it may have been an import, a bulk edit, or a project type that does not keep field history.'}
         </span>
       </div>
     );

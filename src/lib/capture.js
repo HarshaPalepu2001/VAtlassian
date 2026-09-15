@@ -227,6 +227,27 @@ export async function writeCapturedTreeBaseline({
       || Number(existing.total_field_count) < 1) {
       return { captured: false, reason: 'CAPTURE_INCOMPLETE' };
     }
+    // Publication precedes the item-state index write. If that final write
+    // failed, a retry must repair the index without rereading Jira or creating
+    // another baseline. Never point the index at an older SUPERSEDED version.
+    if (existing.state === 'ACTIVE') {
+      await services.upsertBaselined({
+        issueId: Number(existing.issue_id ?? rootIssue.id),
+        issueKey: rootIssue.key,
+        projectId: Number(existing.project_id ?? rootIssue.fields?.project?.id),
+        issueTypeId: String(existing.issue_type_id ?? rootIssue.fields?.issuetype?.id ?? ''),
+        summary: rootIssue.fields?.summary ?? '',
+        reviewerAccountId: existing.approved_by ?? approval.accountId,
+        reviewerName: existing.approved_name ?? approval.displayName,
+        baselineId: existing.baseline_id,
+        baselineVersion: Number(existing.version),
+        contentHash: existing.content_hash,
+        fieldDigests: typeof existing.field_digests === 'string'
+          ? existing.field_digests : JSON.stringify(existing.field_digests ?? {}),
+        lastChangelogId: null,
+        now: existing.captured_at ?? transitionAt ?? Date.now()
+      });
+    }
     return {
       captured: true,
       alreadyCaptured: true,
@@ -337,7 +358,10 @@ export async function writeCapturedTreeBaseline({
     baselineId: reserved.baselineId,
     baselineVersion: Number(version),
     contentHash: treePlan.treeHash,
-    fieldDigests: {},
+    // va_item_state.field_digests is a JSON/TEXT column. Forge SQL rejects
+    // plain objects as bound parameters; the tree values themselves remain
+    // stored in the per-node value table above.
+    fieldDigests: JSON.stringify({}),
     lastChangelogId: null,
     now: capturedAt
   });
