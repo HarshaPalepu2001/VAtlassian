@@ -142,8 +142,9 @@ export async function getSummary(args) { return respond(async () => {
   const materialCount = baseline ? Number(review?.drifted_field_count ?? 0) : 0;
   const pendingDrift = Boolean(baseline) && driftCount > 0;
   const policyIncomplete = pendingDrift && !policy;
+  const isOriginalApprover = pendingDrift && baseline?.approved_by === actor.accountId;
   const baselineEligible = pendingDrift && policy
-    ? await isEligible({ accountId: actor.accountId, projectId, issueTypeId, role: policy.requiredRole })
+    ? (isOriginalApprover || await isEligible({ accountId: actor.accountId, projectId, issueTypeId, role: policy.requiredRole }))
     : false;
   const decidesDrift = pendingDrift && baselineEligible;
   const tier = (anyEligible || decidesDrift) ? 'actor' : 'observer';

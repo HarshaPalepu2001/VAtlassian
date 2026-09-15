@@ -166,6 +166,44 @@ test('drift authority comes from the baseline\'s own recorded provenance, not th
   assert.equal(summary.approval.requiredRole, 'baseline-signer');
 });
 
+test('the original approver may always decide drift, even without a current eligibility grant', async () => {
+  fixture({
+    isEligible: async () => false,
+    gatedTransition: async () => null,
+    availableTransitions: async () => [],
+    activeBaseline: async () => ({
+      baseline_id: Buffer.alloc(16, 1), version: 3, transition_id: '31',
+      from_status_id: '100', to_status_id: '200', approved_by: 'reviewer-1',
+      required_role: 'baseline-signer', required_assurance: 'ESIGNATURE',
+      controlled_fields_hash: 'a'.repeat(64)
+    }),
+    getReview: async () => ({ state: 'DRIFTED', version: 2, baseline_version: 3, drift_count: 1, drifted_field_count: 1 })
+  });
+  const summary = await getSummary(args); // args.context.accountId === 'reviewer-1'
+
+  assert.equal(summary.drift.decidesDrift, true, 'the approver on record can decide, regardless of current role eligibility');
+  assert.equal(summary.tier, 'actor');
+});
+
+test('a bystander who neither holds the role nor approved the baseline still cannot decide drift', async () => {
+  fixture({
+    isEligible: async () => false,
+    gatedTransition: async () => null,
+    availableTransitions: async () => [],
+    activeBaseline: async () => ({
+      baseline_id: Buffer.alloc(16, 1), version: 3, transition_id: '31',
+      from_status_id: '100', to_status_id: '200', approved_by: 'someone-else',
+      required_role: 'baseline-signer', required_assurance: 'ESIGNATURE',
+      controlled_fields_hash: 'a'.repeat(64)
+    }),
+    getReview: async () => ({ state: 'DRIFTED', version: 2, baseline_version: 3, drift_count: 1, drifted_field_count: 1 })
+  });
+  const summary = await getSummary(args); // args.context.accountId === 'reviewer-1', not the approver
+
+  assert.equal(summary.drift.decidesDrift, false);
+  assert.equal(summary.tier, 'observer');
+});
+
 test('a baseline with incomplete provenance blocks the drift decision instead of throwing', async () => {
   fixture({
     availableTransitions: async () => [],
