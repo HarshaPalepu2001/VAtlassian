@@ -123,6 +123,9 @@ function IssuePanelBody({ issueKey: issueKeyProp, onDone }: Props) {
               for this configuration. Review them in the admin console.
             </Notice>
           )}
+          {summary.adminIncidentUnavailable && (
+            <Notice danger>Workflow control status is temporarily unavailable. No incident count is being shown; reload before relying on this control state.</Notice>
+          )}
 
           {summary.baseline && (
             <DriftSection drift={authoritativeSummary!.drift} evidence={evidence} evidenceReady={evidenceReady} issueKey={issueKey} />

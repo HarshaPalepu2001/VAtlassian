@@ -118,6 +118,14 @@ test('an ungated transition is not our business and produces no blocker', () => 
   assert.equal(blocker, null, 'a clean slate is a sentence, not an error');
 });
 
+test('an unrecognised signing surface is refused', () => {
+  const { actions, blocker } = resolveActions({
+    offered: [createBaseline], gates: [ruleCreateBaseline], eligible: [true], surface: 'unknown-surface'
+  });
+  assert.deepEqual(actions, []);
+  assert.equal(blocker, BLOCKER.WRONG_FIELD_FOR_RULE);
+});
+
 test('holding no role on the only rule names the role rather than the person', () => {
   const { actions, blocker } = resolveActions({
     offered: [createBaseline],

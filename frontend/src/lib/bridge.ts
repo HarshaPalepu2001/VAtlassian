@@ -9,12 +9,13 @@ const MUTATION_KEYS = ['signature:submit', 'approval:submit', 'approval:retryTra
  *  with `{ error, reason }` — so a failed mutation still returns here as a
  *  normal value. This is the one place that decides "durable" from that
  *  shape, so every caller of `invoke` gets the same answer without having to
- *  emit anything itself. A `transitionError` means Jira refused the move the
- *  decision was for, so the operation did not complete. */
+ *  emit anything itself. A `transitionError` can follow a persisted approval:
+ *  in that case other views still need to refresh and show the recorded
+ *  decision, even though Jira did not complete the requested move. */
 function isDurable(result: unknown): boolean {
   if (!result || typeof result !== 'object') return false;
-  const r = result as { success?: boolean; ok?: boolean; error?: string; transitionError?: string };
-  return r.success !== false && r.ok !== false && !r.error && !r.transitionError;
+  const r = result as { success?: boolean; ok?: boolean; error?: string; transitionError?: string; approvalId?: string };
+  return r.success !== false && r.ok !== false && !r.error && (!r.transitionError || typeof r.approvalId === 'string');
 }
 
 /** The app requests plain resolver bodies, never bridge response metadata. */
@@ -24,9 +25,11 @@ export async function invoke<T = unknown>(key: string, payload?: Record<string, 
   const result = await forgeInvoke<T>(key, payload) as T;
   // THE ONE PLACE THIS EVENT IS EMITTED for the Custom UI bundle. It fires
   // exactly once, only after the mutation is durable — never when the
-  // resolver denies, validation fails, persistence fails, Jira refuses the
-  // transition, or a WebAuthn ceremony was cancelled before recording
-  // anything. Components must not emit this themselves; see
+  // resolver denies, validation fails, persistence fails, or a WebAuthn
+  // ceremony was cancelled before recording anything. A persisted approval
+  // followed by a Jira transition refusal is durable and deliberately emits
+  // so other surfaces can show the pending/retry state. Components must not
+  // emit this themselves; see
   // src/panel/sections/ApprovalControls.tsx and RestoreStatus.tsx, which rely
   // on this instead. (src/ui-kit/edit.jsx is a separate Forge UI Kit runtime
   // that cannot import this module and emits its own durable-only event.)

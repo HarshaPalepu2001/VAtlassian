@@ -47,6 +47,6 @@ test('stable read fails closed when tree keeps changing', async () => {
     assert.fail('Should have thrown');
   } catch (err) {
     assert.ok(err instanceof FailClosed);
-    assert.equal(err.code, 'TREE_CHANGED_DURING_CAPTURE');
+    assert.equal(err.reason, 'TREE_CHANGED_DURING_CAPTURE');
   }
 });

@@ -259,3 +259,10 @@ test('an admin sees an incident count; a non-admin does not', async () => {
   const summary2 = await getSummary(args);
   assert.equal(summary2.adminIncidentCount, undefined);
 });
+
+test('an unavailable admin incident read preserves the summary with an explicit unavailable state', async () => {
+  fixture({ isActiveAdmin: async () => true, adminIncidentCount: async () => { throw new Error('storage unavailable'); } });
+  const summary = await getSummary(args);
+  assert.equal(summary.error, undefined);
+  assert.equal(summary.adminIncidentUnavailable, true);
+});

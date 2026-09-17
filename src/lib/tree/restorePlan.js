@@ -90,11 +90,12 @@ export function planTreeRestore({ baselineTree, currentTree, controlledFields })
       // path; their external link identities need a separate rewire policy.
       if (!removedIds.has(idOf(node))) {
         const nodeLinkIds = fieldIds.filter(fieldId => linkFieldIds.has(fieldId));
-        if (nodeLinkIds.length > 0) {
-          const values = retainedFields(baselineTree, idOf(node), nodeLinkIds);
-          steps.push(action('RESTORE_LINKS', idOf(node), parentOf(node), nodeLinkIds, {
-            links: values[nodeLinkIds[0]]
-          }));
+        if (nodeLinkIds.length > 1) {
+          throw new FailClosed('MULTI_LINK_FIELD_UNSUPPORTED');
+        }
+        if (nodeLinkIds.length === 1) {
+          const values = retainedFields(baselineTree, idOf(node), [nodeLinkIds[0]]);
+          steps.push(action('RESTORE_LINKS', idOf(node), parentOf(node), [nodeLinkIds[0]], { links: values[nodeLinkIds[0]] }));
         }
       }
       return steps;

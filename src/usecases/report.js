@@ -1,4 +1,4 @@
-import { load, respond, fail } from './panelAccess.js';
+import { load, respond, fail, filterViewableTree, filterViewableReviewDiff } from './panelAccess.js';
 import { getReport, putReport } from '../db/reportStore.js';
 import { generateReport, reportHashFor, chooseModel, degraded } from '../lib/report.js';
 import { sha256Hex, canonical } from '../lib/hash.js';
@@ -6,7 +6,8 @@ import { sha256Hex, canonical } from '../lib/hash.js';
 async function reportFor(args, generate) {
   const state = await load(args, { requireAuthority: generate });
   if (!state.baseline) fail('NO_BASELINE');
-  const diff = state.reviewDiff ?? state.diff;
+  const viewableTree = state.tree ? await filterViewableTree(state.tree) : state.tree;
+  const diff = state.reviewDiff ? filterViewableReviewDiff(state.reviewDiff, viewableTree) : state.diff;
   if (!diff) return { report: null, reportHash: null };
   const models = state.config.ai.models;
   const model = state.config.ai.enabled ? chooseModel(diff, models) : 'rule-based';

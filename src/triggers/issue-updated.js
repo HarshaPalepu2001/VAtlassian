@@ -1,6 +1,7 @@
 import { collectAffectedTrees, affectedTreeRoots, collectTree } from '../lib/collect.js';
 import { executeQuery } from '../lib/db.js';
 import { retryEvent } from './retry.js';
+import { withRequestCache } from '../lib/cache.js';
 
 export function isDependencyBundle(value) {
   return typeof value?.collectAffectedTrees === 'function';
@@ -24,6 +25,10 @@ export function isDependencyBundle(value) {
  * NEVER THROWS.
  */
 export async function run(event, suppliedDeps = null) {
+  return withRequestCache(() => runUncached(event, suppliedDeps));
+}
+
+async function runUncached(event, suppliedDeps) {
   // Forge invokes a trigger as (event, context). Context is not our test
   // dependency bundle; treating it as one silently skipped every update.
   const deps = isDependencyBundle(suppliedDeps)
@@ -40,7 +45,10 @@ export async function run(event, suppliedDeps = null) {
   try {
     const results = await deps.collectAffectedTrees(event, deps);
     const result = results[0] || { outcome: 'NO_CHANGE' };
-    if (['ERROR', 'UNREADABLE', 'BUSY'].includes(result.outcome)) return retryEvent(event, result.outcome);
+    // One event can fan out to several governed roots (collectAffectedTrees);
+    // a failure on any of them must not be masked by another root's success.
+    const failed = results.find(r => ['ERROR', 'UNREADABLE', 'BUSY'].includes(r.outcome));
+    if (failed) return retryEvent(event, failed.outcome);
 
     // Not required for correctness — the diff is already idempotent — but the
     // audit trail should be able to say WHY a check ran and whether an event

@@ -128,7 +128,7 @@ export function shapeFor({ field, value, editmeta = {} }) {
       const key = items === 'user' ? 'accountId' : 'id';
       const mapped = arr.map((v) => idOf(v, key));
       if (mapped.some((v) => v == null)) {
-        return refuse('array', `One or more approved entries do not carry ${key === 'user' ? 'an account id' : 'an id'}, so the list cannot be restored exactly.`);
+        return refuse('array', `One or more approved entries do not carry ${items === 'user' ? 'an account id' : 'an id'}, so the list cannot be restored exactly.`);
       }
       return ok(mapped, key === 'accountId' ? 'multi-user' : 'multi-entity');
     }

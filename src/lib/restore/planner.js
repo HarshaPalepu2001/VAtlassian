@@ -66,7 +66,7 @@ export function planRestore({ diff, baselineValues = {}, controlledFields = [], 
     // what is written. Skipping here is how a restore reported COMPLETE while
     // a tracked field was still wrong.
     if (fieldDiff.changed === false) continue;
-    if (fieldDiff.semanticChange === false) formattingOnly.push(fieldDiff.fieldName);
+    const formattingOnlyChange = fieldDiff.semanticChange === false;
 
     const field = byId.get(fieldDiff.fieldId);
     if (!field) continue;
@@ -110,6 +110,7 @@ export function planRestore({ diff, baselineValues = {}, controlledFields = [], 
     }
 
     if (handler) {
+      if (formattingOnlyChange) formattingOnly.push(fieldDiff.fieldName);
       steps.push({
         fieldId: fieldDiff.fieldId, fieldName: fieldDiff.fieldName,
         strategy: handler, targetValue: target,
@@ -133,6 +134,7 @@ export function planRestore({ diff, baselineValues = {}, controlledFields = [], 
     }
 
     fieldWrites[fieldDiff.fieldId] = shaped.value;
+    if (formattingOnlyChange) formattingOnly.push(fieldDiff.fieldName);
     steps.push({
       fieldId: fieldDiff.fieldId, fieldName: fieldDiff.fieldName,
       strategy: 'field', targetValue: shaped.value,

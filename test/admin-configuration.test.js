@@ -235,9 +235,28 @@ test('saveConfig validates AI options and persists disabled setting', async () =
   assert.equal(bad.writes.length, 0);
 });
 
+test('site-wide STRICT mode is refused while any project has unresolved drift', async () => {
+  const deps = fixture();
+  deps.hasUnresolvedDrift = async projectId => projectId == null;
+  const result = await admin.saveConfig(request({ config: { policy: { mode: 'STRICT' } } }), deps);
+  assert.equal(result.success, false);
+  assert.match(result.error, /unresolved drift/);
+});
+
 test('field retention refuses string false and requires a declared scope', async () => {
   const deps = fixture();
   assert.equal((await admin.setRetention(request({ projectId: '1', fieldId: 'summary', storeValues: 'false' }), deps)).success, false);
   assert.equal((await admin.setRetention(request({ projectId: '1', fieldId: 'summary', storeValues: true }), deps)).success, false);
   assert.equal(deps.writes.length, 0);
+});
+
+test('wildcard retention cannot disable evidence for a specifically gated issue type', async () => {
+  const deps = fixture({ rows: [{ field_id: 'summary', issue_type_id: '*' }] });
+  deps.listGatedTransitions = async () => [{ issue_type_id: '2', state: 'ACTIVE', capture_baseline: true }];
+
+  const result = await admin.setRetention(request({ projectId: '1', fieldId: 'summary', storeValues: false }), deps);
+
+  assert.equal(result.success, false);
+  assert.match(result.error, /Retention cannot be disabled/);
+  assert.equal(deps.writes.length, 0, 'the unsafe wildcard retention change must not persist');
 });

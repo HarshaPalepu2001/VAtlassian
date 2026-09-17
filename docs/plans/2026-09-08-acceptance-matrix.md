@@ -72,7 +72,7 @@ import cleanly, frontend build succeeds, `forge lint` reports no issues.
 | Approve creates a new baseline and resumes drift tracking | Met | `applyApproval` → `writeCapturedBaseline` → `markDecided` in `src/usecases/drift.js` |
 | Reject restores the last approved baseline condition | Met | `src/usecases/restoreActions.js` |
 | **All** tracked fields revert, not just the title | Met | `src/lib/restore/planner.js` plans every changed tracked field; `src/lib/restore/adapters.js` shapes each field kind. `test/restore-correctness.test.js`, `test/restore-adapters.test.js` |
-| Fields that are tracked but not on the edit screen still revert | Met (this session) | App-attributed writes now carry `overrideScreenSecurity`/`overrideEditableFlag`, and the planner is fed an app-scoped `editmeta` read using the same overrides so plan and write agree. `src/lib/restore/executor.js`, `src/usecases/panelAccess.js`. `test/restore-correctness.test.js` |
+| Fields that are tracked but not on the edit screen still revert | Met (local) / Needs live | App-attributed writes now carry `overrideScreenSecurity`/`overrideEditableFlag`, and the planner is fed an app-scoped `editmeta` read using the same overrides so plan and write agree. `src/lib/restore/executor.js`, `src/usecases/panelAccess.js`. `test/restore-correctness.test.js` |
 | Parent and issue links revert | Met | `restoreLinks()` reconciles links by type, direction and identity, validating both complete lists before any mutation. `test/restore-correctness.test.js` |
 | Restore is confirmed by reading Jira back | Met | `src/lib/restore/verifier.js` — a field is `succeeded` only after a fresh read matches the approved digest; a field Jira omits from the read is never counted as verified |
 | A restore cannot silently report success | Met | `tally()` derives state from verification, not from HTTP status. `test/restore-verification.test.js` |
@@ -91,7 +91,7 @@ import cleanly, frontend build succeeds, `forge lint` reports no issues.
 ## Live acceptance still required
 
 Local tests cannot establish any of these. They need a run on a non-production
-tenant (VJIRA on `dev-site.atlassian.net` was nominated):
+tenant (a nominated non-production Jira site):
 
 1. Jira actually refuses a controlled transition when the validator denies it.
 2. `overrideScreenSecurity` / `overrideEditableFlag` are accepted on both

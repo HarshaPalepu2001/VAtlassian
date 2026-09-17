@@ -107,7 +107,7 @@ function describeAction(transition, gate) {
  *   existed and something specific stopped it being offered.
  */
 export function resolveActions({ offered = [], gates = [], eligible = [], enforced = [], surface = 'panel' } = {}) {
-  const allowed = SURFACE_ASSURANCE[surface] ?? null;
+  const allowed = Object.hasOwn(SURFACE_ASSURANCE, surface) ? SURFACE_ASSURANCE[surface] : [];
 
   // Kept so the caller can tell "no rule applies to this work item at all"
   // (a clean slate, and a plain sentence) apart from "a rule applies but you

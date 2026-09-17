@@ -53,8 +53,9 @@ const hooks = registerHooks({
     return next(url, context);
   }
 });
-const { getState } = await import('../src/usecases/panel.js');
+const { getState, getGlanceState } = await import('../src/usecases/panel.js');
 const { getEvidence } = await import('../src/usecases/panelEvidence.js');
+const { filterViewableReviewDiff } = await import('../src/usecases/panelAccess.js');
 hooks.deregister();
 
 const clone = value => structuredClone(value);
@@ -100,10 +101,14 @@ function fixture(overrides = {}) {
     isEligible: async () => true,
     availableTransitions: async () => [{ id: '31', name: 'Approve to next', toStatusId: '200' }],
     throwing: async () => [],
-    request: async (_identity, url) => {
+    request: async (_identity, url, options = {}) => {
       const response = body => ({ ok: true, status: 200, json: async () => clone(body) });
       if (String(url).includes('/editmeta')) return response({ fields: editmeta });
       if (String(url).includes('/changelog')) return response({ values: [], total: 0, isLast: true });
+      if (options.method === 'POST' && String(url).includes('/permissions/check')) {
+        const body = JSON.parse(options.body);
+        return response({ projectPermissions: [{ permission: 'BROWSE_PROJECTS', issues: body.projectPermissions[0].issues }] });
+      }
       return response(f.issue);
     },
     ...overrides
@@ -113,6 +118,47 @@ function fixture(overrides = {}) {
 }
 
 const args = { payload: { issueKey: 'T-10' }, context: { accountId: 'reviewer-1' } };
+
+test('filtered review evidence retains the actual highest materiality', () => {
+  const visibleTree = { nodes: [{ logicalNodeId: 'root' }] };
+  const result = filterViewableReviewDiff({ fields: [
+    { logicalNodeId: 'root', semanticChange: true, materiality: 'MINOR' },
+    { logicalNodeId: 'root', semanticChange: true, materiality: 'CRITICAL' }
+  ] }, visibleTree);
+
+  assert.equal(result.materialFieldCount, 2);
+  assert.equal(result.maxMateriality, 'CRITICAL');
+});
+
+test('non-admin glance reads do not query administrative incident controls', async () => {
+  let controlsRead = 0;
+  fixture({ issueControlStatus: async () => {
+    controlsRead++;
+    throw new Error('control storage unavailable');
+  } });
+
+  const result = await getGlanceState({ context: {
+    accountId: 'reviewer-1', extension: { issue: { id: '10', typeId: '1' }, project: { id: '1' } }
+  } });
+
+  assert.equal(result.state, 'BASELINED');
+  assert.equal(result.controls, undefined);
+  assert.equal(controlsRead, 0);
+});
+
+test('admin glance degrades controls when their incident read fails', async () => {
+  fixture({
+    isActiveAdmin: async () => true,
+    issueControlStatus: async () => { throw new Error('control storage unavailable'); }
+  });
+
+  const result = await getGlanceState({ context: {
+    accountId: 'admin', extension: { issue: { id: '10', typeId: '1' }, project: { id: '1' } }
+  } });
+
+  assert.deepEqual(result.controls, { unavailable: true, incidents: [], gateFindings: [] });
+  assert.equal(result.error, undefined);
+});
 
 // ── A recorded approval whose transition never landed ────────────────────────
 //
@@ -328,7 +374,7 @@ test('panel returns structural drift and exact destructive consequences', async 
       if (String(url).includes('/editmeta')) return response({ fields: {} });
       if (options.method === 'POST' && String(url).includes('/permissions/check')) {
         const body = JSON.parse(options.body);
-        return response({ issues: body.issues.map(({ issue }) => ({ id: issue, permissions: { BROWSE_PROJECTS: { havePermission: true } } })) });
+        return response({ projectPermissions: [{ permission: 'BROWSE_PROJECTS', issues: body.projectPermissions[0].issues }] });
       }
       if (options.method === 'POST' && String(url).includes('/search/jql')) {
         const bodyStr = options.body;
@@ -401,7 +447,7 @@ test('evidence reports structural rejection detail identically to the compatibil
       if (String(url).includes('/editmeta')) return response({ fields: {} });
       if (options.method === 'POST' && String(url).includes('/permissions/check')) {
         const body = JSON.parse(options.body);
-        return response({ issues: body.issues.map(({ issue }) => ({ id: issue, permissions: { BROWSE_PROJECTS: { havePermission: true } } })) });
+        return response({ projectPermissions: [{ permission: 'BROWSE_PROJECTS', issues: body.projectPermissions[0].issues }] });
       }
       if (options.method === 'POST' && String(url).includes('/search/jql')) {
         const bodyStr = options.body;
@@ -450,12 +496,12 @@ test('evidence excludes a descendant node the viewer cannot browse, and checks w
       if (String(url).includes('/editmeta')) return response({ fields: {} });
       if (options.method === 'POST' && String(url).includes('/permissions/check')) {
         const body = JSON.parse(options.body);
-        return response({ issues: body.issues.map(({ issue }) => ({
-          id: issue,
+        return response({ projectPermissions: [{
+          permission: 'BROWSE_PROJECTS',
           // Every descendant is visible except NEW-9's id (9): simulates an
           // Issue Security Scheme that hides that one issue from this viewer.
-          permissions: { BROWSE_PROJECTS: { havePermission: issue !== '9' } }
-        })) });
+          issues: body.projectPermissions[0].issues.filter(id => String(id) !== '9')
+        }] });
       }
       if (options.method === 'POST' && String(url).includes('/search/jql')) {
         if (String(options.body).includes('T-10')) {
@@ -477,4 +523,63 @@ test('evidence excludes a descendant node the viewer cannot browse, and checks w
   const permCheck = requestedIdentities.find(r => r.url.includes('/permissions/check'));
   assert.ok(permCheck, 'evidence must check descendant visibility before returning tree content');
   assert.equal(permCheck.identity, 'user', 'visibility must be checked with the viewer\'s own privilege, not asApp()');
+});
+
+test('evidence and panel state hide a hidden descendant\'s changed-field content, not just its key', async () => {
+  const hiddenId = logicalNodeId('9');
+  const visibleId = logicalNodeId('100');
+  const f = fixture({
+    activeBaseline: async () => ({
+      baseline_id: Buffer.alloc(16, 1), tree_hash: 'abc', node_count: 3, edge_count: 2, total_field_count: 3,
+      from_status_id: '100', to_status_id: '200', transition_id: '31'
+    }),
+    readBaselineTree: async () => ({
+      nodes: [
+        { logicalNodeId: logicalNodeId('10'), issueKey: 'T-10', parentLogicalId: null, digests: { summary: 'baseline-root' } },
+        { logicalNodeId: hiddenId, issueKey: 'NEW-9', parentLogicalId: logicalNodeId('10'), digests: { summary: 'baseline-hidden' } },
+        { logicalNodeId: visibleId, issueKey: 'NEW-10', parentLogicalId: logicalNodeId('10'), digests: { summary: 'baseline-visible' } }
+      ],
+      values: {
+        [hiddenId]: { summary: 'secret-before' },
+        [visibleId]: { summary: 'visible-before' }
+      }
+    }),
+    request: async (identity, url, options = {}) => {
+      const response = body => ({ ok: true, status: 200, json: async () => body });
+      if (String(url).includes('/editmeta')) return response({ fields: {} });
+      if (options.method === 'POST' && String(url).includes('/permissions/check')) {
+        const body = JSON.parse(options.body);
+        return response({ projectPermissions: [{
+          permission: 'BROWSE_PROJECTS',
+          // NEW-9's id (9) is denied: simulates an Issue Security Scheme
+          // hiding that one issue from this viewer.
+          issues: body.projectPermissions[0].issues.filter(id => String(id) !== '9')
+        }] });
+      }
+      if (options.method === 'POST' && String(url).includes('/search/jql')) {
+        if (String(options.body).includes('T-10')) {
+          return response({ issues: [
+            { id: '9', key: 'NEW-9', fields: { summary: 'secret-after', parent: { id: '10' }, project: { id: '1' }, issuetype: { id: '1' }, status: { id: '100' } } },
+            { id: '100', key: 'NEW-10', fields: { summary: 'visible-after', parent: { id: '10' }, project: { id: '1' }, issuetype: { id: '1' }, status: { id: '100' } } }
+          ] });
+        }
+        return response({ issues: [] });
+      }
+      return response({ ...f.issue, fields: { ...f.issue.fields, parent: null } });
+    }
+  });
+
+  const evidence = await getEvidence(args);
+  assert.ok(!evidence.drift.fields.some(field => String(field.fieldId).startsWith(hiddenId)),
+    'a hidden descendant\'s changed field must not reach evidence.drift.fields');
+  assert.ok(!JSON.stringify(evidence).includes('secret'),
+    'the hidden descendant\'s key and retained content must never reach evidence');
+  assert.ok(evidence.drift.fields.some(field => String(field.fieldId).startsWith(visibleId)),
+    'a visible descendant\'s changed field must still reach evidence.drift.fields');
+
+  const state = await getState(args);
+  assert.ok(!state.drift.fields.some(field => String(field.fieldId).startsWith(hiddenId)),
+    'a hidden descendant\'s changed field must not reach panel:getState either');
+  assert.ok(!JSON.stringify(state).includes('secret'),
+    'the hidden descendant\'s key and retained content must never reach panel state');
 });

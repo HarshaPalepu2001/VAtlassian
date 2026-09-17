@@ -1,8 +1,8 @@
 /**
  * SIGNING CONTEXT — resolving what may be signed from a transition screen.
  *
- * Forge's issue-transition custom field context does not carry the destination
- * transition id. Both signing fields (va-approval-field for UI Kit, and
+ * Forge's issue-transition custom field context carries the destination
+ * transition id (`issueTransition.id`). Both signing fields (va-approval-field for UI Kit, and
  * va-device-approval-field for Custom UI) previously fell back to panel:getState,
  * which returned every gated transition leaving the current status. On an issue
  * with two controlled outbound edges, the field offered a dropdown — and if an

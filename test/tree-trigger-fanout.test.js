@@ -50,6 +50,13 @@ test('creating a new descendant records NODE_ADDED on the root', async () => {
   assert.deepEqual(fixture().driftKinds, ['NODE_ADDED']);
 });
 
+test('an unreadable created-event collection is retried rather than dropped', async () => {
+  const result = await runCreated(createdSubtaskEvent(), {
+    collectAffectedTrees: async () => [{ outcome: 'UNREADABLE' }]
+  });
+  assert.equal(result.retryOptions?.retryData?.reason, 'UNREADABLE');
+});
+
 test('created trigger treats Forge context as context, not injected dependencies', async () => {
   const hooks = registerHooks({
     resolve(specifier, context, next) {
@@ -60,21 +67,27 @@ test('created trigger treats Forge context as context, not injected dependencies
     },
     load(url, context, next) {
       if (url === 'fixture:created-runtime') return { format: 'module', shortCircuit: true, source: `
-        export async function triggerRuntime() { return globalThis.vaCreatedRuntime; }
+        export async function triggerRuntime() {
+          globalThis.vaCreatedRuntimeCalls += 1;
+          return globalThis.vaCreatedRuntime;
+        }
       ` };
       return next(url, context);
     }
   });
+  globalThis.vaCreatedRuntimeCalls = 0;
   globalThis.vaCreatedRuntime = {
-    collectAffectedTrees: async () => [{ outcome: 'NO_CHANGE' }],
+    collectAffectedTrees: async () => [{ outcome: 'FIXTURE_USED' }],
     affectedTreeRoots: async () => [],
     collectTree: async () => ({ outcome: 'NO_CHANGE' })
   };
   try {
     const result = await runCreated(createdSubtaskEvent(), { cloudId: 'cloud', moduleKey: 'on-issue-created' });
-    assert.equal(result.outcome, 'NO_CHANGE');
+    assert.equal(result.outcome, 'FIXTURE_USED');
+    assert.equal(globalThis.vaCreatedRuntimeCalls, 1, 'the Forge-context path must load the hooked runtime fixture');
   } finally {
     delete globalThis.vaCreatedRuntime;
+    delete globalThis.vaCreatedRuntimeCalls;
     hooks.deregister();
   }
 });

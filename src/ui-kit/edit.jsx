@@ -117,12 +117,14 @@ const ASSURANCE_LABELS = { ESIGNATURE: 'Electronic signature', BIOMETRIC: 'Biome
  * THIS RUNTIME'S BRIDGE LAYER FOR MUTATIONS. The UI Kit bundle cannot import
  * frontend/src/lib/bridge.ts, so it applies the same rule here: emit
  * VA_ISSUE_CHANGED exactly once, and only when the resolver reports a durable
- * success — never on a denied, refused, or failed attempt.
+ * success — never on a denied or failed attempt. A Jira transition refusal
+ * after a persisted approval is durable and must refresh other app views.
  */
 async function invokeMutation(key, payload) {
   const result = await invoke(key, payload);
   const durable = !!result && typeof result === 'object'
-    && result.success !== false && result.ok !== false && !result.error && !result.transitionError;
+    && result.success !== false && result.ok !== false && !result.error
+    && (!result.transitionError || typeof result.approvalId === 'string');
   if (durable) events.emit('VA_ISSUE_CHANGED', { issueKey: payload?.issueKey }).catch(() => {});
   return result;
 }
@@ -166,6 +168,7 @@ const Edit = () => {
   const [options, setOptions] = useState(null);
   const [blocker, setBlocker] = useState(null);
   const [ctId, setCtId] = useState(null);
+  const [capturesBaseline, setCapturesBaseline] = useState(false);
   const [affirmed, setAffirmed] = useState(false);
   const [code, setCode] = useState('');
   const [token, setToken] = useState('');
@@ -259,7 +262,7 @@ const Edit = () => {
 
         setBlocker(blockerMsg);
         setOptions(opts);
-        if (opts.length === 1) setCtId(opts[0].ctId);
+        if (opts.length === 1) { setCtId(opts[0].ctId); setCapturesBaseline(opts[0].capturesBaseline === true); }
         if (opts.length === 1 && !blockerMsg && !hash) {
           setStatus({
             kind: 'error',
@@ -293,13 +296,16 @@ const Edit = () => {
       return;
     }
     let cancelled = false;
-    const capturing = options?.find((o) => o.ctId === ctId)?.capturesBaseline === true;
     setToken('');
     setStatus({ kind: 'verifying', message: 'Preparing signature' });
     invoke('approval:challenge', { issueKey, transitionId: ctId, intent: 'WORKFLOW', decision: 'APPROVE', expectedEvidenceHash: evidenceHash })
       .then(challenge => {
         if (!challenge?.success) throw new Error(challenge?.error ?? 'The reviewed content changed. Reopen the transition and review it again.');
-        if (!cancelled) setStatus({ kind: 'verifying', message: capturing ? 'Publishing baseline' : 'Recording signature' });
+        // A superseded run (issueKey/ctId/affirmed/code/evidenceHash changed
+        // since this effect started) must not spend the one-time code —
+        // checked before, not just after, the submit that spends it.
+        if (cancelled) return null;
+        setStatus({ kind: 'verifying', message: capturesBaseline ? 'Publishing baseline' : 'Recording signature' });
         return invokeMutation('approval:submit', { issueKey, challengeId: challenge.challengeId, code, confirmed: true, preauthorize: true });
       })
       .then((res) => {
@@ -319,7 +325,7 @@ const Edit = () => {
       })
       .catch((e) => { if (!cancelled) setStatus({ kind: 'error', message: e.message }); });
     return () => { cancelled = true; };
-  }, [issueKey, ctId, affirmed, code, evidenceHash, options]);
+  }, [issueKey, ctId, affirmed, code, evidenceHash, capturesBaseline]);
 
   // Changing WHICH statement is being signed withdraws the affirmation, and
   // clears any code and token already gathered under the old one. An

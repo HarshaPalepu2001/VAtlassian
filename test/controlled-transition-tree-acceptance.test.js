@@ -426,7 +426,7 @@ test('unsupported retained fields and wrong-status read-back remain fail-closed'
     baselineTree: { nodes: [root], values: { root: {} } },
     currentTree: { nodes: [{ ...root, digests: { unsupported: 'changed' } }] },
     controlledFields: [{ field_id: 'unsupported' }]
-  }), error => error.code === 'BASELINE_VALUES_REQUIRED');
+  }), error => error.reason === 'BASELINE_VALUES_REQUIRED');
 
   const verified = await verifyTreeRestore({
     readStableTree: async () => ({ tree: { nodes: [{ id: '1', key: 'KEY-1', fields: { status: { id: '2' } } }] } }),

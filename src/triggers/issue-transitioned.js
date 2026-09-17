@@ -3,9 +3,14 @@ import { collect, DETECTED_VIA } from '../lib/collect.js';
 import { getReview } from '../db/itemStateStore.js';
 
 import { retryEvent, eventTime } from './retry.js';
+import { withRequestCache } from '../lib/cache.js';
 
 /** Capture consumes the recorded approval; failures remain visible and retryable. */
 export async function run(event, suppliedDeps = null) {
+  return withRequestCache(() => runUncached(event, suppliedDeps));
+}
+
+async function runUncached(event, suppliedDeps) {
   const runtime = suppliedDeps ?? await (await import('./runtime.js')).triggerRuntime();
   const deps = { captureBaseline, collect, getReview, ...runtime };
   const issue = event?.issue;

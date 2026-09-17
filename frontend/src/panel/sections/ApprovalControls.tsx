@@ -309,7 +309,11 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
   return <Card title="Approval" subtitle={canAct ? 'Your decision is recorded against your name and cannot be edited afterwards.' : undefined}><div className="va-stack">
     {/* Every viewer — eligible or not — sees the exact rule this work item is
         controlled by. Nothing here is hidden behind a disclosure. */}
-    <ControlFacts summary={summary} fromStatusName={fromStatusName} authoritativeReady={!summary.baseline || Boolean(evidence)} />
+    <ControlFacts
+      summary={summary}
+      fromStatusName={fromStatusName}
+      authoritativeReady={!summary.baseline || Boolean(evidence) || Boolean(evidenceError)}
+    />
     {liveRegion}
     {outcome && <Notice danger={outcome.failed}>{outcome.message}</Notice>}
     {session.message && <Notice danger={session.failed}>{session.message}</Notice>}

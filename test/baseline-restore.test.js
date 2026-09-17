@@ -271,6 +271,16 @@ test('a formatting-only difference is still restored', () => {
   assert.equal(plan.steps.length, 1);
 });
 
+test('an unrestorable formatting-only difference is not also promised as formatting restore work', () => {
+  const plan = planRestore({
+    diff: { issueId: 1, baselineId: 'b', baselineVersion: 1, fields: [{ fieldId: 'summary', fieldName: 'Summary', changed: true,
+      semanticChange: false, restorable: RESTORABLE.NO, restorableReason: 'Not retained' }] },
+    baselineValues: {}, controlledFields: [{ field_id: 'summary', field_kind: FIELD_KIND.TEXT }], editmeta: {}
+  });
+  assert.deepEqual(plan.preflight.formattingOnly, []);
+  assert.deepEqual(plan.preflight.cannotRestore.map(item => item.fieldName), ['Summary']);
+});
+
 test('the summary still tells the reviewer a change was formatting only', () => {
   const plan = planRestore({
     diff: {

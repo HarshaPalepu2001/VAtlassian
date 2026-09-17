@@ -2,6 +2,8 @@ import { archive } from '../db/itemStateStore.js';
 import { tryAppend } from '../db/store.js';
 import { EVENT } from '../lib/ledger.js';
 import { collectAffectedTrees, affectedTreeRoots, collectTree } from '../lib/collect.js';
+import { withRequestCache } from '../lib/cache.js';
+import { retryEvent } from './retry.js';
 
 /**
  * avi:jira:deleted:issue.
@@ -13,6 +15,10 @@ import { collectAffectedTrees, affectedTreeRoots, collectTree } from '../lib/col
  * the tree lookup first costs nothing.
  */
 export async function run(event, deps = { collectAffectedTrees, affectedTreeRoots, collectTree }) {
+  return withRequestCache(() => runUncached(event, deps));
+}
+
+async function runUncached(event, deps) {
   const issue = event?.issue;
   if (!issue?.id) return;
   const issueId = Number(issue.id);
@@ -21,6 +27,10 @@ export async function run(event, deps = { collectAffectedTrees, affectedTreeRoot
 
   try {
     const results = await deps.collectAffectedTrees(event, deps);
+    // One event can fan out to several governed roots; a failed collection on
+    // any of them must retry rather than be silently dropped by archiving anyway.
+    const failed = results.find(r => ['ERROR', 'UNREADABLE', 'BUSY'].includes(r.outcome));
+    if (failed) return retryEvent(event, failed.outcome);
     await archive(issueId, now);
 
     await tryAppend({

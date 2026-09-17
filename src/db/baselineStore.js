@@ -118,6 +118,19 @@ export async function writeBaseline({ baseline, values, raw, writable, resume = 
   const baselineId = resume?.baseline_id ?? newId();
   const now = baseline.captured_at;
 
+  // A resumed capture replays from a fresh read, gated upstream on the new
+  // read's content_hash matching what the crashed attempt already recorded —
+  // but that only proves the two reads are semantically equal, not that this
+  // replay's chunk boundaries land on the exact same (field_id, seq) keys the
+  // partial attempt left behind. `ON DUPLICATE KEY UPDATE data = data` below
+  // is a no-op, so any row a key doesn't land on again stays as whatever the
+  // crashed attempt wrote. Clearing this issue/version's rows first means the
+  // replay always leaves exactly what this read says, never a mix of the two.
+  if (resume) await query(
+    `DELETE FROM va_baseline_value WHERE issue_id = ? AND version = ?`,
+    [baseline.issue_id, baseline.version]
+  );
+
   // 1. Values first. Retained fields only — `values`/`raw` are already filtered
   // by content.js's project(), which writes nothing for a field whose
   // store_values is false.

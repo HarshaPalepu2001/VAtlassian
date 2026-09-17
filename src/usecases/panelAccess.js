@@ -15,6 +15,7 @@ import { logicalNodeId } from '../lib/tree/model.js';
 import { diffTree } from '../lib/tree/diff.js';
 import { treeReviewDiff } from '../lib/tree/reviewDiff.js';
 import { readBaselineTree } from '../db/baselineTreeStore.js';
+import { maxMateriality } from '../lib/materiality.js';
 import { fail, actorFrom, serialise, respond } from './access.js';
 
 export { fail, actorFrom, serialise, respond };
@@ -183,7 +184,9 @@ export async function filterViewableTree(tree) {
     const response = await api.asUser().requestJira(route`/rest/api/3/permissions/check`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ issues: ids.map(id => ({ issue: id, permissions: ['BROWSE_PROJECTS'] })) })
+      body: JSON.stringify({
+        projectPermissions: [{ issues: ids.map(Number).filter(Number.isFinite), permissions: ['BROWSE_PROJECTS'] }]
+      })
     });
     // Fail closed: an unreadable permission check hides the whole tree
     // rather than risk showing a node nobody proved the viewer can see.
@@ -192,9 +195,10 @@ export async function filterViewableTree(tree) {
   } catch {
     return { ...tree, nodes: [] };
   }
-  const visible = new Set((body?.issues ?? [])
-    .filter(entry => entry?.permissions?.BROWSE_PROJECTS?.havePermission === true)
-    .map(entry => String(entry.id)));
+  const visible = new Set((body?.projectPermissions ?? [])
+    .filter(grant => grant?.permission === 'BROWSE_PROJECTS')
+    .flatMap(grant => grant?.issues ?? [])
+    .map(String));
   return { ...tree, nodes: tree.nodes.filter(n => visible.has(String(n.id ?? ''))) };
 }
 
@@ -205,6 +209,35 @@ export function filterViewableTreeDiff(treeDiff, visibleTree) {
   if (!treeDiff?.changes) return treeDiff;
   const visibleIds = new Set((visibleTree?.nodes ?? []).map(n => n.logicalNodeId));
   return { ...treeDiff, changes: treeDiff.changes.filter(c => c.kind === 'NODE_REMOVED' || visibleIds.has(c.logicalNodeId)) };
+}
+
+/**
+ * The same visibility boundary as filterViewableTreeDiff(), applied to the
+ * reviewer-facing field list — lib/tree/reviewDiff.js's per-node issue key,
+ * field names, and before/after content, not just the structural tree change
+ * it was rendered from. Every caller that surfaces reviewDiff.fields
+ * (panel:getState, panel:getEvidence, the report) must filter through this
+ * before returning it; the raw reviewDiff is not safe to hand back as-is.
+ *
+ * `reviewDiff` here is snapshot()'s field: treeReviewDiff()'s output when a
+ * real treeDiff exists, but the plain root-issue diffIssue() result — never
+ * carrying logicalNodeId — for a gate that says capture_baseline but whose
+ * active baseline predates the tree feature. That fallback is inherently
+ * root-scoped (gated by the ordinary issue read, not by tree-node
+ * visibility), so a field with no logicalNodeId passes through untouched.
+ */
+export function filterViewableReviewDiff(reviewDiff, visibleTree) {
+  if (!reviewDiff?.fields) return reviewDiff;
+  const visibleIds = new Set((visibleTree?.nodes ?? []).map(n => n.logicalNodeId));
+  const fields = reviewDiff.fields.filter(f => f.logicalNodeId == null || f.nodeRemoved === true || visibleIds.has(f.logicalNodeId));
+  const materialFields = fields.filter(f => f.semanticChange && f.materiality !== 'COSMETIC');
+  return {
+    ...reviewDiff,
+    fields,
+    changedFieldCount: fields.length,
+    materialFieldCount: materialFields.length,
+    maxMateriality: materialFields.length ? maxMateriality(materialFields.map(f => f.materiality)) : null
+  };
 }
 
 export async function load(args, options = {}) {

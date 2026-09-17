@@ -79,7 +79,12 @@ export type PanelSummary = {
   restore: PanelRestore | null;
   approval: { requiredRole?: string | null; requiredAssurance?: AssuranceLevel | null; meaning?: string | null; pending: PendingApproval | null };
   adminIncidentCount?: number;
+  adminIncidentUnavailable?: boolean;
   error?: string;
+  /** The review row's own version counter, bumped on every re-observation —
+   *  independent of baseline.version. Passed to usePanelEvidence so it can key
+   *  its cache on the current-record evidence itself, not only the baseline. */
+  evidenceVersion?: number | null;
 };
 
 export type BaselineField = { fieldId: string; fieldName: string; materiality?: string; retained: boolean; digest?: string; preview?: { text?: string; empty?: boolean; truncated?: boolean; more?: number } | null };

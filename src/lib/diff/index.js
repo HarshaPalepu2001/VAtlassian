@@ -99,7 +99,7 @@ export function diffIssue({
     const trace = touches.length ? touches : events.map(e => ({
       at: Number(e.occurred_at), authorId: e.actor_account_id ?? null,
       authorName: e.actor_name ?? null, source: e.source ?? 'UNKNOWN',
-      detected: e.detected_via === 'SWEEP', fromString: null, toString: null
+      detected: ['SWEEP', 'RECONCILE'].includes(e.detected_via), fromString: null, toString: null
     }));
 
     const materiality = classify(

@@ -1,3 +1,5 @@
+import { withRequestCache } from '../lib/cache.js';
+
 /** Independent failures must never prevent the other scheduled controls running.
  * Imports are lazy so a broken dependency also stays isolated to its own job.
  */
@@ -33,14 +35,14 @@ async function runList(names, implementations) {
 }
 
 export function runFiveMinute(_request, { jobs: implementations = jobs } = {}) {
-  return runList(['migrate', 'alerts'], implementations);
+  return withRequestCache(() => runList(['migrate', 'alerts'], implementations));
 }
 
 // Field adoption must finish before either collector measures the tracked set.
 export function runHourly(_request, { jobs: implementations = jobs } = {}) {
-  return runList(['adoptFields', 'reconcile', 'rehash', 'gatecheck'], implementations);
+  return withRequestCache(() => runList(['adoptFields', 'reconcile', 'rehash', 'gatecheck'], implementations));
 }
 
 export function runDaily(_request, { jobs: implementations = jobs } = {}) {
-  return runList(['verify', 'seal', 'directoryReconcile', 'devicecheck', 'prune'], implementations);
+  return withRequestCache(() => runList(['verify', 'seal', 'directoryReconcile', 'devicecheck', 'prune'], implementations));
 }

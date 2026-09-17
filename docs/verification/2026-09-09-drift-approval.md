@@ -40,7 +40,7 @@ Additional regression tests cover changed evidence, policy/baseline changes afte
 - `npm run verify`: 570 backend tests and 10 frontend tests passed; 130/130 backend modules imported; TypeScript and production UI build passed.
 - `forge lint`: no issues found.
 - `forge deploy --environment development`: deployed VAtlassian ALM version 2.24.0; Forge reported it eligible for Runs on Atlassian.
-- `forge install list`: development install on `dev-site.atlassian.net` for Jira is up to date.
+- `forge install list`: development Jira install is up to date.
 - `git diff --check`: passed.
 - The UI build retains its existing large-bundle warning.
 - The standard verification command now includes the frontend tests. Happy DOM was added only as a development dependency.
@@ -49,7 +49,7 @@ Additional regression tests cover changed evidence, policy/baseline changes afte
 
 The native Jira transition screen itself was not opened. Local tests and deployment do not establish tenant validator publication, Forge invocation timing, actual Jira field-write permissions, or host event delivery. The manifest and published workflow still need to point at this app in the target Jira project. No existing tenant data was rewritten during acceptance.
 
-The live browser attempt was blocked because the Chrome DevTools connector could not attach to its existing profile. The Atlassian connector available in this session did not resolve `VJIRA-1` on `dev-site.atlassian.net`, so it could not substitute for the Jira UI run.
+The live browser attempt was blocked because the Chrome DevTools connector could not attach to its existing profile. The Atlassian connector available in this session did not resolve the nominated work item, so it could not substitute for the Jira UI run.
 
 Restoration is over retained, tracked baseline values. Missing historical values, irreversible Jira data (such as a deleted attachment), or fields Jira refuses to write cannot be truthfully reported as an exact restoration; the app retains the incomplete outcome. The 105-field test does not establish support for every possible third-party Jira field type or administrator changes to the tracked-field schema between baselines.
 

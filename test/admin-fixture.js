@@ -69,7 +69,6 @@ export function fixture(options = {}) {
     setConfig: async (...args) => { writes.push(args); },
     verifyChain: async () => ({ ok: true, checked: 1 }),
     listGatedTransitions: async () => [],
-    listGatedTransitions: async () => [],
   };
   deps.tryAppend = event => deps.append(deps.auditStore, event);
   return deps;

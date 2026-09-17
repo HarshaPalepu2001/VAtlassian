@@ -19,6 +19,7 @@ import { claimRestoreAction, finishRestoreAction, recordReplacement,
   readReplacements, readRestoreActions } from '../db/restoreTreeStore.js';
 import { createRestoreAdapters } from '../lib/tree/restoreAdapters.js';
 import { enqueueRestore } from '../lib/restore/queue.js';
+import { withRequestCache } from '../lib/cache.js';
 
 const WORKER_BATCH = 25;
 const TERMINAL = new Set(['COMPLETE', 'COMPLETE_WITH_REPLACEMENTS', 'FAILED']);
@@ -178,12 +179,24 @@ export async function runRestoreWorker(eventOrBody, overrides = {}) {
     const counters = countersFor(executed, state);
     const detail = [{ ...counters, remaining: Number(executed.remaining ?? 0), verification: verified }];
     await deps.finishRestore({ restoreId, now: Date.now(), counters, state, detail });
-    await deps.markDecided({ issueId: Number(body.issueId), baselineVersion: Number(body.baselineVersion), approvalId: restore.approval_id });
-    await deps.release({ issueId: Number(body.issueId), state: 'BASELINED', now: Date.now(),
-      counters: { driftCount: 0, driftedFieldCount: 0, maxMateriality: null } });
-    await deps.append({ actorAccountId: restore.actor_account_id, issueId: Number(body.issueId),
-      approvalId: restore.approval_id, eventType: EVENT.RESTORE_COMPLETED,
-      payload: { restoreId: idBase64(restoreId), state, counters } });
+    // finishRestore is durable at this point — the restore's own terminal
+    // state is settled and reported below regardless of what happens next.
+    // A failure in this bookkeeping must not fall into the catch block: that
+    // would call failRestore() (a no-op against the already-terminal row,
+    // since its WHERE clause excludes COMPLETE/COMPLETE_WITH_REPLACEMENTS/
+    // FAILED) and release(issue, 'ERROR') (not a no-op — it would mark an
+    // issue that was actually restored as being in error), and it would
+    // report this call as FAILED when the restore itself did not fail.
+    try {
+      await deps.markDecided({ issueId: Number(body.issueId), baselineVersion: Number(body.baselineVersion), approvalId: restore.approval_id });
+      await deps.release({ issueId: Number(body.issueId), state: 'BASELINED', now: Date.now(),
+        counters: { driftCount: 0, driftedFieldCount: 0, maxMateriality: null } });
+      await deps.append({ actorAccountId: restore.actor_account_id, issueId: Number(body.issueId),
+        approvalId: restore.approval_id, eventType: EVENT.RESTORE_COMPLETED,
+        payload: { restoreId: idBase64(restoreId), state, counters } });
+    } catch (bookkeepingError) {
+      console.error('restoreWorker: post-completion bookkeeping failed', JSON.stringify({ restoreId: idBase64(restoreId), state }), bookkeepingError);
+    }
     return { state, restoreId, progress: { totalSteps, completedSteps: counters.completedSteps, remainingSteps: 0 } };
   } catch (error) {
     await deps.failRestore({ restoreId, error, now: Date.now() });
@@ -194,5 +207,5 @@ export async function runRestoreWorker(eventOrBody, overrides = {}) {
 }
 
 export async function handler(event) {
-  return runRestoreWorker(event);
+  return withRequestCache(() => runRestoreWorker(event));
 }

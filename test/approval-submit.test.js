@@ -503,8 +503,8 @@ test('a busy restore returns a recovery message instead of the raw lock code', a
   f.deps.apply = async () => { const error = new Error('ALREADY_DECIDING'); error.reason = 'ALREADY_DECIDING'; throw error; };
   const result = await createApprovalUsecases(f.deps).submit(f.request);
   assert.equal(result.success, false);
-  assert.match(result.error, /restore is already in progress/i);
-  assert.match(result.error, /Retry restore/i);
+  assert.match(result.error, /another decision.*already in progress/i);
+
 });
 test('retry cannot use another actor approval or mint new capability', async () => {
   const f = fixture(), api = createApprovalUsecases(f.deps);

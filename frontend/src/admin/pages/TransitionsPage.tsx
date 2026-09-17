@@ -93,6 +93,7 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
   const [discovery, setDiscovery] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
   const [selectedKey, setSelectedKey] = useState('');
   const discoverySeq = useRef(0);
+  const statusSeq = useRef(0);
 
   const [role, setRole] = useState('');
   const [meaning, setMeaning] = useState('');
@@ -120,11 +121,11 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
 
   useEffect(() => {
     let active = true;
+    const seq = ++statusSeq.current;
     if (!projectId) { setIssueTypes([]); setProjectStatuses([]); return () => { active = false; }; }
     setIssueTypes([]);
     invoke('admin:listStatusesForProject', { projectId, issueTypeId: '' })
-      .then((r: any) => { if (active && r.success) setProjectStatuses(r.statuses ?? []); });
-
+      .then((r: any) => { if (active && seq === statusSeq.current && r.success) setProjectStatuses(r.statuses ?? []); });
     invoke('admin:listIssueTypesForProject', { projectId })
       .then((r: any) => { if (active && r.success) setIssueTypes(r.issueTypes ?? []); });
     return () => { active = false; };
@@ -132,9 +133,11 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
 
   useEffect(() => {
     let active = true;
-    if (!projectId || !issueTypeId) { setProjectStatuses([]); return () => { active = false; }; }
+    if (!projectId) { ++statusSeq.current; setProjectStatuses([]); return () => { active = false; }; }
+    if (!issueTypeId) return () => { active = false; };
+    const seq = ++statusSeq.current;
     invoke('admin:listStatusesForProject', { projectId, issueTypeId })
-      .then((r: any) => { if (active && r.success) setProjectStatuses(r.statuses ?? []); });
+      .then((r: any) => { if (active && seq === statusSeq.current && r.success) setProjectStatuses(r.statuses ?? []); });
     return () => { active = false; };
   }, [projectId, issueTypeId]);
 

@@ -13,6 +13,7 @@ const frontendReact = specifier => new URL(`../node_modules/${specifier === 'rea
 const hooks = registerHooks({
   resolve(specifier, context, next) {
     if (specifier === '@forge/bridge') return { url: 'panel:bridge', shortCircuit: true };
+    if (specifier === '@simplewebauthn/browser') return { url: 'panel:webauthn', shortCircuit: true };
     if (specifier === '@forge/react' || specifier === '@forge/react/jira') return { url: 'panel:forge-react', shortCircuit: true };
     if (specifier.startsWith('@atlaskit/')) return { url: 'panel:button', shortCircuit: true };
     if ((specifier === 'react' || specifier === 'react/jsx-runtime') && context.parentURL?.includes('/src/ui-kit/')) return { url: frontendReact(specifier), shortCircuit: true };
@@ -28,6 +29,13 @@ const hooks = registerHooks({
       export const invoke = (...args) => globalThis.panelTransport.invoke(...args);
       export const events = { on: async (name, cb) => globalThis.panelTransport.on(name, cb), emit: async (...args) => { globalThis.panelTransport.emitted.push(args); globalThis.panelTransport.deliver?.(...args); } };
       export const view = { refresh: async () => {}, submit: v => { globalThis.panelTransport.submitted.push(v); }, getContext: async () => globalThis.panelTransport.context }; export const router = { open: async () => {} };`
+    };
+    if (url === 'panel:webauthn') return {
+      format: 'module', shortCircuit: true, source: `
+      export const browserSupportsWebAuthn = () => globalThis.webauthnFixture.browserSupportsWebAuthn();
+      export const platformAuthenticatorIsAvailable = () => globalThis.webauthnFixture.platformAuthenticatorIsAvailable();
+      export const startAuthentication = args => globalThis.webauthnFixture.startAuthentication(args);
+      export const startRegistration = args => globalThis.webauthnFixture.startRegistration(args);`
     };
     if (url === 'panel:button') return {
       format: 'module', shortCircuit: true, source: `
@@ -77,6 +85,7 @@ afterEach(async () => {
   container?.remove();
   root = null;
   window.open = openWindow;
+  globalThis.webauthnFixture = defaultWebauthnFixture();
 });
 
 const settle = () => act(async () => { await new Promise(r => setTimeout(r, 30)); });
@@ -89,6 +98,14 @@ const selectValue = (select, value) => {
   Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(select, value);
   select.dispatchEvent(new window.Event('change', { bubbles: true }));
 };
+
+const defaultWebauthnFixture = () => ({
+  browserSupportsWebAuthn: () => true,
+  platformAuthenticatorIsAvailable: async () => true,
+  startAuthentication: async () => { throw new Error('No test authenticator response configured.'); },
+  startRegistration: async () => { throw new Error('No test authenticator response configured.'); }
+});
+globalThis.webauthnFixture = defaultWebauthnFixture();
 
 function setup(handler, { context = { extension: { issue: { key: 'T-1', id: '10' } } } } = {}) {
   const listeners = new Map();
@@ -269,6 +286,35 @@ test('CHALLENGE 3.1: TransitionsPage handles 3 rapid project switches (P1 -> P2 
   assert.match(text(), /Status 3/, 'Current project P3 statuses must be rendered');
   assert.doesNotMatch(text(), /Status 1/, 'Stale P1 statuses must be dropped');
   assert.doesNotMatch(text(), /Status 2/, 'Stale P2 statuses must be dropped');
+});
+
+test('CHALLENGE 3.1b: a late all-types status read cannot overwrite a selected work-item type', async () => {
+  let resolveAll, resolveBug;
+  setup(async (key, payload) => {
+    if (key === 'admin:listControlledTransitions') return { success: true, transitions: [] };
+    if (key === 'admin:listIssueTypesForProject') return { success: true, issueTypes: [{ id: 'bug', name: 'Bug' }] };
+    if (key === 'admin:listStatusesForProject' && payload.issueTypeId === '') {
+      return new Promise(resolve => { resolveAll = () => resolve({ success: true, statuses: [{ id: 'all', name: 'All-types status' }] }); });
+    }
+    if (key === 'admin:listStatusesForProject' && payload.issueTypeId === 'bug') {
+      return new Promise(resolve => { resolveBug = () => resolve({ success: true, statuses: [{ id: 'bug-status', name: 'Bug-only status' }] }); });
+    }
+    return { success: true };
+  });
+
+  await act(() => root.render(h(TransitionsPage, { projects: [{ id: 'P1', name: 'Proj 1' }] })));
+  await flush();
+  await act(() => selectValue(fieldSelect('Project'), 'P1'));
+  await flush();
+  await act(() => selectValue(fieldSelect('Work item type'), 'bug'));
+  await flush();
+  assert.ok(resolveAll && resolveBug, 'both reads are in flight for the race');
+  await act(() => resolveBug());
+  await flush();
+  await act(() => resolveAll());
+  await flush();
+  assert.match(text(), /Bug-only status/);
+  assert.doesNotMatch(text(), /All-types status/);
 });
 
 test('CHALLENGE 3.2: TransitionsPage functional role updater preserves valid role and resets invalid role', async () => {
@@ -480,6 +526,36 @@ test('CHALLENGE 1.2: WebAuthnPopup rejects message when source !== opener or ori
   }
 });
 
+test('CHALLENGE 1.2b: duplicate valid options start only one device prompt', async () => {
+  setup(() => ({}));
+  const originalOpener = Object.getOwnPropertyDescriptor(window, 'opener');
+  const originalIsSecureContext = Object.getOwnPropertyDescriptor(window, 'isSecureContext');
+  let starts = 0;
+  try {
+    const fakeOpener = { postMessage() {} };
+    Object.defineProperty(window, 'opener', { value: fakeOpener, configurable: true, writable: true });
+    Object.defineProperty(window, 'isSecureContext', { value: true, configurable: true, writable: true });
+    globalThis.webauthnFixture = {
+      browserSupportsWebAuthn: () => true,
+      platformAuthenticatorIsAvailable: async () => true,
+      startAuthentication: async () => { starts++; return new Promise(() => {}); },
+      startRegistration: async () => { throw new Error('unexpected enrolment'); }
+    };
+    await act(() => root.render(h(WebAuthnPopup)));
+    await flush();
+    const options = { type: 'webauthn-options', action: 'confirm', optionsJSON: { challenge: 'one' } };
+    window.dispatchEvent(new window.MessageEvent('message', { data: options, origin: window.location.origin, source: fakeOpener }));
+    window.dispatchEvent(new window.MessageEvent('message', { data: options, origin: window.location.origin, source: fakeOpener }));
+    await flush();
+    assert.equal(starts, 1, 'a repeated valid options message must not open a second authenticator prompt');
+  } finally {
+    if (originalOpener) Object.defineProperty(window, 'opener', originalOpener);
+    else delete window.opener;
+    if (originalIsSecureContext) Object.defineProperty(window, 'isSecureContext', originalIsSecureContext);
+    else delete window.isSecureContext;
+  }
+});
+
 test('CHALLENGE 1.3: WebAuthnPopup fails safe when opened directly without opener', async () => {
   setup(() => ({}));
   const originalOpener = Object.getOwnPropertyDescriptor(window, 'opener');
@@ -519,4 +595,3 @@ test('CHALLENGE 5.3: RestoreStatus handles retry failure gracefully and displays
   assert.match(text(), /Forge backend timeout during restore retry/, 'Error message should be rendered in danger notice');
   assert.equal(retryBtn.disabled, false, 'Retry button must become re-enabled after failure');
 });
-

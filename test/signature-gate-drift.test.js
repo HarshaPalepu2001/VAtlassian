@@ -2,7 +2,7 @@
  * Gate drift detection.
  *
  * The workflow fixture below is the real shape returned by
- * POST /rest/api/3/workflows for project AP on dev-site.atlassian.net,
+ * POST /rest/api/3/workflows from a non-production Jira site,
  * captured 2026-08-31 — including the two GLOBAL transitions, which are the
  * part a naive comparison gets wrong.
  */

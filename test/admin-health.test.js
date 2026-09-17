@@ -105,3 +105,12 @@ test('gatecheck workflow findings and missing-transition-id findings are both re
   assert.equal(result.findings.length, 2);
   assert.deepEqual(result.findings.map((f) => f.type).sort(), ['GATE_ABSENT', 'MISSING_TRANSITION_ID']);
 });
+
+test('wildcard workflow findings render all work item types', async () => {
+  const deps = fixture({ query: sql => ({ result: true, data: sql.includes('FROM va_gate_finding') ? [{
+    finding_key: 'k', finding_type: 'GATE_ABSENT', severity: 'CRITICAL', project_id: '1', issue_type_id: '*', workflow_id: 'wf', transition_id: '1',
+    from_status_id: '*', to_status_id: '2', detail: 'missing', first_seen_at: 1, last_seen_at: 1, cleared_at: null
+  }] : [] }) });
+  const result = await listGateFindings(request({}), deps);
+  assert.equal(result.findings[0].issueTypeName, 'All work item types');
+});

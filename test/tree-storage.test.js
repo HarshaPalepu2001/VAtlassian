@@ -80,6 +80,25 @@ test('beginTreeBaseline reserves a distinct capturing baseline id', async () => 
   assert.notDeepEqual(result.baselineId, approvalId);
 });
 
+test('beginTreeBaseline accepts a baseline created without an approval record', async () => {
+  const queries = [];
+  await beginTreeBaseline({
+    baseline: {
+      issue_id: 1, project_id: 100, issue_type_id: '200', version: 1,
+      content_hash: 'tree-hash', field_digests: '{}',
+      transition_id: '5', from_status_id: '1', to_status_id: '2',
+      approved_by: 'system', approved_name: 'System', transition_at: 10,
+      captured_at: 11, assurance_level: 'SYSTEM', approval_id: null,
+      fidelity: 'EXACT', field_count: 2, tree_hash: 'tree-hash'
+    },
+    query: async (sql, params) => { queries.push({ sql, params }); }
+  });
+
+  assert.equal(queries.length, 1);
+  assert.equal(queries[0].params[15], null,
+    'the nullable approval_id must remain SQL NULL rather than be binary-encoded');
+});
+
 test('beginTreeBaseline reserves the row with its immutable control provenance', async () => {
   const queries = [];
   await beginTreeBaseline({
@@ -101,14 +120,19 @@ test('beginTreeBaseline reserves the row with its immutable control provenance',
   assert.deepEqual(queries[0].params.slice(-3), ['Quality Reviewer', 'ESIGNATURE', 'c'.repeat(64)]);
 });
 
-test('beginTreeBaseline resumes the capturing row without inserting another', async () => {
+test('beginTreeBaseline resumes the capturing row without inserting another, after clearing prior partial rows', async () => {
   const baselineId = Buffer.alloc(16, 4);
+  const queries = [];
   const result = await beginTreeBaseline({
     baseline: { version: 3 },
     resume: { baseline_id: baselineId, version: 3, state: 'CAPTURING' },
-    query: async () => assert.fail('resume must not insert')
+    query: async (sql, params) => { queries.push({ sql, params }); }
   });
   assert.deepEqual(result, { baselineId, version: 3 });
+  assert.equal(queries.length, 2);
+  assert.match(queries[0].sql, /DELETE FROM va_baseline_node_value WHERE baseline_id/);
+  assert.match(queries[1].sql, /DELETE FROM va_baseline_node WHERE baseline_id/);
+  assert.ok(queries.every(q => !/INSERT/.test(q.sql)), 'resume must not insert a fresh baseline row');
 });
 
 test('writeTreeCapture executes proper queries with treeHash and calculated edgeCount', async () => {
@@ -221,7 +245,11 @@ test('publishTreeBaseline activates before superseding older versions', async ()
     baselineId: Buffer.alloc(16, 2), issueId: 1, version: 3,
     query: async (sql, params) => {
       calls.push({ sql, params });
-      return calls.length === 1 ? { affectedRows: 1 } : { affectedRows: 2 };
+      return [];
+    },
+    write: async (sql, params) => {
+      calls.push({ sql, params });
+      return { result: true, data: { affectedRows: 1 } };
     }
   });
 
@@ -237,7 +265,11 @@ test('publishTreeBaseline cannot activate a row without control provenance', asy
     baselineId: Buffer.alloc(16, 2), issueId: 1, version: 3,
     query: async (sql, params) => {
       calls.push({ sql, params });
-      return { affectedRows: 0 };
+      return [];
+    },
+    write: async (sql, params) => {
+      calls.push({ sql, params });
+      return { result: true, data: { affectedRows: 0 } };
     }
   }), error => error.reason === 'CAPTURE_INCOMPLETE');
 
@@ -245,6 +277,19 @@ test('publishTreeBaseline cannot activate a row without control provenance', asy
   assert.match(calls[0].sql, /required_role IS NOT NULL/);
   assert.match(calls[0].sql, /required_assurance IS NOT NULL/);
   assert.match(calls[0].sql, /controlled_fields_hash IS NOT NULL/);
+});
+
+test('publishTreeBaseline fails closed when Forge SQL does not report a successful activation', async () => {
+  const calls = [];
+  await assert.rejects(() => publishTreeBaseline({
+    baselineId: Buffer.alloc(16, 2), issueId: 1, version: 3,
+    query: async (sql, params) => { calls.push({ sql, params }); return []; },
+    write: async sql => sql.includes("SET state = 'ACTIVE'")
+      ? { result: false, error: new Error('storage unavailable') }
+      : assert.fail('only the activation must use the Forge SQL write result')
+  }), error => error.reason === 'CAPTURE_INCOMPLETE');
+
+  assert.equal(calls.length, 0, 'an unconfirmed activation must not supersede the live baseline');
 });
 
 test('readBaselineTree fetches and decodes nodes and values', async (t) => {

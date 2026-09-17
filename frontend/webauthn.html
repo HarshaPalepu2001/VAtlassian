@@ -16,10 +16,17 @@
         console.error('WebAuthn popup unhandled error:', event.error || event.message);
         var root = document.getElementById('root');
         if (root && !root.hasChildNodes()) {
-          root.innerHTML = '<div style="padding:24px;font-family:-apple-system,BlinkMacSystemFont,sans-serif;color:#ae2e24;">' +
-            '<h3 style="margin:0 0 8px;">Device check error</h3>' +
-            '<p style="margin:0;font-size:13px;">' + (event.message || 'An error occurred.') + '</p>' +
-            '</div>';
+          var container = document.createElement('div');
+          container.style.cssText = 'padding:24px;font-family:-apple-system,BlinkMacSystemFont,sans-serif;color:#ae2e24;';
+          var heading = document.createElement('h3');
+          heading.style.cssText = 'margin:0 0 8px;';
+          heading.textContent = 'Device check error';
+          var message = document.createElement('p');
+          message.style.cssText = 'margin:0;font-size:13px;';
+          message.textContent = event.message || 'An error occurred.';
+          container.appendChild(heading);
+          container.appendChild(message);
+          root.appendChild(container);
         }
       });
     </script>

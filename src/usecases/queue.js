@@ -32,7 +32,7 @@ export async function list({ payload = {}, context }) { return respond(async () 
   const page = await response.json();
   const rows = await reviewsByIds((page.issues ?? []).map(i => i.id));
   const byId = new Map(rows.map(r => [String(r.issue_id), r]));
-  const resolved = await Promise.all((page.issues ?? []).map(async issue => {
+  const resolveOne = async issue => {
     const actions = await actionsForIssue(issue, grants);
     const row = byId.get(String(issue.id));
     const canReviewDrift = Boolean(row) && DRIFT_QUEUE_STATES.has(row.state)
@@ -46,7 +46,18 @@ export async function list({ payload = {}, context }) { return respond(async () 
       transitionName: actions[0]?.toStatusName ?? actions[0]?.name ?? null,
       transitionLabel: actions[0]?.label ?? null,
       transitionCount: actions.length };
-  }));
+  };
+  // Each issue's actionsForIssue() makes its own live Jira transitions call, so
+  // resolving a full 50-issue page in one Promise.all fans out up to 50
+  // concurrent Jira requests. Bounded batches, same pattern as
+  // trackedFields.js's per-issue-type reads, keep this off Jira's rate limit.
+  const QUEUE_RESOLUTION_CONCURRENCY = 5;
+  const resolved = [];
+  const pageIssues = page.issues ?? [];
+  for (let i = 0; i < pageIssues.length; i += QUEUE_RESOLUTION_CONCURRENCY) {
+    const batch = pageIssues.slice(i, i + QUEUE_RESOLUTION_CONCURRENCY);
+    resolved.push(...await Promise.all(batch.map(resolveOne)));
+  }
   const items = resolved.filter(Boolean);
   return { items, nextPageToken: page.nextPageToken ?? null };
 }); }

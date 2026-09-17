@@ -1,5 +1,6 @@
 import ForgeResolver from '@forge/resolver';
 import * as admin from '../usecases/admin.js';
+import { withRequestCache } from '../lib/cache.js';
 const resolver = new (ForgeResolver.default ?? ForgeResolver)();
 
 resolver.define('admin:check', req => admin.check(req));
@@ -52,4 +53,5 @@ resolver.define('diagnostics:write-identity', () => diagnostics.checkWriteIdenti
 resolver.define('admin:listCredentials', req => admin.listCredentials(req));
 resolver.define('admin:reconcileDirectory', req => admin.reconcileDirectory(req));
 
-export const handler = resolver.getDefinitions();
+const definitions = resolver.getDefinitions();
+export const handler = (...args) => withRequestCache(() => definitions(...args));

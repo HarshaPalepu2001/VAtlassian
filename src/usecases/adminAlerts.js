@@ -116,7 +116,7 @@ export async function listGateFindings(req, overrides) {
         severity: row.severity,
         projectKey: projects.get(String(row.project_id))?.key ?? null,
         projectName: projects.get(String(row.project_id))?.name ?? null,
-        issueTypeName: issueTypes.get(String(row.issue_type_id))?.name ?? null,
+        issueTypeName: issueTypeName(row.issue_type_id),
         fromStatusName: statusName(row.from_status_id),
         toStatusName: statusName(row.to_status_id),
         workflowId: row.workflow_id,

@@ -1,8 +1,13 @@
 import { collect, DETECTED_VIA } from '../lib/collect.js';
 import { executeQuery } from '../lib/db.js';
 import { retryEvent, eventTime } from './retry.js';
+import { withRequestCache } from '../lib/cache.js';
 
 export async function run(event) {
+  return withRequestCache(() => runUncached(event));
+}
+
+async function runUncached(event) {
   const issueLink = event?.issueLink;
   if (!issueLink) return;
 

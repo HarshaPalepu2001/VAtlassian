@@ -3,6 +3,7 @@ import { meetsAssurance, isAssuranceLevel, effectiveAssurance } from './lib/appr
 import { validEvidence } from './lib/approval/record.js';
 import { normalizeCode } from './lib/totp.js';
 import { EVENT } from './lib/ledger.js';
+import { withRequestCache } from './lib/cache.js';
 
 export function submittedApprovalToken(fields) {
   if (!fields || typeof fields !== 'object') return null;
@@ -97,6 +98,10 @@ export function createGate(deps) {
 }
 
 export async function validate(payload) {
+  return withRequestCache(() => validateUncached(payload));
+}
+
+async function validateUncached(payload) {
   // Entry is logged before lazy imports, so cold-start/import failures are visible too.
   console.log('gate:invoked', JSON.stringify({ issueKey: payload?.issue?.key ?? null }));
   try {

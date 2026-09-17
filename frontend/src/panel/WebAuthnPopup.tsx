@@ -25,6 +25,7 @@ export default function WebAuthnPopup() {
     }
 
     let done = false;
+    let prompting = false;
     let announceTimer: ReturnType<typeof setTimeout> | undefined;
     let slowTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -46,7 +47,8 @@ export default function WebAuthnPopup() {
       if (event.origin !== window.location.origin) return;
       if (event.source !== opener) return;
       const data = event.data;
-      if (!data || typeof data !== 'object' || data.type !== 'webauthn-options' || done) return;
+      if (!data || typeof data !== 'object' || data.type !== 'webauthn-options' || done || prompting) return;
+      prompting = true;
       stopTimers();
       setSlow(false);
       setPhase('prompting');

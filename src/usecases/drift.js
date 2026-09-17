@@ -22,9 +22,23 @@ const RESTORE_TIMEOUT_MS = 24000;
 function withTimeout(promise, ms, message) {
   let timer;
   const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => { const err = new Error(message); err.reason = 'SERVICE_UNAVAILABLE'; reject(err); }, ms);
+    timer = setTimeout(() => {
+      const err = new Error(message);
+      err.reason = 'RESTORE_IN_PROGRESS';
+      // Promise.race cannot cancel the restore. It may still be mutating Jira,
+      // so callers must keep the compare-and-swap lock until it reaches its own
+      // terminal release path.
+      err.retainRestoreLock = true;
+      reject(err);
+    }, ms);
   });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+export async function releaseFailedApproval({ locked, issueId, diff, driftCount, error, release, now = Date.now() }) {
+  if (!locked || error?.retainRestoreLock) return;
+  await release({ issueId, state: 'ERROR', now,
+    counters: { ...undecidedCounters(diff), driftCount } });
 }
 
 /** Called internally by the sole approval writer; no approval is inserted here. */
@@ -159,12 +173,13 @@ export async function applyApproval({ issue, actor, approval, prepared, resuming
       return await withTimeout(
         performRestore({ prepared: checked, actor, approval }),
         RESTORE_TIMEOUT_MS,
-        'Restore timed out waiting for Jira. Please retry.'
+        'Restore is still running. Refresh the panel for its outcome.'
       );
     }
     let capture = { captured: false, reason: 'CAPTURE_DISABLED' };
-    if (!transition || [true, 1, '1'].includes(checked.gate?.capture_baseline)) {
-      if (checked.gate?.capture_baseline) {
+    const capturesBaseline = [true, 1, '1'].includes(checked.gate?.capture_baseline);
+    if (!transition || capturesBaseline) {
+      if (capturesBaseline) {
         const { writeCapturedTreeBaseline } = await import('../lib/capture.js');
         const { readStableTree } = await import('../lib/tree/stableRead.js');
         const { planTreeCapture } = await import('../lib/tree/capturePlan.js');
@@ -221,10 +236,12 @@ export async function applyApproval({ issue, actor, approval, prepared, resuming
     // writeCapturedBaseline publishes the new item state only after durable values.
     return { success: true, capture, baselinePublished: capture.captured === true };
   } catch (error) {
-    if (locked) await release({ issueId: fresh.issueId, state: 'ERROR', now: Date.now(),
-      // `driftCount` here is the snapshot's, which also counts undecided drift
-      // rows the current diff no longer shows.
-      counters: { ...undecidedCounters(fresh.diff), driftCount: fresh.driftCount } });
+    // `driftCount` here is the snapshot's, which also counts undecided drift
+    // rows the current diff no longer shows. A timeout is different: the
+    // underlying restore remains live, so changing the lock would admit a
+    // concurrent restore before the first one reaches its own finally block.
+    await releaseFailedApproval({ locked, issueId: fresh.issueId, diff: fresh.diff,
+      driftCount: fresh.driftCount, error, release });
     throw error;
   }
 }

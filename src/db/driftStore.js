@@ -11,12 +11,15 @@ import { newId, throwing, isDuplicateKey } from './store.js';
  * transactions to make that safe.
  */
 
-export async function hasUnresolvedDrift(projectId) {
-  const rows = await executeQuery(
-    `SELECT 1 FROM va_drift WHERE project_id = ? AND approval_id IS NULL LIMIT 1`,
-    [projectId]
+export async function hasUnresolvedDrift(projectId, query = executeQuery) {
+  const siteWide = projectId == null;
+  const rows = await query(
+    `SELECT 1 FROM va_drift WHERE ${siteWide ? '' : 'project_id = ? AND '}approval_id IS NULL LIMIT 1`,
+    siteWide ? [] : [projectId]
   );
-  return rows.result && rows.data.length > 0;
+  if (!rows?.result) throw rows?.error ?? new Error('Unresolved-drift storage is unavailable');
+  if (!Array.isArray(rows.data)) throw new Error('Unresolved-drift storage returned an unreadable result');
+  return rows.data.length > 0;
 }
 
 const DRIFT_COLUMNS = `

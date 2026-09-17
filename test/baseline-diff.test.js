@@ -240,6 +240,12 @@ test('collector attribution remains visible when Jira history is unavailable', (
   assert.equal(result.fields[0].attribution[0]?.authorName, 'Priya');
   assert.equal(result.fields[0].attribution[0]?.at, 200);
 });
+test('reconcile collection attribution is marked as detected', () => {
+  const result = diffIssue(evidenceFixture({ summary: 'Edited', labels: ['a'] }, { driftRows: [
+    { key: 'reconcile-1', field_id: 'summary', occurred_at: 200, source: 'SYSTEM', detected_via: 'RECONCILE' }
+  ] }));
+  assert.equal(result.fields[0].attribution[0]?.detected, true);
+});
 test('subtask drift carries work item labels instead of bare Jira ids', () => {
   const result = diffIssue({
     baseline: { baseline_id: Buffer.from('baseline'), version: 1, transition_at: 100, field_digests: { subtasks: 'old' } },
@@ -280,4 +286,3 @@ test('issuelinks drift carries link type and linked issue summary labels instead
   assert.equal(result.fields[0].valueLabels['10001'], 'Blocks');
   assert.equal(result.fields[0].valueLabels['66382'], 'VJIRA-8 - Security audit logging');
 });
-

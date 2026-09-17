@@ -1,5 +1,5 @@
 import api from '@forge/api';
-import { load, respond, actorFrom, fail, filterViewableTree, filterViewableTreeDiff } from './panelAccess.js';
+import { load, respond, actorFrom, fail, filterViewableTree, filterViewableTreeDiff, filterViewableReviewDiff } from './panelAccess.js';
 import { getReview } from '../db/itemStateStore.js';
 import { baselineHistory } from '../db/baselineStore.js';
 import { buildRecord } from '../lib/record.js';
@@ -117,6 +117,7 @@ export async function getState(args) { return respond(async () => {
   const { description, descriptionEmpty, descriptionTruncated } = extractDescription(issue.fields.description);
   const viewableTree = state.tree ? await filterViewableTree(state.tree) : state.tree;
   const viewableTreeDiff = filterViewableTreeDiff(state.treeDiff, viewableTree);
+  const viewableReviewDiff = filterViewableReviewDiff(state.reviewDiff, viewableTree);
   const { groupedDrift, deleteIssueKeys, recreateCount } = buildTreeRejection({ tree: viewableTree, treeDiff: viewableTreeDiff });
 
   const base = {
@@ -150,7 +151,7 @@ export async function getState(args) { return respond(async () => {
     eligibility: { eligible: true, reason: null },
     drift: {
       ...base.drift,
-      fields: state.reviewDiff?.fields ?? state.diff?.fields ?? []
+      fields: viewableReviewDiff?.fields ?? state.diff?.fields ?? []
     },
     transitions: actions,
     credentialEnrolled: credential,
@@ -177,17 +178,16 @@ export async function getGlanceState({ context }) { return respond(async () => {
   const actor = actorFrom(context);
   const issueId = context.extension?.issue?.id;
   if (!issueId) fail('ISSUE_CONTEXT_REQUIRED');
-  const [row, controls, isAdmin] = await Promise.all([
+  const [row, isAdmin] = await Promise.all([
     getReview(Number(issueId)),
-    issueControlStatus({ issueId: Number(issueId), projectId: context.extension?.project?.id,
-      issueTypeId: context.extension?.issue?.typeId }),
     isActiveAdmin(actor.accountId).catch(() => false)
   ]);
   const result = { state: row?.state ?? 'UNAPPROVED', baselineVersion: row?.baseline_version ?? null,
     driftCount: Number(row?.drift_count ?? 0), materialCount: Number(row?.drifted_field_count ?? 0),
     maxMateriality: row?.max_materiality ?? null };
   if (isAdmin) {
-    result.controls = controls;
+    result.controls = await issueControlStatus({ issueId: Number(issueId), projectId: context.extension?.project?.id,
+      issueTypeId: context.extension?.issue?.typeId }).catch(() => ({ unavailable: true, incidents: [], gateFindings: [] }));
   }
   return result;
 }); }

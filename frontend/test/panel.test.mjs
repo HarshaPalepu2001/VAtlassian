@@ -1081,6 +1081,13 @@ test('a successful durable mutation emits VA_ISSUE_CHANGED exactly once',async()
  assert.deepEqual(globalThis.panelTransport.emitted[0],['VA_ISSUE_CHANGED',{issueKey:'T-1'}]);
 });
 
+test('an unavailable admin incident read is explicit instead of looking like no incidents',async()=>{
+ setup(async key=>key==='panel:getSummary'?summary({adminIncidentUnavailable:true}):{restores:[]});
+ await act(()=>root.render(h(IssuePanel,{issueKey:'T-1'})));await flush();
+ assert.match(text(),/Workflow control status is temporarily unavailable/);
+ assert.doesNotMatch(text(),/workflow control incident has been recorded/i);
+});
+
 test('a post-action refresh does not become a storm when the app event echoes back',async()=>{
  let reads=0;
  setup(async key=>{
@@ -1107,7 +1114,7 @@ test('a resolver-denied submit does not emit VA_ISSUE_CHANGED',async()=>{
  assert.equal(globalThis.panelTransport.emitted.length,0,'a denied mutation is not durable and must not notify other surfaces');
 });
 
-test('Jira refusing the transition is reported legibly, emits nothing, and offers no reuse of the spent signature',async()=>{
+test('a persisted approval followed by a Jira refusal is reported, refreshes views, and cannot reuse the spent signature',async()=>{
  setup(async key=>key==='signature:challenge'?challengeOk():key==='signature:submit'?{success:true,approvalId:'a',transitioned:false,state:'CONSUMED',transitionError:'Jira refused the transition: a required field is empty.'}:{});
  await act(()=>root.render(h(ApprovalControls,{summary:actor([transition()]),onDone:async()=>{}})));
  await act(()=>clickButton('Approve -> Done').click());await settle();
@@ -1115,7 +1122,7 @@ test('Jira refusing the transition is reported legibly, emits nothing, and offer
  assert.match(text(),/Jira refused the transition: a required field is empty/);
  assert.match(text(),/A fresh signature may be required/);
  assert.equal(clickButton('Retry transition'),undefined,'a spent approval is never offered for reuse');
- assert.equal(globalThis.panelTransport.emitted.length,0);
+ assert.deepEqual(globalThis.panelTransport.emitted,[['VA_ISSUE_CHANGED',{issueKey:'T-1'}]],'the persisted approval must be visible in every open view even though Jira refused the move');
  assert.equal(clickButton('Approve -> Done').disabled,false,'the reviewer can start again without reloading');
 });
 
@@ -1128,13 +1135,12 @@ test('approval and restore resolver outcomes notify other open app views',async(
  assert.deepEqual(globalThis.panelTransport.emitted[0],['VA_ISSUE_CHANGED',{issueKey:'T-1'}]);
 });
 
-test('resolver, validator, persistence, and Jira failures never emit VA_ISSUE_CHANGED',async()=>{
+test('resolver, validator, and persistence failures never emit VA_ISSUE_CHANGED',async()=>{
  const outcomes=[
   {success:false,error:'DENIED'},
   {success:false,reason:'INSUFFICIENT_ASSURANCE',error:'The device check did not meet the rule.'},
   {error:'The service is unavailable.',reason:'SERVICE_UNAVAILABLE'},
-  {ok:false,reason:'WEBAUTHN_CREDENTIAL_UNREACHABLE'},
-  {success:true,approvalId:'a',transitioned:false,transitionError:'Jira refused the transition.'}
+  {ok:false,reason:'WEBAUTHN_CREDENTIAL_UNREACHABLE'}
  ];
  for(const outcome of outcomes){
   setup(async()=>outcome);

@@ -1,11 +1,22 @@
 import * as store from './store.js';
-import { toBinaryParam, fromBinaryColumn } from '../lib/db.js';
+import { executeQuery, affectedRows, toBinaryParam, fromBinaryColumn } from '../lib/db.js';
 import { encodeValue, decodeValue } from '../lib/valuestore.js';
 import { FailClosed } from '../lib/errors.js';
 
 export async function beginTreeBaseline({ baseline, resume = null, query = store.throwing }) {
   if (resume) {
     if (resume.state !== 'CAPTURING') throw new FailClosed('CAPTURE_INCOMPLETE');
+    // writeTreeCapture's inserts use `ON DUPLICATE KEY UPDATE chunk = chunk` —
+    // a no-op, so it stays idempotent for a byte-identical replay of the same
+    // row. A resumed capture instead replays from a fresh tree read, which can
+    // legitimately differ from what an earlier, crashed attempt already wrote
+    // (a field's chunk count shrank, a node dropped out). Clearing this
+    // baseline's rows first means the replay always leaves exactly what the
+    // current read says, never a mix of this attempt's rows and a prior
+    // attempt's leftovers that happened to share a key.
+    const bId = toBinaryParam(resume.baseline_id);
+    await query('DELETE FROM va_baseline_node_value WHERE baseline_id = FROM_BASE64(?)', [bId]);
+    await query('DELETE FROM va_baseline_node WHERE baseline_id = FROM_BASE64(?)', [bId]);
     return { baselineId: resume.baseline_id, version: Number(resume.version) };
   }
 
@@ -27,7 +38,7 @@ export async function beginTreeBaseline({ baseline, resume = null, query = store
       baseline.field_digests, baseline.transition_id, baseline.from_status_id,
       baseline.to_status_id, baseline.approved_by, baseline.approved_name,
       baseline.transition_at, baseline.captured_at, baseline.assurance_level,
-      toBinaryParam(baseline.approval_id), baseline.fidelity, baseline.field_count, 0,
+      baseline.approval_id ? toBinaryParam(baseline.approval_id) : null, baseline.fidelity, baseline.field_count, 0,
       baseline.tree_hash, 0, 0, 0,
       baseline.required_role, baseline.required_assurance, baseline.controlled_fields_hash
     ]
@@ -157,17 +168,17 @@ export async function verifyTreeCapture({ baselineId, expectedNodeCount, expecte
   return true;
 }
 
-export async function publishTreeBaseline({ baselineId, issueId, version, query = store.throwing }) {
+export async function publishTreeBaseline({ baselineId, issueId, version, query = store.throwing, write = executeQuery }) {
   // Provenance is re-checked at the row itself: a baseline without its frozen
   // control policy must never become the standing evidence.
-  const activated = await query(
+  const activated = await write(
     `UPDATE va_baseline SET state = 'ACTIVE'
      WHERE baseline_id = FROM_BASE64(?) AND state = 'CAPTURING'
        AND required_role IS NOT NULL AND required_assurance IS NOT NULL
        AND controlled_fields_hash IS NOT NULL`,
     [toBinaryParam(baselineId)]
   );
-  if (Number(activated?.affectedRows) !== 1) throw new FailClosed('CAPTURE_INCOMPLETE');
+  if (!activated?.result || affectedRows(activated) !== 1) throw new FailClosed('CAPTURE_INCOMPLETE');
 
   await query(
     `UPDATE va_baseline SET state = 'SUPERSEDED'

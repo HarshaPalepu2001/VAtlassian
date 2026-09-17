@@ -1,9 +1,5 @@
-export class FailClosed extends Error {
-  constructor(code) {
-    super(code);
-    this.code = code;
-  }
-}
+export { FailClosed } from '../errors.js';
+import { FailClosed } from '../errors.js';
 
 function relationshipHash(tree) {
   // simple hash of nodes and their parent ids

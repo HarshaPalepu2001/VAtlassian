@@ -1,4 +1,4 @@
-import { load, respond, fail, filterViewableTree, filterViewableTreeDiff } from './panelAccess.js';
+import { load, respond, fail, filterViewableTree, filterViewableTreeDiff, filterViewableReviewDiff } from './panelAccess.js';
 import { baselineHistory } from '../db/baselineStore.js';
 import { restoresForIssue } from '../db/restoreStore.js';
 import { approvalById } from '../db/approvalStore.js';
@@ -100,6 +100,7 @@ export async function getEvidence(args) { return respond(async () => {
   const { description, descriptionEmpty, descriptionTruncated } = extractDescription(issue.fields.description);
   const viewableTree = prepared.tree ? await filterViewableTree(prepared.tree) : prepared.tree;
   const viewableTreeDiff = filterViewableTreeDiff(prepared.treeDiff, viewableTree);
+  const viewableReviewDiff = filterViewableReviewDiff(prepared.reviewDiff, viewableTree);
   const { groupedDrift, deleteIssueKeys, recreateCount } = buildTreeRejection({ tree: viewableTree, treeDiff: viewableTreeDiff });
 
   return {
@@ -110,9 +111,9 @@ export async function getEvidence(args) { return respond(async () => {
     assignee: issue.fields.assignee, reporter: issue.fields.reporter,
     record,
     drift: {
-      count: Number(prepared.driftCount ?? prepared.reviewDiff?.changedFieldCount ?? prepared.diff?.changedFieldCount ?? 0),
-      materialCount: Number(prepared.reviewDiff?.materialFieldCount ?? prepared.diff?.materialFieldCount ?? 0),
-      fields: prepared.reviewDiff?.fields ?? prepared.diff?.fields ?? [], ...groupedDrift
+      count: Number(prepared.driftCount ?? viewableReviewDiff?.changedFieldCount ?? prepared.diff?.changedFieldCount ?? 0),
+      materialCount: Number(viewableReviewDiff?.materialFieldCount ?? prepared.diff?.materialFieldCount ?? 0),
+      fields: viewableReviewDiff?.fields ?? prepared.diff?.fields ?? [], ...groupedDrift
     },
     rejection: { deleteIssueKeys, recreateCount },
     restoreHistory: restores

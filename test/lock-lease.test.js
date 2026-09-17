@@ -101,7 +101,7 @@ test('approval.challenge() returns structured failure without throwing uncaught 
 
   assert.equal(result.success, false);
   assert.equal(result.reason, 'ALREADY_DECIDING');
-  assert.match(result.error, /restore is already in progress/i);
+  assert.match(result.error, /another decision.*already in progress/i);
 });
 
 test('approval.challenge() succeeds when prepareApproval passes', async () => {

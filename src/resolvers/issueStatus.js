@@ -1,9 +1,10 @@
 import { getReview } from '../db/itemStateStore.js';
 import { issueControlStatus } from '../db/incidentStore.js';
+import { withRequestCache } from '../lib/cache.js';
 
 /** Forge invokes this with its issue-context payload, not a bridge request. */
 export async function handler(payload) {
-  return issueStatus(payload, { getReview, issueControlStatus });
+  return withRequestCache(() => issueStatus(payload, { getReview, issueControlStatus }));
 }
 
 export async function issueStatus(payload, deps) {

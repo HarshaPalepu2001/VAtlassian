@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '../../lib/bridge';
 import Button from '@atlaskit/button';
 import { Card, Field, Page, Select } from '../../ui/primitives';
@@ -15,14 +15,25 @@ export default function SettingsPage({ projects }: { projects: Project[] }) {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  // The project a load is in flight for. Guards against a slower response for
+  // a project the user has since switched away from overwriting the state of
+  // whichever project is now selected.
+  const requestedProjectId = useRef('');
 
   const load = useCallback(async () => {
     if (!projectId) return;
+    const forProject = projectId;
+    requestedProjectId.current = forProject;
     try {
       const r = assertResult(await invoke<Result & ConfigData>('admin:getConfig', { projectId }));
+      if (requestedProjectId.current !== forProject) return;
       setMode(r.config?.policy?.mode ?? 'DETECT');
+      setLoaded(true);
     } catch (e) {
+      if (requestedProjectId.current !== forProject) return;
       setError(errorMessage(e));
+      setLoaded(false);
     }
   }, [projectId]);
 
@@ -30,6 +41,7 @@ export default function SettingsPage({ projects }: { projects: Project[] }) {
     setMode('DETECT');
     setError('');
     setMessage('');
+    setLoaded(false);
     void load();
   }, [load]);
 
@@ -88,7 +100,7 @@ export default function SettingsPage({ projects }: { projects: Project[] }) {
               </Field>
             </div>
             <div className="va-form-actions" style={{ marginTop: '16px' }}>
-              <Button appearance="primary" isDisabled={busy} onClick={save}>
+              <Button appearance="primary" isDisabled={busy || !loaded} onClick={save}>
                 Save Settings
               </Button>
             </div>

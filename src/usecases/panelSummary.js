@@ -216,6 +216,11 @@ export async function getSummary(args) { return respond(async () => {
     } : null,
     drift: { count: driftCount, materialCount, decidesDrift, policyIncomplete,
       canApprove: decidesDrift, canReject: decidesDrift },
+    // The review row's own version counter — bumped on every re-observation,
+    // independent of baselineVersion — so usePanelEvidence can key its cache
+    // on "has the current-record evidence itself moved" rather than only on
+    // whether the baseline changed.
+    evidenceVersion: review?.version != null ? Number(review.version) : null,
     restore,
     approval: {
       requiredRole: policy?.requiredRole ?? transitions.find(t => t.requiredRole)?.requiredRole ?? null,
@@ -231,7 +236,10 @@ export async function getSummary(args) { return respond(async () => {
     }
   };
 
-  if (isAdmin) payload.adminIncidentCount = await adminIncidentCount({ issueId, projectId, issueTypeId });
+  if (isAdmin) {
+    try { payload.adminIncidentCount = await adminIncidentCount({ issueId, projectId, issueTypeId }); }
+    catch { payload.adminIncidentUnavailable = true; }
+  }
 
   return payload;
 }); }

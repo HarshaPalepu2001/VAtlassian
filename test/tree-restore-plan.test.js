@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { planTreeRestore } from '../src/lib/tree/restorePlan.js';
 import { FIELD_KIND } from '../src/lib/content.js';
+import { DENY } from '../src/lib/errors.js';
 
 function treeRestoreFixture() {
   return {
@@ -79,7 +80,7 @@ test('a deleted governed root fails closed instead of creating a replacement', (
     baselineTree: { nodes: [{ logicalNodeId: 'root', parentLogicalId: null, digests: {} }], values: { root: {} } },
     currentTree: { nodes: [] },
     controlledFields: []
-  }), /BASELINE_ROOT_MISSING/);
+  }), err => err.reason === 'BASELINE_ROOT_MISSING');
 });
 
 test('issue links get a dedicated restore step instead of being sent as ordinary fields', () => {
@@ -100,4 +101,20 @@ test('issue links get a dedicated restore step instead of being sent as ordinary
   assert.deepEqual(plan.steps.map(step => step.kind), ['RESTORE_FIELDS', 'RESTORE_LINKS']);
   assert.deepEqual(plan.steps[0].fields, { summary: 'approved' });
   assert.deepEqual(plan.steps[1].links, [link]);
+});
+
+test('more than one link field on a single node fails closed', () => {
+  const fields = [
+    { field_id: 'issuelinks', field_kind: FIELD_KIND.LINKS },
+    { field_id: 'custom_links', field_kind: FIELD_KIND.LINKS }
+  ];
+  const baselineTree = { nodes: [{ logicalNodeId: 'root', parentLogicalId: null, digests: { issuelinks: 'a', custom_links: 'b' } }],
+    values: { root: { issuelinks: [{ id: 'one' }], custom_links: [{ id: 'two' }] } } };
+  const currentTree = { nodes: [{ logicalNodeId: 'root', parentLogicalId: null, digests: { issuelinks: 'changed-a', custom_links: 'changed-b' } }] };
+  assert.throws(() => planTreeRestore({ baselineTree, currentTree, controlledFields: fields }),
+    err => err.reason === 'MULTI_LINK_FIELD_UNSUPPORTED'
+      // A refusal the reviewer can act on, not the generic "service could not
+      // be reached" fallback FailClosed uses for an unmapped reason.
+      && err.message === DENY.MULTI_LINK_FIELD_UNSUPPORTED
+      && err.message !== DENY.SERVICE_UNAVAILABLE);
 });

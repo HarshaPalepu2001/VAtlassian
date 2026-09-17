@@ -9,6 +9,7 @@ import * as queue from '../usecases/queue.js';
 import * as report from '../usecases/report.js';
 import * as signing from '../usecases/signing.js';
 import { defineWebAuthnResolvers } from '../usecases/webauthn.js';
+import { withRequestCache } from '../lib/cache.js';
 
 const Resolver = ForgeResolver.default ?? ForgeResolver;
 const resolver = new Resolver();
@@ -30,4 +31,5 @@ resolver.define('report:get', ({ payload, context }) => report.get({ payload, co
 resolver.define('report:generate', ({ payload, context }) => report.generate({ payload, context }));
 resolver.define('signing:context', ({ payload, context }) => signing.signingContext({ payload, context }));
 defineWebAuthnResolvers(resolver);
-export const handler = resolver.getDefinitions();
+const definitions = resolver.getDefinitions();
+export const handler = (...args) => withRequestCache(() => definitions(...args));

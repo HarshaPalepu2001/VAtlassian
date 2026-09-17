@@ -6,7 +6,7 @@ Application: VAtlassian
 
 Forge environment: development
 
-Jira site: dev-site.atlassian.net
+Jira site: `<redacted development site>`
 
 Deployed version: 3.13.0
 
@@ -55,9 +55,9 @@ Task 9 is code-complete and locally verified. What remains for it, same as every
 
 ### Deployment target reconfirmed, 2026-09-14 (read-only)
 
-- `forge whoami`: logged in as the designated development administrator.
-- App id: `ari:cloud:ecosystem::app/1d49ae3f-e976-438c-893c-806c8b249351` (manifest.yml).
-- `forge install list`: one installation — `<redacted installation id>`, environment `development`, site `dev-site.atlassian.net`, Jira, app version 3, status Up-to-date. Same target as the 2026-09-13 live session above.
+- `forge whoami`: authenticated as the designated development administrator.
+- App id: `<redacted app identifier>` (manifest.yml).
+- `forge install list`: one development installation on the redacted Jira site, for Jira, at app version 3, with status Up-to-date. Same target as the 2026-09-13 live session above.
 
 **Not yet deployed**: the Tasks 1-8 review-remediation commit above (`00b57a3`) is local only. The installed version 3 predates it. Live testing against the current fixes — including the descendant-tree-visibility security fix — requires `npm run deploy` (or the project's own deploy path) to this same development installation first, and that step was intentionally left for the operator to trigger rather than run automatically here.
 
