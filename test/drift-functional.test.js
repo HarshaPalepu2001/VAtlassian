@@ -345,8 +345,8 @@ test('a delayed duplicate capture cannot erase new drift after v2',async()=>{
 
 test('after v2 approval, rejection restores v2 values and preserves v1 history',async()=>{
   const f=fixture();await f.sign();
-  // Baseline recall owns the status change; recursive restoration must verify
-  // that its caller has already returned the root to the review status.
+  // Restoration verifies against the approved baseline while leaving workflow
+  // status alone; this setup keeps the root in the review status explicitly.
   f.issue.fields.status.id='1';
   f.issue.fields.summary='unreviewed after v2';f.review.state='DRIFTED';
   f.drift.push({baseline_version:2,field_id:'summary',approval_id:null});
@@ -385,13 +385,13 @@ test('a pending baseline-owned transition requires a fresh signature instead of 
   assert.equal(result.success,false,JSON.stringify(result));assert.equal(result.reason,'NO_DECISION');
   assert.equal(f.rows.length,1);assert.equal(f.baselines.length,2);
 });
-test('rejection from Done recalls the item to review before restoring the baseline',async()=>{
+test('rejection restores the baseline fields without changing the issue status',async()=>{
   const f=fixture();
   f.issue.fields.status.id='2';
   f.issue.fields.summary='content changed after approval';
   const result=await f.sign({decision:'REJECT',transitionId:undefined});
   assert.equal(result.success,true,JSON.stringify(result));
-  assert.equal(f.issue.fields.status.id,'1');
+  assert.equal(f.issue.fields.status.id,'2');
   assert.equal(f.issue.fields.summary,'v1 approved');
   assert.equal(result.restore.state,'COMPLETE',JSON.stringify(result.restore));
 });

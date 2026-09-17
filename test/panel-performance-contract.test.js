@@ -145,6 +145,13 @@ test('an eligible reviewer sees the same transition with canApprove true', async
   assert.equal(summary.transitions[0].canApprove, true);
 });
 
+test('summary exposes the review version that keys current-record evidence', async () => {
+  fixture({ getReview: async () => ({ state: 'DRIFTED', version: 42, baseline_version: 1, drift_count: 1, drifted_field_count: 1 }) });
+  const summary = await getSummary(args);
+
+  assert.equal(summary.evidenceVersion, 42);
+});
+
 test('drift authority comes from the baseline\'s own recorded provenance, not the current rule', async () => {
   fixture({
     isEligible: async ({ role }) => role === 'baseline-signer',

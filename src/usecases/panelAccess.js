@@ -45,8 +45,23 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
   let gate = authorityPolicy;
   if (!gate && transition) gate = await gatedTransition({ projectId, issueTypeId, fromStatusId,
     toStatusId: String(transition.toStatusId), transitionId: transition.id });
-  if (!gate && !transition && baseline) gate = await gatedTransition({ projectId, issueTypeId,
-    fromStatusId: baseline.from_status_id, toStatusId: baseline.to_status_id, transitionId: baseline.transition_id });
+  if (!gate && !transition && baseline) {
+    if (baseline.required_assurance) {
+      gate = {
+        transition_id: String(baseline.transition_id),
+        from_status_id: String(baseline.from_status_id),
+        to_status_id: String(baseline.to_status_id),
+        required_role: baseline.required_role,
+        required_assurance: baseline.required_assurance,
+        meaning: 'REVIEW_REJECTED',
+        capture_baseline: true,
+        block_on_drift: true
+      };
+    } else {
+      gate = await gatedTransition({ projectId, issueTypeId,
+        fromStatusId: baseline.from_status_id, toStatusId: baseline.to_status_id, transitionId: baseline.transition_id });
+    }
+  }
   // Drift outlives review status. Resolve authority from configured scope, never assignment.
   if (!gate && !transition && !baseline) gate = edge.gated ? edge : null;
   const eligible = !!gate && await isEligible({ accountId: actor.accountId, projectId, issueTypeId, role: gate.required_role });

@@ -11,6 +11,8 @@ type Options = {
   /** The summary's latest baseline version; null when there is no baseline. */
   baselineVersion: number | null;
   baselineId?: string | null;
+  /** The review row version from the compact summary; advances on same-baseline drift updates. */
+  evidenceVersion?: number | null;
   enabled: boolean;
   /** Called when evidence proves the summary's baseline is no longer current. */
   onStale?: () => void | Promise<void>;
@@ -35,8 +37,8 @@ export const STALE_EVIDENCE_MESSAGE = 'The evidence changed while it was loading
  * baseline. If the refreshed summary still names the same key, loading stops
  * with a scoped error and a manual retry rather than looping.
  */
-export default function usePanelEvidence({ issueKey, actionId, baselineVersion, baselineId = null, enabled, onStale }: Options) {
-  const cacheKey = baselineVersion == null ? null : `${actionId}::${baselineVersion}::${baselineId ?? ''}`;
+export default function usePanelEvidence({ issueKey, actionId, baselineVersion, baselineId = null, evidenceVersion = null, enabled, onStale }: Options) {
+  const cacheKey = baselineVersion == null ? null : `${actionId}::${baselineVersion}::${baselineId ?? ''}::${evidenceVersion ?? ''}`;
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const mounted = useRef(true);
   const sequence = useRef(0);

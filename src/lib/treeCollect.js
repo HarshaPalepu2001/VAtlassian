@@ -2,12 +2,9 @@ import api, { route } from '@forge/api';
 import { OUTCOME, REVIEW_STATE } from './interception.js';
 import { controlledFields } from '../db/configStore.js';
 import { getReview, applyObservation } from '../db/itemStateStore.js';
-import { activeBaseline } from '../db/baselineStore.js';
 import { voidOthers } from '../db/approvalStore.js';
 import { tryAppend } from '../db/store.js';
 import { EVENT } from './ledger.js';
-import { baselinePolicy } from './baselinePolicy.js';
-import { recallToReview } from './restore/recall.js';
 import { activeRootsForNode, readBaselineTree } from '../db/baselineTreeStore.js';
 import { replaceTreeDrift } from '../db/treeDriftStore.js';
 import { createTreeReader } from './tree/jira.js';
@@ -132,7 +129,6 @@ export async function collectTree({ rootIssueId, rootIssueKey, detectedVia = DET
   }
 
   const baselineTree = await readBaselineTree(review.baseline_id);
-  const currentStatusId = String(currentTree.nodes?.[0]?.fields?.status?.id ?? '');
   const plannedCurrentTree = planTreeCapture({ rootIssueId, nodes: currentTree.nodes, controlledFields: cFields });
 
   const { changes } = diffTree({ baselineTree, currentTree: plannedCurrentTree, controlledFields: cFields });
@@ -195,31 +191,6 @@ export async function collectTree({ rootIssueId, rootIssueKey, detectedVia = DET
     console.error('tree: could not void stale decisions', JSON.stringify({ issueKey: rootIssueKey }));
   }
 
-  // Put the item back behind the exact review status recorded by its latest
-  // active baseline. This is the same recall contract as flat-field drift:
-  // reject restores that baseline, approve cuts a new snapshot.
-  let recall = null;
-  try {
-    const baseline = await activeBaseline(rootIssueId);
-    const policy = baselinePolicy(baseline);
-    recall = await recallToReview({
-      issueId: rootIssueId,
-      issueKey: rootIssueKey,
-      projectId: Number(review.project_id),
-      issueTypeId: String(review.issue_type_id),
-      currentStatusId,
-      baselineId: baselineIdHex(policy.baselineId),
-      baselineVersion: policy.version,
-      reviewStatusId: policy.reviewStatusId,
-      driftCount: reviewChangeCount,
-      now
-    });
-  } catch {
-    // The drift evidence remains valid if automatic recall cannot run. The
-    // item stays DRIFTED and the administrator can resolve the workflow route.
-    console.error('tree: drift recall failed', JSON.stringify({ issueKey: rootIssueKey }));
-  }
-
   await tryAppend({
     actorAccountId: actorAccountId ?? 'system',
     eventType: detectedVia === DETECTED_VIA.EVENT ? EVENT.DRIFT_DETECTED : EVENT.DRIFT_RECONCILED,
@@ -236,11 +207,7 @@ export async function collectTree({ rootIssueId, rootIssueKey, detectedVia = DET
   });
 
   return { outcome: OUTCOME.DRIFT_RECORDED, kinds: changes.map(c => c.kind), inserted: changes.length,
-    recall: recall?.action ?? null };
-}
-
-function baselineIdHex(value) {
-  return Buffer.isBuffer(value) ? value.toString('hex') : String(value ?? '');
+    recall: null };
 }
 
 /**

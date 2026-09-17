@@ -1,5 +1,9 @@
 import { retryEvent } from './retry.js';
 
+export function isDependencyBundle(value) {
+  return typeof value?.collectAffectedTrees === 'function';
+}
+
 /**
  * avi:jira:created:issue — wakes any governed tree the new issue was born
  * into.
@@ -16,7 +20,9 @@ import { retryEvent } from './retry.js';
  * (previously incomplete) default-parameter wiring.
  */
 export async function run(event, suppliedDeps = null) {
-  const deps = suppliedDeps ?? await (await import('./runtime.js')).triggerRuntime();
+  const deps = isDependencyBundle(suppliedDeps)
+    ? suppliedDeps
+    : await (await import('./runtime.js')).triggerRuntime();
   const issue = event?.issue;
   if (!issue?.id) return;
   const issueKey = String(issue.key ?? issue.id);

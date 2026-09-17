@@ -305,7 +305,6 @@ test('baseline history is mapped from database snake_case to camelCase propertie
   assert.equal(h.assuranceLevel, 'ESIGNATURE');
 });
 
-
 test('panel returns structural drift and exact destructive consequences', async () => {
   const f = fixture({
     activeBaseline: async () => ({

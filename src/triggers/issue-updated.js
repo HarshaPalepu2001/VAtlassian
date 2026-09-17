@@ -58,7 +58,7 @@ export async function run(event, suppliedDeps = null) {
     }
     return result;
   } catch (e) {
-    console.error('updated: handler failed', JSON.stringify({ issueKey }));
+    console.error('updated: handler failed', JSON.stringify({ issueKey }), e);
     return retryEvent(event, 'COLLECTION_FAILED');
   }
 }

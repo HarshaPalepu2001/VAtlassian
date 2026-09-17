@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
+import { project } from '../src/lib/content.js';
 
 /**
  * Functional coverage for the aggregate tree collector (src/lib/collect.js's
@@ -27,10 +28,8 @@ const modules = {
   'db/itemStateStore.js': ['getReview', 'applyObservation', 'touch', 'refreshHeader', 'dueTreeRoots', 'recoverStaleLocks'],
   'db/restoreStore.js': ['suppressedFields'],
   'db/approvalStore.js': ['voidOthers', 'expireStale'],
-  // newId/throwing: never called on this suite's paths (the aggregate tree
-  // collector never recalls), but db/incidentStore.js imports both at module
-  // scope, and collect.js now reaches it transitively through
-  // lib/restore/recall.js — see recordRecallFinding there.
+  // Keep the recall module stubbed as a tripwire: drift detection must not
+  // import or call it, and the no-status-move regressions below assert that.
   'db/store.js': ['tryAppend', 'newId', 'throwing'],
   'db/observationStore.js': ['recordObservation'],
   'db/baselineTreeStore.js': ['activeRootsForNode', 'readBaselineTree'],
@@ -63,7 +62,7 @@ const hooks = registerHooks({
     return next(url, context);
   }
 });
-const { collectTree, discoverActiveRootsByAncestor } = await import('../src/lib/collect.js');
+const { collect, collectTree, discoverActiveRootsByAncestor } = await import('../src/lib/collect.js');
 const { sweep } = await import('../src/jobs/reconcile.js');
 const { planTreeCapture } = await import('../src/lib/tree/capturePlan.js');
 hooks.deregister();
@@ -91,6 +90,7 @@ function rawNodes(children) {
 function baseFixture({ baselineChildren = [{ id: '2', summary: 'story' }], liveChildren = baselineChildren } = {}) {
   const replaceTreeDriftCalls = [];
   const tryAppendCalls = [];
+  const recallCalls = [];
   const baselineTree = planTreeCapture({ rootIssueId: '1', nodes: rawNodes(baselineChildren), controlledFields: FIELDS });
   const f = {
     review: { baseline_id: Buffer.alloc(16, 1), baseline_version: 1, version: 1, state: 'BASELINED', last_checked_at: 0,
@@ -98,6 +98,7 @@ function baseFixture({ baselineChildren = [{ id: '2', summary: 'story' }], liveC
     baselineTree,
     replaceTreeDriftCalls,
     tryAppendCalls,
+    recallCalls,
     getReview: async () => f.review,
     activeBaseline: async () => ({ baseline_id: f.review.baseline_id, version: 1,
       transition_id: '2', from_status_id: '20', to_status_id: '30', required_role: 'Reviewer',
@@ -109,7 +110,7 @@ function baseFixture({ baselineChildren = [{ id: '2', summary: 'story' }], liveC
       return { updated: true };
     },
     voidOthers: async () => 0,
-    recallToReview: async () => ({ action: 'RECALL', applied: true }),
+    recallToReview: async (args) => { recallCalls.push(args); return { action: 'RECALL', applied: true }; },
     controlledFields: async () => FIELDS,
     activeRootsForNode: async () => [],
     readBaselineTree: async () => f.baselineTree,
@@ -135,6 +136,53 @@ function baseFixture({ baselineChildren = [{ id: '2', summary: 'story' }], liveC
         summary: 'root', parent: null, project: { id: '10' },
         issuetype: { id: '20' }, status: { id: '30' }
       } });
+    }
+  };
+  globalThis.vaFlow = f;
+  return f;
+}
+
+function flatFixture() {
+  const fields = [{ field_id: 'summary', field_name: 'summary', field_kind: 'TEXT', store_values: true, writable: true }];
+  const approved = { summary: 'approved', parent: null, project: { id: '10' }, issuetype: { id: '20' }, status: { id: '30' } };
+  const live = { ...approved, summary: 'edited after approval' };
+  const projected = project({ summary: approved.summary }, fields);
+  const recallCalls = [];
+  const driftRows = [];
+  const f = {
+    issue: { id: '1', key: 'FEAT-1', fields: live },
+    review: { baseline_id: Buffer.alloc(16, 2), baseline_version: 1, version: 1, state: 'BASELINED',
+      issue_key: 'FEAT-1', summary: 'approved', reviewer_account_id: 'reviewer-1', reviewer_name: 'Reviewer' },
+    baseline: { baseline_id: Buffer.alloc(16, 2), issue_id: 1, project_id: 10, issue_type_id: '20', version: 1,
+      state: 'ACTIVE', content_hash: projected.contentHash, field_digests: JSON.stringify(projected.digests),
+      transition_id: '2', from_status_id: '20', to_status_id: '30', required_role: 'Reviewer',
+      required_assurance: 'ESIGNATURE', controlled_fields_hash: 'a'.repeat(64), transition_at: 100 },
+    driftRows,
+    recallCalls,
+    getReview: async () => f.review,
+    activeBaseline: async () => f.baseline,
+    controlledFields: async () => fields,
+    projectConfig: async () => ({ enabled: true }),
+    reviewStatusIds: async () => ['20'],
+    recordObservation: async () => {},
+    readAllValues: async () => ({ summary: approved.summary }),
+    existingChangelogKeys: async () => new Set(),
+    suppressedFields: async () => new Set(),
+    recordDrift: async row => { driftRows.push(row); return { inserted: true, driftId: `d-${driftRows.length}` }; },
+    driftSummary: async () => ({ total: driftRows.length, fields: new Set(driftRows.map(row => row.field_id)).size }),
+    applyObservation: async ({ review, counters }) => {
+      f.review = { ...f.review, ...review, drift_count: counters.driftCount,
+        drifted_field_count: counters.driftedFieldCount, version: f.review.version + 1 };
+      return { updated: true };
+    },
+    refreshHeader: async () => {},
+    voidOthers: async () => 0,
+    tryAppend: async () => {},
+    recallToReview: async args => { recallCalls.push(args); return { action: 'RECALL', applied: true }; },
+    request: async (_identity, url) => {
+      const response = body => ({ ok: true, status: 200, json: async () => structuredClone(body) });
+      if (String(url).includes('/changelog')) return response({ values: [], total: 0, isLast: true });
+      return response(f.issue);
     }
   };
   globalThis.vaFlow = f;
@@ -195,6 +243,27 @@ test('a new descendant not in the baseline is diffed as NODE_ADDED and replaces 
   assert.equal(f.tryAppendCalls.length, 1);
   assert.equal(f.tryAppendCalls[0].actorAccountId, 'acct-1');
   assert.equal(f.tryAppendCalls[0].payload.scope, 'TREE');
+});
+
+test('tree drift detection records evidence without moving the Jira status', async () => {
+  const f = baseFixture({ liveChildren: [{ id: '2', summary: 'changed story' }] });
+  const result = await collectTree({ rootIssueId: 1, rootIssueKey: 'FEAT-1', now: 1000 });
+
+  assert.equal(result.outcome, 'DRIFT_RECORDED');
+  assert.equal(f.review.state, 'DRIFTED');
+  assert.equal(f.recallCalls.length, 0, 'detecting drift must not perform a workflow recall');
+  assert.equal(result.recall, null);
+});
+
+test('flat-field drift detection records evidence without moving the Jira status', async () => {
+  const f = flatFixture();
+  const result = await collect({ issueId: 1, issueKey: 'FEAT-1', now: 1000 });
+
+  assert.equal(result.outcome, 'DRIFT_RECORDED');
+  assert.equal(f.review.state, 'DRIFTED');
+  assert.equal(f.driftRows.length, 1);
+  assert.equal(f.recallCalls.length, 0, 'detecting drift must not perform a workflow recall');
+  assert.equal(result.recall, null);
 });
 
 test('a baselined child missing from the live tree is diffed as NODE_REMOVED', async () => {

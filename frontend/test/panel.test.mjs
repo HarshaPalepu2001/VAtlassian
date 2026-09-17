@@ -978,6 +978,7 @@ test('a failed evidence load keeps the summary and controls visible, with a scop
  await act(()=>root.render(h(IssuePanel,{issueKey:'T-1'})));await flush();
  await act(()=>disclosure().click());await flush();
  assert.match(text(),/could not be loaded/);
+ assert.doesNotMatch(text(),/Checking the current record/,'an evidence failure must replace the loading state');
  assert.ok(clickButton('Approve -> Done'),'controls remain visible after an evidence failure');
  assert.equal(clickButton('Approve -> Done').disabled,true,'controls stay disabled until a current evidence retry succeeds');
  await act(()=>clickButton('Retry').click());await flush();
@@ -1036,8 +1037,8 @@ test('a STALE_EVIDENCE refusal refreshes the summary without rendering the stale
 });
 
 test('evidence that stays stale after a summary refresh stops with a scoped retry instead of looping',async()=>{
- let summaryReads=0,evidenceReads=0;
- setup(async key=>{
+  let summaryReads=0,evidenceReads=0;
+  setup(async key=>{
   if(key==='panel:getSummary'){summaryReads++;return actor([],{baseline:baseline(),drift:driftOn()});}
   if(key==='panel:getEvidence'){evidenceReads++;return {error:'The evidence is stale.',reason:'STALE_EVIDENCE'};}
   return {restores:[]};
@@ -1050,6 +1051,23 @@ test('evidence that stays stale after a summary refresh stops with a scoped retr
  assert.ok(clickButton('Approve changes'),'controls stay visible');
  await act(()=>clickButton('Reload evidence').click());await flush();
  assert.equal(evidenceReads,2);
+});
+
+test('a same-baseline Jira refresh reloads evidence when the review version advances',async()=>{
+ let summaryReads=0,evidenceReads=0;
+ const listeners=setup(async key=>{
+  if(key==='panel:getSummary'){summaryReads++;return actor([],{baseline:baseline(),drift:driftOn(),evidenceVersion:summaryReads});}
+  if(key==='panel:getEvidence')return evidenceWithField(++evidenceReads===1?'Before event':'After event');
+  return {restores:[]};
+ });
+ await act(()=>root.render(h(IssuePanel,{issueKey:'T-1'})));await flush();await flush();
+ await act(()=>disclosure().click());await flush();
+ assert.match(text(),/Before event/);
+ await act(()=>listeners.get('JIRA_ISSUE_CHANGED')());await flush();await flush();
+ assert.equal(summaryReads,2);
+ assert.equal(evidenceReads,2,'same baseline, newer review version must invalidate current-record evidence');
+ assert.match(text(),/After event/);
+ assert.doesNotMatch(text(),/Before event/);
 });
 
 // ── Event ownership: exactly one event per durable mutation ──────────────

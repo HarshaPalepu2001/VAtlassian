@@ -1,6 +1,4 @@
 import api, { route } from '@forge/api';
-import { availableTransitions, applyTransition } from '../lib/transitions.js';
-import { recallPlan, RECALL } from '../lib/recall.js';
 import { FailClosed } from '../lib/errors.js';
 import { executeRestore } from '../lib/restore/executor.js';
 import { verifyRestore, describeResult } from '../lib/restore/verifier.js';
@@ -59,32 +57,6 @@ export async function queueRestore({ prepared, actor, approval, stores = restore
   }
 }
 
-/**
- * Rejection is the recovery path for drift that may already have carried the
- * item past review. Return it to the exact review status recorded by the
- * active baseline before a restore is queued or verified. The route is chosen
- * from Jira's current user-visible transitions and must be one available,
- * screen-free edge; never guess at a workflow route.
- */
-async function returnToBaselineReview({ forgeApi, issue, baseline }) {
-  const currentStatusId = String(issue?.fields?.status?.id ?? '');
-  const targetStatusId = String(baseline?.from_status_id ?? '');
-  if (!currentStatusId || !targetStatusId || currentStatusId === targetStatusId) return null;
-
-  const transitions = await availableTransitions(forgeApi, issue.key);
-  const plan = recallPlan({ currentStatusId, targetStatusId, transitions, driftCount: 1 });
-  if (plan.action !== RECALL.RECALL) {
-    throw new FailClosed('RESTORE_STATUS_UNAVAILABLE', plan);
-  }
-
-  const applied = await applyTransition(forgeApi, {
-    issueKey: issue.key, transitionId: plan.transitionId, asApp: false
-  });
-  if (!applied.ok) {
-    throw new FailClosed('RESTORE_STATUS_UNAVAILABLE', applied);
-  }
-  return { fromStatusId: currentStatusId, toStatusId: targetStatusId, transitionId: plan.transitionId };
-}
 
 /** Restore success is derived only from the post-write verification read. */
 export async function performRestore({ prepared, actor, approval }) {
@@ -93,7 +65,6 @@ export async function performRestore({ prepared, actor, approval }) {
   const isTree = Boolean(baseline?.tree_hash);
   const baselineTree = isTree ? prepared.baselineTree : null;
   const currentTree = isTree ? prepared.currentTree : null;
-  await returnToBaselineReview({ forgeApi, issue, baseline });
   if (isTree && config?.restore?.queue !== false) {
     return queueRestore({ prepared, actor, approval });
   }
@@ -152,7 +123,7 @@ export async function performRestore({ prepared, actor, approval }) {
           baselineTree,
           controlledFields: fields,
           replacements,
-          expectedRootStatusId: baseline.from_status_id
+          expectedRootStatusId: null
         });
       }
       state = executed.state === 'READY_TO_VERIFY'
@@ -175,7 +146,7 @@ export async function performRestore({ prepared, actor, approval }) {
         controlledFields: fields, ...config.restore });
       const verified = await verifyRestore({ api: forgeApi, issueKey: issue.key, controlledFields: fields,
         baselineDigests: typeof baseline.field_digests === 'string' ? JSON.parse(baseline.field_digests) : baseline.field_digests,
-        detail: executed.detail, expectedStatusId: baseline.from_status_id });
+        detail: executed.detail, expectedStatusId: null });
       detail = verified.detail;
       unmatched = verified.unmatched;
       const tal = tally(detail, unmatched);

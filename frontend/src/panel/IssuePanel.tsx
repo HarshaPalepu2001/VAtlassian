@@ -71,10 +71,12 @@ function IssuePanelBody({ issueKey: issueKeyProp, onDone }: Props) {
     actionId: 'current-record',
     baselineVersion: summary?.baseline?.version ?? null,
     baselineId: summary?.baseline?.baselineId ?? null,
+    evidenceVersion: summary?.evidenceVersion ?? null,
     enabled: Boolean(summary?.baseline) || baselineDisclosureOpen,
     onStale: refresh
   });
-  const evidenceReady = !summary?.baseline || Boolean(evidence);
+  const hasAuthoritativeEvidence = !summary?.baseline || Boolean(evidence);
+  const evidenceReady = hasAuthoritativeEvidence || Boolean(evidenceError);
   const evidenceFieldCount = evidence?.drift?.fields?.length ?? 0;
   const evidenceStructuralCount = (evidence?.drift?.changedFields?.length ?? 0)
     + (evidence?.drift?.addedNodes?.length ?? 0) + (evidence?.drift?.removedNodes?.length ?? 0)
@@ -126,7 +128,7 @@ function IssuePanelBody({ issueKey: issueKeyProp, onDone }: Props) {
             <DriftSection drift={authoritativeSummary!.drift} evidence={evidence} evidenceReady={evidenceReady} issueKey={issueKey} />
           )}
 
-          {!evidenceReady && evidenceError && (
+          {!evidence && evidenceError && (
             <Notice>
               Change details could not be loaded. {evidenceError}
               {' '}<Button appearance="subtle" onClick={retryEvidence}>Reload evidence</Button>
@@ -137,7 +139,7 @@ function IssuePanelBody({ issueKey: issueKeyProp, onDone }: Props) {
             summary={authoritativeSummary!}
             issueKey={issueKey}
             onDone={async () => { await refresh(); onDone?.(); }}
-            disabled={!!error || !evidenceReady}
+            disabled={!!error || !hasAuthoritativeEvidence}
             evidence={evidence}
             evidenceLoading={evidenceLoading}
             evidenceError={evidenceError}

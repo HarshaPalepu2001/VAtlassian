@@ -98,7 +98,7 @@ async function defaultVerify({ prepared, restoreId }) {
   return verifyTreeRestore({ readStableTree, readTree: prepared.reader.read.bind(prepared.reader),
     rootIssueKey: prepared.issue.key, baselineTree: prepared.baselineTree,
     controlledFields: prepared.fields, replacements,
-    expectedRootStatusId: prepared.baseline.from_status_id });
+    expectedRootStatusId: null });
 }
 
 /**
@@ -171,9 +171,10 @@ export async function runRestoreWorker(eventOrBody, overrides = {}) {
       return { state: 'RESTORING', restoreId, skipped: true };
     }
     const verified = await deps.verify({ restoreId, restore, approval, prepared, plan });
-    if (!verified?.matches) throw new Error('Restore verification did not match the baseline');
     const replacements = verified.replacements ?? [];
-    const state = replacements.length ? 'COMPLETE_WITH_REPLACEMENTS' : 'COMPLETE';
+    const state = verified.matches
+      ? (replacements.length ? 'COMPLETE_WITH_REPLACEMENTS' : 'COMPLETE')
+      : (verified.progress ? 'PARTIAL' : 'FAILED');
     const counters = countersFor(executed, state);
     const detail = [{ ...counters, remaining: Number(executed.remaining ?? 0), verification: verified }];
     await deps.finishRestore({ restoreId, now: Date.now(), counters, state, detail });

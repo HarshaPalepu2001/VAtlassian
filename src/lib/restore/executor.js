@@ -135,7 +135,23 @@ export async function executeRestore({
   // difference between "one field could not be restored" and "the restore
   // failed", and a reviewer deserves the first answer when it is the true one.
   if (bulkErrors) {
+    const badIds = Object.keys(bulkErrors);
+    const goodIds = writeIds.filter(id => !badIds.includes(id));
+    
+    // Try a second bulk write with only the fields Jira did not complain about
+    if (goodIds.length > 0) {
+      const goodWrites = {};
+      for (const id of goodIds) goodWrites[id] = writes[id];
+      const res2 = await put(client, issueKey, write, { fields: goodWrites });
+      if (res2.ok) {
+        for (const id of goodIds) {
+          detail.set(id, { fieldId: id, fieldName: nameOf(byId, id), outcome: OUTCOME.SUCCEEDED, reason: null, verified: false });
+        }
+      }
+    }
+
     for (const fieldId of writeIds) {
+      if (detail.has(fieldId)) continue; // Already succeeded in second bulk write
       const complaint = bulkErrors[fieldId];
       let lastError = complaint ?? null;
       let ok = false;
@@ -144,9 +160,6 @@ export async function executeRestore({
         const res = await put(client, issueKey, write, { fields: { [fieldId]: writes[fieldId] } });
         if (res.ok) { ok = true; break; }
         lastError = res.errors?.[fieldId] ?? res.messages?.[0] ?? `HTTP ${res.status}`;
-        // Only retry on a transient status. A 400 is a rejected VALUE and will
-        // be rejected identically every time; retrying it twice just makes the
-        // reviewer wait longer for the same answer.
         if (res.status && res.status < 500 && res.status !== 429) break;
       }
 

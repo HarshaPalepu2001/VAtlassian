@@ -11,13 +11,14 @@ import { activeBaseline } from '../db/baselineStore.js';
 import { baselinePolicy } from '../lib/baselinePolicy.js';
 import { isEligible } from '../lib/reviewer.js';
 import { baselineDecisionMeaning } from '../lib/approval/challenge.js';
+import api, { route } from '@forge/api';
 
 export async function getState(args) { return respond(async () => {
   const state = await load(args); return { drift: state.diff, review: state.review };
 }); }
 export async function getDiff(args) { return respond(async () => ({ diff: (await load(args)).diff })); }
 
-const RESTORE_TIMEOUT_MS = 20000;
+const RESTORE_TIMEOUT_MS = 24000;
 function withTimeout(promise, ms, message) {
   let timer;
   const timeout = new Promise((_, reject) => {
@@ -139,21 +140,22 @@ export async function applyApproval({ issue, actor, approval, prepared, resuming
     if (!resuming && checked.contentHash !== approval.content_hash) fail('STALE_EVIDENCE');
     if (approval.decision === 'REJECT') {
       if (checked.baseline && checked.issue.fields.status?.id && String(checked.issue.fields.status.id) !== checked.baseline.from_status_id) {
-        const { recallToReview } = await import('../lib/restore/recall.js');
-        const recallResult = await recallToReview({
-          issueId: checked.issueId,
-          issueKey: checked.issue.key,
-          projectId: checked.projectId,
-          issueTypeId: checked.issueTypeId,
-          currentStatusId: String(checked.issue.fields.status.id),
-          driftCount: checked.driftCount,
-          baselineId: checked.baseline.baseline_id,
-          baselineVersion: checked.baseline.version,
-          reviewStatusId: checked.baseline.from_status_id,
-          now: Date.now()
-        });
-        // If recall fails (e.g. no route), we still proceed with restoring the content.
+        
+        
+        const commentBody = `Electronic signature review rejected by ${actor.displayName}. The baseline content has been automatically restored.`;
+        await api.asUser().requestJira(route`/rest/api/3/issue/${checked.issue.key}/comment`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            body: {
+              type: 'doc',
+              version: 1,
+              content: [{ type: 'paragraph', content: [{ type: 'text', text: commentBody }] }]
+            }
+          })
+        }).catch(e => console.error('Failed to post comment', e));
       }
+      console.log('Starting withTimeout performRestore');
       return await withTimeout(
         performRestore({ prepared: checked, actor, approval }),
         RESTORE_TIMEOUT_MS,
