@@ -219,6 +219,9 @@ function defaultAdapters() {
     },
     editIssue: async () => {},
     deleteIssue: async () => {},
+    // The executor refuses to delete a work item it cannot first record in the
+    // ledger, so this adapter is a dependency of the delete path, not a hook.
+    appendLedger: async () => {},
     createIssue: async () => ({ newIssueId: 'new-id', newIssueKey: 'NEW-1' }),
     recordReplacement: async (_restoreId, logicalNodeId, oldIssueId, newIssueId) => {
       replacements.push({ logicalNodeId, oldIssueId, newIssueId });

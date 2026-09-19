@@ -240,11 +240,44 @@ export async function readBaselineTree(baselineId, query = store.throwing) {
   return { nodes, values };
 }
 
+/**
+ * Every active baseline that covers this work item, with the provenance of the
+ * approval that created it.
+ *
+ * ─── WHY THE PROVENANCE IS PART OF THE ANSWER ────────────────────────────────
+ *
+ * A tree baseline is ONE approval over a composite record: a single signature,
+ * bound to a tree hash computed over every node. That is a sound model — it is
+ * how a validation package or a batch record is approved, and it is stronger
+ * than N independent signatures because the aggregate hash makes the scope
+ * unambiguous and tamper-evident.
+ *
+ * It carries an obligation, though, and the app was not meeting it. An auditor
+ * looking at a CHILD work item asks "who approved this, when, and to what
+ * standard?" — and every surface answered "no baseline", because va_baseline
+ * has a row for the root only. The signature covered the child; nothing could
+ * show that it did. An approval nobody can trace from the record it governs is
+ * an audit finding whatever the hash says.
+ *
+ * So this returns the approver, the moment, the assurance level and the version
+ * along with the root, and panelAccess.snapshot() attaches it to any item that
+ * has no baseline of its own. Children are not separately signed — they are
+ * demonstrably covered, which is the thing that was missing.
+ */
 export async function activeRootsForNode(issueId, query = store.throwing) {
   const rows = await query(
     `SELECT TO_BASE64(b.baseline_id) AS baselineId,
             n.original_issue_id AS rootIssueId,
-            n.issue_key AS rootIssueKey
+            n.issue_key AS rootIssueKey,
+            b.version AS version,
+            b.approved_by AS approvedBy,
+            b.approved_name AS approvedName,
+            b.captured_at AS capturedAt,
+            b.transition_at AS transitionAt,
+            b.assurance_level AS assuranceLevel,
+            b.required_role AS requiredRole,
+            b.tree_hash AS treeHash,
+            c.content_hash AS nodeContentHash
      FROM va_baseline_node c
      JOIN va_baseline b ON b.baseline_id = c.baseline_id
      JOIN va_baseline_node n ON n.baseline_id = b.baseline_id AND n.parent_logical_node_id IS NULL
@@ -254,6 +287,15 @@ export async function activeRootsForNode(issueId, query = store.throwing) {
   return rows.map(r => ({
     baselineId: fromBinaryColumn(r.baselineId),
     rootIssueId: r.rootIssueId,
-    rootIssueKey: r.rootIssueKey
+    rootIssueKey: r.rootIssueKey,
+    version: r.version == null ? null : Number(r.version),
+    approvedBy: r.approvedBy ?? null,
+    approvedName: r.approvedName ?? null,
+    capturedAt: r.capturedAt == null ? null : Number(r.capturedAt),
+    transitionAt: r.transitionAt == null ? null : Number(r.transitionAt),
+    assuranceLevel: r.assuranceLevel ?? null,
+    requiredRole: r.requiredRole ?? null,
+    treeHash: r.treeHash ?? null,
+    nodeContentHash: r.nodeContentHash ?? null
   }));
 }

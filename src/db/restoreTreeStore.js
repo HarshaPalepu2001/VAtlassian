@@ -54,6 +54,26 @@ export async function finishRestoreAction(restoreId, stepKey, success, detail, o
   return changed(result) || result == null;
 }
 
+/**
+ * Reopen the steps Jira refused, so a reviewer's explicit retry attempts them
+ * again.
+ *
+ * The executor settles a refusal durably — otherwise a requeue would retry the
+ * same impossible write for ever and the restore would never reach its
+ * verification pass. That is right for the queue and wrong for a person, who
+ * presses Retry precisely because they believe the refusal no longer applies.
+ * Only refusals are cleared; completed steps stay completed, so a retry remains
+ * the idempotent continuation it has always been.
+ */
+export async function clearRefusedRestoreActions(restoreId, query = store.throwing) {
+  const result = await query(
+    `DELETE FROM va_restore_action
+     WHERE restore_id = FROM_BASE64(?) AND state = 'FAILED'`,
+    [toBinaryParam(restoreId)]
+  );
+  return changed(result);
+}
+
 export async function readRestoreActions(restoreId, query = store.throwing) {
   const rows = await query(
     `SELECT step_key AS stepKey, logical_node_id AS logicalNodeId, kind,

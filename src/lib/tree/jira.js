@@ -18,7 +18,10 @@ export function createTreeReader({ api, route }) {
       const rootIssue = await rootRes.json();
 
       if (!rootIssue.fields) rootIssue.fields = {};
-      if (!('parent' in rootIssue.fields)) rootIssue.fields.parent = null;
+      // The tree is rooted here. A root's own Jira parent (for example its Epic)
+      // lies outside the tree, and keeping it would make capture, stable reads
+      // and restore verification see a dangling edge (MISSING_PARENT).
+      rootIssue.fields.parent = null;
 
       for (const f of requestedFieldIds) {
         if (!(f in rootIssue.fields)) {

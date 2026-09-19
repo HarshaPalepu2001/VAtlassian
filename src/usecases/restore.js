@@ -1,7 +1,8 @@
 import { load, respond, fail } from './panelAccess.js';
 import { restoresForIssue, restoreById } from '../db/restoreStore.js';
 import { approvalById } from '../db/approvalStore.js';
-import { resumable } from '../lib/restore/resume.js';
+import { resumable, comparableDigests, approvedDigestsFor } from '../lib/restore/resume.js';
+import { clearRefusedRestoreActions } from '../db/restoreTreeStore.js';
 import { acquire } from '../db/itemStateStore.js';
 import { enqueueRestore } from '../lib/restore/queue.js';
 import { markRestoreQueued, markRestoreQueueFailure } from '../db/restoreStore.js';
@@ -41,15 +42,20 @@ export async function retry(args) { return respond(async () => {
   // sit somewhere on the path between the rejected candidate and the approved
   // baseline. Substituting today's hash here — as this used to — made the
   // downstream comparison compare a value with itself and pass unconditionally.
-  const baselineDigests = typeof prepared.baseline?.field_digests === 'string'
-    ? JSON.parse(prepared.baseline.field_digests)
-    : (prepared.baseline?.field_digests ?? {});
   const check = resumable({
-    baselineDigests,
-    candidateDigests: restore.candidate_digests ?? {},
-    currentDigests: prepared.digests ?? {}
+    baselineDigests: comparableDigests(approvedDigestsFor({ baseline: prepared.baseline,
+      baselineTree: prepared.baselineTree, issueId: prepared.issueId })),
+    candidateDigests: comparableDigests(restore.candidate_digests ?? {}),
+    currentDigests: comparableDigests(prepared.digests ?? {})
   });
   if (!check.ok) fail(check.reason);
+
+  // A refusal is settled so that a requeue does not retry it for ever. A
+  // reviewer pressing Retry is saying the opposite — that something about the
+  // refusal may have changed, usually a field configuration an administrator
+  // has just corrected — so those steps are reopened for this attempt.
+  await clearRefusedRestoreActions(restore.restore_id).catch(error =>
+    console.error('restore: could not reopen refused actions', error));
 
   const locked = await acquire({ issueId: prepared.issueId, expectedVersion: prepared.review?.version,
     state: 'RESTORING', allowedStates: ['ERROR', 'DRIFTED', 'RESTORING'], now: Date.now() });

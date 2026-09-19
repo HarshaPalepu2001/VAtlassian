@@ -179,3 +179,31 @@ test('reader does not expose Jira error response bodies', async () => {
     error => error.message === 'Failed search: 403'
   );
 });
+
+test('a root that has its own Jira parent is read as the tree root, so capture does not see a dangling edge', async () => {
+  const { planTreeCapture } = await import('../src/lib/tree/capturePlan.js');
+  const fields = { summary: 'Root', project: { id: '10' }, issuetype: { id: '20' }, status: { id: '30' } };
+  const api = { asApp: () => ({ requestJira: async (request) => request.path.includes('/issue/')
+    ? { status: 200, json: async () => ({ id: '1', key: 'ROOT-1', fields: { ...fields, parent: { id: '999', key: 'EPIC-1' } } }) }
+    : { status: 200, json: async () => ({ issues: [{ id: '2', key: 'CHILD-1', fields: { ...fields, parent: { id: '1', key: 'ROOT-1' } } }] }) }
+  }) };
+  let searched = false;
+  const scopedApi = { asApp: () => ({ requestJira: async (request, options) => {
+    if (!request.path.includes('/issue/')) {
+      if (searched) return { status: 200, json: async () => ({ issues: [] }) };
+      searched = true;
+    }
+    return api.asApp().requestJira(request, options);
+  } }) };
+  const route = (strings, ...values) => {
+    const path = strings.reduce((out, part, index) => out + part + encodeURIComponent(values[index] ?? ''), '');
+    return { path, toString: () => path };
+  };
+
+  const tree = await createTreeReader({ api: scopedApi, route }).read('ROOT-1', ['summary']);
+  assert.equal(tree.nodes[0].fields.parent, null);
+  const plan = planTreeCapture({ rootIssueId: '1', nodes: tree.nodes,
+    controlledFields: [{ field_id: 'summary', field_kind: 'TEXT', store_values: true }] });
+  assert.equal(plan.nodeCount, 2);
+  assert.equal(plan.edgeCount, 1);
+});

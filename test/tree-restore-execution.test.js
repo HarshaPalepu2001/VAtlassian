@@ -26,6 +26,7 @@ function createJournalAdapters(options = {}) {
   const state = {
     actions: [], replacements: [],
     mutations: { create: [], edit: [], move: [], delete: [], links: [] },
+    ledger: [],
     failFieldOnce: options.failFieldOnce ?? false,
     permissionResponse: options.permissionResponse ?? 200
   };
@@ -67,7 +68,10 @@ function createJournalAdapters(options = {}) {
       }
     },
     deleteIssue: async issueId => { state.mutations.delete.push(issueId); },
-    restoreLinks: async (issueId, links) => { state.mutations.links.push({ issueId, links }); }
+    restoreLinks: async (issueId, links) => { state.mutations.links.push({ issueId, links }); },
+    // Required, not optional: the executor will not destroy a work item it
+    // cannot first record. See the DELETE_ADDED_NODE branch.
+    appendLedger: async (eventType, payload) => { state.ledger.push({ eventType, payload }); }
   };
   return { adapters, state };
 }

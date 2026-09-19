@@ -3,6 +3,7 @@ import { FailClosed } from '../lib/errors.js';
 import { executeRestore } from '../lib/restore/executor.js';
 import { verifyRestore, describeResult } from '../lib/restore/verifier.js';
 import { tally } from '../lib/restore/outcome.js';
+import { stateAfter } from '../lib/decision.js';
 import { planRestore } from '../lib/restore/planner.js';
 import { startRestore, finishRestore } from '../db/restoreStore.js';
 import { markDecided } from '../db/driftStore.js';
@@ -137,9 +138,12 @@ export async function performRestore({ prepared, actor, approval }) {
         skipped: executed.remaining,
         irreversible: 0
       };
+      unmatched = verified?.unmatched ?? [];
       detail = [{ attempted: executed.attempted, completed: executed.completed,
-        remaining: executed.remaining, replacements, verification: verified && {
-          matches: verified.matches, statusMatches: verified.statusMatches, changes: verified.changes
+        remaining: executed.remaining, refused: executed.refused ?? [], replacements, unmatched,
+        verification: verified && {
+          matches: verified.matches, statusMatches: verified.statusMatches, changes: verified.changes,
+          unmatched
         } }];
     } else {
       const executed = await executeRestore({ api: forgeApi, plan, issueKey: issue.key, issueId,
@@ -157,7 +161,13 @@ export async function performRestore({ prepared, actor, approval }) {
     await finishRestore({ restoreId, now: Date.now(), counters, state, detail }).catch(e => console.error('finishRestore failed', e));
     const complete = state === 'COMPLETE' || state === 'COMPLETE_WITH_REPLACEMENTS';
     if (complete) await markDecided({ issueId, baselineVersion: baseline.version, approvalId: approval.approval_id }).catch(e => console.error('markDecided failed', e));
-    await release({ issueId, state: complete ? 'BASELINED' : 'ERROR', now: Date.now(),
+    // lib/decision.js owns this rule for both restore paths. A partial restore
+    // whose verification NAMED the fields that still differ is honest drift and
+    // stays actionable in the queue; anything the app could not establish is
+    // ERROR. See stateAfter() for why the two were worth separating.
+    const unmatchedCount = unmatched.length;
+    await release({ issueId, state: stateAfter({ decision: 'REJECT', restoreState: state, unmatchedCount }),
+      now: Date.now(),
       counters: complete ? { driftCount: 0, driftedFieldCount: 0, maxMateriality: null } : {
         driftCount: prepared.driftCount, driftedFieldCount: diff?.materialFieldCount ?? prepared.driftCount,
         maxMateriality: diff?.maxMateriality ?? null } }).catch(e => console.error('release failed', e));

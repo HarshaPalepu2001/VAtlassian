@@ -1,9 +1,12 @@
 import { changedFields } from '../content.js';
+import { contentFieldIds } from './structure.js';
 
 export function diffTree({ baselineTree, currentTree, controlledFields }) {
   const changes = [];
-  const scopeIds = controlledFields.map(f => f.field_id);
-  
+  // Shape is compared as nodes and edges below, never as field values. See
+  // ./structure.js for the three failures that came of comparing it twice.
+  const scopeIds = contentFieldIds(controlledFields);
+
   const baselineNodes = new Map(baselineTree.nodes.map(n => [n.logicalNodeId, n]));
   const currentNodes = new Map(currentTree.nodes.map(n => [n.logicalNodeId, n]));
 
