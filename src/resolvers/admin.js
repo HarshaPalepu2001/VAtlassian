@@ -50,6 +50,10 @@ resolver.define('admin:getConfig', req => admin.getConfig(req));
 import * as diagnostics from '../usecases/diagnostics.js';
 resolver.define('diagnostics:write-identity', () => diagnostics.checkWriteIdentity());
 
+import * as harness from './harness.js';
+resolver.define('harness:logAction', ({ payload, context }) => harness.logAction({ payload, context }));
+resolver.define('harness:inspectIssue', ({ payload, context }) => harness.inspectIssue({ payload, context }));
+
 resolver.define('admin:listCredentials', req => admin.listCredentials(req));
 resolver.define('admin:reconcileDirectory', req => admin.reconcileDirectory(req));
 

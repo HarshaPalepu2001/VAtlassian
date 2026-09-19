@@ -98,3 +98,12 @@ test('Providers adhere to registry constraints', () => {
   }
   assert.equal(importCount, 0, 'No file outside registry.js should import a provider directly');
 });
+
+test('every UI resolver accepts client harness telemetry', () => {
+  // Custom UI beacons harness:logAction from every surface. A resolver that
+  // lacks it throws "Resolver has no definition" on each navigation.
+  for (const name of ['panel.js', 'admin.js', 'totp.js']) {
+    const content = fs.readFileSync(path.join(srcDir, 'resolvers', name), 'utf8');
+    assert.match(content, /resolver\.define\('harness:logAction'/, `${name} must define harness:logAction`);
+  }
+});

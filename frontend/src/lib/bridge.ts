@@ -1,4 +1,5 @@
 import { invoke as forgeInvoke, events } from '@forge/bridge';
+import { recordHarnessEvent } from './harness';
 
 /** Resolver keys whose success means a durable, visible state change — a
  *  signature recorded, a transition retried, a restoration retried. Every
@@ -20,21 +21,51 @@ function isDurable(result: unknown): boolean {
 
 /** The app requests plain resolver bodies, never bridge response metadata. */
 export async function invoke<T = unknown>(key: string, payload?: Record<string, unknown>): Promise<T> {
-  // Bridge 6 types include a metadata envelope even when none was requested.
-  // Its transport returns the raw body for this two-argument invocation.
-  const result = await forgeInvoke<T>(key, payload) as T;
-  // THE ONE PLACE THIS EVENT IS EMITTED for the Custom UI bundle. It fires
-  // exactly once, only after the mutation is durable — never when the
-  // resolver denies, validation fails, persistence fails, or a WebAuthn
-  // ceremony was cancelled before recording anything. A persisted approval
-  // followed by a Jira transition refusal is durable and deliberately emits
-  // so other surfaces can show the pending/retry state. Components must not
-  // emit this themselves; see
-  // src/panel/sections/ApprovalControls.tsx and RestoreStatus.tsx, which rely
-  // on this instead. (src/ui-kit/edit.jsx is a separate Forge UI Kit runtime
-  // that cannot import this module and emits its own durable-only event.)
-  if (MUTATION_KEYS.includes(key) && isDurable(result)) {
-    void events.emit('VA_ISSUE_CHANGED', { issueKey: payload?.issueKey }).catch(() => {});
+  const isInternalTelemetry = key === 'harness:logAction';
+  const startedAt = Date.now();
+
+  try {
+    const result = await forgeInvoke<T>(key, payload) as T;
+    const durationMs = Date.now() - startedAt;
+
+    if (!isInternalTelemetry) {
+      const isOk = !result || typeof result !== 'object'
+        || ((result as { success?: boolean; ok?: boolean; error?: string }).success !== false
+          && (result as { ok?: boolean }).ok !== false
+          && !(result as { error?: string }).error);
+
+      recordHarnessEvent(isOk ? 'BRIDGE' : 'ERROR', `invoke:${key}`, {
+        durationMs,
+        success: isOk,
+        issueKey: payload?.issueKey,
+        ...(payload ? { request: payload } : {}),
+        response: typeof result === 'object' && result !== null
+          ? {
+              success: (result as { success?: boolean }).success,
+              ok: (result as { ok?: boolean }).ok,
+              reason: (result as { reason?: string }).reason,
+              error: (result as { error?: string }).error,
+              transitioned: (result as { transitioned?: boolean }).transitioned,
+              state: (result as { state?: string }).state
+            }
+          : result
+      });
+    }
+
+    if (MUTATION_KEYS.includes(key) && isDurable(result)) {
+      void events.emit('VA_ISSUE_CHANGED', { issueKey: payload?.issueKey }).catch(() => {});
+    }
+    return result;
+  } catch (error) {
+    const durationMs = Date.now() - startedAt;
+    if (!isInternalTelemetry) {
+      recordHarnessEvent('ERROR', `invoke:${key}:failed`, {
+        durationMs,
+        issueKey: payload?.issueKey,
+        request: payload
+      }, error);
+    }
+    throw error;
   }
-  return result;
 }
+

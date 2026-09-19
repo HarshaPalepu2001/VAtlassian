@@ -8,8 +8,10 @@ import * as restore from '../usecases/restore.js';
 import * as queue from '../usecases/queue.js';
 import * as report from '../usecases/report.js';
 import * as signing from '../usecases/signing.js';
+import * as harness from './harness.js';
 import { defineWebAuthnResolvers } from '../usecases/webauthn.js';
 import { withRequestCache } from '../lib/cache.js';
+import { harnessLog } from '../lib/harnessLogger.js';
 
 const Resolver = ForgeResolver.default ?? ForgeResolver;
 const resolver = new Resolver();
@@ -30,6 +32,46 @@ resolver.define('queue:list', ({ payload, context }) => queue.list({ payload, co
 resolver.define('report:get', ({ payload, context }) => report.get({ payload, context }));
 resolver.define('report:generate', ({ payload, context }) => report.generate({ payload, context }));
 resolver.define('signing:context', ({ payload, context }) => signing.signingContext({ payload, context }));
+resolver.define('harness:logAction', ({ payload, context }) => harness.logAction({ payload, context }));
+resolver.define('harness:inspectIssue', ({ payload, context }) => harness.inspectIssue({ payload, context }));
 defineWebAuthnResolvers(resolver);
 const definitions = resolver.getDefinitions();
-export const handler = (...args) => withRequestCache(() => definitions(...args));
+
+export const handler = async (...args) => {
+  const req = args[0];
+  const functionKey = req?.call?.functionKey;
+  const isHarnessLog = functionKey === 'harness:logAction';
+  const startedAt = Date.now();
+
+  try {
+    const result = await withRequestCache(() => definitions(...args));
+    const durationMs = Date.now() - startedAt;
+
+    if (!isHarnessLog) {
+      const isSuccess = result?.success !== false && result?.ok !== false && !result?.error;
+      harnessLog(isSuccess ? 'RESOLVER' : 'ERROR', `resolver:${functionKey}`, {
+        functionKey,
+        durationMs,
+        issueKey: req?.payload?.issueKey ?? req?.context?.extension?.issue?.key,
+        accountId: req?.context?.accountId,
+        success: isSuccess,
+        reason: result?.reason,
+        error: result?.error,
+        transitioned: result?.transitioned
+      }, isSuccess ? 'INFO' : 'WARN');
+    }
+    return result;
+  } catch (error) {
+    const durationMs = Date.now() - startedAt;
+    harnessLog('ERROR', `resolver:${functionKey}:failed`, {
+      functionKey,
+      durationMs,
+      issueKey: req?.payload?.issueKey ?? req?.context?.extension?.issue?.key,
+      accountId: req?.context?.accountId,
+      error: error?.message,
+      reason: error?.reason
+    }, 'ERROR');
+    throw error;
+  }
+};
+

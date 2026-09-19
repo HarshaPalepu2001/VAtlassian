@@ -3,12 +3,15 @@ import { view } from '@forge/bridge';
 import Button from '@atlaskit/button';
 import { Card, Page } from '../ui/primitives';
 import { Notice } from '../ui/feedback';
-import usePanelState from './usePanelState';
 import usePanelEvidence from './usePanelEvidence';
 import DriftSection from './sections/DriftSection';
 import ApprovalControls from './sections/ApprovalControls';
 import BaselineRecord from './sections/BaselineRecord';
 import RestoreStatus from './sections/RestoreStatus';
+import DiagnosticsHud from './DiagnosticsHud';
+import usePanelState from './usePanelState';
+
+
 
 type Props = { issueKey?: string; onDone?: () => void };
 
@@ -163,6 +166,9 @@ function IssuePanelBody({ issueKey: issueKeyProp, onDone }: Props) {
           <RestoreStatus issueKey={issueKey} restore={summary.restore} onDone={refresh} />
         </>
       )}
+
+      <DiagnosticsHud summary={authoritativeSummary} evidence={evidence} />
     </div>
   );
 }
+
