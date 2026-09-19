@@ -1,4 +1,4 @@
-import { executeQuery, toBinaryParam, fromBinaryColumn, limitClause } from '../lib/db.js';
+import { executeQuery, toBinaryParam, fromBinaryColumn, limitClause, affectedRows } from '../lib/db.js';
 import { newId, throwing } from './store.js';
 import { withAlwaysControlled } from '../lib/content.js';
 import { effectiveAssurance } from '../lib/approval/levels.js';
@@ -38,6 +38,27 @@ export async function setConfig(key, value, updatedBy, now) {
     `REPLACE INTO va_config (cfg_key, cfg_value, updated_at, updated_by) VALUES (?, ?, ?, ?)`,
     [key, JSON.stringify(value), now, updatedBy]
   );
+}
+
+/** Administrative reads must expose corrupt data and preserve the exact saved
+ * value as an optimistic concurrency token, including an absent row. */
+export async function readConfigRecord(key) {
+  const rows = await throwing('SELECT cfg_value FROM va_config WHERE cfg_key = ?', [key]);
+  if (!rows.length) return { config: {}, revision: null };
+  const revision = rows[0].cfg_value;
+  let config;
+  try { config = JSON.parse(revision); } catch { throw new Error('Saved configuration is unreadable. No changes were saved.'); }
+  if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('Saved configuration is invalid. No changes were saved.');
+  return { config, revision };
+}
+
+export async function setConfigIfCurrent(key, value, updatedBy, now, revision) {
+  const json = JSON.stringify(value);
+  const result = revision === null
+    ? await executeQuery(`INSERT IGNORE INTO va_config (cfg_key, cfg_value, updated_at, updated_by) VALUES (?, ?, ?, ?)`, [key, json, now, updatedBy])
+    : await executeQuery(`UPDATE va_config SET cfg_value = ?, updated_at = ?, updated_by = ? WHERE cfg_key = ? AND BINARY cfg_value = BINARY ?`, [json, now, updatedBy, key, revision]);
+  if (!result.result) throw new Error('Configuration could not be saved.');
+  return affectedRows(result) === 1;
 }
 
 /**

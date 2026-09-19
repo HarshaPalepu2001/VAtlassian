@@ -1,5 +1,6 @@
 import { invoke } from '../lib/bridge';
 import type { Result } from '../lib/result';
+import { recordHarnessEvent } from '../lib/harness';
 
 type CeremonyAction = 'enrol' | 'confirm';
 type WebAuthnStart = Result & { challengeId: string; options: PublicKeyCredentialRequestOptions | PublicKeyCredentialCreationOptions };
@@ -20,12 +21,14 @@ function errorWithName(name: string, message?: string) {
 function openCeremonyWindow() {
   const url = new URL('webauthn.html', window.location.href);
   url.searchParams.set('mode', 'webauthn-popup');
+  recordHarnessEvent('WEBAUTHN', 'ceremony:openWindow', { url: url.toString() });
   return window.open(url.toString(), popupName(), POPUP_FEATURES);
 }
 
 function runInPopup(popup: Window | null, action: CeremonyAction, optionsJSON: unknown): Promise<unknown> {
   return new Promise((resolve, reject) => {
     if (!popup || popup.closed) {
+      recordHarnessEvent('WEBAUTHN', 'ceremony:popupBlocked', { action });
       reject(errorWithName('PopupBlockedError', 'The device confirmation window could not be opened.'));
       return;
     }
@@ -49,16 +52,19 @@ function runInPopup(popup: Window | null, action: CeremonyAction, optionsJSON: u
       const data = event.data;
       if (!data || typeof data !== 'object') return;
       if (data.type === 'webauthn-ready') {
+        recordHarnessEvent('WEBAUTHN', 'ceremony:handshakeReady', { action });
         popup.postMessage({ type: 'webauthn-options', action, optionsJSON }, window.location.origin);
         return;
       }
       if (data.type === 'webauthn-result') {
+        recordHarnessEvent('WEBAUTHN', 'ceremony:result', { action, success: data.success, errorName: data.errorName, errorMessage: data.errorMessage });
         if (data.success) finish(resolve, data.response);
         else finish(reject, errorWithName(data.errorName || 'NotAllowedError', data.errorMessage));
       }
     };
 
     window.addEventListener('message', onMessage);
+
 
     // The device window can be closed without answering. Rather than poll
     // `popup.closed`, check it whenever the reviewer comes back to this frame:
@@ -115,6 +121,7 @@ export async function biometricStatus() {
 }
 
 export async function enrolBiometric() {
+  recordHarnessEvent('WEBAUTHN', 'enrol:start');
   const origin = window.location.origin;
   const popup = openCeremonyWindow();
   let start: WebAuthnStart;
@@ -126,27 +133,34 @@ export async function enrolBiometric() {
     });
   } catch (error) {
     try { popup?.close(); } catch { /* ignore */ }
+    recordHarnessEvent('ERROR', 'enrol:start:failed', {}, error);
     throw error;
   }
   if (start.ok === false) {
     try { popup?.close(); } catch { /* ignore */ }
+    recordHarnessEvent('ERROR', 'enrol:start:rejected', { reason: start.reason, error: start.error });
     return start;
   }
   try {
     const response = await runInPopup(popup, 'enrol', start.options);
-    return invoke<Result & { enrolled?: boolean }>('webauthn:enrolFinish', {
+    const finish = await invoke<Result & { enrolled?: boolean }>('webauthn:enrolFinish', {
       origin,
       challengeId: start.challengeId,
       response,
       deviceLabel: defaultDeviceLabel(),
       kind: 'device'
     });
+    recordHarnessEvent('WEBAUTHN', 'enrol:finished', { enrolled: finish.enrolled, ok: finish.ok });
+    return finish;
   } catch (error) {
-    return failureFor(error, 'enrol');
+    const failure = failureFor(error, 'enrol');
+    recordHarnessEvent('ERROR', 'enrol:failed', { reason: failure.reason, error: failure.error }, error);
+    return failure;
   }
 }
 
 export async function confirmBiometric({ approvalChallengeId }: { approvalChallengeId: string }): Promise<Result & { assertion?: WebAuthnAssertion }> {
+  recordHarnessEvent('WEBAUTHN', 'confirm:start', { approvalChallengeId });
   const origin = window.location.origin;
   const popup = openCeremonyWindow();
   let start: WebAuthnStart;
@@ -154,16 +168,22 @@ export async function confirmBiometric({ approvalChallengeId }: { approvalChalle
     start = await invoke<WebAuthnStart>('webauthn:assertStart', { origin, approvalChallengeId });
   } catch (error) {
     try { popup?.close(); } catch { /* ignore */ }
+    recordHarnessEvent('ERROR', 'confirm:assertStart:failed', { approvalChallengeId }, error);
     throw error;
   }
   if (start.ok === false) {
     try { popup?.close(); } catch { /* ignore */ }
+    recordHarnessEvent('ERROR', 'confirm:assertStart:rejected', { approvalChallengeId, reason: start.reason, error: start.error });
     return start;
   }
   try {
     const response = await runInPopup(popup, 'confirm', start.options);
+    recordHarnessEvent('WEBAUTHN', 'confirm:popupAssertionSuccess', { approvalChallengeId, challengeId: start.challengeId });
     return { ok: true, assertion: { origin, challengeId: start.challengeId, response } };
   } catch (error) {
-    return failureFor(error, 'confirm');
+    const failure = failureFor(error, 'confirm');
+    recordHarnessEvent('ERROR', 'confirm:failed', { approvalChallengeId, reason: failure.reason, error: failure.error }, error);
+    return failure;
   }
 }
+

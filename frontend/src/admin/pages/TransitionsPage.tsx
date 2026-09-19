@@ -10,6 +10,7 @@ import {
 import { AssuranceChip } from '../../ui/feedback';
 import type { AssuranceLevel } from '../../lib/assurance';
 import { CONTROLLED_TRANSITION_ASSURANCE_OPTIONS } from '../../lib/assurance';
+import { assertResult, errorMessage } from '../../lib/result';
 import { formatDate } from '../../ui/format';
 
 type Project = { id: string; key: string; name: string };
@@ -49,6 +50,7 @@ const optionKey = (t: WorkflowTransition) => `${t.transitionId}:${t.fromStatusId
  */
 type ControlledTransition = {
   ctId: string;
+  projectId: string; issueTypeId: string; transitionId: string | null; fromStatusId: string; toStatusId: string; rejectToStatusId?: string; requireDecision?: boolean;
   requiredAssurance: AssuranceLevel;
   captureBaseline: boolean;
   blockOnDrift: boolean;
@@ -75,6 +77,8 @@ const COLUMNS = [
 ];
 
 export default function TransitionsPage({ projects }: { projects: Project[] }) {
+  const [editing, setEditing] = useState<ControlledTransition | null>(null);
+  const [refresh, setRefresh] = useState(0);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -104,6 +108,7 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
   const [availableRoles, setAvailableRoles] = useState<string[]>([]);
 
   const loadTransitions = async () => {
+    setLoading(true);
     try {
       const response = await invoke('admin:listControlledTransitions') as
         { success: boolean; transitions?: ControlledTransition[]; error?: string };
@@ -123,23 +128,24 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
     let active = true;
     const seq = ++statusSeq.current;
     if (!projectId) { setIssueTypes([]); setProjectStatuses([]); return () => { active = false; }; }
-    setIssueTypes([]);
+    setIssueTypes([]); setProjectStatuses([]);
     invoke('admin:listStatusesForProject', { projectId, issueTypeId: '' })
-      .then((r: any) => { if (active && seq === statusSeq.current && r.success) setProjectStatuses(r.statuses ?? []); });
+      .then((r: any) => { assertResult(r); if (active && seq === statusSeq.current) setProjectStatuses(r.statuses ?? []); }).catch(e => { if(active) setMessage({type:'error',text:errorMessage(e)}); });
     invoke('admin:listIssueTypesForProject', { projectId })
-      .then((r: any) => { if (active && r.success) setIssueTypes(r.issueTypes ?? []); });
+      .then((r: any) => { assertResult(r); if (active) setIssueTypes(r.issueTypes ?? []); }).catch(e => { if(active) setMessage({type:'error',text:errorMessage(e)}); });
     return () => { active = false; };
-  }, [projectId]);
+  }, [projectId, refresh]);
 
   useEffect(() => {
     let active = true;
     if (!projectId) { ++statusSeq.current; setProjectStatuses([]); return () => { active = false; }; }
     if (!issueTypeId) return () => { active = false; };
     const seq = ++statusSeq.current;
+    setProjectStatuses([]);
     invoke('admin:listStatusesForProject', { projectId, issueTypeId })
-      .then((r: any) => { if (active && seq === statusSeq.current && r.success) setProjectStatuses(r.statuses ?? []); });
+      .then((r: any) => { assertResult(r); if (active && seq === statusSeq.current) setProjectStatuses(r.statuses ?? []); }).catch(e => { if(active) setMessage({type:'error',text:errorMessage(e)}); });
     return () => { active = false; };
-  }, [projectId, issueTypeId]);
+  }, [projectId, issueTypeId, refresh, editing]);
 
   useEffect(() => {
     let active = true;
@@ -152,14 +158,15 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
     invoke('admin:listAvailableRoles', { projectId, issueTypeId })
       .then((r: any) => {
         if (!active) return;
+        assertResult(r);
         if (r.success) {
           const roles = r.roles ?? [];
           setAvailableRoles(roles);
-          setRole(cur => (cur && !roles.includes(cur) ? '' : cur));
+          setRole(cur => { const next = editing?.requiredRole ?? cur; return roles.includes(next) ? next : ''; });
         }
-      });
+      }).catch(e => { if(active) setMessage({type:'error',text:errorMessage(e)}); });
     return () => { active = false; };
-  }, [projectId, issueTypeId]);
+  }, [projectId, issueTypeId, refresh, editing]);
 
   // The transition picker. A change to either scope input invalidates
   // whatever was selected — Jira's workflow for a different project or work
@@ -178,7 +185,7 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
     invoke('admin:listWorkflowTransitions', { projectId, issueTypeId })
       .then((r: any) => {
         if (discoverySeq.current !== seq) return;
-        if (r.success) { setWorkflowTransitions(r.transitions ?? []); setDiscovery('loaded'); }
+        if (r.success) { setWorkflowTransitions(r.transitions ?? []); setDiscovery('loaded'); if (editing && editing.projectId===projectId && editing.issueTypeId===issueTypeId) setSelectedKey(`${editing.transitionId}:${editing.fromStatusId}`); }
         else { setDiscovery('error'); setMessage({ type: 'error', text: r.error || 'Could not read the live Jira workflow.' }); }
       })
       .catch((err: any) => {
@@ -186,7 +193,7 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
         setDiscovery('error');
         setMessage({ type: 'error', text: err.message || 'Could not read the live Jira workflow.' });
       });
-  }, [projectId, issueTypeId]);
+  }, [projectId, issueTypeId, refresh, editing]);
 
   const selectedTransition = workflowTransitions.find((t) => optionKey(t) === selectedKey) ?? null;
   // A transition with no enabled va-gate of ours cannot be enforced no matter
@@ -201,7 +208,7 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
   const statusOptions = projectStatuses.map((s) => ({ value: s.id, label: s.name }));
 
   const complete = Boolean(projectId && issueTypeId && selectedTransition && role.trim() && meaning.trim());
-  const canSave = complete && discovery === 'loaded' && !blockingFinding;
+  const canSave = complete && discovery === 'loaded' && !blockingFinding && availableRoles.includes(role) && (!rejectStatus || projectStatuses.some(s=>s.id===rejectStatus));
 
   const handleCreate = async () => {
     setMessage(null);
@@ -211,7 +218,8 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
     }
     setSaving(true);
     try {
-      const result = await invoke('admin:createControlledTransition', {
+      const result = await invoke(editing ? 'admin:updateControlledTransition' : 'admin:createControlledTransition', {
+        ...(editing ? {ctId:editing.ctId, requireDecision:editing.requireDecision ?? false} : {}),
         projectId, issueTypeId,
         transitionId: selectedTransition.transitionId,
         fromStatusId: selectedTransition.fromStatusId,
@@ -223,9 +231,9 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
         const project = projects.find((p) => p.id === projectId);
         setMessage({
           type: 'success',
-          text: `Approval now required${project ? ` in ${project.name}` : ''} for "${meaning.trim()}".`
+          text: `Rule ${editing ? 'updated' : 'added'}; approval required${project ? ` in ${project.name}` : ''} for "${meaning.trim()}".`
         });
-        setRole(''); setMeaning(''); setRejectStatus(''); setSelectedKey('');
+        setEditing(null); setRole(''); setMeaning(''); setRejectStatus(''); setSelectedKey('');
         await loadTransitions();
       } else {
         setMessage({ type: 'error', text: result.error || 'Failed to add the rule.' });
@@ -238,14 +246,20 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
   };
 
   const handleRevoke = async (rule: ControlledTransition) => {
-    const result = await invoke('admin:revokeControlledTransition', { ctId: rule.ctId }) as
-      { success: boolean; error?: string };
-    if (result.success) {
-      setMessage({ type: 'success', text: `"${rule.meaning}" no longer requires approval.` });
+    if (saving) return;
+    setSaving(true); setMessage(null);
+    try {
+      assertResult(await invoke('admin:revokeControlledTransition', { ctId: rule.ctId }) as any);
+      if (editing?.ctId === rule.ctId) setEditing(null);
       await loadTransitions();
-    } else {
-      setMessage({ type: 'error', text: result.error || 'Failed to remove the rule.' });
-    }
+    } catch (e) { setMessage({type:'error',text:errorMessage(e)}); }
+    finally { setSaving(false); }
+  };
+  const edit = (rule: ControlledTransition) => {
+    setEditing(rule); setMessage(null); setProjectId(rule.projectId); setIssueTypeId(rule.issueTypeId);
+    setMeaning(rule.meaning); setRole(rule.requiredRole); setAssurance(rule.requiredAssurance);
+    setCapture(rule.captureBaseline); setBlock(rule.blockOnDrift); setRejectStatus(rule.rejectToStatusId ?? '');
+    setSelectedKey(`${rule.transitionId}:${rule.fromStatusId}`);
   };
 
   return (
@@ -253,21 +267,21 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
       {message && (
         <div style={{ marginBottom: '20px' }}>
           <SectionMessage appearance={message.type}>
-            <p>{message.text}</p>
+            <p>{message.text}</p>{message.type==='error'&&<Button isDisabled={saving} onClick={()=>{setMessage(null);setRefresh(v=>v+1);void loadTransitions();}}>Retry loading configuration</Button>}
           </SectionMessage>
         </div>
       )}
 
       <Card
-        title="Require an approval"
+        title={editing?'Edit controlled transition':'Require an approval'}
         subtitle="Company-managed projects only — team-managed projects cannot express segregation of duties."
       >
-        <div className="va-form-grid">
+        <fieldset disabled={saving} style={{border:0,padding:0,margin:0,minWidth:0}}><div className="va-form-grid">
           <Field label="Project">
             <Select
               placeholder="Choose a project…"
               value={projectId}
-              onChange={(value) => { setProjectId(value); setIssueTypeId(''); setRejectStatus(''); }}
+              onChange={(value) => { setRole(''); setProjectId(value); setIssueTypeId(''); setRejectStatus(''); }}
               options={projects.map((p) => ({ value: p.id, label: p.name }))}
             />
           </Field>
@@ -357,15 +371,16 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
           : 'Add the "Electronic Signature" field to this transition screen.'}><Select value={requiredAssurance} onChange={v=>setAssurance(v as AssuranceLevel)} placeholder="Choose assurance" options={CONTROLLED_TRANSITION_ASSURANCE_OPTIONS}/></Field><Field label="Capture approved baseline"><input type="checkbox" checked={captureBaseline} onChange={e=>setCapture(e.target.checked)}/></Field><Field label="Block transition on unresolved drift"><input type="checkbox" checked={blockOnDrift} onChange={e=>setBlock(e.target.checked)}/></Field></div>
         <div className="va-form-actions">
           <Button appearance="primary" onClick={handleCreate} isDisabled={saving || !canSave}>
-            {saving ? 'Adding…' : 'Add rule'}
+            {saving ? 'Saving…' : editing ? 'Save rule' : 'Add rule'}
           </Button>
+          {editing&&<Button isDisabled={saving} onClick={()=>{setEditing(null);setSelectedKey('');setRole('');setMeaning('');setRejectStatus('');}}>Cancel edit</Button>}
           <span className="va-hint">
             {blockingFinding
               ? 'Attach the signature validator to this transition in Jira before it can be controlled.'
               : canSave ? 'Takes effect immediately.' : 'Choose a project, type, exact transition, a role and a meaning.'}
           </span>
         </div>
-      </Card>
+      </fieldset></Card>
 
       <Section title={`Active rules${transitions.length ? ` (${transitions.length})` : ''}`}>
         <Card flush>
@@ -410,7 +425,7 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
                       : <>Stays at <Name value={rule.fromStatusName} noun="status" /></>}
                   </td>
                   <td className="va-table__actions">
-                    <Button appearance="subtle" onClick={() => handleRevoke(rule)}>Remove</Button>
+                    <Button appearance="subtle" isDisabled={saving} onClick={()=>edit(rule)}>Edit</Button><Button appearance="subtle" isDisabled={saving} onClick={() => handleRevoke(rule)}>Remove</Button>
                   </td>
                 </tr>
               ))}

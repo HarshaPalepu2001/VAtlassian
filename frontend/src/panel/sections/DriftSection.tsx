@@ -3,6 +3,8 @@ import Button from '@atlaskit/button';
 import { Loading } from '../../ui/primitives';
 import { plural } from '../../ui/format';
 import type { PanelEvidence, PanelSummary } from '../types';
+import { recordHarnessEvent } from '../../lib/harness';
+
 
 const ReviewWorkspace = lazy(() => import('../../review/ReviewWorkspace'));
 
@@ -62,9 +64,13 @@ export default function DriftSection({ drift, evidence, evidenceReady = true, is
               : `${plural(drift.materialCount, 'change')} need${drift.materialCount === 1 ? 's' : ''} a decision.`
           )}
         </span>
-        <Button appearance={open ? 'subtle' : 'primary'} onClick={() => setOpen(!open)}>
+        <Button appearance={open ? 'subtle' : 'primary'} onClick={() => {
+          recordHarnessEvent('DRIFT', open ? 'click:hideChanges' : 'click:reviewChanges', { issueKey, driftCount: drift.count });
+          setOpen(!open);
+        }}>
           {open ? 'Hide changes' : 'Review changes'}
         </Button>
+
       </div>
       {open && (
         <Suspense fallback={<Loading label="Opening review…" />}>

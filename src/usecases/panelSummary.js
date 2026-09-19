@@ -9,6 +9,7 @@ import { adminIncidentCount } from '../db/incidentStore.js';
 import { credentialState } from '../db/credentialStore.js';
 import { isActiveAdmin } from '../db/adminStore.js';
 import { restoresForIssue } from '../db/restoreStore.js';
+import { activeRootsForNode } from '../db/baselineTreeStore.js';
 import { isEligible } from '../lib/reviewer.js';
 import { baselinePolicy } from '../lib/baselinePolicy.js';
 import { baselineDecisionMeaning } from '../lib/approval/challenge.js';
@@ -104,7 +105,8 @@ export async function getSummary(args) { return respond(async () => {
   const statusCategory = issue.fields.status?.statusCategory?.key?.toLowerCase();
   const isDone = statusCategory === 'done' || issue.fields.status?.name?.toLowerCase() === 'done';
 
-  const [available, baseline, review, approval, pendingRow, credentialEnrolled, isAdmin, restores] = await Promise.all([
+  const [available, baseline, review, approval, pendingRow, credentialEnrolled, isAdmin, restores,
+    governingRoots] = await Promise.all([
     availableTransitions(api, issue.key),
     activeBaseline(issueId),
     getReview(issueId),
@@ -112,7 +114,10 @@ export async function getSummary(args) { return respond(async () => {
     pendingApprovalForActor({ issueId, accountId: actor.accountId, fromStatusId }).catch(() => null),
     credentialState(actor.accountId).then(row => row?.state === 'ACTIVE').catch(() => undefined),
     isActiveAdmin(actor.accountId).catch(() => false),
-    restoresForIssue(issueId, 1).catch(() => [])
+    restoresForIssue(issueId, 1).catch(() => []),
+    // Governed-by-coverage, for a work item that is a node inside a parent's
+    // tree baseline and therefore has no va_baseline row of its own.
+    activeRootsForNode(issueId).catch(() => [])
   ]);
 
   // Never offer a transition to the same status, and never offer any once the
@@ -207,6 +212,21 @@ export async function getSummary(args) { return respond(async () => {
       treeHash: baseline.tree_hash ?? null,
       policyIncomplete: !policy
     } : null,
+    // The approval that governs this work item when it has no baseline of its
+    // own: it is a node inside a parent's tree baseline. Named here so an
+    // auditor can answer "who approved this?" from the record itself rather
+    // than having to know which hierarchy it belongs to.
+    coveredBy: (baseline ? [] : governingRoots ?? []).map(cover => ({
+      rootIssueKey: cover.rootIssueKey ?? null,
+      version: cover.version,
+      approvedName: cover.approvedName ?? null,
+      approvedBy: cover.approvedBy ?? null,
+      capturedAt: cover.capturedAt,
+      transitionAt: cover.transitionAt,
+      assuranceLevel: cover.assuranceLevel ?? null,
+      requiredRole: cover.requiredRole ?? null,
+      treeHash: cover.treeHash ?? null
+    })),
     latestApproval: approval ? {
       decision: approval.decision,
       state: approval.state,

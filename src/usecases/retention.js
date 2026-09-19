@@ -32,13 +32,11 @@ export async function setRetentionPolicy(req, overrides) {
     const { accountId } = req.context;
   const { days = null, acknowledgeShortPeriod = false } = req.payload ?? {};
   if (days == null || days === '') {
-    for (const key of [RETENTION_DAYS_CFG, RETENTION_ACK_CFG]) {
-      await query(deps, 'DELETE FROM va_config WHERE cfg_key = ?', [key]);
-    }
     await append(auditStore, {
-      eventId: newId(), actorAccountId: accountId, eventType: EVENT.CONTROLLED_TRANSITION_CHANGED,
-      payload: { change: 'RETENTION_POLICY', action: 'CLEARED', effect: 'Records retained indefinitely' }
+      eventId: newId(), actorAccountId: accountId, eventType: EVENT.CONFIG_CHANGED,
+      payload: { change: 'RETENTION_POLICY', action: 'CLEAR_REQUESTED', effect: 'Records retained indefinitely' }
     });
+    await query(deps, 'DELETE FROM va_config WHERE cfg_key IN (?, ?)', [RETENTION_DAYS_CFG, RETENTION_ACK_CFG]);
     return { success: true, description: describeRetention(retentionPolicy({})) };
   }
   const parsed = Number(days);
@@ -53,23 +51,15 @@ export async function setRetentionPolicy(req, overrides) {
     };
   }
   const now = Date.now();
-  for (const [key, value] of [[RETENTION_DAYS_CFG, String(parsed)], [RETENTION_ACK_CFG, String(acknowledgeShortPeriod === true)]]) {
-    const res = await executeQuery(
-      `INSERT INTO va_config (cfg_key, cfg_value, updated_at, updated_by)
-       VALUES (?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE cfg_value = VALUES(cfg_value), updated_at = VALUES(updated_at), updated_by = VALUES(updated_by)`,
-      [key, value, now, accountId]
-    );
-    if (!res.result) return { success: false, error: 'Failed to save retention policy' };
-  }
   await append(auditStore, {
-    eventId: newId(), actorAccountId: accountId, eventType: EVENT.CONTROLLED_TRANSITION_CHANGED,
-    payload: {
-      change: 'RETENTION_POLICY', action: 'SET', days: parsed,
-      belowFloor: parsed < RETENTION_FLOOR_DAYS,
-      acknowledged: acknowledgeShortPeriod === true
-    }
+    eventId: newId(), actorAccountId: accountId, eventType: EVENT.CONFIG_CHANGED,
+    payload: { change: 'RETENTION_POLICY', action: 'SET_REQUESTED', days: parsed,
+      belowFloor: parsed < RETENTION_FLOOR_DAYS, acknowledged: acknowledgeShortPeriod === true }
   });
+  await query(deps, `INSERT INTO va_config (cfg_key, cfg_value, updated_at, updated_by)
+    VALUES (?, ?, ?, ?), (?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE cfg_value = VALUES(cfg_value), updated_at = VALUES(updated_at), updated_by = VALUES(updated_by)`,
+    [RETENTION_DAYS_CFG, String(parsed), now, accountId, RETENTION_ACK_CFG, String(acknowledgeShortPeriod === true), now, accountId]);
   return { success: true, description: describeRetention(retentionPolicy({ [RETENTION_DAYS_CFG]: String(parsed), [RETENTION_ACK_CFG]: String(acknowledgeShortPeriod === true) })) };
   }, overrides, 'retention');
 }

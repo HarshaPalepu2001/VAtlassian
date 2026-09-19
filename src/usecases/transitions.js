@@ -59,7 +59,7 @@ export async function createControlledTransition(req, overrides) {
     await verifyControlledTransition(input, deps);
     if (input.captureBaseline) {
       const rows = await deps.declaredFieldRows({ projectId: input.projectId, issueTypeId: input.issueTypeId });
-      if (rows.some(r => r.store_values === 0 || r.store_values === false)) {
+      if (rows.some(r => r.state !== 'EXCLUDED' && (r.store_values === 0 || r.store_values === false || r.store_values === '0'))) {
         throw new Error('This project has fields with retention disabled. Enable retention for all tracked fields before creating a capture-baseline policy.');
       }
     }
@@ -91,7 +91,7 @@ export async function updateControlledTransition(req, overrides) {
     await verifyControlledTransition(input, deps, { excludeCtId: id });
     if (input.captureBaseline) {
       const rows = await deps.declaredFieldRows({ projectId: input.projectId, issueTypeId: input.issueTypeId });
-      if (rows.some(r => r.store_values === 0 || r.store_values === false)) {
+      if (rows.some(r => r.state !== 'EXCLUDED' && (r.store_values === 0 || r.store_values === false || r.store_values === '0'))) {
         throw new Error('This project has fields with retention disabled. Enable retention for all tracked fields before updating a capture-baseline policy.');
       }
     }

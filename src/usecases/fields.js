@@ -5,7 +5,7 @@ const ACTIVE_STATE = 'ACTIVE';
 export async function fieldSetup(req, overrides) {
  return runAdmin(req, async (deps) => {
   const { context, payload } = req;
-  const { declaredFieldRows, readScopeFields, storageReport, withAlwaysControlled, candidateFields, DEFAULT_LADDER, DEFAULT_MATERIALITY } = deps;
+  const { declaredFieldRows, readScopeFields, storageReport, withAlwaysControlled, candidateFields, ALWAYS_CONTROLLED_FIELDS, DEFAULT_LADDER, DEFAULT_MATERIALITY } = deps;
   const { projectId, issueTypeId } = fieldScope(payload);
   if (!projectId || !issueTypeId) return { ok: false, error: 'NO_SCOPE' };
   const [allRows, jiraFields, storage] = await Promise.all([
@@ -34,6 +34,8 @@ export async function fieldSetup(req, overrides) {
     ok: true,
     controlled: controlled.map((f) => ({
       ...f,
+      pinned: ALWAYS_CONTROLLED_FIELDS.some(p => p.field_id === f.field_id),
+      declared: allRows.some(r => r.field_id === f.field_id && String(r.issue_type_id) === issueTypeId),
       restorable: f.writable !== false
     })),
     trackedCount: controlled.length,

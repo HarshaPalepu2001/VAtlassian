@@ -42,6 +42,7 @@ const hooks = registerHooks({
 const { createApprovalUsecases } = await import('../src/usecases/approval.js');
 const { prepareApproval, applyApproval } = await import('../src/usecases/drift.js');
 const { writeCapturedBaseline } = await import('../src/lib/capture.js');
+const { DENY } = await import('../src/lib/errors.js');
 
 const clone = value => structuredClone(value);
 const now = () => 1700000000000;
@@ -206,7 +207,8 @@ function fixture() {
   const deps={now,issue:async()=>describe(),actor:async accountId=>({accountId,displayName:'Reviewer'}),
     edge:async()=>f.policy,eligible:async()=>true,transition:async(_issue,payload)=>{
       f.transitionRequests.push({...payload});
-      return String(payload.transitionId)==='5'?{id:'5',toStatusId:'2'}:null;
+      if(f.unavailableTransitions)return null;
+      return String(payload.transitionId)==='5'?{id:'5',toStatusId:'2'}:f.extraTransitions?.[String(payload.transitionId)]??null;
     },
     prepare:prepareApproval,apply:applyApproval,totpDeps:totpFixture(now),
     record:async r=>f.rows.push(r),audit:async a=>f.audits.push(a),
@@ -307,7 +309,13 @@ test('a field Jira silently drops leaves restoration incomplete and the validato
   const f=fixture();f.issue.fields.labels=['new'];f.dropWrite='labels';
   const result=await f.sign({decision:'REJECT'});
   assert.equal(result.restore.state,'PARTIAL');assert.equal(result.restore.success,false);
-  assert.equal(f.review.state,'ERROR');assert.equal(f.drift[0].approval_id,null);assert.equal((await f.gate()).result,false);
+  // The verification named the field that did not take, so this is drift with
+  // evidence rather than an app error nobody can act on — and the transition is
+  // still refused, which is the guarantee that matters here. ERROR would refuse
+  // it too, as ITEM_BUSY, but leaves the reviewer no way out of the state.
+  assert.equal(f.review.state,'DRIFTED');
+  assert.ok(result.restore.unmatched.some(entry=>entry.fieldId==='labels'),JSON.stringify(result.restore.unmatched));
+  assert.equal(f.drift[0].approval_id,null);assert.equal((await f.gate()).result,false);
 });
 test('a partial rejection can resume after a legacy DECIDING lock',async()=>{
   const f=fixture();f.issue.fields.labels=['new'];f.dropWrite='labels';
@@ -394,4 +402,62 @@ test('rejection restores the baseline fields without changing the issue status',
   assert.equal(f.issue.fields.status.id,'2');
   assert.equal(f.issue.fields.summary,'v1 approved');
   assert.equal(result.restore.state,'COMPLETE',JSON.stringify(result.restore));
+});
+
+test('a second workflow transition on an already-baselined item signs under the transition rule and captures v2',async()=>{
+  const f=fixture();
+  // The item was baselined by an earlier pass through this edge and has since
+  // come back to review. A workflow signature must use the edge's configured
+  // meaning, not the drift-decision meaning derived from baseline v1.
+  f.policy={...f.policy,meaning:'baselining requirements'};
+  const result=await f.sign({intent:'WORKFLOW'});
+  assert.equal(result.success,true,JSON.stringify(result));
+  assert.equal(result.transitioned,true,JSON.stringify(result));
+  assert.equal(f.rows[0].meaning,'baselining requirements');
+  assert.equal(f.rows[0].baseline_id,null);
+  assert.equal(f.baselines.at(-1).version,2);
+  assert.equal(f.baselines.at(-1).state,'ACTIVE');
+});
+test('a workflow transition out of a later status is not replayed against the baseline review status',async()=>{
+  const f=fixture();
+  f.issue.fields.status.id='2';
+  f.policy={transition_id:'7',from_status_id:'2',to_status_id:'3',required_assurance:'ESIGNATURE',
+    required_role:'reviewer',meaning:'Start development',capture_baseline:true,block_on_drift:true};
+  f.extraTransitions={'7':{id:'7',toStatusId:'3'}};
+  const result=await f.sign({intent:'WORKFLOW',transitionId:'7',preauthorize:true});
+  assert.equal(result.success,true,JSON.stringify(result));
+  assert.equal(f.rows[0].meaning,'Start development');
+  assert.equal(f.rows[0].transition_id,'7');
+  assert.equal(f.rows[0].state,'PENDING');
+  assert.equal(f.baselines.at(-1).version,2);
+});
+test('a drift approval outside the baseline review status reports STATUS_CHANGED',async()=>{
+  const f=fixture();
+  f.issue.fields.status.id='2';
+  const result=await f.api.challenge(f.args);
+  assert.equal(result.success,false);
+  assert.equal(result.reason,'STATUS_CHANGED');
+  assert.notEqual(result.error,DENY.SERVICE_UNAVAILABLE);
+});
+test('a drift approval whose baseline transition Jira no longer offers reports TRANSITION_UNAVAILABLE',async()=>{
+  const f=fixture();
+  f.unavailableTransitions=true;
+  const result=await f.api.challenge(f.args);
+  assert.equal(result.success,false);
+  assert.equal(result.reason,'TRANSITION_UNAVAILABLE');
+});
+test('a drift approval whose baseline edge now leads elsewhere reports TRANSITION_MISMATCH',async()=>{
+  const f=fixture();
+  // Jira still offers transition 5, but it no longer lands on the baseline's destination.
+  f.baselines[f.baselines.length-1]={...f.baselines.at(-1),to_status_id:'9'};
+  const result=await f.api.challenge(f.args);
+  assert.equal(result.success,false);
+  assert.equal(result.reason,'TRANSITION_MISMATCH');
+});
+test('every reason a signing surface can return has its own message',()=>{
+  for(const reason of ['POLICY_CHANGED','STATUS_CHANGED','TRANSITION_UNAVAILABLE','TRANSITION_MISMATCH',
+    'MISSING_PARENT','MISSING_ROOT','DUPLICATE_NODE','CYCLE_DETECTED','TREE_LIMIT_EXCEEDED','BASELINE_VALUES_REQUIRED']){
+    assert.equal(typeof DENY[reason],'string',reason);
+    assert.notEqual(DENY[reason],DENY.SERVICE_UNAVAILABLE,reason);
+  }
 });

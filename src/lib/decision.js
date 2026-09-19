@@ -136,17 +136,43 @@ export function decide({ decision, diff, plan = null, evidenceHash = null }) {
 }
 
 /**
- * Where the review row lands after a decision.
+ * Where the review row lands after a decision. THE ONLY DEFINITION.
  *
- * A rejection returns the item to BASELINED only when the restore fully
- * verified. A partial restore leaves ERROR, on purpose: the item is neither at
- * its approved state nor honestly drifted, and the one thing that must not
- * happen is it quietly re-entering the queue as though nothing went wrong.
- * ERROR is visible in the admin console and says what failed.
+ * ─── WHY IT NOW DISTINGUISHES TWO KINDS OF "NOT COMPLETE" ────────────────────
+ *
+ * This used to send every unfinished restore to ERROR, on the reasoning that a
+ * partly restored item is "neither at its approved state nor honestly drifted".
+ * That reasoning holds for one of the two things PARTIAL can mean and not the
+ * other, and collapsing them had a cost a reviewer paid directly.
+ *
+ * gate.js refuses a transition on an item in ERROR with RESTORE_IN_PROGRESS —
+ * ITEM_BUSY. It is a state a person cannot act their way out of from the panel:
+ * the only exit is a restore retry, and while the retry was itself refused (see
+ * lib/restore/resume.js) an item whose fields were in fact all correct could
+ * sit there blocking every transition, for ever, with no explanation.
+ *
+ * So the two are separated by whether the app knows what it is looking at:
+ *
+ *   · The restore ran to the end and the verification pass named exactly which
+ *     tracked fields still differ from the approved values. That is DRIFT, with
+ *     evidence. It belongs in the reviewer's queue, where the fields are listed
+ *     and can be restored again or decided on. The gate still refuses the
+ *     transition — as UNDECIDED_DRIFT, which is true and which a reviewer can
+ *     clear.
+ *
+ *   · Anything else — a batch that could not run, a verification read that
+ *     failed, a restore that died midway — leaves the app unable to say what
+ *     state the item is in. That is ERROR: an operational problem, surfaced in
+ *     the admin console, not a review decision anybody should be asked to make.
+ *
+ * COMPLETE_WITH_REPLACEMENTS is a success. It was missing here, so a tree
+ * restore that recreated a deleted work item and verified perfectly would have
+ * landed in ERROR.
  */
-export function stateAfter({ decision, restoreState }) {
+export function stateAfter({ decision, restoreState, unmatchedCount = 0 }) {
   if (decision === DECISION.APPROVE) return REVIEW_STATE.BASELINED;
-  if (restoreState === 'COMPLETE') return REVIEW_STATE.BASELINED;
+  if (restoreState === 'COMPLETE' || restoreState === 'COMPLETE_WITH_REPLACEMENTS') return REVIEW_STATE.BASELINED;
+  if (restoreState === 'PARTIAL' && Number(unmatchedCount) > 0) return REVIEW_STATE.DRIFTED;
   return REVIEW_STATE.ERROR;
 }
 

@@ -4,6 +4,7 @@ import { validEvidence } from './lib/approval/record.js';
 import { normalizeCode } from './lib/totp.js';
 import { EVENT } from './lib/ledger.js';
 import { withRequestCache } from './lib/cache.js';
+import { harnessLog } from './lib/harnessLogger.js';
 
 export function submittedApprovalToken(fields) {
   if (!fields || typeof fields !== 'object') return null;
@@ -29,13 +30,16 @@ export function createGate(deps) {
     const rawCode = rawCodeSubmitted(payload?.transition?.modifiedFields);
     const facts = { issueKey, fromStatusId, toStatusId, transitionId, hasToken: token != null, hasRawCode: rawCode };
     deps.log({ event: 'gate:enter', ...facts });
+    harnessLog('GATE', 'gate:enter', facts);
     const deny = async (reason, detail, extra = {}) => {
       const elapsedMs = deps.now() - startedAt;
       deps.log({ event: 'gate:deny', ...facts, reason, detail, elapsedMs });
+      harnessLog('GATE', 'gate:deny', { ...facts, reason, detail, elapsedMs }, 'WARN');
       try { await deps.audit({ eventType: 'TRANSITION_BLOCKED', actorAccountId: 'system', payload: { ...facts, reason, detail: detail ?? null, elapsedMs } }, { deadlineMs: 1200 }); } catch { /* refusal remains closed even if evidence storage is down */ }
       const assurance = extra.required ? ` Obtained: ${extra.obtained ?? 'none'}. Required: ${extra.required}.` : '';
       return { result: false, errorMessage: (DENY[reason] ?? DENY.SERVICE_UNAVAILABLE) + assurance };
     };
+
     if (!issueKey || !fromStatusId || !toStatusId) return deny('SERVICE_UNAVAILABLE', 'MALFORMED_PAYLOAD');
     if (rawCode) return deny('RAW_CODE_ON_SCREEN', 'RAW_TOTP_CODE_IN_MODIFIED_FIELDS');
     try {
@@ -67,7 +71,7 @@ export function createGate(deps) {
       const required = effectiveAssurance(policy.required_assurance);
       if (!meetsAssurance(approval.assurance_level, required)) return deny('INSUFFICIENT_ASSURANCE', 'ASSURANCE_FLOOR', { obtained: approval.assurance_level, required });
       if (!validEvidence(approval) || approval.content_hash !== contentHash) return deny('CONTENT_CHANGED', 'CONTENT_OR_EVIDENCE_CHANGED');
-      if (approval.signer_role !== policy.required_role || approval.meaning !== policy.meaning) return deny('NOT_CONFIGURED', 'POLICY_CHANGED');
+      if (approval.signer_role !== policy.required_role || approval.meaning !== policy.meaning) return deny('POLICY_CHANGED', 'POLICY_CHANGED');
       if (!await deps.eligible({ accountId: approval.account_id, issueTypeId, projectId, role: policy.required_role })) return deny('ELIGIBILITY_REVOKED', 'ELIGIBILITY_REVOKED');
       const result = await deps.consume({ approvalId: approval.approval_id, now: deps.now() });
       if (!result?.consumed) return deny('NO_DECISION', 'CAS_LOST_RACE');
@@ -90,7 +94,9 @@ export function createGate(deps) {
       });
       await deps.voidOthers({ issueId, exceptApprovalId: approval.approval_id, now: deps.now() });
       deps.log({ event: 'gate:allow', ...facts, elapsedMs: deps.now() - startedAt });
+      harnessLog('GATE', 'gate:allow', { ...facts, elapsedMs: deps.now() - startedAt });
       return { result: true };
+
     } catch (error) {
       return deny(error instanceof FailClosed ? error.reason : 'SERVICE_UNAVAILABLE', 'FAIL_CLOSED');
     }

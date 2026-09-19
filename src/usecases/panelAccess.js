@@ -14,7 +14,7 @@ import { planTreeCapture } from '../lib/tree/capturePlan.js';
 import { logicalNodeId } from '../lib/tree/model.js';
 import { diffTree } from '../lib/tree/diff.js';
 import { treeReviewDiff } from '../lib/tree/reviewDiff.js';
-import { readBaselineTree } from '../db/baselineTreeStore.js';
+import { readBaselineTree, activeRootsForNode } from '../db/baselineTreeStore.js';
 import { maxMateriality } from '../lib/materiality.js';
 import { fail, actorFrom, serialise, respond } from './access.js';
 
@@ -94,6 +94,18 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
     diff.historyUnavailable = changelog.failed === true;
   }
   
+  // A work item with no baseline of its own may still be governed: it can be a
+  // node inside a parent's tree baseline, covered by that approval. Without
+  // this the child's panel said "not baselined" about an item a reviewer had
+  // signed for, and an auditor could not trace the approval from the record it
+  // governs. See activeRootsForNode() for why coverage rather than a separate
+  // signature is the right model.
+  // Wrapped rather than `.catch()`-ed: a store that throws synchronously would
+  // otherwise take the whole panel down over a supplementary read.
+  const coveredBy = baseline ? [] : await (async () => {
+    try { return await activeRootsForNode(issueId); } catch { return []; }
+  })();
+
   let tree = null, currentTree = null, baselineTree = null, treeDiff = null, treeHash = null;
   const useTree = gate?.capture_baseline || baseline?.tree_hash;
   if (useTree) {
@@ -136,7 +148,7 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
   if (expectedEvidenceHash != null && expectedEvidenceHash !== (useTree ? treeHash : evidenceHash)) fail('STALE_EVIDENCE');
   const reviewDriftCount = reviewDiff?.changedFieldCount ?? treeDiff?.changes?.length ?? 0;
   return { issue, actor, issueId, projectId, issueTypeId, config, baseline, review, gate,
-    eligible, fields, editmeta, restoreEditmeta, baselineValues, driftRows, diff,
+    coveredBy, eligible, fields, editmeta, restoreEditmeta, baselineValues, driftRows, diff,
     contentHash: useTree ? treeHash : projection.contentHash, digests: projection.digests,
     evidenceHash: useTree ? treeHash : evidenceHash, baselineVersion: baseline?.version ?? 0,
     tree, currentTree, baselineTree, treeDiff, treeHash,

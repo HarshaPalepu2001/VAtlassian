@@ -74,7 +74,7 @@ export function createApprovalUsecases(deps) {
     // incorrectly replayed against the item's current status.
     if (requestedTransition) {
       const transition = await deps.transition(issue, requested);
-      if (!transition) fail('NOT_CONFIGURED');
+      if (!transition) fail('TRANSITION_UNAVAILABLE');
       const prepared = await deps.prepare({ issue, actor, decision, expectedEvidenceHash,
         forTransition: true, transition });
       const ct = await deps.edge(issue, transition, prepared);
@@ -94,10 +94,11 @@ export function createApprovalUsecases(deps) {
     if (prepared.baseline) {
       if (!ct) fail('BASELINE_POLICY_INCOMPLETE');
       if (decision === 'APPROVE') {
+        if (String(issue.statusId) !== String(ct.from_status_id)) fail('STATUS_CHANGED');
         transition = await deps.transition(issue, { transitionId: ct.transition_id });
-        if (!transition || String(transition.id) !== String(ct.transition_id)
-            || String(transition.toStatusId) !== String(ct.to_status_id)
-            || String(issue.statusId) !== String(ct.from_status_id)) fail('CONTENT_CHANGED');
+        if (!transition) fail('TRANSITION_UNAVAILABLE');
+        if (String(transition.id) !== String(ct.transition_id)
+            || String(transition.toStatusId) !== String(ct.to_status_id)) fail('TRANSITION_MISMATCH');
       } else transition = { id: String(ct.transition_id), toStatusId: String(ct.to_status_id) };
     } else ct = await deps.edge(issue, transition, prepared);
 
@@ -166,8 +167,8 @@ export function createApprovalUsecases(deps) {
           requested: challengeRow.transition_id != null
             ? { intent: 'WORKFLOW', transitionId: challengeRow.transition_id }
             : { intent: 'DRIFT' } }));
-        if (challengeRow.transition_id != null && String(challengeRow.transition_id) !== String(transition?.id ?? '')) fail('CONTENT_CHANGED');
-        if (challengeRow.transition_id == null && workflowTransition) fail('CONTENT_CHANGED');
+        if (challengeRow.transition_id != null && String(challengeRow.transition_id) !== String(transition?.id ?? '')) fail('TRANSITION_MISMATCH');
+        if (challengeRow.transition_id == null && workflowTransition) fail('TRANSITION_MISMATCH');
         if (prepared.contentHash !== challengeRow.candidate_hash) fail('CONTENT_CHANGED');
         if (activeOperationLock(prepared.review, deps.now())) fail('RESTORE_IN_PROGRESS');
         // A signed capture resolves this drift in apply(), before a pending

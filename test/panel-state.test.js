@@ -22,7 +22,7 @@ const modules = {
   'db/configStore.js': ['controlledFields', 'projectConfig', 'gateActiveOutOf', 'gatedTransition',
     'listGatedTransitions', 'declaredFieldRows', 'seedControlledFields', 'countControlledFields'],
   'db/baselineStore.js': ['activeBaseline', 'readAllValues', 'baselineHistory'],
-  'db/baselineTreeStore.js': ['readBaselineTree'],
+  'db/baselineTreeStore.js': ['readBaselineTree', 'activeRootsForNode'],
   'db/itemStateStore.js': ['getReview'],
   'db/driftStore.js': ['driftForIssue'],
   'db/approvalStore.js': ['approvalById', 'pendingApprovalForActor', 'latestApproval'],
@@ -96,6 +96,10 @@ function fixture(overrides = {}) {
     issueControlStatus: async () => ({ incidents: [], gateFindings: [] }),
     adminIncidentCount: async () => 0,
     restoresForIssue: async () => [],
+    // A work item that is a node inside someone else's tree baseline resolves
+    // its governing approval through this. Most fixtures here are roots, so the
+    // default is "covered by nothing of its own".
+    activeRootsForNode: async () => [],
     credentialState: async () => f.credential,
     isActiveAdmin: async () => false,
     isEligible: async () => true,

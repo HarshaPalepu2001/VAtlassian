@@ -1,5 +1,6 @@
 import { fieldScope, fieldCatalogue } from './fieldsValidation.js';
 import { runAdmin } from './adminRuntime.js';
+import { assertRetentionRemovable } from './fieldsConfiguration.js';
 const ACTIVE_STATE = 'ACTIVE';
 
 export async function classifyFieldsForBaseline(req, overrides) {
@@ -80,6 +81,9 @@ export async function saveControlledFieldsBaseline(req, overrides) {
   const retentionById = new Map(submitted.map(f => [f.fieldId, f.storeValues]));
   const storeValuesFor = id => retentionById.get(id) ?? Boolean(Number(catalogue.rows.find(r => r.field_id === id && String(r.issue_type_id) === issueTypeId)?.store_values ?? 0));
   const { tracked, excluded } = partitionForBaseline(submitted, fieldsById);
+  if (tracked.some(f => !storeValuesFor(f.fieldId))) {
+    await assertRetentionRemovable(deps, { projectId, issueTypeId });
+  }
   const now = Date.now();
   const auditPayload = buildBaselineAuditPayload({
     projectId, issueTypeId, tracked, excluded, now

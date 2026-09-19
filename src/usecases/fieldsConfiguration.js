@@ -4,7 +4,7 @@ import { fieldScope, fieldCatalogue, fieldRow, validateConfig } from './fieldsVa
 /** listGatedTransitions() already decodes capture_baseline to a real boolean
  *  (configStore.js normalizes Forge SQL's 0/1 with `!!Number(...)`), so a
  *  plain truthy check here is correct. */
-async function assertRetentionRemovable(deps, scope) {
+export async function assertRetentionRemovable(deps, scope) {
   const gates = await deps.listGatedTransitions(scope.projectId);
   const scopeCoversGate = gate => scope.issueTypeId === '*'
     || String(gate.issue_type_id) === scope.issueTypeId
@@ -58,15 +58,25 @@ export async function saveConfig(req, overrides) {
   return runAdmin(req, async deps => {
     const payload = req.payload ?? {};
     const key = payload.projectId == null ? 'site' : `project:${fieldScope({ ...payload, issueTypeId: '*' }).projectId}`;
-    const config = validateConfig(payload.config ?? {});
+    const patch = validateConfig(payload.config ?? {});
+    const current = await deps.readConfigRecord(key);
+    if (Object.hasOwn(payload, 'expectedRevision') && payload.expectedRevision !== current.revision) {
+      throw new Error('Settings changed since you loaded this page. Reload and review the latest values before saving.');
+    }
+    const merge = (base, over) => Object.fromEntries(Object.entries({ ...base, ...over }).map(([k, v]) =>
+      [k, over[k] && typeof over[k] === 'object' && !Array.isArray(over[k]) ? merge(base?.[k] ?? {}, over[k]) : v]));
+    const config = validateConfig(merge(current.config, patch));
     if (config.policy?.mode === 'STRICT') {
       if (await deps.hasUnresolvedDrift(payload.projectId ?? null)) {
         throw new Error('Cannot enable STRICT mode: there is unresolved drift. Approve or reject all pending drift first.');
       }
+      throw new Error('STRICT mode is not supported. Approval is enforced by configured Jira workflow validators; content changes are detected after they occur.');
     }
     await deps.tryAppend({ actorAccountId: req.context.accountId, eventType: deps.EVENT.CONFIG_CHANGED,
       payload: { scope: key, keys: Object.keys(config), action: 'SAVE_REQUESTED', config } });
-    await deps.setConfig(key, config, req.context.accountId, Date.now());
+    if (!await deps.setConfigIfCurrent(key, config, req.context.accountId, Date.now(), current.revision)) {
+      throw new Error('Settings changed during this save. Reload and review the latest values before trying again.');
+    }
     return { ok: true };
   }, overrides, 'fields');
 }
@@ -75,6 +85,9 @@ export async function getConfig(req, overrides) {
   return runAdmin(req, async deps => {
     const projectId = req.payload?.projectId;
     if (projectId != null) fieldScope({ projectId });
-    return { config: await deps.projectConfig(projectId ?? null) };
+    const key = projectId == null ? 'site' : `project:${fieldScope({projectId}).projectId}`;
+    const record = await deps.readConfigRecord(key);
+    if (projectId != null) await deps.readConfigRecord('site');
+    return { config: await deps.projectConfig(projectId ?? null), revision: record.revision };
   }, overrides, 'fields');
 }

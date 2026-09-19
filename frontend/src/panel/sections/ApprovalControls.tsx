@@ -10,10 +10,12 @@ import type { AssuranceLevel } from '../../lib/assurance';
 import { assertResult, errorMessage } from '../../lib/result';
 import type { Result } from '../../lib/result';
 import type { PanelEvidence, PanelSummary } from '../types';
+import { recordHarnessEvent } from '../../lib/harness';
 import {
   PROGRESS, approvalPayload, approvalReady, captureFact, driftFact, movingTo, recordingProgress, resolveSelectedAction,
   restoreStateLabel, transitionApproveLabel, transitionDestination, transitionOptionLabel, transitionScopeLabel
 } from '../approvalModel';
+
 import { biometricStatus, confirmBiometric, enrolBiometric } from '../deviceAuth';
 
 type Decision = 'APPROVE' | 'REJECT';
@@ -126,6 +128,7 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
   const driftEvidenceBlocked = reviewingDrift && (Boolean(evidenceLoading) || !evidence);
 
   function choose(transitionId: string) {
+    recordHarnessEvent('UI', 'select:transition', { transitionId, issueKey: targetKey });
     generation.current += 1;
     lock.current = null;
     setStored(blankSession(resolveSelectedAction(summary, transitionId).actionKey, generation.current));
@@ -138,13 +141,14 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
   /** Starts an action synchronously — progress shown and duplicates refused
    *  in the same click — or returns null if one is already running. */
   function begin(phase: Phase, progress: string, phaseDecision: Decision | null = null): number | null {
-    if (session.generation < 0 || lock.current === session.generation) return null;
-    const gen = session.generation;
+    if (lock.current !== null) return null;
+    const gen = generation.current;
     lock.current = gen;
     setOutcome(null);
     patch(gen, { phase, phaseDecision, progress, message: '', failed: false });
     return gen;
   }
+
 
   function end(gen: number) {
     if (lock.current === gen) lock.current = null;
@@ -152,6 +156,13 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
   }
 
   async function requestChallenge(decision: Decision) {
+    recordHarnessEvent('UI', 'click:requestChallenge', {
+      decision,
+      reviewingDrift,
+      transitionId: reviewingDrift ? undefined : transition?.transitionId,
+      issueKey: targetKey,
+      note: session.note
+    });
     if (driftEvidenceBlocked) return;
     const gen = begin('challenge', PROGRESS.preparing, decision);
     if (gen === null) return;
@@ -163,8 +174,10 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
         intent: reviewingDrift ? 'DRIFT' : 'WORKFLOW',
         decision, code: '', note: session.note, evidenceHash: reviewingDrift ? evidence?.evidenceHash : undefined, confirmed: true, level
       })));
+      recordHarnessEvent('UI', 'challenge:received', { challengeId: result.challengeId, requiredAssurance: result.requiredAssurance, issueKey: targetKey });
       patch(gen, { challenge: { id: result.challengeId, nonce: result.nonce, decision, expiresAt: result.expiresAt, meaning: result.meaning, requiredAssurance: result.requiredAssurance } });
     } catch (e) {
+      recordHarnessEvent('ERROR', 'challenge:failed', { decision, issueKey: targetKey }, e);
       patch(gen, { failed: true, message: errorMessage(e) });
     } finally {
       end(gen);
@@ -174,6 +187,13 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
   async function submit() {
     const challenge = session.challenge;
     if (!challenge) return;
+    recordHarnessEvent('UI', 'click:submitSignature', {
+      decision: challenge.decision,
+      mode,
+      challengeId: challenge.id,
+      confirmed: session.confirmed,
+      issueKey: targetKey
+    });
     const recording = recordingProgress({ decision: challenge.decision, reviewingDrift, transition });
     const gen = begin('submit', mode === 'biometric' ? PROGRESS.biometric : recording, challenge.decision);
     if (gen === null) return;
@@ -184,13 +204,18 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
       let webauthn;
       if (mode === 'biometric') {
         const check = await confirmBiometric({ approvalChallengeId: challenge.id }).catch(e => ({ ok: false as const, error: errorMessage(e) }));
-        if (!check.ok) { patch(gen, { failed: true, message: check.error ?? 'The device check did not complete. Nothing has been recorded.' }); return; }
+        if (!check.ok) {
+          recordHarnessEvent('ERROR', 'submit:biometricCheckFailed', { challengeId: challenge.id, error: check.error, issueKey: targetKey });
+          patch(gen, { failed: true, message: check.error ?? 'The device check did not complete. Nothing has been recorded.' });
+          return;
+        }
         webauthn = check.assertion;
         patch(gen, { progress: recording });
       }
       const result = assertResult(await invoke<Result & { approvalId: string; transitioned?: boolean; state?: string; transitionError?: string }>('signature:submit', {
         challengeId: challenge.id, note, confirmed, issueKey: targetKey, ...(mode === 'totp' ? { code } : {}), ...(webauthn ? { webauthn } : {})
       }));
+      recordHarnessEvent('UI', 'submit:recorded', { approvalId: result.approvalId, transitioned: result.transitioned, state: result.state, issueKey: targetKey });
       // The signature is spent either way; it is never offered again.
       if (lock.current === gen) lock.current = null;
       patch(gen, { challenge: null, confirmed: false, note: '', code: '', phase: null, phaseDecision: null, progress: '' });
@@ -204,6 +229,7 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
       }
       await onDone();
     } catch (e) {
+      recordHarnessEvent('ERROR', 'submit:failed', { challengeId: challenge.id, issueKey: targetKey }, e);
       patch(gen, { failed: true, message: errorMessage(e), code: '' });
     } finally {
       end(gen);
@@ -211,13 +237,21 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
   }
 
   async function setupDevice() {
+    recordHarnessEvent('UI', 'click:setupDevice', { issueKey: targetKey });
     const gen = begin('device', 'Setting up biometric approval');
     if (gen === null) return;
     try {
       const result = await enrolBiometric();
-      if (result.ok === false) patch(gen, { failed: true, message: result.error ?? 'The device setup did not complete. Nothing has been recorded.' });
-      else { patch(gen, { message: 'This device is registered. You can now approve with a biometric check.' }); setDeviceNonce(n => n + 1); }
+      if (result.ok === false) {
+        recordHarnessEvent('ERROR', 'setupDevice:failed', { error: result.error, issueKey: targetKey });
+        patch(gen, { failed: true, message: result.error ?? 'The device setup did not complete. Nothing has been recorded.' });
+      } else {
+        recordHarnessEvent('UI', 'setupDevice:success', { issueKey: targetKey });
+        patch(gen, { message: 'This device is registered. You can now approve with a biometric check.' });
+        setDeviceNonce(n => n + 1);
+      }
     } catch (e) {
+      recordHarnessEvent('ERROR', 'setupDevice:exception', { issueKey: targetKey }, e);
       patch(gen, { failed: true, message: errorMessage(e) });
     } finally {
       end(gen);
@@ -226,16 +260,23 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
 
   async function retryTransition() {
     if (!pending?.transitionId) return;
+    recordHarnessEvent('UI', 'click:retryTransition', {
+      approvalId: pending.approvalId,
+      transitionId: pending.transitionId,
+      issueKey: targetKey
+    });
     const gen = begin('retry', movingTo(transitions.find(t => t.transitionId === pending.transitionId)));
     if (gen === null) return;
     try {
       const result = assertResult(await invoke<Result & { transitioned?: boolean; transitionError?: string }>('approval:retryTransition', { issueKey: targetKey, approvalId: pending.approvalId, transitionId: pending.transitionId }));
+      recordHarnessEvent('UI', 'retryTransition:result', { transitioned: result.transitioned, error: result.transitionError, issueKey: targetKey });
       if (lock.current === gen) lock.current = null;
       patch(gen, { phase: null, phaseDecision: null, progress: '' });
       if (result.transitioned) { setOutcome({ failed: false, message: 'Transition completed.' }); view.refresh().catch(() => {}); }
       else setOutcome({ failed: true, message: result.transitionError ?? result.message ?? 'Transition is still pending.' });
       await onDone();
     } catch (e) {
+      recordHarnessEvent('ERROR', 'retryTransition:exception', { issueKey: targetKey }, e);
       patch(gen, { failed: true, message: errorMessage(e) });
     } finally {
       end(gen);

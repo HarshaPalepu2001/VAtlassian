@@ -76,7 +76,7 @@ export async function upsertBaselined({
      drift_count = 0, drifted_field_count = 0, max_materiality = NULL,
      last_drift_at = NULL, last_drift_by = NULL, last_checked_at = ?, last_changelog_id = ?,
      version = version + 1
-     WHERE issue_id = ? AND (baseline_version IS NULL OR baseline_version < ?)`,
+     WHERE issue_id = ? AND (baseline_version IS NULL OR baseline_version <= ?)`,
     [
       issueKey, projectId, issueTypeId, truncate(summary, 255),
       reviewerAccountId ?? null, reviewerName ?? null,
@@ -275,8 +275,15 @@ export async function reviewsByIds(issueIds) {
 
   const placeholders = ids.map(() => '?').join(', ');
   const rows = await throwing(
-    `SELECT ${REVIEW_COLUMNS} FROM va_item_state
-     WHERE issue_id IN (${placeholders}) LIMIT ${limitClause(ids.length)}`,
+    `SELECT i.issue_id, i.issue_key, i.project_id, i.issue_type_id, i.summary,
+            i.reviewer_account_id, i.reviewer_name, i.state,
+            TO_BASE64(COALESCE(b.baseline_id, i.baseline_id)) AS baseline_id,
+            COALESCE(b.version, i.baseline_version) AS baseline_version,
+            i.content_hash, i.field_digests, i.drift_count, i.drifted_field_count, i.max_materiality,
+            i.last_drift_at, i.last_drift_by, i.last_checked_at, i.last_changelog_id, i.version
+     FROM va_item_state i
+     LEFT JOIN va_baseline b ON b.issue_id = i.issue_id AND b.state = 'ACTIVE'
+     WHERE i.issue_id IN (${placeholders}) LIMIT ${limitClause(ids.length)}`,
     ids
   );
   return rows.map(decode);

@@ -3,6 +3,8 @@ import { invoke } from '../../lib/bridge';
 import Button from '@atlaskit/button';
 import SectionMessage from '@atlaskit/section-message';
 import Textfield from '@atlaskit/textfield';
+import UserPicker from '../UserPicker';
+import { assertResult, errorMessage } from '../../lib/result';
 
 import {
   Badge, Card, EmptyState, Field, Name, Page, Person, Section, Select, Table
@@ -51,13 +53,12 @@ export default function RolesPage({ projects }: { projects: Project[] }) {
   const [issueTypeId, setIssueTypeId] = useState('');
   const [role, setRole] = useState('');
 
-  const [userQuery, setUserQuery] = useState('');
-  const [userResults, setUserResults] = useState<JiraUser[]>([]);
   const [selectedUser, setSelectedUser] = useState<JiraUser | null>(null);
 
   const [filter, setFilter] = useState('');
 
   const loadGrants = async () => {
+    setLoading(true);
     try {
       const response = await invoke('admin:listEligibility', {}) as
         { success: boolean; grants?: EligibilityGrant[]; error?: string };
@@ -73,22 +74,15 @@ export default function RolesPage({ projects }: { projects: Project[] }) {
   useEffect(() => { loadGrants(); }, []);
 
   useEffect(() => {
-    if (!projectId) { setIssueTypes([]); return; }
-    invoke('admin:listIssueTypesForProject', { projectId })
-      .then((r: any) => { if (r.success) setIssueTypes(r.issueTypes ?? []); });
+    let active = true;
+    setIssueTypes([]);
+    if (projectId) invoke('admin:listIssueTypesForProject', { projectId })
+      .then((r: any) => { assertResult(r); if (active) setIssueTypes(r.issueTypes ?? []); })
+      .catch(e => { if (active) setMessage({ type: 'error', text: errorMessage(e) }); });
+    return () => { active = false; };
   }, [projectId]);
 
-  useEffect(() => {
-    const handle = setTimeout(async () => {
-      if (userQuery.trim().length < 2 || selectedUser) { setUserResults([]); return; }
-      const response = await invoke('admin:searchUsers', { query: userQuery }) as
-        { success: boolean; users?: JiraUser[] };
-      if (response.success) setUserResults(response.users ?? []);
-    }, 300);
-    return () => clearTimeout(handle);
-  }, [userQuery, selectedUser]);
-
-  const complete = selectedUser && issueTypeId && role.trim();
+  const complete = selectedUser && projectId && issueTypeId && role.trim();
 
   const handleGrant = async () => {
     setMessage(null);
@@ -107,7 +101,7 @@ export default function RolesPage({ projects }: { projects: Project[] }) {
           type: 'success',
           text: `${selectedUser!.displayName} may now sign as "${role.trim()}".`
         });
-        setSelectedUser(null); setUserQuery(''); setRole('');
+        setSelectedUser(null); setRole('');
         await loadGrants();
       } else {
         setMessage({ type: 'error', text: result.error || 'Failed to grant eligibility.' });
@@ -120,17 +114,13 @@ export default function RolesPage({ projects }: { projects: Project[] }) {
   };
 
   const handleRevoke = async (grant: EligibilityGrant) => {
-    const result = await invoke('admin:revokeEligibility', { elId: grant.elId }) as
-      { success: boolean; error?: string };
-    if (result.success) {
-      setMessage({
-        type: 'success',
-        text: `${grant.signerName ?? 'That signer'} can no longer sign as "${grant.role}".`
-      });
+    if (saving) return;
+    setSaving(true); setMessage(null);
+    try {
+      assertResult(await invoke('admin:revokeEligibility', { elId: grant.elId }) as any);
       await loadGrants();
-    } else {
-      setMessage({ type: 'error', text: result.error || 'Failed to revoke eligibility.' });
-    }
+    } catch (e) { setMessage({ type: 'error', text: errorMessage(e) }); }
+    finally { setSaving(false); }
   };
 
   // Filtering is client-side against the names already on screen. The previous
@@ -153,7 +143,7 @@ export default function RolesPage({ projects }: { projects: Project[] }) {
       {message && (
         <div style={{ marginBottom: '20px' }}>
           <SectionMessage appearance={message.type}>
-            <p>{message.text}</p>
+            <p>{message.text}</p>{message.type==='error'&&<Button isDisabled={saving} onClick={loadGrants}>Retry loading roles</Button>}
           </SectionMessage>
         </div>
       )}
@@ -176,46 +166,10 @@ export default function RolesPage({ projects }: { projects: Project[] }) {
         title="Grant a role"
         subtitle="Eligibility is granted per work item type, so a Change Request approver is not automatically a Deviation approver."
       >
-        <div className="va-form-grid va-form-grid--wide">
-          <div className="va-field va-typeahead">
-            <span className="va-label">Person</span>
-            {selectedUser ? (
-              <div className="va-typeahead__selected">
-                <Person name={selectedUser.displayName} meta={selectedUser.emailAddress} />
-                <span className="va-spacer" />
-                <Button
-                  appearance="subtle"
-                  onClick={() => { setSelectedUser(null); setUserQuery(''); }}
-                >
-                  Change
-                </Button>
-              </div>
-            ) : (
-              <>
-                <Textfield
-                  placeholder="Search by name or email…"
-                  value={userQuery}
-                  onChange={(e: any) => setUserQuery(e.target.value)}
-                />
-                {userResults.length > 0 && (
-                  <div className="va-typeahead__menu">
-                    {userResults.map((user) => (
-                      <button
-                        type="button"
-                        key={user.accountId}
-                        className="va-typeahead__option"
-                        onClick={() => { setSelectedUser(user); setUserResults([]); }}
-                      >
-                        <Person name={user.displayName} meta={user.emailAddress} />
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </>
-            )}
-          </div>
+        <fieldset disabled={saving} style={{border:0,padding:0,margin:0,minWidth:0}}><div className="va-form-grid va-form-grid--wide">
+          <UserPicker value={selectedUser} onChange={setSelectedUser} />
 
-          <Field label="Project" hint="Used to narrow the work item types below.">
+          <Field label="Project" hint="This grant applies only to the selected project.">
             <Select
               placeholder="Choose a project…"
               value={projectId}
@@ -252,7 +206,7 @@ export default function RolesPage({ projects }: { projects: Project[] }) {
             {complete ? 'Takes effect immediately.' : 'Choose a person, a work item type, and a role.'}
           </span>
         </div>
-      </Card>
+      </fieldset></Card>
 
       <Section title={`Who can approve${grants.length ? ` (${grants.length})` : ''}`}>
         {grants.length > 3 && (
@@ -295,7 +249,7 @@ export default function RolesPage({ projects }: { projects: Project[] }) {
                     )}
                   </td>
                   <td className="va-table__actions">
-                    <Button appearance="subtle" onClick={() => handleRevoke(grant)}>Revoke</Button>
+                    <Button appearance="subtle" isDisabled={saving} onClick={() => handleRevoke(grant)}>Revoke</Button>
                   </td>
                 </tr>
               ))}

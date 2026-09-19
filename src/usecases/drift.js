@@ -45,7 +45,13 @@ export async function releaseFailedApproval({ locked, issueId, diff, driftCount,
 export async function prepareApproval({ issue, actor, decision, expectedEvidenceHash, forTransition = false, transition = null, allowBusy = false, now = Date.now() }) {
   const fresh = await readableIssue({ payload: { issueId: issue.id }, context: { accountId: actor.accountId } });
   const active = await activeBaseline(Number(fresh.id));
-  const immutable = active ? baselinePolicy(active) : null;
+  // A workflow transition is authorised by the controlled transition it runs,
+  // even when an earlier pass through the workflow left an active baseline.
+  // Only a baseline-owned drift decision replays the baseline's frozen policy
+  // and review status; applying that to a new transition would swap its
+  // configured meaning for the drift meaning and refuse it as POLICY_CHANGED.
+  const workflowTransition = forTransition && transition != null;
+  const immutable = active && !workflowTransition ? baselinePolicy(active) : null;
   const approvalPolicy = immutable ? {
     transition_id: immutable.transitionId,
     from_status_id: immutable.reviewStatusId,
@@ -61,7 +67,7 @@ export async function prepareApproval({ issue, actor, decision, expectedEvidence
   if (immutable) {
     if (!prepared.baseline || !Buffer.from(prepared.baseline.baseline_id).equals(Buffer.from(immutable.baselineId))
         || Number(prepared.baseline.version) !== immutable.version) fail('STALE_EVIDENCE');
-    if (decision === 'APPROVE' && String(fresh.fields.status?.id ?? '') !== immutable.reviewStatusId) fail('CONTENT_CHANGED');
+    if (decision === 'APPROVE' && String(fresh.fields.status?.id ?? '') !== immutable.reviewStatusId) fail('STATUS_CHANGED');
     const eligible = await isEligible({ accountId: actor.accountId, projectId: prepared.projectId,
       issueTypeId: prepared.issueTypeId, role: immutable.requiredRole });
     if (!eligible) fail('NOT_ELIGIBLE');
@@ -105,7 +111,7 @@ export async function prepareApproval({ issue, actor, decision, expectedEvidence
   return prepared;
 }
 
-export async function applyApproval({ issue, actor, approval, prepared, resuming = false, policy = null }) {
+export async function applyApproval({ issue, actor, approval, prepared, resuming = false, policy = null, workflowTransition = null }) {
   if (!approval?.approval_id || !actor?.accountId ||
       String(approval.actor_account_id ?? approval.account_id) !== actor.accountId ||
       String(approval.issue_id) !== String(issue.id)) fail('APPROVAL_BINDING_MISMATCH');
@@ -113,8 +119,12 @@ export async function applyApproval({ issue, actor, approval, prepared, resuming
   // hash is deliberately distinct from the reviewed diff evidence hash.
   if (!['VOID', 'CONSUMED'].includes(approval.state)) fail('APPROVAL_NOT_VERIFIED');
   const transition = approval.transition_id ? { id: approval.transition_id, toStatusId: approval.to_status_id } : null;
+  // A drift decision also carries the baseline's transition id, so the id alone
+  // cannot tell the two intents apart. Workflow approvals are recorded without
+  // a baseline binding; use that when the caller does not say explicitly.
+  const forTransition = transition != null && (workflowTransition ?? approval.baseline_id == null);
   let fresh = await prepareApproval({ issue, actor, decision: approval.decision,
-    expectedEvidenceHash: resuming ? undefined : prepared?.evidenceHash, transition, allowBusy: resuming });
+    expectedEvidenceHash: resuming ? undefined : prepared?.evidenceHash, forTransition, transition, allowBusy: resuming });
   const assertPolicy = current => {
     const authoritative = current.approvalPolicy ?? current.gate;
     if (policy && ['required_role', 'required_assurance', 'meaning', 'capture_baseline', 'block_on_drift']
@@ -142,7 +152,7 @@ export async function applyApproval({ issue, actor, approval, prepared, resuming
       // between the snapshot and this acquire. Re-read and retry once, but
       // keep the state allow-list so a live restore is never taken over.
       fresh = await prepareApproval({ issue, actor, decision: approval.decision,
-        expectedEvidenceHash: undefined, transition, allowBusy: true });
+        expectedEvidenceHash: undefined, forTransition, transition, allowBusy: true });
       assertPolicy(fresh);
     }
     if (!locked) fail(fresh.review?.state === 'RESTORING' ? 'RESTORE_IN_PROGRESS' : 'ALREADY_DECIDING');
@@ -150,7 +160,7 @@ export async function applyApproval({ issue, actor, approval, prepared, resuming
   try {
     // Re-read after the CAS: a concurrent edit must not be silently accepted.
     const checked = await prepareApproval({ issue, actor, decision: approval.decision,
-      expectedEvidenceHash: fresh.evidenceHash, transition, allowBusy: true });
+      expectedEvidenceHash: fresh.evidenceHash, forTransition, transition, allowBusy: true });
     if (!resuming && checked.contentHash !== approval.content_hash) fail('STALE_EVIDENCE');
     if (approval.decision === 'REJECT') {
       if (checked.baseline && checked.issue.fields.status?.id && String(checked.issue.fields.status.id) !== checked.baseline.from_status_id) {

@@ -81,22 +81,22 @@ export async function grantEligibility(req, overrides) {
   if (!target || target.active === false) throw new Error('Choose an active Jira user.');
   const elId = newId();
   const now = Date.now();
+  await append(auditStore, {
+    eventId: newId(),
+    actorAccountId: accountId,
+    eventType: EVENT.ELIGIBILITY_CHANGED,
+    payload: {
+      action: 'GRANT_REQUESTED', targetAccountId, issueTypeId, role,
+      scope: projectId == null ? 'ALL_PROJECTS' : 'PROJECT',
+      projectId: projectId == null ? null : String(projectId)
+    }
+  });
   const insertResult = await executeQuery(
     `INSERT INTO va_eligibility (el_id, account_id, issue_type_id, role, state, granted_at, granted_by, project_id)
      VALUES (FROM_BASE64(?), ?, ?, ?, ?, ?, ?, ?)`,
     [toBinaryParam(elId), targetAccountId, issueTypeId, role, ACTIVE, now, accountId, projectId == null ? null : String(projectId)]
   );
   if (!insertResult.result) return { success: false, error: 'Failed to grant eligibility' };
-  await append(auditStore, {
-    eventId: newId(),
-    actorAccountId: accountId,
-    eventType: EVENT.ELIGIBILITY_CHANGED,
-    payload: {
-      action: 'GRANTED', targetAccountId, issueTypeId, role,
-      scope: projectId == null ? 'ALL_PROJECTS' : 'PROJECT',
-      projectId: projectId == null ? null : String(projectId)
-    }
-  });
   return { success: true, elId: elId.toString('hex') };
   }, overrides, 'eligibility');
 }
@@ -107,17 +107,17 @@ export async function revokeEligibility(req, overrides) {
     const { accountId } = req.context;
   const { elId } = req.payload ?? {};
   if (!validId(elId)) return { success: false, error: 'elId is required' };
+  await append(auditStore, {
+    eventId: newId(),
+    actorAccountId: accountId,
+    eventType: EVENT.ELIGIBILITY_CHANGED,
+    payload: { action: 'REVOKE_REQUESTED', elId }
+  });
   const updateResult = await executeQuery(
     `UPDATE va_eligibility SET state = ? WHERE el_id = FROM_BASE64(?)`,
     [REVOKED, toBinaryParam(Buffer.from(elId, 'hex'))]
   );
   if (!updateResult.result) return { success: false, error: 'Failed to revoke eligibility' };
-  await append(auditStore, {
-    eventId: newId(),
-    actorAccountId: accountId,
-    eventType: EVENT.ELIGIBILITY_CHANGED,
-    payload: { action: 'REVOKED', elId }
-  });
   return { success: true };
   }, overrides, 'eligibility');
 }

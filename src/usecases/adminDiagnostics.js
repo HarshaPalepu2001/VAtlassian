@@ -17,11 +17,15 @@ export async function listContentChanges(req, overrides) {
   return runAdmin(req, async deps => {
     const projectId = req.payload?.projectId;
     if (projectId != null && !/^[1-9]\d*$/.test(String(projectId))) throw new Error('Invalid project.');
-    const result = await query(deps, `SELECT TO_BASE64(drift_id) AS drift_id, issue_id, field_id,
-      field_name, materiality, occurred_at, actor_account_id, actor_name, from_repr, to_repr FROM va_drift
-      WHERE approval_id IS NULL ${projectId == null ? '' : 'AND project_id = ?'} ORDER BY occurred_at DESC LIMIT 201`, projectId == null ? [] : [projectId]);
+    const result = await query(deps, `SELECT TO_BASE64(d.drift_id) AS drift_id, d.issue_id, d.field_id,
+      d.field_name, d.materiality, d.occurred_at, d.actor_account_id, d.actor_name, i.issue_key, i.summary
+      FROM va_drift d LEFT JOIN va_item_state i ON i.issue_id = d.issue_id
+      WHERE d.approval_id IS NULL ${projectId == null ? '' : 'AND d.project_id = ?'} ORDER BY d.occurred_at DESC LIMIT 201`, projectId == null ? [] : [projectId]);
     const rows = result.data ?? [];
-    return { changes: rows.slice(0, 200).map(r => ({ ...r, driftId: r.drift_id, issueId: String(r.issue_id), fieldId: r.field_id, fieldName: r.field_name, occurredAt: r.occurred_at, actorName: r.actor_name })), hasMore: rows.length > 200 };
+    return { changes: rows.slice(0, 200).map(r => ({ driftId: r.drift_id, issueId: String(r.issue_id),
+      issueKey: r.issue_key ?? null, summary: r.summary ?? null, fieldId: r.field_id, fieldName: r.field_name,
+      changedAt: Number(r.occurred_at), occurredAt: Number(r.occurred_at), actorName: r.actor_name,
+      materiality: r.materiality })), hasMore: rows.length > 200 };
   }, overrides);
 }
 

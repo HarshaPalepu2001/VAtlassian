@@ -61,7 +61,7 @@ export async function approvalRuntime() {
         throw new FailClosed('SERVICE_UNAVAILABLE');
       });
       const exact = exactAvailableTransition(transitions, payload);
-      if (!exact) throw new FailClosed('NOT_CONFIGURED');
+      if (!exact) throw new FailClosed('TRANSITION_UNAVAILABLE');
       return { id: exact.id, toStatusId: exact.toStatusId };
     },
     edge: (issue, transition, prepared) => transition ? config.gatedTransition({ projectId: issue.projectId,
@@ -113,7 +113,7 @@ export async function gateRuntime() {
       const response = await api.asUser().requestJira(route`/rest/api/3/issue/${issueKey}?fields=*all`);
       if (!response.ok) throw new FailClosed('SERVICE_UNAVAILABLE');
       const issue = describeIssue(await response.json());
-      if (issue.statusId !== fromStatusId) throw new FailClosed('CONTENT_CHANGED');
+      if (issue.statusId !== fromStatusId) throw new FailClosed('STATUS_CHANGED');
       let effectiveTransitionId = transitionId == null ? null : String(transitionId);
       if (!effectiveTransitionId && approvalId) {
         const signedApproval = await approvals.pendingApprovalByToken({
@@ -142,7 +142,10 @@ export async function gateRuntime() {
         baselines.activeBaseline(issue.issueId)
       ]);
       const item = items[0] ?? null;
-      if (active && Number(item?.baseline_version) !== Number(active.version)) throw new FailClosed('CONTENT_CHANGED');
+      if (active && item && Number(item.baseline_version) !== Number(active.version)) {
+        query('UPDATE va_item_state SET baseline_version = ? WHERE issue_id = ?', [active.version, issue.issueId]).catch(() => {});
+        item.baseline_version = active.version;
+      }
       const content = await approvalContentHash({ issue, declared, modifiedFields, activeBaseline: active,
         readTree: active?.tree_hash ? createTreeReader({ api, route }).read : null });
       return { ...issue, ct, health, item, transitionId: effectiveTransitionId,

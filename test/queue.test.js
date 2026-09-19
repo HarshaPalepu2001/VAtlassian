@@ -11,7 +11,7 @@ const modules = {
   'db/configStore.js': ['controlledFields', 'projectConfig', 'gateActiveOutOf', 'gatedReviewStatuses', 'gatedTransition',
     'listGatedTransitions', 'declaredFieldRows', 'seedControlledFields', 'countControlledFields'],
   'db/itemStateStore.js': ['driftedInProjects', 'reviewsByIds'],
-  'db/baselineStore.js': ['activeBaseline'],
+  'db/baselineStore.js': ['activeBaseline', 'activeBaselines'],
   'lib/transitions.js': ['availableTransitions']
 };
 
@@ -72,6 +72,7 @@ test('My approvals includes wildcard controlled bug transitions and excludes unc
     }],
     driftedInProjects: async () => [],
     reviewsByIds: async () => [],
+    activeBaselines: async () => new Map(),
     availableTransitions: async (api, issueKey) => issueKey === 'VJIRA-7'
       ? [{ id: '101', name: 'Done', toStatusId: '5', toStatusName: 'Done' }]
       : [{ id: '102', name: 'Done', toStatusId: '5', toStatusName: 'Done' }],
@@ -79,8 +80,11 @@ test('My approvals includes wildcard controlled bug transitions and excludes unc
       ? { required_role: 'SDE-1', required_assurance: 'BIOMETRIC', meaning: 'Bug done', matched_any_status: true }
       : null,
     request: async (url, options) => {
-      calls.push(JSON.parse(options.body).jql);
-      return response({ issues: [bug, subtask], nextPageToken: null });
+      if (options?.body) {
+        calls.push(JSON.parse(options.body).jql);
+        return response({ issues: [bug, subtask], nextPageToken: null });
+      }
+      return response(url.includes('VJIRA-7') ? bug : subtask);
     }
   };
 
@@ -124,13 +128,17 @@ test('My approvals lists drift on a signed item whose current status is not a ga
       drift_count: 1, drifted_field_count: 1, max_materiality: 'CRITICAL', last_drift_at: 1 }],
     // The baseline records the edge it was captured on: 3 -> 5.
     activeBaseline: async () => ({ issue_id: 1, version: 2, from_status_id: '3', to_status_id: '5' }),
+    activeBaselines: async () => new Map([[1, { issue_id: 1, version: 5, from_status_id: '3', to_status_id: '5' }]]),
     // Nothing is gated out of where it stands now.
     availableTransitions: async () => [{ id: '103', name: 'Reopen', toStatusId: '3', toStatusName: 'In-Review' }],
     gatedTransition: async ({ fromStatusId, toStatusId }) =>
       String(fromStatusId) === '3' && String(toStatusId) === '5'
         ? { required_role: 'SDE-1', required_assurance: 'ESIGNATURE', meaning: 'Bug done' }
         : null,
-    request: async () => response({ issues: [drifted], nextPageToken: null })
+    request: async (url, options) => {
+      if (options?.body) return response({ issues: [drifted], nextPageToken: null });
+      return response(drifted);
+    }
   };
 
   const result = await list({ payload: {}, context: { accountId: 'actor-1' } });
@@ -140,6 +148,7 @@ test('My approvals lists drift on a signed item whose current status is not a ga
   assert.equal(result.items[0].driftCount, 1);
   assert.equal(result.items[0].materialCount, 1);
   assert.equal(result.items[0].state, 'DRIFTED');
+  assert.equal(result.items[0].baselineVersion, 5, 'activeBaselines version 5 takes precedence over stale row baseline_version 2');
 });
 
 test('drift is not offered to somebody who lacks the role the baseline edge requires', async () => {
@@ -161,12 +170,60 @@ test('drift is not offered to somebody who lacks the role the baseline edge requ
     driftedInProjects: async () => [{ issue_id: 1, state: 'DRIFTED', baseline_version: 2, drift_count: 1 }],
     reviewsByIds: async () => [{ issue_id: 1, state: 'DRIFTED', baseline_version: 2, drift_count: 1 }],
     activeBaseline: async () => ({ issue_id: 1, version: 2, from_status_id: '3', to_status_id: '5' }),
+    activeBaselines: async () => new Map([[1, { issue_id: 1, version: 2, from_status_id: '3', to_status_id: '5' }]]),
     availableTransitions: async () => [],
     gatedTransition: async () => ({ required_role: 'SDE-1', required_assurance: 'ESIGNATURE', meaning: 'Bug done' }),
-    request: async () => response({ issues: [drifted], nextPageToken: null })
+    request: async (url, options) => {
+      if (options?.body) return response({ issues: [drifted], nextPageToken: null });
+      return response(drifted);
+    }
   };
 
   const result = await list({ payload: {}, context: { accountId: 'actor-1' } });
 
   assert.equal(result.items.length, 0, 'authority still comes from the gate, not from holding any role');
 });
+
+test('My approvals excludes an item whose live status has transitioned (eliminating Lucene index lag)', async () => {
+  // Stale JQL issue claims it is still in In-Review (3)
+  const staleIssue = issue({ id: '16', key: 'VJIRA-16', issueTypeId: BUG_TYPE });
+  staleIssue.fields.status = { id: '3', name: 'In-Review' };
+
+  // Live Jira issue is actually in In Progress (10002) where no gated transition exists
+  const liveIssue = issue({ id: '16', key: 'VJIRA-16', issueTypeId: BUG_TYPE });
+  liveIssue.fields.status = { id: '10002', name: 'In Progress' };
+
+  globalThis.vaQueue = {
+    grantsFor: async () => [{ account_id: 'actor-1', project_id: '10001', issue_type_id: '*', role: 'SDE-1', state: 'ACTIVE' }],
+    controlledFields: async () => [],
+    projectConfig: async () => ({ enabled: true }),
+    gateActiveOutOf: async () => ({ gated: false }),
+    listGatedTransitions: async () => [],
+    declaredFieldRows: async () => [],
+    seedControlledFields: async () => {},
+    countControlledFields: async () => 0,
+    gatedReviewStatuses: async () => [{
+      projectId: 10001, issueTypeId: BUG_TYPE, statusId: '3', toStatusId: '5', role: 'SDE-1'
+    }],
+    driftedInProjects: async () => [],
+    reviewsByIds: async () => [],
+    activeBaselines: async () => new Map([[16, { issue_id: 16, version: 5 }]]),
+    activeBaseline: async () => ({ issue_id: 16, version: 5 }),
+    // From In Progress (10002), Jira offers no transitions that match any gated rule
+    availableTransitions: async () => [],
+    gatedTransition: async () => null,
+    request: async (url, options) => {
+      if (options?.body) {
+        // JQL search returns stale issue
+        return response({ issues: [staleIssue], nextPageToken: null });
+      }
+      // Direct live issue fetch returns the real current status
+      return response(liveIssue);
+    }
+  };
+
+  const result = await list({ payload: {}, context: { accountId: 'actor-1' } });
+
+  assert.equal(result.items.length, 0, 'item has transitioned to In Progress with no gates, so it must not appear in the queue');
+});
+

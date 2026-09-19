@@ -129,14 +129,34 @@ test('rejecting a diff with no restorable steps explains the restore limitation'
 
 // ─── Where the item lands ────────────────────────────────────────────────────
 
-test('a PARTIAL restore leaves the item in ERROR, never quietly back in the queue', () => {
+test('a restore that could not establish the item state leaves ERROR, never quietly back in the queue', () => {
   // The item is neither at its approved state nor honestly drifted, and the one
   // thing that must not happen is it re-entering the queue as though nothing
   // went wrong.
-  assert.equal(stateAfter({ decision: DECISION.REJECT, restoreState: 'PARTIAL' }), REVIEW_STATE.ERROR);
   assert.equal(stateAfter({ decision: DECISION.REJECT, restoreState: 'FAILED' }), REVIEW_STATE.ERROR);
+  // A PARTIAL the verification could not explain is the same unknown.
+  assert.equal(stateAfter({ decision: DECISION.REJECT, restoreState: 'PARTIAL' }), REVIEW_STATE.ERROR);
   assert.equal(stateAfter({ decision: DECISION.REJECT, restoreState: 'COMPLETE' }), REVIEW_STATE.BASELINED);
   assert.equal(stateAfter({ decision: DECISION.APPROVE }), REVIEW_STATE.BASELINED);
+});
+
+test('a partial restore that named the fields still differing is drift, not an app error', () => {
+  // ERROR makes gate.js refuse every transition as ITEM_BUSY, and there is no
+  // route out of it from the panel. When the verification pass can say exactly
+  // which tracked fields still differ, that is ordinary drift with evidence:
+  // the reviewer sees the list, and can restore again or decide on it.
+  assert.equal(stateAfter({ decision: DECISION.REJECT, restoreState: 'PARTIAL', unmatchedCount: 2 }),
+    REVIEW_STATE.DRIFTED);
+  // A failed restore is still an operational problem whatever it managed to read.
+  assert.equal(stateAfter({ decision: DECISION.REJECT, restoreState: 'FAILED', unmatchedCount: 2 }),
+    REVIEW_STATE.ERROR);
+});
+
+test('a tree restore that recreated a work item and verified is a success', () => {
+  // COMPLETE_WITH_REPLACEMENTS was missing here, so a perfectly verified tree
+  // restore would have been recorded as an error.
+  assert.equal(stateAfter({ decision: DECISION.REJECT, restoreState: 'COMPLETE_WITH_REPLACEMENTS' }),
+    REVIEW_STATE.BASELINED);
 });
 
 test('counters zero on approve and on a complete restore, and persist on a partial one', () => {

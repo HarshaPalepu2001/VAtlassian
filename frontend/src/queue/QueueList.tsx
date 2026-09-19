@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { invoke } from '../lib/bridge';
+import { recordHarnessEvent } from '../lib/harness';
 import Button from '@atlaskit/button';
 import { Badge, Card, EmptyState, IssueLink, Loading, Page, Table } from '../ui/primitives';
 import { Notice } from '../ui/feedback';
@@ -8,7 +9,20 @@ import { assertResult, errorMessage } from '../lib/result';
 import type { Result } from '../lib/result';
 import IssuePanel from '../panel/IssuePanel';
 
-type Item = {issueId:string;issueKey:string;summary:string;status:string;state:string;baselineVersion:number;driftCount:number;materialCount:number;lastDriftAt?:number};
+type Item = {
+  issueId: string;
+  issueKey: string;
+  summary: string;
+  status: string;
+  state: string;
+  baselineVersion: number;
+  driftCount: number;
+  materialCount: number;
+  lastDriftAt?: number;
+  transitionName?: string | null;
+  transitionLabel?: string | null;
+  transitionCount?: number;
+};
 
 export default function QueueList() {
   const [items, setItems] = useState<Item[]>([]);
@@ -23,7 +37,11 @@ export default function QueueList() {
       const r = assertResult(await invoke<Result&{items:Item[];nextPageToken?:string|null}>('queue:list', token ? {nextPageToken: token} : {}));
       setItems(prev => token ? [...prev, ...r.items.filter(i => !prev.some(p => p.issueId === i.issueId))] : r.items);
       setNext(r.nextPageToken ?? null);
-    } catch (e) { setError(errorMessage(e)); } finally { setLoading(false); }
+      recordHarnessEvent('UI', 'queue:loaded', { itemCount: r.items?.length ?? 0 });
+    } catch (e) {
+      setError(errorMessage(e));
+      recordHarnessEvent('ERROR', 'queue:loadFailed', {}, e);
+    } finally { setLoading(false); }
   }, []);
 
   useEffect(() => { void load(); }, [load]);
@@ -33,7 +51,7 @@ export default function QueueList() {
       eyebrow="Approval and baseline"
       title="My approvals"
       lead="Work items waiting on a decision from you, based on the approval roles you hold."
-      actions={<Button isDisabled={loading} onClick={() => load()}>Refresh</Button>}
+      actions={<Button isDisabled={loading} onClick={() => { recordHarnessEvent('UI', 'click:refreshQueue'); void load(); }}>Refresh</Button>}
     >
       {error && <Notice danger>{error}</Notice>}
       {loading && !items.length ? <Loading label="Finding work items that need you…" /> : (
@@ -77,8 +95,15 @@ export default function QueueList() {
                               : 'Formatting only'}
                           </div>
                         </>
+                      ) : (item.transitionCount ?? 0) > 0 ? (
+                        <>
+                          <Badge tone="brand">
+                            {item.transitionLabel || item.transitionName || 'Approval required'}
+                          </Badge>
+                          <div className="va-secondary">Workflow transition</div>
+                        </>
                       ) : (
-                        <span className="va-muted">Awaiting approval</span>
+                        <span className="va-muted">Up to date</span>
                       )}
                     </td>
                     {/* Date only, with the exact time on hover. A worklist column
@@ -93,7 +118,10 @@ export default function QueueList() {
                       {/* Not primary. A column of filled blue buttons gives every
                           row the same urgency and leaves nothing for the actual
                           signing action to look more important than. */}
-                      <Button onClick={() => setExpanded(isOpen ? '' : item.issueId)}>
+                      <Button onClick={() => {
+                        recordHarnessEvent('UI', 'click:toggleReview', { issueKey: item.issueKey, expanded: !isOpen });
+                        setExpanded(isOpen ? '' : item.issueId);
+                      }}>
                         {isOpen ? 'Close' : 'Review'}
                       </Button>
                     </td>

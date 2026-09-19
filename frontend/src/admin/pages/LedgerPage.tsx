@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { invoke } from '../../lib/bridge';
 import Button from '@atlaskit/button';
 import SectionMessage from '@atlaskit/section-message';
@@ -204,7 +204,9 @@ function EntryRow({ entry }: { entry: LedgerEntry }) {
 
 export default function LedgerPage() {
   const [issueKeyInput, setIssueKeyInput] = useState('');
-  const [searching, setSearching] = useState(false);
+  const [searching, setSearching] = useState(true);
+  const [queryKey, setQueryKey] = useState<string | null>(null);
+  const sequence = useRef(0);
   const [message, setMessage] = useState<{ type: 'error' | 'information'; text: string } | null>(null);
 
   const [issue, setIssue] = useState<Issue | null>(null);
@@ -217,62 +219,47 @@ export default function LedgerPage() {
   const [loadingMore, setLoadingMore] = useState(false);
 
   const runQuery = async (issueKey: string | null, beforeSeq: number | null, append: boolean) => {
-    const response = await invoke('admin:listLedger', {
-      issueKey: issueKey ?? undefined,
-      beforeSeq: beforeSeq ?? undefined
-    }) as any;
-
-    if (!response.success) {
-      setMessage({ type: 'error', text: response.error || 'Failed to load the ledger.' });
-      if (!append) { setEntries([]); setIssue(null); setCounts(null); setSignaturesSummary([]); }
-      return;
+    const seq = ++sequence.current;
+    if (append) setLoadingMore(true);
+    else { setSearching(true); setQueryKey(issueKey); setEntries([]); setIssue(null); setCounts(null); setSignaturesSummary([]); }
+    setHasMore(false); setMessage(null);
+    try {
+      const response = await invoke('admin:listLedger', { issueKey: issueKey ?? undefined, beforeSeq: beforeSeq ?? undefined }) as any;
+      if (seq !== sequence.current) return;
+      if (!response.success) throw new Error(response.error || 'Failed to load the ledger.');
+      setIssue(response.issue ?? null); setCounts(response.counts ?? null);
+      if (!append) setSignaturesSummary(response.signaturesSummary ?? []);
+      setEntries(prev => append ? [...prev, ...response.entries] : response.entries);
+      setHasMore(response.hasMore === true); setNextBeforeSeq(response.nextBeforeSeq ?? null);
+    } catch (e) {
+      if (seq !== sequence.current) return;
+      setHasMore(false); setNextBeforeSeq(null);
+      setMessage({type:'error',text:e instanceof Error ? e.message : 'Failed to load the ledger.'});
+    } finally {
+      if (seq === sequence.current) { setSearching(false); setLoadingMore(false); }
     }
-
-    setMessage(null);
-    setIssue(response.issue ?? null);
-    setCounts(response.counts ?? null);
-    if (!append && response.signaturesSummary) setSignaturesSummary(response.signaturesSummary);
-    setEntries((prev) => (append ? [...prev, ...response.entries] : response.entries));
-    setHasMore(response.hasMore);
-    setNextBeforeSeq(response.nextBeforeSeq);
   };
 
   // Recent activity across the site, on first load — before an admin has
   // typed anything an empty issue-lookup panel would otherwise look broken.
   useEffect(() => {
-    runQuery(null, null, false);
+    void runQuery(null, null, false);
+    return () => { ++sequence.current; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleSearch = async () => {
-    const key = issueKeyInput.trim();
-    setSearching(true);
-    setScoped(key.length > 0);
-    try {
-      await runQuery(key || null, null, false);
-    } finally {
-      setSearching(false);
-    }
+    if (searching || loadingMore) return;
+    const key = issueKeyInput.trim(); setScoped(key.length > 0);
+    await runQuery(key || null, null, false);
   };
-
   const handleClear = async () => {
-    setIssueKeyInput('');
-    setScoped(false);
-    setSearching(true);
-    try {
-      await runQuery(null, null, false);
-    } finally {
-      setSearching(false);
-    }
+    if (searching || loadingMore) return;
+    setIssueKeyInput(''); setScoped(false); await runQuery(null, null, false);
   };
-
   const handleLoadMore = async () => {
-    setLoadingMore(true);
-    try {
-      await runQuery(scoped ? issue?.issueKey ?? issueKeyInput.trim() : null, nextBeforeSeq, true);
-    } finally {
-      setLoadingMore(false);
-    }
+    if (searching || loadingMore) return;
+    await runQuery(queryKey, nextBeforeSeq, true);
   };
 
   return (
@@ -283,7 +270,7 @@ export default function LedgerPage() {
     >
       {message && (
         <div style={{ marginBottom: '20px' }}>
-          <SectionMessage appearance={message.type}><p>{message.text}</p></SectionMessage>
+          <SectionMessage appearance={message.type}><p>{message.text}</p><Button isDisabled={searching||loadingMore} onClick={()=>runQuery(queryKey,null,false)}>Retry loading ledger</Button></SectionMessage>
         </div>
       )}
 
@@ -299,10 +286,10 @@ export default function LedgerPage() {
               />
             </Field>
           </div>
-          <Button appearance="primary" onClick={handleSearch} isDisabled={searching || !issueKeyInput.trim()}>
+          <Button appearance="primary" onClick={handleSearch} isDisabled={searching || loadingMore || !issueKeyInput.trim()}>
             {searching ? 'Searching…' : 'Show history'}
           </Button>
-          {scoped && <Button appearance="subtle" onClick={handleClear} isDisabled={searching}>Clear</Button>}
+          {scoped && <Button appearance="subtle" onClick={handleClear} isDisabled={searching||loadingMore}>Clear</Button>}
         </div>
       </Card>
 
@@ -325,9 +312,9 @@ export default function LedgerPage() {
         </div>
       )}
 
-      <Section title={scoped ? `History for ${issue?.issueKey ?? issueKeyInput.trim()}` : 'Recent activity, most recent first'}>
+      <Section title={scoped ? `History for ${issue?.issueKey ?? queryKey}` : 'Recent activity, most recent first'}>
         <Card flush>
-          {entries.length === 0 ? (
+          {searching ? <EmptyState title="Loading ledger…" /> : message ? <EmptyState title="Ledger unavailable" /> : entries.length === 0 ? (
             <EmptyState title={scoped ? 'No ledger entries for this work item' : 'Nothing recorded yet'}>
               {scoped
                 ? 'Either this work item has never come under a controlled transition, or the key does not exist.'

@@ -8,10 +8,20 @@ export async function listProjects(req, overrides) {
   return runAdmin(req, async (deps) => {
     const { asApp, route } = deps;
     try {
-    const response = await asApp().requestJira(route`/rest/api/3/project/search?maxResults=100`);
-    if (!response.ok) return { success: false, error: `Jira returned ${response.status}` };
-    const body = await response.json();
-    return { success: true, projects: (body.values ?? []).map((p) => ({ id: p.id, key: p.key, name: p.name })) };
+    const projects = new Map();
+    let startAt = 0;
+    for (;;) {
+      const response = await asApp().requestJira(route`/rest/api/3/project/search?maxResults=100&startAt=${startAt}`);
+      if (!response.ok) throw new Error(`Could not load all projects: Jira returned ${response.status}`);
+      const body = await response.json();
+      if (!Array.isArray(body.values)) throw new Error('Jira returned an unreadable project list.');
+      const before = projects.size;
+      for (const p of body.values) projects.set(String(p.id), { id: String(p.id), key: p.key, name: p.name });
+      startAt += body.values.length;
+      if (body.isLast === true || (body.isLast !== false && (body.total == null || startAt >= body.total))) break;
+      if (projects.size === before) throw new Error('Jira project pagination did not advance. Please retry.');
+    }
+    return { success: true, projects: [...projects.values()] };
   } catch (e) {
     console.error(e);
     return { success: false, error: e.message };
@@ -28,7 +38,7 @@ export async function listIssueTypesForProject(req, overrides) {
     const response = await asApp().requestJira(route`/rest/api/3/issuetype/project?projectId=${projectId}`);
     if (!response.ok) return { success: false, error: `Jira returned ${response.status}` };
     const body = await response.json();
-    return { success: true, issueTypes: (body ?? []).map((t) => ({ id: t.id, name: t.name })) };
+    return { success: true, issueTypes: (body ?? []).map((t) => ({ id: String(t.id), name: t.name, subtask: t.subtask === true })) };
   } catch (e) {
     console.error(e);
     return { success: false, error: e.message };
@@ -167,7 +177,7 @@ export async function searchUsers(req, overrides) {
     const response = await asApp().requestJira(route`/rest/api/3/user/search?query=${query.trim()}&maxResults=20`);
     if (!response.ok) return { success: false, error: `Jira returned ${response.status}` };
     const body = await response.json();
-    return { success: true, users: (body ?? []).map((u) => ({ accountId: u.accountId, displayName: u.displayName, emailAddress: u.emailAddress })) };
+    return { success: true, users: (body ?? []).filter(u => u.active !== false && u.accountType !== 'app').map((u) => ({ accountId: u.accountId, displayName: u.displayName, emailAddress: u.emailAddress })) };
   } catch (e) {
     console.error(e);
     return { success: false, error: e.message };

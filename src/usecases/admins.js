@@ -33,7 +33,8 @@ export async function runMigrations(req, overrides) {
     if (!await deps.isJiraAdmin()) throw new Error('Only a Jira administrator can run migrations.');
     const run = deps.runMigrations ?? (await import('../jobs/migrate.js')).run;
     const result = await run();
-    return result ?? { success: true };
+    if (result?.ok === false || result?.success === false) throw new Error(`Migration stopped${result.failedAt ? ` at ${result.failedAt}` : ''}: ${result.reason ?? 'database operation failed'}. Retry after resolving the error.`);
+    return { ...result, success: true, message: `${result?.applied ?? 0} pending migrations applied.` };
   }, overrides, '', { bootstrap: true });
 }
 
@@ -42,7 +43,9 @@ export async function listAdmins(req, overrides) {
     const rows = (await query(deps, 'SELECT account_id, state, seeded_by, created_at FROM va_admin ORDER BY created_at')).data ?? [];
     const users = await deps.lookupUsers(rows.flatMap(r => [r.account_id, r.seeded_by]));
     return { admins: rows.map(r => ({ accountId: r.account_id, state: r.state, createdAt: r.created_at,
-      displayName: users.get(r.account_id)?.displayName ?? r.account_id,
+      displayName: users.get(r.account_id)?.displayName ?? null,
+      canRevoke: r.state === 'ACTIVE' && r.account_id !== req.context.accountId && r.seeded_by !== 'BOOTSTRAP',
+      revokeReason: r.account_id === req.context.accountId ? 'Your account' : r.seeded_by === 'BOOTSTRAP' ? 'Recovery custodian' : null,
       seededByName: users.get(r.seeded_by)?.displayName ?? r.seeded_by })) };
   }, overrides);
 }

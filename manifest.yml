@@ -142,6 +142,8 @@ modules:
               route: content-review
         - header: Operations
           pages:
+            - title: Settings
+              route: settings
             - title: Credentials & recovery
               route: credentials
             - title: Control health

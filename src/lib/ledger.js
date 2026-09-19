@@ -287,5 +287,9 @@ export const EVENT = {
   TREE_RESTORE_PLAN_CREATED: 'TREE_RESTORE_PLAN_CREATED',
   TREE_RESTORE_STEP_CLAIMED: 'TREE_RESTORE_STEP_CLAIMED',
   TREE_RESTORE_REPLACEMENT_RECORDED: 'TREE_RESTORE_REPLACEMENT_RECORDED',
+  // What a rejection destroyed, written before the work item is deleted. See
+  // the DELETE_ADDED_NODE branch of lib/tree/restoreExecutor.js: this entry IS
+  // the record that the deleted record existed.
+  TREE_RESTORE_NODE_DESTROYED: 'TREE_RESTORE_NODE_DESTROYED',
   TREE_RESTORE_VERIFIED: 'TREE_RESTORE_VERIFIED'
 };

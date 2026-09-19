@@ -46,6 +46,28 @@ export async function activeBaseline(issueId) {
   return rows.length > 0 ? decode(rows[0]) : null;
 }
 
+/** The standing active baselines for multiple work items in one read. */
+export async function activeBaselines(issueIds, query = throwing) {
+  const ids = [...new Set((issueIds ?? []).map(Number).filter(Number.isFinite))];
+  if (ids.length === 0) return new Map();
+  const placeholders = ids.map(() => '?').join(', ');
+  const rows = await query(
+    `SELECT ${BASELINE_COLUMNS} FROM va_baseline
+     WHERE issue_id IN (${placeholders}) AND state = 'ACTIVE'
+     ORDER BY version DESC`,
+    ids
+  );
+  const byIssue = new Map();
+  for (const raw of rows) {
+    const item = decode(raw);
+    const existing = byIssue.get(item.issue_id);
+    if (!existing || item.version > existing.version) {
+      byIssue.set(item.issue_id, item);
+    }
+  }
+  return byIssue;
+}
+
 export async function baselineByVersion(issueId, version, query = throwing) {
   const rows = await query(
     `SELECT ${BASELINE_COLUMNS} FROM va_baseline

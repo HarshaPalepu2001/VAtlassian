@@ -4,7 +4,7 @@ import { grantsFor } from '../lib/reviewer.js';
 import { rowAuthorises } from '../lib/eligibility.js';
 import { gatedReviewStatuses, gatedTransition } from '../db/configStore.js';
 import { driftedInProjects, reviewsByIds } from '../db/itemStateStore.js';
-import { activeBaseline } from '../db/baselineStore.js';
+import { activeBaseline, activeBaselines } from '../db/baselineStore.js';
 import { availableTransitions } from '../lib/transitions.js';
 import { resolveActions } from '../lib/journey.js';
 
@@ -30,17 +30,35 @@ export async function list({ payload = {}, context }) { return respond(async () 
       maxResults: 50, ...(payload.nextPageToken ? { nextPageToken: String(payload.nextPageToken) } : {}) }) });
   if (!response.ok) fail('QUEUE_UNAVAILABLE');
   const page = await response.json();
-  const rows = await reviewsByIds((page.issues ?? []).map(i => i.id));
+  const issueIds = (page.issues ?? []).map(i => i.id);
+  const [rows, activeMap] = await Promise.all([
+    reviewsByIds(issueIds),
+    activeBaselines(issueIds).catch(() => new Map())
+  ]);
   const byId = new Map(rows.map(r => [String(r.issue_id), r]));
   const resolveOne = async issue => {
-    const actions = await actionsForIssue(issue, grants);
+    let liveIssue = issue;
+    try {
+      const liveRes = await api.asUser().requestJira(
+        route`/rest/api/3/issue/${issue.key}?fields=summary,status,project,issuetype`
+      );
+      if (liveRes.ok) {
+        liveIssue = await liveRes.json();
+      }
+    } catch {
+      liveIssue = issue;
+    }
+
+    const actions = await actionsForIssue(liveIssue, grants);
     const row = byId.get(String(issue.id));
+    const active = activeMap.get(Number(issue.id));
     const canReviewDrift = Boolean(row) && DRIFT_QUEUE_STATES.has(row.state)
-      && await authorisedForDrift(issue, grants);
+      && await authorisedForDrift(liveIssue, grants);
     if (!canReviewDrift && actions.length === 0) return null;
-    return { issueId: issue.id, issueKey: issue.key, issue_id: issue.id, issue_key: issue.key,
-      summary: issue.fields.summary, status: issue.fields.status.name,
-      state: row?.state ?? 'UNAPPROVED', baselineVersion: row?.baseline_version ?? 0,
+    const baselineVersion = active?.version ?? row?.baseline_version ?? 0;
+    return { issueId: liveIssue.id, issueKey: liveIssue.key, issue_id: liveIssue.id, issue_key: liveIssue.key,
+      summary: liveIssue.fields.summary, status: liveIssue.fields.status.name,
+      state: row?.state ?? 'UNAPPROVED', baselineVersion,
       driftCount: Number(row?.drift_count ?? 0), materialCount: Number(row?.drifted_field_count ?? 0),
       maxMateriality: row?.max_materiality ?? null, lastDriftAt: row?.last_drift_at ?? null,
       transitionName: actions[0]?.toStatusName ?? actions[0]?.name ?? null,

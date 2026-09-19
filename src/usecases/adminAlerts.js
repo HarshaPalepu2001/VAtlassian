@@ -1,4 +1,4 @@
-import { runAdmin } from './adminRuntime.js';
+import { runAdmin, query, validScope } from './adminRuntime.js';
 const ACTIVE = 'ACTIVE';
 const REVOKED = 'REVOKED';
 
@@ -33,22 +33,22 @@ export async function setAlertDestination(req, overrides) {
   if (!projectId || !issueTypeId) {
     return { success: false, error: 'Choose both a project and a work item type for security alerts.' };
   }
-  const now = Date.now();
-  for (const [key, value] of [[ALERT_PROJECT_CFG, String(projectId)], [ALERT_ISSUE_TYPE_CFG, String(issueTypeId)]]) {
-    const res = await executeQuery(
-      `INSERT INTO va_config (cfg_key, cfg_value, updated_at, updated_by)
-       VALUES (?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE cfg_value = VALUES(cfg_value), updated_at = VALUES(updated_at), updated_by = VALUES(updated_by)`,
-      [key, value, now, accountId]
-    );
-    if (!res.result) return { success: false, error: 'Failed to save alert destination' };
+  if (!validScope(projectId, issueTypeId) || issueTypeId === '*') throw new Error('Choose a valid project and work item type.');
+  const response = await deps.asApp().requestJira(deps.route`/rest/api/3/issuetype/project?projectId=${projectId}`);
+  if (!response.ok) throw new Error('Could not validate the alert destination in Jira.');
+  const types = await response.json();
+  if (!Array.isArray(types) || !types.some(t => String(t.id) === String(issueTypeId) && t.subtask !== true)) {
+    throw new Error('Choose a standard work item type belonging to the alert project. Subtasks require a parent and cannot receive alerts.');
   }
+  const now = Date.now();
   await append(auditStore, {
-    eventId: newId(),
-    actorAccountId: accountId,
-    eventType: EVENT.CONTROLLED_TRANSITION_CHANGED,
-    payload: { change: 'ALERT_DESTINATION', projectId: String(projectId), issueTypeId: String(issueTypeId) }
+    eventId: newId(), actorAccountId: accountId, eventType: EVENT.CONFIG_CHANGED,
+    payload: { change: 'ALERT_DESTINATION', action: 'SAVE_REQUESTED', projectId: String(projectId), issueTypeId: String(issueTypeId) }
   });
+  await query(deps, `INSERT INTO va_config (cfg_key, cfg_value, updated_at, updated_by)
+    VALUES (?, ?, ?, ?), (?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE cfg_value = VALUES(cfg_value), updated_at = VALUES(updated_at), updated_by = VALUES(updated_by)`,
+    [ALERT_PROJECT_CFG, String(projectId), now, accountId, ALERT_ISSUE_TYPE_CFG, String(issueTypeId), now, accountId]);
   return { success: true };
   }, overrides, 'adminAlerts');
 }
@@ -80,6 +80,7 @@ export async function listGateFindings(req, overrides) {
     )
   ]);
   if (!result.result) return { success: false, error: 'Failed to list gate findings' };
+  if (!missingTransitionResult.result) throw new Error('Could not check rules missing an exact transition. Control health is unavailable.');
   const rows = result.data ?? [];
   const missingRows = missingTransitionResult.result ? (missingTransitionResult.data ?? []) : [];
   const [projects, issueTypes, statuses] = await Promise.all([

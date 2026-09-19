@@ -67,6 +67,8 @@ export function fixture(options = {}) {
     upsertControlledField: async row => { writes.push(row); return Buffer.alloc(16, 1); },
     setFieldRetention: async row => { writes.push(row); return true; },
     setConfig: async (...args) => { writes.push(args); },
+    readConfigRecord: async () => ({ config: {}, revision: null }),
+    setConfigIfCurrent: async (key, value, actor, now) => { writes.push([key, value, actor, now]); return true; },
     verifyChain: async () => ({ ok: true, checked: 1 }),
     listGatedTransitions: async () => [],
   };
