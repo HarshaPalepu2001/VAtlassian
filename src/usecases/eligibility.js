@@ -71,12 +71,14 @@ export async function grantEligibility(req, overrides) {
   return runAdmin(req, async (deps) => {
     const { executeQuery, toBinaryParam, append, EVENT, auditStore, newId, lookupUsers } = deps;
     const { accountId } = req.context;
-  const { targetAccountId, issueTypeId, role, projectId = null } = req.payload ?? {};
-  if (!targetAccountId || !issueTypeId || !role) {
-    return { success: false, error: 'targetAccountId, issueTypeId, and role are all required' };
-  }
-  if (typeof role !== 'string' || !role.trim() || role !== role.trim() || role.length > 32) return { success: false, error: 'role must be 32 characters or fewer' };
-  if (!validScope(projectId ?? '1', issueTypeId) || typeof targetAccountId !== 'string' || targetAccountId.length > 128) throw new Error('Invalid eligibility scope or account.');
+    const { targetAccountId, issueTypeId, role } = req.payload ?? {};
+    const rawPid = req.payload?.projectId;
+    const projectId = (rawPid != null && rawPid !== '' && rawPid !== '*') ? String(rawPid) : null;
+    if (!targetAccountId || !issueTypeId || !role) {
+      return { success: false, error: 'targetAccountId, issueTypeId, and role are all required' };
+    }
+    if (typeof role !== 'string' || !role.trim() || role !== role.trim() || role.length > 32) return { success: false, error: 'role must be 32 characters or fewer' };
+    if (!validScope(projectId ?? '1', issueTypeId) || typeof targetAccountId !== 'string' || targetAccountId.length > 128) throw new Error('Invalid eligibility scope or account.');
   const target = (await lookupUsers([targetAccountId])).get(targetAccountId);
   if (!target || target.active === false) throw new Error('Choose an active Jira user.');
   const elId = newId();

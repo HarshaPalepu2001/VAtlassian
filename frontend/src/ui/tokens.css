@@ -970,3 +970,44 @@ body {
 .va-steps li {
   margin-bottom: 6px;
 }
+
+/* ---------------------------------------------------------------------------
+   Admin Console in-app navigation (Configure mode & fallback)
+   --------------------------------------------------------------------------- */
+
+.va-nav-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  border-bottom: 1px solid var(--va-border);
+  margin-bottom: 24px;
+  padding: 0 0 2px 0;
+}
+
+.va-nav-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -3px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--va-text-subtle);
+  cursor: pointer;
+  border-radius: var(--va-radius) var(--va-radius) 0 0;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  white-space: nowrap;
+}
+
+.va-nav-tab:hover {
+  background: var(--va-surface-hover);
+  color: var(--va-text);
+}
+
+.va-nav-tab--active {
+  color: var(--va-brand);
+  border-bottom-color: var(--va-brand);
+  font-weight: 600;
+  background: var(--va-brand-bg);
+}
+

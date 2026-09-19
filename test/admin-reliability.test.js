@@ -125,3 +125,93 @@ test('a concurrent configuration write is surfaced instead of claiming success',
   const deps = fixture(); deps.setConfigIfCurrent = async () => false;
   assert.equal((await admin.saveConfig(request({ projectId: '1', config: { ai: { enabled: false } } }), deps)).success, false);
 });
+
+test('getConfig and saveConfig handle site-wide defaults with null or empty projectId', async () => {
+  for (const emptyPid of [null, '', 'site', undefined]) {
+    const deps = fixture();
+    deps.readConfigRecord = async (key) => {
+      assert.equal(key, 'site');
+      return { config: { enabled: true, visibility: 'reviewer-only' }, revision: 'rev-site' };
+    };
+    deps.projectConfig = async (pid) => {
+      assert.equal(pid, null);
+      return { enabled: true, visibility: 'reviewer-only' };
+    };
+    const getRes = await admin.getConfig(request({ projectId: emptyPid }), deps);
+    assert.equal(getRes.success, true);
+    assert.equal(getRes.revision, 'rev-site');
+
+    const saveRes = await admin.saveConfig(request({
+      projectId: emptyPid,
+      expectedRevision: 'rev-site',
+      config: { enabled: false, visibility: 'all', queueThreshold: 'CRITICAL', restore: { commentOnRestore: false, notifyUsers: true } }
+    }), deps);
+    assert.equal(saveRes.success, true);
+    assert.equal(deps.writes[0][0], 'site');
+    assert.equal(deps.writes[0][1].enabled, false);
+    assert.equal(deps.writes[0][1].visibility, 'all');
+    assert.equal(deps.writes[0][1].queueThreshold, 'CRITICAL');
+    assert.equal(deps.writes[0][1].restore.commentOnRestore, false);
+    assert.equal(deps.writes[0][1].restore.notifyUsers, true);
+  }
+});
+
+test('saveConfig rejects invalid restore and notification settings', async () => {
+  const deps = fixture();
+  // invalid restore setting
+  const invalidRestore = await admin.saveConfig(request({
+    projectId: '1',
+    config: { restore: { commentOnRestore: 'not-a-bool' } }
+  }), deps);
+  assert.equal(invalidRestore.success, false);
+
+  // invalid actAs
+  const invalidActAs = await admin.saveConfig(request({
+    projectId: '1',
+    config: { restore: { actAs: 'malicious' } }
+  }), deps);
+  assert.equal(invalidActAs.success, false);
+
+  // invalid perFieldRetries
+  const invalidRetries = await admin.saveConfig(request({
+    projectId: '1',
+    config: { restore: { perFieldRetries: 50 } }
+  }), deps);
+  assert.equal(invalidRetries.success, false);
+
+  // invalid notification digest
+  const invalidDigest = await admin.saveConfig(request({
+    projectId: '1',
+    config: { notifications: { digest: 'not-bool' } }
+  }), deps);
+  assert.equal(invalidDigest.success, false);
+});
+
+test('grantEligibility supports site-wide scope with empty or null projectId', async () => {
+  const deps = fixture();
+  deps.lookupUsers = async () => new Map([['reviewer', { displayName: 'Reviewer', active: true }]]);
+  const res = await admin.grantEligibility(request({
+    targetAccountId: 'reviewer',
+    issueTypeId: '*',
+    role: 'QA Lead',
+    projectId: ''
+  }), deps);
+  assert.equal(res.success, true, res.error);
+  const insert = deps.calls.find(c => c.sql.includes('INSERT INTO va_eligibility'));
+  assert.ok(insert);
+  // project_id is null for site-wide
+  assert.equal(insert.params[insert.params.length - 1], null);
+});
+
+test('listContentChanges supports filtering by projectId', async () => {
+  const deps = fixture({
+    query: (sql, params) => {
+      assert.match(sql, /AND d\.project_id = \?/);
+      assert.deepEqual(params, ['123']);
+      return { result: true, data: [] };
+    }
+  });
+  const res = await admin.listContentChanges(request({ projectId: '123' }), deps);
+  assert.equal(res.success, true);
+});
+

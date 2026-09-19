@@ -57,7 +57,11 @@ export async function setRetention(req, overrides) {
 export async function saveConfig(req, overrides) {
   return runAdmin(req, async deps => {
     const payload = req.payload ?? {};
-    const key = payload.projectId == null ? 'site' : `project:${fieldScope({ ...payload, issueTypeId: '*' }).projectId}`;
+    const rawPid = payload.projectId;
+    const pid = (rawPid != null && rawPid !== '' && rawPid !== 'site')
+      ? String(fieldScope({ ...payload, issueTypeId: '*' }).projectId)
+      : null;
+    const key = pid ? `project:${pid}` : 'site';
     const patch = validateConfig(payload.config ?? {});
     const current = await deps.readConfigRecord(key);
     if (Object.hasOwn(payload, 'expectedRevision') && payload.expectedRevision !== current.revision) {
@@ -67,7 +71,7 @@ export async function saveConfig(req, overrides) {
       [k, over[k] && typeof over[k] === 'object' && !Array.isArray(over[k]) ? merge(base?.[k] ?? {}, over[k]) : v]));
     const config = validateConfig(merge(current.config, patch));
     if (config.policy?.mode === 'STRICT') {
-      if (await deps.hasUnresolvedDrift(payload.projectId ?? null)) {
+      if (await deps.hasUnresolvedDrift(pid)) {
         throw new Error('Cannot enable STRICT mode: there is unresolved drift. Approve or reject all pending drift first.');
       }
       throw new Error('STRICT mode is not supported. Approval is enforced by configured Jira workflow validators; content changes are detected after they occur.');
@@ -83,11 +87,13 @@ export async function saveConfig(req, overrides) {
 
 export async function getConfig(req, overrides) {
   return runAdmin(req, async deps => {
-    const projectId = req.payload?.projectId;
-    if (projectId != null) fieldScope({ projectId });
-    const key = projectId == null ? 'site' : `project:${fieldScope({projectId}).projectId}`;
+    const rawPid = req.payload?.projectId;
+    const pid = (rawPid != null && rawPid !== '' && rawPid !== 'site')
+      ? String(fieldScope({ projectId: rawPid }).projectId)
+      : null;
+    const key = pid ? `project:${pid}` : 'site';
     const record = await deps.readConfigRecord(key);
-    if (projectId != null) await deps.readConfigRecord('site');
-    return { config: await deps.projectConfig(projectId ?? null), revision: record.revision };
+    if (pid != null) await deps.readConfigRecord('site');
+    return { config: await deps.projectConfig(pid), revision: record.revision };
   }, overrides, 'fields');
 }

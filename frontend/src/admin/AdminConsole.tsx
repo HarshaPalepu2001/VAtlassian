@@ -1,9 +1,9 @@
-import { useCallback,useEffect,useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { view } from '@forge/bridge';
 import { invoke } from '../lib/bridge';
-import { Loading,Page } from '../ui/primitives';
+import { Loading, Page } from '../ui/primitives';
 import { Notice } from '../ui/feedback';
-import { assertResult,errorMessage } from '../lib/result';
+import { assertResult, errorMessage } from '../lib/result';
 import type { Result } from '../lib/result';
 import type { Project } from './types';
 import { parseAdminRoute } from './routes';
@@ -18,14 +18,136 @@ import CredentialsPage from './pages/CredentialsPage';
 import HealthPage from './pages/HealthPage';
 import ContentReviewPage from './pages/ContentReviewPage';
 import SettingsPage from './pages/SettingsPage';
-export default function AdminConsole({configure=false}:{configure?:boolean}){
- const [route,setRoute]=useState<AdminRoute|null>('admins');const [access,setAccess]=useState<{isAdmin:boolean;needsBootstrap:boolean}|null>(null);const [projects,setProjects]=useState<Project[]>([]);const [error,setError]=useState('');
- useEffect(()=>{if(configure)return;let active=true;let unlisten:(()=>void)|undefined;view.createHistory().then(history=>{if(!active)return;setRoute(parseAdminRoute(history.location.pathname));unlisten=history.listen(location=>{setRoute(parseAdminRoute(location.pathname));});}).catch(e=>setError(errorMessage(e)));return()=>{active=false;unlisten?.();};},[configure]);
- const check=useCallback(async()=>{setError('');try{const r=assertResult(await invoke<Result&{isAdmin:boolean;needsBootstrap:boolean}>('admin:check'));setAccess(r);if(r.isAdmin){const p=assertResult(await invoke<Result&{projects:Project[]}>('admin:listProjects'));setProjects(p.projects);}}catch(e){setError(errorMessage(e));}},[]);
- useEffect(()=>{void check();},[check]);
- if(error)return <Page title="Could not load administration"><Notice danger>{error}</Notice><button className="va-button" onClick={check}>Retry</button></Page>;
- if(!access)return <Loading label="Checking administrative access…"/>;
- if(access.needsBootstrap&&!access.isAdmin)return <AdminsPage bootstrap onBootstrap={()=>void check()}/>;
- if(!access.isAdmin)return <Page title="Administrator access required"><Notice>An existing VAtlassian administrator must grant access.</Notice></Page>;
- switch(route){case 'admins':return <AdminsPage/>;case 'roles':return <RolesPage projects={projects}/>;case 'transitions':return <TransitionsPage projects={projects}/>;case 'fields':return <FieldsPage projects={projects}/>;case 'ledger':return <LedgerPage/>;case 'retention':return <RetentionPage projects={projects}/>;case 'credentials':return <CredentialsPage/>;case 'health':return <HealthPage projects={projects}/>;case 'content-review':return <ContentReviewPage/>;case 'settings':return <SettingsPage projects={projects}/>;default:return <Page title="Page not found"><p>Choose a page in the administration menu.</p></Page>;}
+
+const NAV_ITEMS: { id: AdminRoute; label: string }[] = [
+  { id: 'settings', label: 'Settings' },
+  { id: 'admins', label: 'Administrators' },
+  { id: 'roles', label: 'Approver roles' },
+  { id: 'transitions', label: 'Controlled transitions' },
+  { id: 'fields', label: 'Controlled fields' },
+  { id: 'ledger', label: 'Audit ledger' },
+  { id: 'retention', label: 'Export & retention' },
+  { id: 'content-review', label: 'Content changes' },
+  { id: 'credentials', label: 'Credentials & recovery' },
+  { id: 'health', label: 'Control health' }
+];
+
+export default function AdminConsole({ configure = false }: { configure?: boolean }) {
+  const [route, setRoute] = useState<AdminRoute | null>(configure ? 'settings' : 'admins');
+  const [access, setAccess] = useState<{ isAdmin: boolean; needsBootstrap: boolean } | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (configure) return;
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    view
+      .createHistory()
+      .then((history) => {
+        if (!active) return;
+        setRoute(parseAdminRoute(history.location.pathname));
+        unlisten = history.listen((location) => {
+          setRoute(parseAdminRoute(location.pathname));
+        });
+      })
+      .catch((e) => setError(errorMessage(e)));
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, [configure]);
+
+  const check = useCallback(async () => {
+    setError('');
+    try {
+      const r = assertResult(await invoke<Result & { isAdmin: boolean; needsBootstrap: boolean }>('admin:check'));
+      setAccess(r);
+      if (r.isAdmin) {
+        const p = assertResult(await invoke<Result & { projects: Project[] }>('admin:listProjects'));
+        setProjects(p.projects);
+      }
+    } catch (e) {
+      setError(errorMessage(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    void check();
+  }, [check]);
+
+  if (error) {
+    return (
+      <Page title="Could not load administration">
+        <Notice danger>{error}</Notice>
+        <button className="va-button" onClick={check}>
+          Retry
+        </button>
+      </Page>
+    );
+  }
+
+  if (!access) return <Loading label="Checking administrative access…" />;
+  if (access.needsBootstrap && !access.isAdmin) {
+    return <AdminsPage bootstrap onBootstrap={() => void check()} />;
+  }
+  if (!access.isAdmin) {
+    return (
+      <Page title="Administrator access required">
+        <Notice>An existing VAtlassian administrator must grant access.</Notice>
+      </Page>
+    );
+  }
+
+  const renderContent = () => {
+    switch (route) {
+      case 'admins':
+        return <AdminsPage />;
+      case 'roles':
+        return <RolesPage projects={projects} />;
+      case 'transitions':
+        return <TransitionsPage projects={projects} />;
+      case 'fields':
+        return <FieldsPage projects={projects} />;
+      case 'ledger':
+        return <LedgerPage />;
+      case 'retention':
+        return <RetentionPage projects={projects} />;
+      case 'credentials':
+        return <CredentialsPage />;
+      case 'health':
+        return <HealthPage projects={projects} />;
+      case 'content-review':
+        return <ContentReviewPage projects={projects} />;
+      case 'settings':
+        return <SettingsPage projects={projects} />;
+      default:
+        return (
+          <Page title="Page not found">
+            <p>Choose a page in the administration menu.</p>
+          </Page>
+        );
+    }
+  };
+
+  if (!configure) return renderContent();
+
+  return (
+    <div className="va-admin-configure-layout" style={{ padding: '8px 0' }}>
+      <nav className="va-nav-tabs" aria-label="Administration navigation">
+        {NAV_ITEMS.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            className={`va-nav-tab ${route === item.id ? 'va-nav-tab--active' : ''}`}
+            onClick={() => setRoute(item.id)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </nav>
+      {renderContent()}
+    </div>
+  );
 }
+

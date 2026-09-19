@@ -56,6 +56,20 @@ export function validateConfig(config) {
     if (config.ai.models !== undefined && (!config.ai.models || typeof config.ai.models !== 'object' || Array.isArray(config.ai.models) ||
       Object.entries(config.ai.models).some(([k, v]) => !['light', 'standard', 'deep'].includes(k) || typeof v !== 'string' || !/^[a-zA-Z0-9._:-]{1,128}$/.test(v)))) throw new Error('Invalid AI model settings.');
   }
+  if (config.restore !== undefined) {
+    if (!config.restore || typeof config.restore !== 'object' || Array.isArray(config.restore)) throw new Error('Invalid restore settings.');
+    if (Object.keys(config.restore).some(k => !['actAs', 'notifyUsers', 'perFieldRetries', 'commentOnRestore'].includes(k))) throw new Error('Unknown restore setting.');
+    if (config.restore.commentOnRestore !== undefined && typeof config.restore.commentOnRestore !== 'boolean') throw new Error('commentOnRestore must be a boolean.');
+    if (config.restore.notifyUsers !== undefined && typeof config.restore.notifyUsers !== 'boolean') throw new Error('notifyUsers must be a boolean.');
+    if (config.restore.perFieldRetries !== undefined && (!Number.isSafeInteger(config.restore.perFieldRetries) || config.restore.perFieldRetries < 0 || config.restore.perFieldRetries > 10)) throw new Error('perFieldRetries must be between 0 and 10.');
+    if (config.restore.actAs !== undefined && !['app', 'user'].includes(config.restore.actAs)) throw new Error('Invalid actAs value.');
+  }
+  if (config.notifications !== undefined) {
+    if (!config.notifications || typeof config.notifications !== 'object' || Array.isArray(config.notifications)) throw new Error('Invalid notification settings.');
+    if (Object.keys(config.notifications).some(k => !['digest', 'digestAfterHours'].includes(k))) throw new Error('Unknown notification setting.');
+    if (config.notifications.digest !== undefined && typeof config.notifications.digest !== 'boolean') throw new Error('digest must be a boolean.');
+    if (config.notifications.digestAfterHours !== undefined && (!Number.isSafeInteger(config.notifications.digestAfterHours) || config.notifications.digestAfterHours < 1 || config.notifications.digestAfterHours > 168)) throw new Error('digestAfterHours must be between 1 and 168.');
+  }
   // Only JSON data is persisted; reject prototype keys at every depth before merge.
   const walk = value => {
     if (!value || typeof value !== 'object') return;

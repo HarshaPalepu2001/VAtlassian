@@ -76,13 +76,14 @@ export default function RolesPage({ projects }: { projects: Project[] }) {
   useEffect(() => {
     let active = true;
     setIssueTypes([]);
-    if (projectId) invoke('admin:listIssueTypesForProject', { projectId })
+    if (projectId && projectId !== '*') invoke('admin:listIssueTypesForProject', { projectId })
       .then((r: any) => { assertResult(r); if (active) setIssueTypes(r.issueTypes ?? []); })
       .catch(e => { if (active) setMessage({ type: 'error', text: errorMessage(e) }); });
     return () => { active = false; };
   }, [projectId]);
 
-  const complete = selectedUser && projectId && issueTypeId && role.trim();
+  const isSiteWide = projectId === '*';
+  const complete = Boolean(selectedUser && projectId && (isSiteWide || issueTypeId) && role.trim());
 
   const handleGrant = async () => {
     setMessage(null);
@@ -93,13 +94,16 @@ export default function RolesPage({ projects }: { projects: Project[] }) {
     setSaving(true);
     try {
       const result = await invoke('admin:grantEligibility', {
-        targetAccountId: selectedUser!.accountId, issueTypeId, role: role.trim(), projectId
+        targetAccountId: selectedUser!.accountId,
+        issueTypeId: isSiteWide ? '*' : issueTypeId,
+        role: role.trim(),
+        projectId: isSiteWide ? '*' : projectId
       }) as { success: boolean; error?: string };
 
       if (result.success) {
         setMessage({
           type: 'success',
-          text: `${selectedUser!.displayName} may now sign as "${role.trim()}".`
+          text: `${selectedUser!.displayName} may now sign as "${role.trim()}"${isSiteWide ? ' across all projects' : ''}.`
         });
         setSelectedUser(null); setRole('');
         await loadGrants();
@@ -169,22 +173,22 @@ export default function RolesPage({ projects }: { projects: Project[] }) {
         <fieldset disabled={saving} style={{border:0,padding:0,margin:0,minWidth:0}}><div className="va-form-grid va-form-grid--wide">
           <UserPicker value={selectedUser} onChange={setSelectedUser} />
 
-          <Field label="Project" hint="This grant applies only to the selected project.">
+          <Field label="Project" hint={isSiteWide ? "This grant applies across all projects on this site." : "This grant applies only to the selected project."}>
             <Select
               placeholder="Choose a project…"
               value={projectId}
               onChange={(value) => { setProjectId(value); setIssueTypeId(''); }}
-              options={projects.map((p) => ({ value: p.id, label: p.name }))}
+              options={[{ value: '*', label: 'All projects (Site-wide)' }, ...projects.map((p) => ({ value: p.id, label: p.name }))]}
             />
           </Field>
 
           <Field label="Work item type">
             <Select
               placeholder="Choose a type…"
-              value={issueTypeId}
-              disabled={!projectId}
+              value={isSiteWide ? '*' : issueTypeId}
+              disabled={!projectId || isSiteWide}
               onChange={setIssueTypeId}
-              options={[{value:'*',label:'All work item types'},...issueTypes.map((t) => ({ value: t.id, label: t.name }))]}
+              options={isSiteWide ? [{ value: '*', label: 'All work item types' }] : [{value:'*',label:'All work item types'},...issueTypes.map((t) => ({ value: t.id, label: t.name }))]}
             />
           </Field>
 

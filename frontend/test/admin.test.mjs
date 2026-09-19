@@ -26,6 +26,7 @@ const {default:React,act}=await import('react');
 const {createRoot}=await import('react-dom/client');
 const pages={};
 for(const name of ['Fields','Health','ContentReview','Retention','Roles','Transitions','Settings','Credentials','Admins','Ledger']) pages[name]=(await import(`../src/admin/pages/${name}Page.tsx`)).default;
+pages['AdminConsole'] = (await import('../src/admin/AdminConsole.tsx')).default;
 hooks.deregister();
 let root,container;
 const projects=[{id:'1',name:'First project',key:'ONE'},{id:'2',name:'Second project',key:'TWO'}];
@@ -36,6 +37,11 @@ afterEach(async()=>{if(root)await act(()=>root.unmount());container?.remove();ro
 const text=()=>container.textContent;
 const button=label=>[...container.querySelectorAll('button')].find(b=>b.textContent.includes(label));
 async function select(index,value){await act(()=>{const el=container.querySelectorAll('select')[index];el.value=value;el.dispatchEvent(new window.Event('change',{bubbles:true}));});await flush();}
+const typeInto=(input,value)=>{
+  Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set.call(input,value);
+  input.dispatchEvent(new window.Event('input',{bubbles:true}));
+  input.dispatchEvent(new window.Event('change',{bubbles:true}));
+};
 const setup=name=>({success:true,controlled:[{field_id:'summary',field_name:name,field_kind:'TEXT',store_values:true,pinned:true,declared:true}],excluded:[],available:[]});
 
 test('fields cannot show a late response from another project',async()=>{
@@ -89,4 +95,109 @@ test('ledger clears stale pagination when a lookup fails',async()=>{
  assert.ok(button('Load more'));
  globalThis.transport=key=>key==='harness:logAction'?{ok:true}:{success:false,error:'Ledger read failed'};
  await act(()=>button('Load more').click());await flush();assert.equal(button('Load more'),undefined);
+});
+
+test('settings renders operational controls and saves modified values',async()=>{
+ let savedConfig = null;
+ await mount('Settings',(key,payload)=>{
+  if(key==='admin:getConfig') return {success:true,revision:'rev-1',config:{enabled:true,visibility:'reviewer-only',queueThreshold:'MINOR',ai:{enabled:true,maxCompletionTokens:4096},restore:{commentOnRestore:true,notifyUsers:false},policy:{mode:'DETECT'}}};
+  if(key==='admin:saveConfig') { savedConfig = payload; return {success:true}; }
+  return {success:true};
+ });
+ assert.match(text(),/Enable VAtlassian protection/);
+ assert.match(text(),/Panel visibility boundary/);
+ assert.match(text(),/Review queue threshold/);
+ assert.match(text(),/Post audit comment on restoration/);
+ assert.match(text(),/Notify authors of unapproved modifications/);
+
+ // Toggle comment on restore
+ const checkboxes = container.querySelectorAll('input[type=checkbox]');
+ await act(()=>checkboxes[2].click());
+ assert.ok(button('Save settings'));
+
+ await act(()=>button('Save settings').click());
+ await flush();
+ assert.ok(savedConfig);
+ assert.equal(savedConfig.config.restore.commentOnRestore, false);
+ assert.match(text(),/Site-wide default settings saved/);
+});
+
+test('settings handles optimistic concurrency conflicts cleanly',async()=>{
+ await mount('Settings',(key)=>key==='admin:getConfig'?{success:true,revision:'rev-1',config:{enabled:true,ai:{enabled:true},policy:{mode:'DETECT'}}}:{success:false,error:'Settings changed since you loaded this page.'});
+ const checkboxes = container.querySelectorAll('input[type=checkbox]');
+ await act(()=>checkboxes[0].click()); // toggle enabled
+ await act(()=>button('Save settings').click());
+ await flush();
+ assert.match(text(),/Settings changed since you loaded this page/);
+ assert.ok(button('Retry'));
+});
+
+test('content review filters by project and handles refresh',async()=>{
+ const projectCalls = [];
+ await mount('ContentReview',(key,payload)=>{
+  projectCalls.push(payload?.projectId);
+  return {success:true,changes:[]};
+ });
+ assert.ok(container.querySelector('select'));
+ await select(0,'1');
+ await flush();
+ assert.equal(projectCalls.at(-1), '1');
+});
+
+test('admin console configure mode defaults to settings and renders in-app tabs',async()=>{
+ container=document.createElement('div');document.body.append(container);root=createRoot(container);
+ globalThis.transport=(key)=>key==='admin:check'?{success:true,isAdmin:true,needsBootstrap:false}:key==='admin:listProjects'?{success:true,projects}:key==='admin:getConfig'?{success:true,revision:'1',config:{enabled:true,ai:{enabled:true},policy:{mode:'DETECT'}}}:{success:true};
+ await act(()=>root.render(React.createElement(pages['AdminConsole'],{configure:true})));
+ await flush();
+
+ const tabs = container.querySelectorAll('.va-nav-tab');
+ assert.ok(tabs.length >= 8);
+ assert.match(tabs[0].textContent, /Settings/);
+ assert.match(text(), /Operational policies/);
+
+ // Click on Administrators tab
+ const adminsTab = [...tabs].find(t=>t.textContent.includes('Administrators'));
+ globalThis.transport=(key)=>key==='admin:listAdmins'?{success:true,admins:[]}:{success:true};
+ await act(()=>adminsTab.click());
+ await flush();
+ assert.match(text(),/Add administrator/);
+});
+
+test('roles page allows site-wide role grant with all projects option',async()=>{
+  let grantedPayload = null;
+  await mount('Roles',(key,payload)=>{
+    if(key==='admin:listEligibility') return {success:true,grants:[]};
+    if(key==='admin:searchUsers') return {success:true,users:[{accountId:'u1',displayName:'Jane Doe'}]};
+    if(key==='admin:grantEligibility') { grantedPayload = payload; return {success:true}; }
+    return {success:true};
+  });
+  const userInput = container.querySelector('.va-typeahead input');
+  assert.ok(userInput);
+  await act(()=>typeInto(userInput,'Jane'));
+  await act(()=>new Promise(r=>setTimeout(r,350)));
+  await flush();
+  const userOption = container.querySelector('.va-typeahead__option');
+  assert.ok(userOption);
+  await act(()=>userOption.click());
+  await flush();
+
+  await select(0,'*');
+  await flush();
+
+  const roleInput = container.querySelector('input[placeholder="QA Lead"]');
+  assert.ok(roleInput);
+  await act(()=>typeInto(roleInput,'Site QA'));
+  await flush();
+
+  const grantBtn = button('Grant role');
+  assert.equal(grantBtn.disabled, false);
+  await act(()=>grantBtn.click());
+  await flush();
+
+  assert.deepEqual(grantedPayload, {
+    targetAccountId: 'u1',
+    issueTypeId: '*',
+    role: 'Site QA',
+    projectId: '*'
+  });
 });
