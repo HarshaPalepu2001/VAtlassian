@@ -70,7 +70,18 @@ export async function createControlledTransition(req, overrides) {
        reject_to_status_id, transition_id, required_assurance, capture_baseline, block_on_drift, require_decision, state, created_at, created_by)
       VALUES (FROM_BASE64(?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?)`,
       [deps.toBinaryParam(id), ...edgeParams(input), Date.now(), req.context.accountId]);
-    return { success: true, ctId: id.toString('hex') };
+    let note;
+    if (input.captureBaseline) {
+      const provisionVault = deps.provisionVault ?? (await import('../lib/vaultProvision.js')).provisionVault;
+      const provisioned = await provisionVault(Number(input.projectId)).catch(error => {
+        console.error('createControlledTransition: vault provisioning threw unexpectedly', error);
+        return { errors: [{ step: 'provisionVault', error: String(error?.message ?? error) }] };
+      });
+      if (provisioned.errors?.length) {
+        note = 'Rule saved. Attachment vaulting could not be fully provisioned yet and will retry automatically at the next baseline.';
+      }
+    }
+    return { success: true, ctId: id.toString('hex'), ...(note ? { note } : {}) };
   }, overrides);
 }
 
@@ -101,7 +112,18 @@ export async function updateControlledTransition(req, overrides) {
     await query(deps, `UPDATE va_controlled_transition SET project_id = ?, issue_type_id = ?, from_status_id = ?, to_status_id = ?,
       required_role = ?, meaning = ?, reject_to_status_id = ?, transition_id = ?, required_assurance = ?, capture_baseline = ?,
       block_on_drift = ?, require_decision = ? WHERE ct_id = FROM_BASE64(?) AND state = 'ACTIVE'`, [...edgeParams(input), id]);
-    return { success: true, ctId: req.payload.ctId };
+    let note;
+    if (input.captureBaseline) {
+      const provisionVault = deps.provisionVault ?? (await import('../lib/vaultProvision.js')).provisionVault;
+      const provisioned = await provisionVault(Number(input.projectId)).catch(error => {
+        console.error('updateControlledTransition: vault provisioning threw unexpectedly', error);
+        return { errors: [{ step: 'provisionVault', error: String(error?.message ?? error) }] };
+      });
+      if (provisioned.errors?.length) {
+        note = 'Rule saved. Attachment vaulting could not be fully provisioned yet and will retry automatically at the next baseline.';
+      }
+    }
+    return { success: true, ctId: req.payload.ctId, ...(note ? { note } : {}) };
   }, overrides);
 }
 

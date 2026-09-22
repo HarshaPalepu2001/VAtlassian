@@ -243,6 +243,48 @@ test('site-wide STRICT mode is refused while any project has unresolved drift', 
   assert.match(result.error, /unresolved drift/);
 });
 
+test('creating a capture-baseline transition provisions the vault for its project', async () => {
+  const deps = fixture();
+  const calls = [];
+  deps.provisionVault = async (projectId) => { calls.push(projectId); return { errors: [] }; };
+  const result = await admin.createControlledTransition(request({ ...edge, captureBaseline: true }), deps);
+  assert.equal(result.success, true);
+  assert.deepEqual(calls, [1]);
+});
+
+test('creating a transition without capture-baseline never touches vault provisioning', async () => {
+  const deps = fixture();
+  let called = false;
+  deps.provisionVault = async () => { called = true; return { errors: [] }; };
+  const result = await admin.createControlledTransition(request({ ...edge, captureBaseline: false }), deps);
+  assert.equal(result.success, true);
+  assert.equal(called, false);
+});
+
+test('a vault provisioning problem is surfaced as a note but never fails the save', async () => {
+  const deps = fixture();
+  deps.provisionVault = async () => ({ errors: [{ step: 'ensureVaultSpace', error: 'confluence down' }] });
+  const result = await admin.createControlledTransition(request({ ...edge, captureBaseline: true }), deps);
+  assert.equal(result.success, true);
+  assert.match(result.note, /retry automatically/);
+});
+
+test('updating a transition to capture-baseline provisions the vault for its project', async () => {
+  const deps = fixture({
+    query: sql => ({
+      result: true,
+      data: sql.startsWith('SELECT state') ? [{ state: 'ACTIVE' }]
+        : sql.includes('FROM va_eligibility') ? [{ role: 'QA' }]
+        : []
+    })
+  });
+  const calls = [];
+  deps.provisionVault = async (projectId) => { calls.push(projectId); return { errors: [] }; };
+  const result = await admin.updateControlledTransition(request({ ...edge, ctId: 'a'.repeat(32), captureBaseline: true }), deps);
+  assert.equal(result.success, true);
+  assert.deepEqual(calls, [1]);
+});
+
 test('field retention refuses string false and requires a declared scope', async () => {
   const deps = fixture();
   assert.equal((await admin.setRetention(request({ projectId: '1', fieldId: 'summary', storeValues: 'false' }), deps)).success, false);
