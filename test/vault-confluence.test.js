@@ -92,3 +92,28 @@ test('uploadAttachmentToPage posts multipart form data with the filename', async
   assert.match(captured.init.body.toString('utf8'), /filename="evidence\.png"/);
   assert.match(captured.init.body.toString('utf8'), /bytes/);
 });
+
+test('uploadAttachmentToPage strips CR/LF and quotes from a hostile filename so it cannot break out of the multipart header', async () => {
+  let captured;
+  await uploadAttachmentToPage(
+    { pageId: 'p1', filename: 'evil.png"\r\nContent-Disposition: form-data; name="admin', buffer: Buffer.from('x') },
+    fakeApi(async (path, init) => {
+      captured = init;
+      return { ok: true, json: async () => ({ results: [{ id: 'att1' }] }) };
+    })
+  );
+  const bodyText = captured.body.toString('utf8');
+  const dispositionLine = bodyText.split('\r\n')[1];
+  assert.match(dispositionLine, /^Content-Disposition: form-data; name="file"; filename="[^"\r\n]*"$/,
+    'the filename value must not contain a raw quote or CR/LF that could break out of the header line');
+});
+
+test('createVaultPage HTML-escapes the issue key before it reaches Confluence storage format', async () => {
+  let captured;
+  await createVaultPage({ spaceId: 's1', issueKey: '<script>alert(1)</script>' }, fakeApi(async (path, init) => {
+    captured = JSON.parse(init.body);
+    return { ok: true, json: async () => ({ id: 'p1' }) };
+  }));
+  assert.doesNotMatch(captured.body.value, /<script>/);
+  assert.match(captured.body.value, /&lt;script&gt;/);
+});

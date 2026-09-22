@@ -1,5 +1,24 @@
 import api, { route } from '@forge/api';
 
+/** Confluence storage format is XHTML; escape before interpolating any value into it. */
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+/**
+ * A multipart Content-Disposition filename sits inside a quoted-string header
+ * value. An attachment's filename is attacker-influenceable (anyone who can
+ * attach a file to a Jira issue controls it), so a bare `"` or a CR/LF could
+ * break out of the field and inject additional multipart headers/parts.
+ * Stripped rather than merely escaped: CR/LF have no legitimate place in a
+ * filename and stripping avoids relying on the receiving parser's unescaping.
+ */
+function sanitizeMultipartFilename(filename) {
+  return String(filename).replace(/[\r\n]/g, '').replace(/"/g, "'");
+}
+
 export function deriveSpaceKey(projectKey) {
   const cleaned = String(projectKey ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   if (!cleaned) throw new Error('Cannot derive a vault space key from an empty project key');
@@ -57,7 +76,7 @@ export async function createVaultPage({ spaceId, issueKey }, forgeApi = api) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       spaceId, status: 'current', title: issueKey,
-      body: { representation: 'storage', value: `<p>Vaulted attachment evidence for ${issueKey}.</p>` }
+      body: { representation: 'storage', value: `<p>Vaulted attachment evidence for ${escapeHtml(issueKey)}.</p>` }
     })
   });
   if (!res.ok) throw new Error(`Failed to create vault page for ${issueKey}: ${res.status}`);
@@ -66,7 +85,7 @@ export async function createVaultPage({ spaceId, issueKey }, forgeApi = api) {
 
 export async function uploadAttachmentToPage({ pageId, filename, buffer }, forgeApi = api) {
   const boundary = '----VAtlassianVault' + Math.random().toString(36).slice(2);
-  const header = `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: application/octet-stream\r\n\r\n`;
+  const header = `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${sanitizeMultipartFilename(filename)}"\r\nContent-Type: application/octet-stream\r\n\r\n`;
   const footer = `\r\n--${boundary}--\r\n`;
   const body = Buffer.concat([Buffer.from(header, 'utf8'), buffer, Buffer.from(footer, 'utf8')]);
   const res = await forgeApi.asApp().requestConfluence(route`/wiki/rest/api/content/${pageId}/child/attachment`, {
