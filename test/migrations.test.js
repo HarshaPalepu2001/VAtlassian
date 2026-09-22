@@ -44,3 +44,26 @@ test('restore progress has durable queue and checkpoint columns', () => {
     assert.match(sql, new RegExp(`ADD COLUMN ${column}\\b`), `missing ${column}`);
   }
 });
+
+test('vault space is keyed by project and records its permission lockdown', () => {
+  const sql = sqlFor('v056_vault_space');
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS va_vault_space/);
+  assert.match(sql, /PRIMARY KEY \(project_id\)/);
+  for (const column of ['space_id', 'space_key', 'permission_scheme_id', 'permission_locked_at', 'created_at', 'created_by']) {
+    assert.match(sql, new RegExp(`\\b${column}\\b`), `missing ${column}`);
+  }
+});
+
+test('vault page is keyed by issue', () => {
+  const sql = sqlFor('v057_vault_page');
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS va_vault_page/);
+  assert.match(sql, /PRIMARY KEY \(issue_id\)/);
+  assert.match(sql, /confluence_page_id/);
+});
+
+test('vault attachment is unique per baseline and jira attachment', () => {
+  const sql = sqlFor('v058_vault_attachment');
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS va_vault_attachment/);
+  assert.match(sql, /UNIQUE KEY uq_vault_attachment_baseline \(baseline_id, jira_attachment_id\)/);
+  assert.match(sql, /content_hash CHAR\(64\) NOT NULL/);
+});

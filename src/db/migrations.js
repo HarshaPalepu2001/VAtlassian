@@ -551,5 +551,34 @@ export const MIGRATIONS = [
   ADD COLUMN completed_steps INT NOT NULL DEFAULT 0,
   ADD COLUMN last_checkpoint BIGINT NULL,
   ADD COLUMN last_error TEXT NULL` },
-  { id: 'v041_baseline_node_value_mediumtext', sql: `ALTER TABLE va_baseline_node_value MODIFY COLUMN chunk MEDIUMTEXT NOT NULL` }
+  { id: 'v041_baseline_node_value_mediumtext', sql: `ALTER TABLE va_baseline_node_value MODIFY COLUMN chunk MEDIUMTEXT NOT NULL` },
+  { id: 'v056_vault_space', sql: `CREATE TABLE IF NOT EXISTS va_vault_space (
+    project_id BIGINT NOT NULL,
+    space_id VARCHAR(64) NOT NULL,
+    space_key VARCHAR(64) NOT NULL,
+    permission_scheme_id VARCHAR(64) NULL,
+    permission_locked_at BIGINT NULL,
+    created_at BIGINT NOT NULL,
+    created_by VARCHAR(128) NOT NULL,
+    PRIMARY KEY (project_id)
+  )` },
+  { id: 'v057_vault_page', sql: `CREATE TABLE IF NOT EXISTS va_vault_page (
+    issue_id BIGINT NOT NULL,
+    project_id BIGINT NOT NULL,
+    confluence_page_id VARCHAR(64) NOT NULL,
+    created_at BIGINT NOT NULL,
+    PRIMARY KEY (issue_id)
+  )` },
+  { id: 'v058_vault_attachment', sql: `CREATE TABLE IF NOT EXISTS va_vault_attachment (
+    id VARCHAR(32) NOT NULL,
+    baseline_id VARCHAR(128) NOT NULL,
+    issue_id BIGINT NOT NULL,
+    jira_attachment_id VARCHAR(64) NOT NULL,
+    filename VARCHAR(512) NOT NULL,
+    content_hash CHAR(64) NOT NULL,
+    confluence_attachment_id VARCHAR(64) NOT NULL,
+    vaulted_at BIGINT NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_vault_attachment_baseline (baseline_id, jira_attachment_id)
+  )` }
 ];
