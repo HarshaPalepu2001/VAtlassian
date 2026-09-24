@@ -16,7 +16,7 @@ made in the app and in Jira.
   happened to the controlled transitions since; (2) whatever the validator
   holds, the panel can decide; (3) the signature half is unchanged; (4) a
   disabled project holds nothing for drift.
-- **Result:** 1339 backend tests pass, 0 fail, no open decisions. 187 UI tests,
+- **Result:** 1340 backend tests pass, 0 fail, no open decisions. 187 UI tests,
   smoke test and UI build all pass (`npm run verify`).
 
 ## Coverage

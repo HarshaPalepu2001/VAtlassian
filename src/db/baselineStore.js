@@ -1,4 +1,4 @@
-import { executeQuery, toBinaryParam, fromBinaryColumn, limitClause, affectedRows } from '../lib/db.js';
+import { executeQuery, toBinaryParam, fromBinaryColumn, limitClause, affectedRows, isUnknownColumn } from '../lib/db.js';
 import { newId, throwing } from './store.js';
 import { FailClosed } from '../lib/errors.js';
 import { encodeValue, decodeValue } from '../lib/valuestore.js';
@@ -17,15 +17,32 @@ export { encodeValue, decodeValue };
  * produces.
  */
 
-const BASELINE_COLUMNS = `
+const LEGACY_COLUMNS = `
   TO_BASE64(baseline_id) AS baseline_id, issue_id, project_id, issue_type_id, version,
   state, content_hash, field_digests, transition_id, from_status_id, to_status_id,
   required_role, required_assurance, controlled_fields_hash,
   approved_by, approved_name, transition_at, captured_at,
   assurance_level, TO_BASE64(approval_id) AS approval_id,
-  fidelity, field_count, value_bytes, tree_hash, node_count, edge_count, total_field_count,
+  fidelity, field_count, value_bytes, tree_hash, node_count, edge_count, total_field_count`;
+const BASELINE_COLUMNS = `${LEGACY_COLUMNS},
   TO_BASE64(captured_by_baseline_id) AS captured_by_baseline_id
 `;
+
+/**
+ * Every baseline read, across the deploy-to-migration window. Forge SQL
+ * applies DDL from the five-minute job, not at deploy (see isUnknownColumn in
+ * lib/db.js), and every hold, panel and decision reads baselines: until
+ * v061_baseline_captured_by lands, read without the column (null), rather than
+ * refuse them all for five minutes.
+ */
+async function selectBaselines(query, sqlFor, params) {
+  try {
+    return await query(sqlFor(BASELINE_COLUMNS), params);
+  } catch (error) {
+    if (!isUnknownColumn(error)) throw error;
+    return query(sqlFor(LEGACY_COLUMNS), params);
+  }
+}
 
 function decode(row) {
   if (!row) return null;
@@ -39,8 +56,8 @@ function decode(row) {
 
 /** The standing baseline for a work item, or null if it has never cleared review. */
 export async function activeBaseline(issueId) {
-  const rows = await throwing(
-    `SELECT ${BASELINE_COLUMNS} FROM va_baseline
+  const rows = await selectBaselines(throwing, columns =>
+    `SELECT ${columns} FROM va_baseline
      WHERE issue_id = ? AND state = 'ACTIVE'
      ORDER BY version DESC LIMIT 1`,
     [issueId]
@@ -53,8 +70,8 @@ export async function activeBaselines(issueIds, query = throwing) {
   const ids = [...new Set((issueIds ?? []).map(Number).filter(Number.isFinite))];
   if (ids.length === 0) return new Map();
   const placeholders = ids.map(() => '?').join(', ');
-  const rows = await query(
-    `SELECT ${BASELINE_COLUMNS} FROM va_baseline
+  const rows = await selectBaselines(query, columns =>
+    `SELECT ${columns} FROM va_baseline
      WHERE issue_id IN (${placeholders}) AND state = 'ACTIVE'
      ORDER BY version DESC`,
     ids
@@ -71,8 +88,8 @@ export async function activeBaselines(issueIds, query = throwing) {
 }
 
 export async function baselineByVersion(issueId, version, query = throwing) {
-  const rows = await query(
-    `SELECT ${BASELINE_COLUMNS} FROM va_baseline
+  const rows = await selectBaselines(query, columns =>
+    `SELECT ${columns} FROM va_baseline
      WHERE issue_id = ? AND version = ? AND state <> 'CAPTURING'`,
     [issueId, version]
   );
@@ -89,16 +106,16 @@ export async function baselineByVersion(issueId, version, query = throwing) {
  */
 export async function baselineForApproval(issueId, approvalId) {
   if (!approvalId) return null;
-  const rows = await throwing(
-    `SELECT ${BASELINE_COLUMNS} FROM va_baseline WHERE issue_id = ? AND approval_id = FROM_BASE64(?) LIMIT 1`,
+  const rows = await selectBaselines(throwing, columns =>
+    `SELECT ${columns} FROM va_baseline WHERE issue_id = ? AND approval_id = FROM_BASE64(?) LIMIT 1`,
     [issueId, toBinaryParam(approvalId)]
   );
   return rows.length > 0 ? decode(rows[0]) : null;
 }
 
 export async function baselineHistory(issueId, limit = 20, query = throwing) {
-  const rows = await query(
-    `SELECT ${BASELINE_COLUMNS} FROM va_baseline WHERE issue_id = ?
+  const rows = await selectBaselines(query, columns =>
+    `SELECT ${columns} FROM va_baseline WHERE issue_id = ?
      AND state <> 'CAPTURING'
      ORDER BY version DESC LIMIT ${limitClause(limit)}`,
     [issueId]

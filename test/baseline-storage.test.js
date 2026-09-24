@@ -177,3 +177,16 @@ test('a baseline read carries the parent capture that produced it, decoded', asy
     [{ baseline_id: Buffer.alloc(16, 1).toString('base64'), approval_id: null, captured_by_baseline_id: parent.toString('base64') }]);
   assert.ok(Buffer.from(child.captured_by_baseline_id).equals(parent));
 });
+
+test('between deploy and migration, baseline reads fall back to the columns that exist', async () => {
+  const seen = [];
+  const row = await baselineByVersion(1, 2, async sql => {
+    seen.push(sql);
+    if (sql.includes('captured_by_baseline_id')) throw Object.assign(new Error("Unknown column 'captured_by_baseline_id'"), { code: 'ER_BAD_FIELD_ERROR' });
+    return [{ baseline_id: Buffer.alloc(16, 1).toString('base64'), approval_id: null }];
+  });
+  assert.equal(seen.length, 2);
+  assert.equal(row.captured_by_baseline_id, null);
+  await assert.rejects(() => baselineByVersion(1, 2, async () => { throw new Error('connection reset'); }), /connection reset/,
+    'any other failure still fails');
+});
