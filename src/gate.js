@@ -60,7 +60,6 @@ export function createGate(deps) {
     };
 
     if (!issueKey || !fromStatusId || !toStatusId) return deny('SERVICE_UNAVAILABLE', 'MALFORMED_PAYLOAD');
-    if (rawCode) return deny('RAW_CODE_ON_SCREEN', 'RAW_TOTP_CODE_IN_MODIFIED_FIELDS');
     try {
       const snapshot = await deps.load({ issueKey, fromStatusId, toStatusId, transitionId,
         approvalId: token, modifiedFields: payload?.transition?.modifiedFields });
@@ -73,10 +72,21 @@ export function createGate(deps) {
       // item whose content has moved stays where it is until that change is
       // approved or reverted. There is no per-edge switch. A count that cannot
       // be read fails closed like any other.
-      if (['RESTORING', 'DECIDING', 'ERROR'].includes(item?.state) || item?.lock_token) return deny('RESTORE_IN_PROGRESS', 'ITEM_BUSY');
+      //
+      // Except in a project disabled in VAtlassian: the panel refuses every
+      // drift decision there, so holding drift would freeze the item with no
+      // way to release it. Off means off.
+      //
+      // A restore that is actually running holds the item too. ERROR is not
+      // one: it means a restore failed and needs attention, and nothing clears
+      // it while the content matches the baseline, so holding it here would
+      // freeze the item on every transition with nothing to decide. Drift, if
+      // any, still holds it below; the signature half still refuses ERROR.
+      const projectDisabled = snapshot.health?.enabled === false;
+      if (['RESTORING', 'DECIDING'].includes(item?.state) || item?.lock_token) return deny('RESTORE_IN_PROGRESS', 'ITEM_BUSY');
       if (item?.state === 'LOCKED') return deny('RECORD_LOCKED', 'ITEM_LOCKED');
-      if (!Number.isSafeInteger(driftCount)) return deny('UNDECIDED_DRIFT', 'DRIFT_UNREADABLE');
-      if (driftCount > 0) return deny('UNDECIDED_DRIFT', 'DRIFT_OUTSTANDING');
+      if (!projectDisabled && !Number.isSafeInteger(driftCount)) return deny('UNDECIDED_DRIFT', 'DRIFT_UNREADABLE');
+      if (!projectDisabled && driftCount > 0) return deny('UNDECIDED_DRIFT', 'DRIFT_OUTSTANDING');
 
       // ── The edge: a signature only where VAtlassian controls it ──────────
       //
@@ -90,12 +100,18 @@ export function createGate(deps) {
       // was all there was to enforce.
       if (!transitionId && !ct) return allow('UNCONTROLLED_EDGE');
       if (!transitionId) return deny('SERVICE_UNAVAILABLE', 'MALFORMED_PAYLOAD');
-      if (ct && snapshot.health?.enabled === false) return deny('NOT_CONFIGURED', 'PROJECT_DISABLED');
+      if (ct && projectDisabled) return deny('NOT_CONFIGURED', 'PROJECT_DISABLED');
       const approval = await deps.pending({ issueId, fromStatusId, toStatusId, transitionId, now: deps.now(), approvalId: token });
       // An edge with no controlled transition behind it asks for no signature.
       // The one exception is an approval bound to a baseline, which carries its
       // own policy for this edge and is checked in full below.
       if (!ct && approval?.baseline_id == null) return allow('UNCONTROLLED_EDGE');
+      // A six-digit value is only an authenticator code where a signature is
+      // being asked for. On any other screen it is just data (a postcode, a
+      // count), so the trap sits here, after the drift hold, not before it.
+      if (rawCode) return deny('RAW_CODE_ON_SCREEN', 'RAW_TOTP_CODE_IN_MODIFIED_FIELDS');
+      // A failed restore still refuses a signed move, as it always has.
+      if (item?.state === 'ERROR') return deny('RESTORE_IN_PROGRESS', 'ITEM_BUSY');
       if (!approval || approval.state !== 'PENDING' || approval.decision !== 'APPROVE') return deny('NO_DECISION', 'NO_CANDIDATE_ROW');
       if (token && approval.approval_id.toString('hex') !== token) return deny('NO_DECISION', 'TRANSITION_SCREEN_TOKEN_MISMATCH');
       if (Number(approval.expires_at) <= deps.now()) return deny('DECISION_EXPIRED', 'EXPIRED');

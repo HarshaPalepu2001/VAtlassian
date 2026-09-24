@@ -121,6 +121,58 @@ export async function resolveEdge({ gated, signedTransitionId, transitions }, { 
     edgeFailure: rules.every(rule => rule == null) ? null : 'SERVICE_UNAVAILABLE' };
 }
 
+/**
+ * Read as the user; where Forge cannot act as this user, read as the app.
+ *
+ * The validator is attached to every transition of a governed workflow, so it
+ * runs for every Jira user and every automation rule — most of whom have never
+ * opened VAtlassian and never granted it consent to act as them. Forge then
+ * throws (NeedsAuthenticationError) or Jira answers 401/403. Refusing on that
+ * would freeze the whole workflow for them, clean items included, although the
+ * drift hold needs only facts the app can read as itself: the issue and its
+ * transitions.
+ *
+ * Only "could not act as this user" falls back. Any other answer — a 404, a
+ * 5xx, a list read that failed with such a status — is returned or rethrown
+ * exactly as the user read gave it, and the caller fails closed as before.
+ * `availableTransitions` reports a non-ok status only in its message, as
+ * "(status N)", so that is where the status is read from.
+ */
+const NOT_THIS_USER = new Set([401, 403]);
+export async function readAsUserOrApp(asUser, asApp) {
+  try {
+    const result = await asUser();
+    if (!NOT_THIS_USER.has(result?.status)) return result;
+  } catch (error) {
+    const status = Number(/\(status (\d+)\)/.exec(String(error?.message ?? ''))?.[1]);
+    if (status && !NOT_THIS_USER.has(status)) throw error;
+  }
+  return asApp();
+}
+
+/**
+ * Could a controlled transition into this status be running unseen by the app?
+ *
+ * The user's own transition list always contains the transition they are
+ * running. The app's may not: a workflow condition ("only the assignee", a
+ * group) can hide from the app a transition the user can perform. If that
+ * hidden one is controlled and the app sees only uncontrolled siblings into
+ * the same status, resolveEdge would take an uncontrolled edge and let a
+ * controlled transition through unsigned. So, for an app-read list only, every
+ * active rule that could match this move must name a transition the app can
+ * see; otherwise the edge is unresolved and fails closed, as it did before the
+ * fallback existed. `rules` is listGatedTransitions(projectId), capped at 200
+ * rows, so a full page is treated as incomplete.
+ */
+export function hidesControlledTransition(rules, available, { issueTypeId, fromStatusId, toStatusId }) {
+  if (!Array.isArray(rules) || rules.length >= 200) return true;
+  const seen = new Set(available.filter(t => t.isAvailable !== false).map(t => String(t.id)));
+  const covers = (value, wanted) => String(value) === '*' || String(value) === String(wanted);
+  return rules.some(rule => rule.state === 'ACTIVE' && covers(rule.issue_type_id, issueTypeId)
+    && covers(rule.from_status_id, fromStatusId) && covers(rule.to_status_id, toStatusId)
+    && !seen.has(String(rule.transition_id)));
+}
+
 /** No diff/LLM or writes on the hot-path snapshot; fresh Jira content closes trigger lag. */
 export async function gateRuntime() {
   const { api, route, query, audit, eligible, approvals, config, baselines } = await shared();
@@ -132,7 +184,15 @@ export async function gateRuntime() {
       issueId: args.issue.issueId, fromStatusId: args.fromStatusId, toStatusId: args.toStatusId,
       approvalId: Buffer.from(args.approvalId, 'hex'), now: Date.now()
     }))?.transition_id,
-    transitions: () => availableTransitions(api, args.issue.issueKey)
+    transitions: () => readAsUserOrApp(
+      () => availableTransitions(api, args.issue.issueKey),
+      async () => {
+        const available = await availableTransitions(api, args.issue.issueKey, { asApp: true });
+        if (hidesControlledTransition(await config.listGatedTransitions(args.issue.projectId), available, {
+          issueTypeId: args.issue.issueTypeId, fromStatusId: args.fromStatusId, toStatusId: args.toStatusId
+        })) throw new FailClosed('SERVICE_UNAVAILABLE');
+        return available;
+      })
   }, args);
 
   return {
@@ -155,8 +215,12 @@ export async function gateRuntime() {
       };
     },
     load: async ({ issueKey, fromStatusId, toStatusId, transitionId, approvalId, modifiedFields }) => {
-      const response = await api.asUser().requestJira(route`/rest/api/3/issue/${issueKey}?fields=*all`);
-      if (!response.ok) throw new FailClosed('SERVICE_UNAVAILABLE');
+      // As the user first; as the app only where Forge cannot act as this user
+      // (see readAsUserOrApp). A 404 or 5xx still fails closed here.
+      const issuePath = route`/rest/api/3/issue/${issueKey}?fields=*all`;
+      const response = await readAsUserOrApp(() => api.asUser().requestJira(issuePath),
+        () => api.asApp().requestJira(issuePath)).catch(() => { throw new FailClosed('SERVICE_UNAVAILABLE'); });
+      if (!response?.ok) throw new FailClosed('SERVICE_UNAVAILABLE');
       const issue = describeIssue(await response.json());
       if (issue.statusId !== fromStatusId) throw new FailClosed('STATUS_CHANGED');
 

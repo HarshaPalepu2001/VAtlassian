@@ -12,6 +12,7 @@ import {
   diffWorkflow, groupByPair, isOurGate, isDisabled,
   transitionCovers, FINDING, SEVERITY, ANY_STATUS
 } from '../src/lib/gateDrift.js';
+import { pairsToCheck } from '../src/jobs/gatecheck.js';
 
 const APP_ID = '62c59525-24c4-4af8-a821-0c7e3e0d185e';
 const ENV_ID = '6a839a34-7d53-4334-b7d9-9ce97f4042cb';
@@ -278,4 +279,107 @@ test('rows group into one entry per project and issue type pair', () => {
 
 test('an empty workflow read yields no findings rather than false alarms', () => {
   assert.deepEqual(diffWorkflow({ rows: bothRows, workflow: null, appId: APP_ID }), []);
+});
+
+// --- a pair with baselines but no controlled rows left --------------------
+//
+// Deleting every controlled transition does not release baselined items: the
+// validator still holds them on drift, so the pair is still judged, for the
+// drift hold alone.
+
+const AP_PAIR = { project_id: 10001, issue_type_id: '10007' };
+
+test('no rows but a scope: a transition without the validator is HOLD_ABSENT for that pair', () => {
+  const findings = diffWorkflow({
+    rows: [], scope: AP_PAIR, workflow: apWorkflow({ doneGate: null }), appId: APP_ID
+  });
+
+  assert.deepEqual(findings.map((f) => [f.type, f.transitionId]), [[FINDING.HOLD_ABSENT, '2']]);
+  assert.equal(findings[0].severity, SEVERITY.CRITICAL);
+  assert.equal(findings[0].projectId, 10001);
+  assert.equal(findings[0].issueTypeId, '10007');
+  assert.ok(!findings[0].key.includes('undefined'), findings[0].key);
+});
+
+test('no rows but a scope: a disabled validator is HOLD_ABSENT, and INITIAL is never judged', () => {
+  const findings = diffWorkflow({
+    rows: [], scope: AP_PAIR, workflow: apWorkflow({ anyGate: sigGate({ disabled: 'true' }) }), appId: APP_ID
+  });
+  assert.deepEqual(findings.map((f) => [f.type, f.transitionId]), [[FINDING.HOLD_ABSENT, '4']]);
+});
+
+test('no rows but a scope: nothing is controlled, so no GATE_ABSENT or GATE_BYPASS_PATH', () => {
+  const findings = diffWorkflow({
+    rows: [], scope: AP_PAIR, workflow: apWorkflow({ doneGate: null, signGate: null }), appId: APP_ID
+  });
+  assert.deepEqual(findings.map((f) => f.type), [FINDING.HOLD_ABSENT, FINDING.HOLD_ABSENT]);
+  assert.deepEqual(findings.map((f) => f.transitionId), ['2', '3']);
+});
+
+test('no rows, a scope, and every transition carrying the validator: clean', () => {
+  assert.deepEqual(diffWorkflow({ rows: [], scope: AP_PAIR, workflow: apWorkflow(), appId: APP_ID }), []);
+});
+
+test('no rows, a scope, and no workflow read: no findings', () => {
+  assert.deepEqual(diffWorkflow({ rows: [], scope: AP_PAIR, workflow: null, appId: APP_ID }), []);
+});
+
+test('a scope missing half the pair yields nothing rather than an "undefined" key', () => {
+  assert.deepEqual(diffWorkflow({
+    rows: [], scope: { project_id: 10001 }, workflow: apWorkflow({ doneGate: null }), appId: APP_ID
+  }), []);
+});
+
+test('a hold finding keeps its key when the controlled rows are deleted', () => {
+  // Sign (3) is uncontrolled with only To Do -> Done controlled; its missing
+  // validator is the same finding before and after that row goes away.
+  const wf = apWorkflow({ signGate: null });
+  const before = diff([row('10004', '10006')], wf).find((f) => f.type === FINDING.HOLD_ABSENT);
+  const after = diffWorkflow({ rows: [], scope: AP_PAIR, workflow: wf, appId: APP_ID });
+  assert.equal(after.length, 1);
+  assert.equal(after[0].key, before.key);
+});
+
+test('with rows present, a scope changes nothing', () => {
+  const wf = apWorkflow({ doneGate: null, anyGate: null });
+  assert.deepEqual(
+    diffWorkflow({ rows: bothRows, scope: { project_id: 999, issue_type_id: 'x' }, workflow: wf, appId: APP_ID }),
+    diff(bothRows, wf)
+  );
+});
+
+// --- which pairs the Health check reads ---------------------------------
+
+test('pairsToCheck: rows only groups like groupByPair, with snake_case ids too', () => {
+  const pairs = pairsToCheck({ rows: [row('10004', '10006'), row('3', '10006')], baselinePairs: [] });
+  assert.equal(pairs.length, 1);
+  assert.equal(pairs[0].projectId, 10001);
+  assert.equal(pairs[0].issueTypeId, '10007');
+  assert.equal(pairs[0].project_id, 10001);
+  assert.equal(pairs[0].issue_type_id, '10007');
+  assert.equal(pairs[0].rows.length, 2);
+});
+
+test('pairsToCheck: baselines only still yields a pair to check, with no rows', () => {
+  const pairs = pairsToCheck({ rows: [], baselinePairs: [AP_PAIR, { project_id: 10002, issue_type_id: '10008' }] });
+  assert.deepEqual(pairs, [
+    { projectId: 10001, issueTypeId: '10007', project_id: 10001, issue_type_id: '10007', rows: [] },
+    { projectId: 10002, issueTypeId: '10008', project_id: 10002, issue_type_id: '10008', rows: [] }
+  ]);
+});
+
+test('pairsToCheck: a pair with both rows and baselines is read once, keeping its rows', () => {
+  const pairs = pairsToCheck({
+    rows: [row('10004', '10006'), row('3', '10006')],
+    // The same project arriving as a string from the other table is the same pair.
+    baselinePairs: [AP_PAIR, { project_id: '10001', issue_type_id: '10007' }, { project_id: 10002, issue_type_id: '10007' }]
+  });
+  assert.equal(pairs.length, 2);
+  assert.equal(pairs[0].rows.length, 2);
+  assert.deepEqual(pairs[1].rows, []);
+  assert.equal(pairs[1].project_id, 10002);
+});
+
+test('pairsToCheck: nothing controlled and nothing baselined means nothing to read', () => {
+  assert.deepEqual(pairsToCheck({ rows: [], baselinePairs: [] }), []);
 });

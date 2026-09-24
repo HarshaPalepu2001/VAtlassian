@@ -145,11 +145,13 @@ export function decide({ decision, diff, plan = null, evidenceHash = null }) {
  * That reasoning holds for one of the two things PARTIAL can mean and not the
  * other, and collapsing them had a cost a reviewer paid directly.
  *
- * gate.js refuses a transition on an item in ERROR with RESTORE_IN_PROGRESS —
- * ITEM_BUSY. It is a state a person cannot act their way out of from the panel:
+ * gate.js refuses a controlled transition on an item in ERROR with
+ * RESTORE_IN_PROGRESS — ITEM_BUSY (uncontrolled transitions are held only by
+ * drift). It is a state a person cannot act their way out of from the panel:
  * the only exit is a restore retry, and while the retry was itself refused (see
  * lib/restore/resume.js) an item whose fields were in fact all correct could
- * sit there blocking every transition, for ever, with no explanation.
+ * sit there blocking every controlled transition, for ever, with no
+ * explanation.
  *
  * So the two are separated by whether the app knows what it is looking at:
  *

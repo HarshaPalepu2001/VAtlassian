@@ -4,7 +4,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveEdge } from '../src/lib/approval/runtime.js';
+import { resolveEdge, readAsUserOrApp, hidesControlledTransition } from '../src/lib/approval/runtime.js';
 import { baselineDrift } from '../src/lib/liveDrift.js';
 import { project, FIELD_KIND } from '../src/lib/content.js';
 import { scopeFromIssue } from '../src/lib/trackedFields.js';
@@ -37,6 +37,81 @@ test('one live transition into the status is taken as the edge', async () => {
   const edge = await resolveEdge(edgeDeps({ transitions: [{ id: 60, toStatusId: '2' }, { id: 61, toStatusId: '3' }] }),
     { toStatusId: '2', transitionId: null });
   assert.deepEqual(edge, { transitionId: '60', ct: null, edgeFailure: null });
+});
+
+// ─── Users who never granted the app consent ────────────────────────────────
+
+const noConsent = () => Object.assign(new Error('Authentication required'),
+  { name: 'NeedsAuthenticationError', code: 'NEEDS_AUTHENTICATION_ERR' });
+const listError = status => new Error(`transitions: could not read transitions for T-1 (status ${status})`);
+const reads = ({ user, app = async () => 'app' }) => {
+  const calls = [];
+  return { calls, asUser: async () => { calls.push('user'); return user(); },
+    asApp: async () => { calls.push('app'); return app(); } };
+};
+
+test('a readable user read is used as is; the app is never asked', async () => {
+  const r = reads({ user: () => ({ ok: true, status: 200 }) });
+  assert.deepEqual(await readAsUserOrApp(r.asUser, r.asApp), { ok: true, status: 200 });
+  assert.deepEqual(r.calls, ['user']);
+});
+
+test('no consent, 401 or 403 as the user: the same read comes from the app', async () => {
+  for (const user of [() => { throw noConsent(); }, () => ({ ok: false, status: 401 }), () => ({ ok: false, status: 403 }),
+    () => { throw listError(401); }, () => { throw listError(403); }]) {
+    const r = reads({ user });
+    assert.equal(await readAsUserOrApp(r.asUser, r.asApp), 'app');
+    assert.deepEqual(r.calls, ['user', 'app']);
+  }
+});
+
+test('any other failure is not a consent problem and never falls back', async () => {
+  for (const status of [404, 500, 503]) {
+    const r = reads({ user: () => ({ ok: false, status }) });
+    assert.equal((await readAsUserOrApp(r.asUser, r.asApp)).status, status);
+    assert.deepEqual(r.calls, ['user']);
+    const t = reads({ user: () => { throw listError(status); } });
+    await assert.rejects(readAsUserOrApp(t.asUser, t.asApp), /status \d+/);
+    assert.deepEqual(t.calls, ['user']);
+  }
+});
+
+test('an app read that also fails is reported, and the edge fails closed', async () => {
+  const r = reads({ user: () => { throw noConsent(); }, app: () => { throw listError(503); } });
+  const edge = await resolveEdge({ ...edgeDeps(), transitions: () => readAsUserOrApp(r.asUser, r.asApp) },
+    { toStatusId: '2', transitionId: null });
+  assert.equal(edge.edgeFailure, 'SERVICE_UNAVAILABLE');
+});
+
+test('without consent the live transition list is read as the app and resolves the edge', async () => {
+  const r = reads({ user: () => { throw noConsent(); },
+    app: () => [{ id: '60', toStatusId: '2' }, { id: '61', toStatusId: '3' }] });
+  const edge = await resolveEdge({ ...edgeDeps({ controlled: ['60'] }), transitions: () => readAsUserOrApp(r.asUser, r.asApp) },
+    { toStatusId: '2', transitionId: null });
+  assert.deepEqual(edge, { transitionId: '60', ct: rule, edgeFailure: null });
+});
+
+const move = { issueTypeId: '1', fromStatusId: '1', toStatusId: '2' };
+const ruleFor = (transition_id, over = {}) => ({ transition_id, issue_type_id: '1', from_status_id: '1', to_status_id: '2',
+  state: 'ACTIVE', ...over });
+
+test('an app-read list is trusted only when every rule that could match this move is visible to the app', () => {
+  const visible = [{ id: '60', toStatusId: '2', isAvailable: true }];
+  assert.equal(hidesControlledTransition([], visible, move), false);
+  assert.equal(hidesControlledTransition([ruleFor('60')], visible, move), false);
+  // A controlled transition a workflow condition hides from the app.
+  assert.equal(hidesControlledTransition([ruleFor('62')], visible, move), true);
+  assert.equal(hidesControlledTransition([ruleFor('62', { from_status_id: '*', to_status_id: '*', issue_type_id: '*' })],
+    visible, move), true);
+  // Seen but unavailable to the app may still be available to the user.
+  assert.equal(hidesControlledTransition([ruleFor('60')], [{ ...visible[0], isAvailable: false }], move), true);
+  // Rules that cannot match this move are irrelevant.
+  for (const over of [{ state: 'INACTIVE' }, { issue_type_id: '9' }, { from_status_id: '9' }, { to_status_id: '9' }]) {
+    assert.equal(hidesControlledTransition([ruleFor('62', over)], visible, move), false);
+  }
+  // A list that may be truncated, or cannot be read, is not proof.
+  assert.equal(hidesControlledTransition(Array.from({ length: 200 }, () => ruleFor('60')), visible, move), true);
+  assert.equal(hidesControlledTransition(null, visible, move), true);
 });
 
 test('uncontrolled siblings are no failure: only the drift hold applies to any of them', async () => {

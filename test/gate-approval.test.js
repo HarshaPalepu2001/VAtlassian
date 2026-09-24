@@ -111,10 +111,12 @@ test('gate fails closed on policy, eligibility, drift, content, expiry and token
     assert.equal((await createGate(f.deps)(f.payload)).result, false);
   }
 });
-test('raw-code trap precedes I/O, and telemetry never includes credentials or field values', async () => {
+test('raw-code trap precedes spending the approval, and telemetry never includes credentials or field values', async () => {
+  // The trap cannot precede the load any more: only the loaded edge says
+  // whether a signature is being asked for, and so whether six digits are a code.
   const f = await fixture();
   f.payload.transition.modifiedFields = { customfield_1: '123 456', secret: 'private text' };
-  f.deps.load = async () => assert.fail('Code trap must run first');
+  f.deps.consume = async () => assert.fail('Code trap must refuse before the approval is spent');
   assert.equal((await createGate(f.deps)(f.payload)).result, false);
   assert.equal(rawCodeSubmitted({ value: '123 456' }), true);
   assert.doesNotMatch(JSON.stringify(f.logs), /123|456|private text/);

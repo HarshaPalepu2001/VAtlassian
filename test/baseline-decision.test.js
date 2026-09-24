@@ -141,8 +141,9 @@ test('a restore that could not establish the item state leaves ERROR, never quie
 });
 
 test('a partial restore that named the fields still differing is drift, not an app error', () => {
-  // ERROR makes gate.js refuse every transition as ITEM_BUSY, and there is no
-  // route out of it from the panel. When the verification pass can say exactly
+  // ERROR makes gate.js refuse every controlled transition as ITEM_BUSY (drift,
+  // not ERROR, is what holds the uncontrolled ones), and there is no route out
+  // of it from the panel. When the verification pass can say exactly
   // which tracked fields still differ, that is ordinary drift with evidence:
   // the reviewer sees the list, and can restore again or decide on it.
   assert.equal(stateAfter({ decision: DECISION.REJECT, restoreState: 'PARTIAL', unmatchedCount: 2 }),

@@ -27,7 +27,8 @@
  * history expires after 60 days. A dated, continuous record from us converts a
  * procedural burden they must defend into a detective control we supply.
  *
- * PURE ON PURPOSE. Everything here is a function of (rows, workflow). No Jira
+ * PURE ON PURPOSE. Everything here is a function of (rows, workflow), plus the
+ * pair being judged when a pair has baselines but no rows left. No Jira
  * client, no database, no clock. The job does the I/O; this does the judgement,
  * so the judgement can be tested exhaustively without either.
  */
@@ -151,13 +152,37 @@ function ctKey(row) {
  * Every non-initial transition is judged, not only the ones a row covers:
  * va-gate is attached to all of them, because besides asking for a signature
  * where a row says so, it is what holds a drifted work item still.
+ *
+ * A PAIR WITH NO ROWS IS STILL JUDGED WHEN IT HAS BASELINES. Deleting every
+ * controlled transition for a project and issue type does not release the
+ * baselined work items there: they are still held on drift, and the only thing
+ * holding them is va-gate. That is exactly the moment a check driven by rows
+ * alone would stop looking. So `scope` ({ project_id, issue_type_id }, an entry
+ * from gatecheck's pairsToCheck is fine) names the pair when `rows` is empty,
+ * and then every non-initial transition without an enabled va-gate is a
+ * HOLD_ABSENT against that pair. Nothing is controlled, so there is no
+ * GATE_ABSENT and no GATE_BYPASS_PATH to raise. The key a HOLD_ABSENT carries
+ * does not depend on the rows, so a finding open before the rows were deleted
+ * stays the same finding afterwards, first_seen_at and all. With no rows and no
+ * scope there is no pair to attribute a finding to, and nothing is returned.
  */
-export function diffWorkflow({ rows = [], workflow, appId, moduleKey = 'va-gate' }) {
+export function diffWorkflow({ rows = [], workflow, appId, moduleKey = 'va-gate', scope = null }) {
   const findings = [];
-  if (!workflow || rows.length === 0) return findings;
+  if (!workflow) return findings;
 
   const transitions = workflow.transitions ?? [];
   const workflowId = workflow.id;
+
+  if (rows.length === 0) {
+    const pair = pairOf(scope);
+    if (!pair) return findings;
+    for (const transition of transitions) {
+      if (transition.type === 'INITIAL') continue;
+      const hold = holdAbsent(transition, workflow, pair, { appId, moduleKey });
+      if (hold) findings.push(hold);
+    }
+    return findings;
+  }
 
   // --- Rows that should be enforced, and are not -------------------------
   for (const row of rows) {
@@ -212,17 +237,8 @@ export function diffWorkflow({ rows = [], workflow, appId, moduleKey = 'va-gate'
 
   for (const transition of transitions) {
     if (transition.type === 'INITIAL' || covered.has(transition.id)) continue;
-    const ours = (transition.validators ?? []).filter((v) => isOurGate(v, { appId, moduleKey }));
-
-    if (ours.length === 0 || ours.every(isDisabled)) {
-      findings.push(make(FINDING.HOLD_ABSENT, pair, {
-        workflowId,
-        transitionId: transition.id,
-        detail: ours.length === 0
-          ? `Transition "${transition.name}" in "${workflow.name}" does not carry the VAtlassian validator. A work item with unreviewed changes can still change status across it.`
-          : `The VAtlassian validator on "${transition.name}" in "${workflow.name}" is attached but disabled. A work item with unreviewed changes can still change status across it.`
-      }));
-    }
+    const hold = holdAbsent(transition, workflow, pair, { appId, moduleKey });
+    if (hold) findings.push(hold);
 
     // A second route into a status we are policing, crossed unsigned.
     if (controlledTargets.has(transition.toStatusReference)) {
@@ -235,6 +251,31 @@ export function diffWorkflow({ rows = [], workflow, appId, moduleKey = 'va-gate'
   }
 
   return findings;
+}
+
+/** The HOLD_ABSENT finding for a transition that does not carry an enabled
+ *  va-gate, or null when it does. Shared by the with-rows and the
+ *  baselines-only paths so both word and key the finding identically. */
+function holdAbsent(transition, workflow, pair, { appId, moduleKey }) {
+  const ours = (transition.validators ?? []).filter((v) => isOurGate(v, { appId, moduleKey }));
+  if (ours.length > 0 && !ours.every(isDisabled)) return null;
+  return make(FINDING.HOLD_ABSENT, pair, {
+    workflowId: workflow.id,
+    transitionId: transition.id,
+    detail: ours.length === 0
+      ? `Transition "${transition.name}" in "${workflow.name}" does not carry the VAtlassian validator. A work item with unreviewed changes can still change status across it.`
+      : `The VAtlassian validator on "${transition.name}" in "${workflow.name}" is attached but disabled. A work item with unreviewed changes can still change status across it.`
+  });
+}
+
+/** Normalise a scope to { project_id, issue_type_id }, accepting the camelCase
+ *  names groupByPair uses too. Null when either half is missing, so a finding
+ *  key can never be minted with "undefined" in it. */
+function pairOf(scope) {
+  const project_id = scope?.project_id ?? scope?.projectId;
+  const issue_type_id = scope?.issue_type_id ?? scope?.issueTypeId;
+  if (project_id == null || issue_type_id == null) return null;
+  return { project_id, issue_type_id };
 }
 
 function make(type, row, { workflowId, transitionId, detail }) {

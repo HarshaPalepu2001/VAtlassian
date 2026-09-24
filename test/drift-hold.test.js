@@ -129,9 +129,20 @@ test('a disabled project refuses its controlled transitions and leaves the rest 
   assert.equal((await open.gate(open.payload)).result, true);
 });
 
-test('drift holds a disabled project too', async () => {
-  const f = await gateFixture({ driftCount: 1, ct: null, snapshot: { health: { enabled: false } } });
-  assert.equal((await f.gate(f.payload)).result, false);
+test('a disabled project does not hold drift, because nobody there can decide it', async () => {
+  // The panel refuses drift decisions in a disabled project, so a hold there
+  // would freeze the item with no way out.
+  for (const driftCount of [1, NaN]) {
+    const f = await gateFixture({ driftCount, ct: null, pendingRow: null, snapshot: { health: { enabled: false } } });
+    assert.equal((await f.gate(f.payload)).result, true, String(driftCount));
+  }
+});
+
+test('a disabled project still refuses its controlled transitions when drifted', async () => {
+  const f = await gateFixture({ driftCount: 1, ct: policy(), snapshot: { health: { enabled: false } } });
+  const result = await f.gate(f.payload);
+  assert.equal(result.result, false);
+  assert.doesNotMatch(result.errorMessage, /changed since it was approved/i);
 });
 
 test('a restore in progress holds an uncontrolled transition', async () => {
@@ -151,4 +162,61 @@ test('a baselined item whose controlled transition was later deleted is still he
 
   const decided = await gateFixture({ driftCount: 0, ct: null, pendingRow: null });
   assert.equal((await decided.gate(decided.payload)).result, true);
+});
+
+// ─── Only a signature screen treats six digits as an authenticator code ─────
+//
+// The raw-code trap stops a signer leaking their TOTP code into an ordinary
+// field of a CONTROLLED transition screen. With the validator on every
+// transition, the same trap on an ordinary screen refused postcodes.
+
+const withFields = (f, modifiedFields) => ({ ...f.payload, transition: { ...f.payload.transition, modifiedFields } });
+
+test('a six-digit value on an uncontrolled transition screen does not block the move', async () => {
+  const f = await gateFixture({ driftCount: 0, ct: null, pendingRow: null });
+  assert.equal((await f.gate(withFields(f, { customfield_200: '560001' }))).result, true);
+});
+
+test('a six-digit value on a controlled transition screen is still refused as a raw code', async () => {
+  const f = await gateFixture({ driftCount: 0, ct: policy() });
+  const result = await f.gate(withFields(f, { customfield_200: '123 456' }));
+  assert.equal(result.result, false);
+  assert.match(result.errorMessage, /authenticator code/i);
+  assert.equal(f.calls.consume, 0);
+});
+
+test('drift is reported before a raw code, even on a controlled screen', async () => {
+  const f = await gateFixture({ driftCount: 1, ct: policy() });
+  const result = await f.gate(withFields(f, { customfield_200: '123456' }));
+  assert.equal(result.result, false);
+  assert.match(result.errorMessage, /changed since it was approved/i);
+});
+
+// ─── ERROR is a failed restore, not a running one ───────────────────────────
+
+test('an ERROR item with no drift passes an uncontrolled transition', async () => {
+  const f = await gateFixture({ driftCount: 0, ct: null, pendingRow: null, snapshot: { item: { state: 'ERROR' } } });
+  assert.equal((await f.gate(f.payload)).result, true);
+});
+
+test('an ERROR item that has drifted is held for the drift on an uncontrolled transition', async () => {
+  const f = await gateFixture({ driftCount: 1, ct: null, pendingRow: null, snapshot: { item: { state: 'ERROR' } } });
+  const result = await f.gate(f.payload);
+  assert.equal(result.result, false);
+  assert.match(result.errorMessage, /changed since it was approved/i);
+});
+
+test('an ERROR item is still refused on a controlled transition', async () => {
+  const f = await gateFixture({ driftCount: 0, ct: policy(), snapshot: { item: { state: 'ERROR' } } });
+  const result = await f.gate(f.payload);
+  assert.equal(result.result, false);
+  assert.match(result.errorMessage, /restoring/i);
+  assert.equal(f.calls.consume, 0);
+});
+
+test('a restore genuinely running still holds an uncontrolled transition', async () => {
+  for (const item of [{ state: 'DECIDING' }, { state: 'BASELINED', lock_token: 'tok' }]) {
+    const f = await gateFixture({ driftCount: 0, ct: null, pendingRow: null, snapshot: { item } });
+    assert.equal((await f.gate(f.payload)).result, false, JSON.stringify(item));
+  }
 });

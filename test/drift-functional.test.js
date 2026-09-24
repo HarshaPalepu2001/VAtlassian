@@ -565,3 +565,57 @@ test('a failed baseline capture queues nothing for the vault',async()=>{
   await f.sign();
   assert.equal(f.vaultCalls.length,0);
 });
+
+// ─── Deciding drift after the controlled transition is gone ─────────────────
+//
+// The validator holds a drifted item on every transition even when the
+// controlled transition that produced its baseline has since been deleted in
+// VAtlassian. That is only safe if the drift can still be DECIDED without the
+// row: approve and reject both take their policy from the baseline itself.
+
+const withoutControlledRow = f => {
+  f.gatedTransition = async () => null;
+  f.gateActiveOutOf = async () => ({ gated: false });
+  f.listGatedTransitions = async () => [];
+  return f;
+};
+
+test('controlled transition deleted: approving the drift still captures a new baseline', async () => {
+  const f = withoutControlledRow(fixture());
+  const result = await f.sign();
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(f.baselines.at(-1).version, 2);
+  assert.equal(f.baselines.at(-1).state, 'ACTIVE');
+  assert.equal(f.baselines.at(-1).required_role, 'reviewer', 'the new baseline keeps the old one\'s policy');
+});
+
+test('controlled transition deleted: rejecting the drift still restores the approved content', async () => {
+  const f = withoutControlledRow(fixture());
+  f.issue.fields.summary = 'changed after approval';
+  const result = await f.sign({ decision: 'REJECT' });
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(result.restore.state, 'COMPLETE');
+  assert.equal(f.issue.fields.summary, 'v1 approved');
+});
+
+test('controlled transition deleted: approving the drift moves nothing', async () => {
+  const f = withoutControlledRow(fixture());
+  const before = f.issue.fields.status.id;
+  await f.sign();
+  assert.equal(f.issue.fields.status.id, before);
+  assert.equal(f.transitionRequests.length, 0);
+});
+
+test('a disabled project refuses drift decisions — which is why the validator stops holding there', async () => {
+  const f = fixture();
+  f.projectConfig = async () => ({ enabled: false, restore: { queue: false } });
+  const c = await f.api.challenge(f.args);
+  assert.equal(c.success, false);
+});
+
+test('a signer with no reviewer role cannot decide drift, even with the row deleted', async () => {
+  const f = withoutControlledRow(fixture());
+  f.isEligible = async () => false;
+  const c = await f.api.challenge(f.args);
+  assert.equal(c.success, false);
+});
