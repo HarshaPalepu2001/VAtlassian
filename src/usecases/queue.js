@@ -7,6 +7,7 @@ import { driftedInProjects, reviewsByIds } from '../db/itemStateStore.js';
 import { activeBaseline, activeBaselines } from '../db/baselineStore.js';
 import { availableTransitions } from '../lib/transitions.js';
 import { resolveActions } from '../lib/journey.js';
+import { getDriftedSubjects } from '../db/confluenceStore.js';
 
 const DRIFT_QUEUE_STATES = new Set(['DRIFTED', 'ERROR']);
 
@@ -16,68 +17,70 @@ export async function list({ payload = {}, context }) { return respond(async () 
   const allowed = scopes.filter(s => grants.some(g => rowAuthorises(g, {
     projectId: s.projectId, issueTypeId: scopeIssueTypeForGrant(s, g), role: s.role })));
   const projects = [...new Set(allowed.map(s => Number(s.projectId)).filter(Number.isFinite))];
-  if (!projects.length) return { items: [], nextPageToken: null };
-  const drifted = await driftedInProjects(projects);
-  const clauses = [...new Set(allowed.map(jqlForScope).filter(Boolean))];
-  const ids = drifted.map(r => Number(r.issue_id)).filter(Number.isFinite);
-  if (ids.length) clauses.push(`id in (${ids.join(',')})`);
-  if (!clauses.length) return { items: [] };
-  // Search as the user enforces Browse Projects AND per-issue security before
-  // any denormalised queue summary can cross the resolver boundary.
-  const response = await api.asUser().requestJira(route`/rest/api/3/search/jql`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
-      jql: `(${clauses.join(' OR ')}) ORDER BY updated DESC`, fields: ['summary', 'status', 'project', 'issuetype'],
-      maxResults: 50, ...(payload.nextPageToken ? { nextPageToken: String(payload.nextPageToken) } : {}) }) });
-  if (!response.ok) fail('QUEUE_UNAVAILABLE');
-  const page = await response.json();
-  const issueIds = (page.issues ?? []).map(i => i.id);
-  const [rows, activeMap] = await Promise.all([
-    reviewsByIds(issueIds),
-    activeBaselines(issueIds).catch(() => new Map())
-  ]);
-  const byId = new Map(rows.map(r => [String(r.issue_id), r]));
-  const resolveOne = async issue => {
-    let liveIssue = issue;
-    try {
-      const liveRes = await api.asUser().requestJira(
-        route`/rest/api/3/issue/${issue.key}?fields=summary,status,project,issuetype`
-      );
-      if (liveRes.ok) {
-        liveIssue = await liveRes.json();
-      }
-    } catch {
-      liveIssue = issue;
-    }
 
-    const actions = await actionsForIssue(liveIssue, grants);
-    const row = byId.get(String(issue.id));
-    const active = activeMap.get(Number(issue.id));
-    const canReviewDrift = Boolean(row) && DRIFT_QUEUE_STATES.has(row.state)
-      && await authorisedForDrift(liveIssue, grants);
-    if (!canReviewDrift && actions.length === 0) return null;
-    const baselineVersion = active?.version ?? row?.baseline_version ?? 0;
-    return { issueId: liveIssue.id, issueKey: liveIssue.key, issue_id: liveIssue.id, issue_key: liveIssue.key,
-      summary: liveIssue.fields.summary, status: liveIssue.fields.status.name,
-      state: row?.state ?? 'UNAPPROVED', baselineVersion,
-      driftCount: Number(row?.drift_count ?? 0), materialCount: Number(row?.drifted_field_count ?? 0),
-      maxMateriality: row?.max_materiality ?? null, lastDriftAt: row?.last_drift_at ?? null,
-      transitionName: actions[0]?.toStatusName ?? actions[0]?.name ?? null,
-      transitionLabel: actions[0]?.label ?? null,
-      transitionCount: actions.length };
-  };
-  // Each issue's actionsForIssue() makes its own live Jira transitions call, so
-  // resolving a full 50-issue page in one Promise.all fans out up to 50
-  // concurrent Jira requests. Bounded batches, same pattern as
-  // trackedFields.js's per-issue-type reads, keep this off Jira's rate limit.
-  const QUEUE_RESOLUTION_CONCURRENCY = 5;
-  const resolved = [];
-  const pageIssues = page.issues ?? [];
-  for (let i = 0; i < pageIssues.length; i += QUEUE_RESOLUTION_CONCURRENCY) {
-    const batch = pageIssues.slice(i, i + QUEUE_RESOLUTION_CONCURRENCY);
-    resolved.push(...await Promise.all(batch.map(resolveOne)));
+  let jiraItems = [];
+  let nextPageToken = null;
+  if (projects.length) {
+    const drifted = await driftedInProjects(projects);
+    const clauses = [...new Set(allowed.map(jqlForScope).filter(Boolean))];
+    const ids = drifted.map(r => Number(r.issue_id)).filter(Number.isFinite);
+    if (ids.length) clauses.push(`id in (${ids.join(',')})`);
+
+    if (clauses.length) {
+      const response = await api.asUser().requestJira(route`/rest/api/3/search/jql`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+          jql: `(${clauses.join(' OR ')}) ORDER BY updated DESC`, fields: ['summary', 'status', 'project', 'issuetype'],
+          maxResults: 50, ...(payload.nextPageToken ? { nextPageToken: String(payload.nextPageToken) } : {}) }) });
+      if (!response.ok) fail('QUEUE_UNAVAILABLE');
+      const page = await response.json();
+      nextPageToken = page.nextPageToken ?? null;
+      const issueIds = (page.issues ?? []).map(i => i.id);
+      const [rows, activeMap] = await Promise.all([
+        reviewsByIds(issueIds),
+        activeBaselines(issueIds).catch(() => new Map())
+      ]);
+      const byId = new Map(rows.map(r => [String(r.issue_id), r]));
+      const resolveOne = async issue => {
+        let liveIssue = issue;
+        try {
+          const liveRes = await api.asUser().requestJira(
+            route`/rest/api/3/issue/${issue.key}?fields=summary,status,project,issuetype`
+          );
+          if (liveRes.ok) {
+            liveIssue = await liveRes.json();
+          }
+        } catch {
+          liveIssue = issue;
+        }
+
+        const actions = await actionsForIssue(liveIssue, grants);
+        const row = byId.get(String(issue.id));
+        const active = activeMap.get(Number(issue.id));
+        const canReviewDrift = Boolean(row) && DRIFT_QUEUE_STATES.has(row.state)
+          && await authorisedForDrift(liveIssue, grants);
+        if (!canReviewDrift && actions.length === 0) return null;
+        const baselineVersion = active?.version ?? row?.baseline_version ?? 0;
+        return { issueId: liveIssue.id, issueKey: liveIssue.key, issue_id: liveIssue.id, issue_key: liveIssue.key,
+          summary: liveIssue.fields.summary, status: liveIssue.fields.status.name,
+          state: row?.state ?? 'UNAPPROVED', baselineVersion,
+          driftCount: Number(row?.drift_count ?? 0), materialCount: Number(row?.drifted_field_count ?? 0),
+          maxMateriality: row?.max_materiality ?? null, lastDriftAt: row?.last_drift_at ?? null,
+          transitionName: actions[0]?.toStatusName ?? actions[0]?.name ?? null,
+          transitionLabel: actions[0]?.label ?? null,
+          transitionCount: actions.length };
+      };
+      const QUEUE_RESOLUTION_CONCURRENCY = 5;
+      const resolved = [];
+      const pageIssues = page.issues ?? [];
+      for (let i = 0; i < pageIssues.length; i += QUEUE_RESOLUTION_CONCURRENCY) {
+        const batch = pageIssues.slice(i, i + QUEUE_RESOLUTION_CONCURRENCY);
+        resolved.push(...await Promise.all(batch.map(resolveOne)));
+      }
+      jiraItems = resolved.filter(Boolean);
+    }
   }
-  const items = resolved.filter(Boolean);
-  return { items, nextPageToken: page.nextPageToken ?? null };
+
+  return { items: jiraItems, nextPageToken };
 }); }
 
 function scopeIssueType(scope) {

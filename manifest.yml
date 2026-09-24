@@ -4,10 +4,19 @@ app:
   runtime:
     name: nodejs22.x
 modules:
+  objectStore:
+    - key: fos
+      storageClass: standard
   consumer:
     - key: va-restore-consumer
       queue: va-restore-queue
       function: restore-worker
+    - key: confl-reconcile-cnsmr
+      queue: confluence-reconcile
+      function: confl-reconcile-wrk
+    - key: va-vault-consumer
+      queue: va-vault-queue
+      function: vault-worker
   sql:
     - key: main
       engine: mysql
@@ -46,14 +55,20 @@ modules:
   jira:workflowValidator:
     - key: va-gate
       name: VAtlassian Approval
-      description: Requires an eligible approval for this transition and its
-        configured assurance level, with no unresolved blocking drift.
+      # ONE VALIDATOR, ATTACHED TO EVERY TRANSITION. It holds a baselined work
+      # item whose content has changed since approval on every transition until
+      # that change is approved or reverted, and asks for a signature only on
+      # the transitions VAtlassian administration controls. There is no second
+      # Jira rule to attach. See src/gate.js.
+      description: Attach to every transition. Holds a work item with unreviewed
+        changes since approval, and requires an eligible approval at the
+        configured assurance level on transitions VAtlassian controls.
       function: gate
       projectTypes: [ company-managed ]
       configurationDescription:
         expression: "'VAtlassian approval: ' + (config['configuredIn'] == 'admin' ?
-          'Configured in VAtlassian' : 'Configure this edge in VAtlassian
-          administration')"
+          'Configured in VAtlassian' : 'Holds drifted work items; signature
+          rules are set in VAtlassian administration')"
       resolver:
         function: admin-resolver
       create:
@@ -171,6 +186,24 @@ modules:
     - key: va-on-issue-link
       function: on-issue-link
       events: [ avi:jira:created:issuelink, avi:jira:deleted:issuelink ]
+    - key: va-on-confluence-event
+      function: on-confluence-event
+      events:
+        - avi:confluence:created:page
+        - avi:confluence:updated:page
+        - avi:confluence:deleted:page
+        - avi:confluence:archived:page
+        - avi:confluence:restored:page
+        - avi:confluence:trashed:page
+        - avi:confluence:created:blogpost
+        - avi:confluence:updated:blogpost
+        - avi:confluence:deleted:blogpost
+        - avi:confluence:archived:blogpost
+        - avi:confluence:restored:blogpost
+        - avi:confluence:trashed:blogpost
+        - avi:confluence:created:attachment
+        - avi:confluence:updated:attachment
+        - avi:confluence:deleted:attachment
   scheduledTrigger:
     - key: trigger-five-minute
       function: runner-five-minute
@@ -181,9 +214,55 @@ modules:
     - key: trigger-daily
       function: runner-daily
       interval: day
+  confluence:contentBylineItem:
+    - key: confluence-byline
+      resource: main-ui
+      resolver:
+        function: panel-resolver
+      title: VAtlassian Status
+  confluence:pageBanner:
+    - key: confluence-banner
+      resource: main-ui
+      resolver:
+        function: panel-resolver
+      title: VAtlassian
+  confluence:contentAction:
+    - key: confluence-action
+      resource: main-ui
+      resolver:
+        function: panel-resolver
+      title: VAtlassian Protect
+  confluence:globalPage:
+    - key: confluence-global
+      resource: main-ui
+      resolver:
+        function: panel-resolver
+      title: VAtlassian Approvals
+      route: approvals
+  confluence:spaceSettings:
+    - key: confluence-space
+      resource: main-ui
+      resolver:
+        function: panel-resolver
+      title: VAtlassian Space Setup
+      route: setup
+  confluence:contentProperty:
+    - key: confluence-property
+      propertyKey: va-property
+      name:
+        value: VAtlassian Property
+      values:
+        - path: value
+          type: string
   function:
     - key: restore-worker
       handler: jobs/restoreWorker.handler
+      timeoutSeconds: 600
+    - key: vault-worker
+      handler: jobs/vaultWorker.handler
+      timeoutSeconds: 600
+    - key: confl-reconcile-wrk
+      handler: jobs/confluenceReconcile.handler
       timeoutSeconds: 600
     - key: issue-status
       handler: resolvers/issueStatus.handler
@@ -206,6 +285,8 @@ modules:
       handler: triggers/issue-deleted.run
     - key: on-issue-link
       handler: triggers/issue-link.run
+    - key: on-confluence-event
+      handler: triggers/confluence-event.run
     - key: runner-five-minute
       handler: jobs/runner.runFiveMinute
     - key: runner-hourly
@@ -244,5 +325,25 @@ permissions:
     - write:jira-work
     - read:jira-user
     - manage:jira-configuration
+    - read:confluence-content.all
+    - read:confluence-content.summary
+    - write:confluence-content
+    - read:confluence-space.summary
+    - read:confluence-user
+    - read:confluence-props
+    - write:confluence-props
+    - write:confluence-space
+    # THE EVIDENCE VAULT (src/lib/vaultConfluence.js). The v2 create-space
+    # endpoint accepts only the granular write:space:confluence — without it
+    # Confluence answered every provisioning attempt with 401. Pages go through
+    # v2 (write/read:page), attachments through the v1 child/attachment
+    # endpoint (write:confluence-file, or its granular pair).
+    - read:space:confluence
+    - write:space:confluence
+    - read:page:confluence
+    - write:page:confluence
+    - read:content-details:confluence
+    - write:attachment:confluence
+    - write:confluence-file
   content:
     styles: [ unsafe-inline ]

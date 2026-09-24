@@ -10,13 +10,14 @@ import { fixture, request, fixtureGateValidator } from './admin-fixture.js';
 // issue_type_id — see db/configStore.js's "ISSUE TYPE TAKES THE WILDCARD TOO".
 const edge = { projectId: '1', issueTypeId: '2', fromStatusId: '*', toStatusId: '2', requiredRole: 'QA', meaning: 'APPROVED', transitionId: '100', requiredAssurance: 'ESIGNATURE' };
 
-test('edge creation stores assurance and both capture/drift policy flags', async () => {
+test('edge creation stores assurance and the capture policy flag, and no drift switch', async () => {
   const deps = fixture();
-  const result = await admin.createControlledTransition(request({ ...edge, requiredAssurance: 'ESIGNATURE', captureBaseline: false, blockOnDrift: true }), deps);
+  const result = await admin.createControlledTransition(request({ ...edge, requiredAssurance: 'ESIGNATURE', captureBaseline: false }), deps);
   assert.equal(result.success, true);
   const insert = deps.calls.find(c => c.sql.includes('INSERT INTO va_controlled_transition'));
-  assert.match(insert.sql, /required_assurance, capture_baseline, block_on_drift/);
-  assert.deepEqual(insert.params.slice(9, 13), ['ESIGNATURE', 0, 1, 0]);
+  assert.match(insert.sql, /required_assurance, capture_baseline, require_decision/);
+  assert.deepEqual(insert.params.slice(9, 12), ['ESIGNATURE', 0, 0]);
+  assert.doesNotMatch(insert.sql, /block_on_drift/);
   assert.equal(deps.events[0].payload.requiredAssurance, 'ESIGNATURE');
 });
 
@@ -214,7 +215,7 @@ test('bulk reviewed baseline pins omitted fields and uses explicit retention cho
   assert.equal(result.success, true);
   assert.equal(deps.writes.find(f => f.field_id === 'summary').state, 'ACTIVE');
   assert.equal(deps.writes.find(f => f.field_id === 'customfield_1').store_values, true);
-  assert.equal(deps.writes.find(f => f.field_id === 'description').store_values, false);
+  assert.equal(deps.writes.find(f => f.field_id === 'description').store_values, true, 'mandatory fields preserve their effective retained default');
   assert.equal(deps.events.length, 1);
 });
 

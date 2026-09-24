@@ -12,5 +12,7 @@ export default function IssueContext(){const [state,setState]=useState<Glance|nu
  void refresh();const unsubscribe=subscribeIssueUpdates(refresh);
  return()=>{active=false;++sequence;unsubscribe();};
  },[]);
- if(error)return <Notice danger>{error}</Notice>;if(!state)return <Loading/>;return <div className="va-row"><Badge tone={state.state==='DRIFTED'?'warning':state.state==='BASELINED'?'success':'neutral'}>{state.state??'No baseline'}</Badge>{(state.baselineVersion??state.version)!=null&&<span>Version {state.baselineVersion??state.version}</span>}{!!(state.driftCount??state.count)&&<span>{state.driftCount??state.count} changes</span>}</div>;
+ // Once a state has painted it stays: a later refresh that fails (they are all
+ // background ones here) is not worth replacing the lozenge with an error.
+ if(!state)return error?<Notice danger>{error}</Notice>:<Loading/>;return <div className="va-row"><Badge tone={state.state==='DRIFTED'?'warning':state.state==='BASELINED'?'success':'neutral'}>{state.state??'No baseline'}</Badge>{(state.baselineVersion??state.version)!=null&&<span>Version {state.baselineVersion??state.version}</span>}{!!(state.driftCount??state.count)&&<span>{state.driftCount??state.count} changes</span>}</div>;
 }

@@ -1,22 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  deriveSpaceKey, findSpaceByKey, createSpace, restrictSpacePermissions,
-  createVaultPage, uploadAttachmentToPage
+  findSpaceByKey, createSpace, appAccountId, findPageByTitle,
+  createProjectPage, createVaultPage, uploadAttachmentToPage, SITE_VAULT_KEY
 } from '../src/lib/vaultConfluence.js';
 
 function fakeApi(handler) {
   return { asApp: () => ({ requestConfluence: handler }) };
 }
-
-test('deriveSpaceKey uppercases and strips non-alphanumerics', () => {
-  assert.equal(deriveSpaceKey('eng'), 'VLTENG');
-  assert.equal(deriveSpaceKey('My-Proj 1'), 'VLTMYPROJ1');
-});
-
-test('deriveSpaceKey refuses an empty project key', () => {
-  assert.throws(() => deriveSpaceKey(''), /empty project key/);
-});
 
 test('findSpaceByKey returns the first match or null', async () => {
   const found = await findSpaceByKey('VLTENG', fakeApi(async () => ({ ok: true, json: async () => ({ results: [{ id: 's1', key: 'VLTENG' }] }) })));
@@ -25,26 +16,77 @@ test('findSpaceByKey returns the first match or null', async () => {
   assert.equal(missing, null);
 });
 
-test('createSpace posts key and name and returns the created space', async () => {
+test('createSpace creates the space PRIVATE to the app, so no person can see or find it', async () => {
   let captured;
-  const space = await createSpace({ spaceKey: 'VLTENG', name: 'VAtlassian Vault — ENG' }, fakeApi(async (path, init) => {
+  const space = await createSpace({ spaceKey: 'VATVAULT', name: 'VAtlassian Vault' }, fakeApi(async (path, init) => {
     captured = { path: path.value, init };
-    return { ok: true, json: async () => ({ id: 's1', key: 'VLTENG' }) };
+    return { ok: true, json: async () => ({ id: 's1', key: 'VATVAULT', homepageId: 'h1' }) };
   }));
   assert.equal(space.id, 's1');
+  assert.equal(space.homepageId, 'h1');
   assert.match(captured.path, /\/wiki\/api\/v2\/spaces$/);
-  assert.deepEqual(JSON.parse(captured.init.body), { key: 'VLTENG', name: 'VAtlassian Vault — ENG' });
+  const body = JSON.parse(captured.init.body);
+  assert.equal(body.key, 'VATVAULT');
+  assert.equal(body.createPrivateSpace, true);
+  assert.equal(body.roleAssignments, undefined, 'nobody is granted access at creation');
 });
 
-test('createSpace on a 409 adopts the existing space by key instead of failing', async () => {
+test('the site vault key is a fixed, valid Confluence space key', () => {
+  assert.match(SITE_VAULT_KEY, /^[A-Z0-9]{1,255}$/);
+});
+
+test('createSpace adopts an existing space by key only when this app created it', async () => {
   let call = 0;
   const forgeApi = fakeApi(async () => {
     call += 1;
     if (call === 1) return { ok: false, status: 409 };
-    return { ok: true, json: async () => ({ results: [{ id: 's1', key: 'VLTENG' }] }) };
+    return { ok: true, json: async () => ({ results: [{ id: 's1', key: 'VATVAULT', authorId: 'app-1' }] }) };
   });
-  const space = await createSpace({ spaceKey: 'VLTENG', name: 'x' }, forgeApi);
+  const space = await createSpace({ spaceKey: 'VATVAULT', name: 'x', ownerAccountId: 'app-1' }, forgeApi);
   assert.equal(space.id, 's1');
+  assert.equal(space.adopted, true);
+});
+
+test('createSpace refuses to adopt a same-key space someone else created', async () => {
+  let call = 0;
+  const forgeApi = fakeApi(async () => {
+    call += 1;
+    if (call === 1) return { ok: false, status: 400 };
+    return { ok: true, json: async () => ({ results: [{ id: 's9', key: 'VATVAULT', authorId: 'a-person' }] }) };
+  });
+  await assert.rejects(() => createSpace({ spaceKey: 'VATVAULT', name: 'x', ownerAccountId: 'app-1' }, forgeApi),
+    /not created by this app/);
+});
+
+test('appAccountId reads the account the app acts as', async () => {
+  const id = await appAccountId(fakeApi(async (path) => {
+    assert.match(path.value, /\/wiki\/rest\/api\/user\/current$/);
+    return { ok: true, json: async () => ({ accountId: 'app-1' }) };
+  }));
+  assert.equal(id, 'app-1');
+});
+
+test('findPageByTitle looks a page up inside one space', async () => {
+  let path;
+  const page = await findPageByTitle({ spaceId: 's1', title: 'ENG — Engineering' }, fakeApi(async (p) => {
+    path = p.value;
+    return { ok: true, json: async () => ({ results: [{ id: 'p1' }] }) };
+  }));
+  assert.equal(page.id, 'p1');
+  assert.match(path, /space-id=s1/);
+  assert.match(path, /title=ENG/);
+});
+
+test('createProjectPage nests the project under the vault home page', async () => {
+  let body;
+  const page = await createProjectPage({ spaceId: 's1', parentId: 'h1', title: 'ENG — Engineering' }, fakeApi(async (p, init) => {
+    body = JSON.parse(init.body);
+    return { ok: true, json: async () => ({ id: 'pp1' }) };
+  }));
+  assert.equal(page.id, 'pp1');
+  assert.equal(body.parentId, 'h1');
+  assert.equal(body.spaceId, 's1');
+  assert.equal(body.title, 'ENG — Engineering');
 });
 
 test('createSpace throws when the create fails for a reason other than a conflict', async () => {
@@ -54,28 +96,16 @@ test('createSpace throws when the create fails for a reason other than a conflic
   );
 });
 
-test('restrictSpacePermissions removes every existing grant', async () => {
-  const deleted = [];
-  const forgeApi = fakeApi(async (path, init) => {
-    if (!init) return { ok: true, json: async () => ({ results: [{ id: 'g1' }, { id: 'g2' }] }) };
-    deleted.push(path.value);
-    return { ok: true };
-  });
-  await restrictSpacePermissions('VLTENG', forgeApi);
-  assert.equal(deleted.length, 2);
-  assert.match(deleted[0], /permission\/g1$/);
-  assert.match(deleted[1], /permission\/g2$/);
-});
-
 test('createVaultPage posts a page titled with the issue key', async () => {
   let captured;
-  const page = await createVaultPage({ spaceId: 's1', issueKey: 'ENG-1' }, fakeApi(async (path, init) => {
+  const page = await createVaultPage({ spaceId: 's1', parentId: 'pp1', issueKey: 'ENG-1' }, fakeApi(async (path, init) => {
     captured = { path: path.value, body: JSON.parse(init.body) };
     return { ok: true, json: async () => ({ id: 'p1' }) };
   }));
   assert.equal(page.id, 'p1');
   assert.equal(captured.body.title, 'ENG-1');
   assert.equal(captured.body.spaceId, 's1');
+  assert.equal(captured.body.parentId, 'pp1', 'an issue page sits under its project page');
 });
 
 test('uploadAttachmentToPage posts multipart form data with the filename', async () => {
@@ -89,6 +119,9 @@ test('uploadAttachmentToPage posts multipart form data with the filename', async
   );
   assert.equal(uploaded.id, 'att1');
   assert.match(captured.path, /\/wiki\/rest\/api\/content\/p1\/child\/attachment$/);
+  // PUT creates-or-versions: a later baseline of the same file must not be refused.
+  assert.equal(captured.init.method, 'PUT');
+  assert.match(captured.init.body.toString('utf8'), /name="minorEdit"\r\n\r\ntrue/);
   assert.match(captured.init.body.toString('utf8'), /filename="evidence\.png"/);
   assert.match(captured.init.body.toString('utf8'), /bytes/);
 });

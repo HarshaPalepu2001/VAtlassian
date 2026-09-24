@@ -34,14 +34,28 @@ export function fieldRow(deps, scope, payload, catalogue, accountId) {
     created_at: Date.now(), created_by: accountId };
 }
 
+/**
+ * Every key accepted here must have a module that reads it. A setting that
+ * validates and persists but changes nothing is worse than a missing one: the
+ * administration page presents it as a control, and the saved value becomes
+ * evidence of an intent the runtime never honoured.
+ *
+ * RETIRED — accepted by earlier builds, refused now, and stripped from stored
+ * configuration by retiredConfigKeys() below:
+ *   visibility          no reader. The visibility filtering in panelAccess.js
+ *                       is Jira issue-security scoped, not driven by this key.
+ *   notifications.*     no reader; no digest job was ever built.
+ *   restore.commentOnRestore  executeRestore() does not read it.
+ * `policy.mode` is kept because saveConfig refuses STRICT outright rather than
+ * storing an unenforced locking promise; see fieldsConfiguration.js.
+ */
 export function validateConfig(config) {
   if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('Configuration must be an object.');
-  const allowed = new Set(['enabled', 'reviewStatusIds', 'queueThreshold', 'visibility', 'ai', 'restore', 'notifications', 'policy']);
+  const allowed = new Set(['enabled', 'reviewStatusIds', 'queueThreshold', 'ai', 'restore', 'policy']);
   if (Object.keys(config).some(k => !allowed.has(k))) throw new Error('Unknown configuration key.');
   for (const key of ['enabled']) if (config[key] !== undefined && typeof config[key] !== 'boolean') throw new Error(`${key} must be a boolean.`);
   if (config.reviewStatusIds !== undefined && (!Array.isArray(config.reviewStatusIds) || config.reviewStatusIds.some(s => !/^\d+$/.test(String(s))))) throw new Error('Invalid review statuses.');
   if (config.queueThreshold !== undefined && !['COSMETIC', 'MINOR', 'MAJOR', 'CRITICAL'].includes(config.queueThreshold)) throw new Error('Invalid queue threshold.');
-  if (config.visibility !== undefined && !['reviewer-only', 'all'].includes(config.visibility)) throw new Error('Invalid visibility.');
   if (config.policy !== undefined) {
     if (!config.policy || typeof config.policy !== 'object' || Array.isArray(config.policy)) throw new Error('Invalid policy settings.');
     if (Object.keys(config.policy).some(k => !['mode'].includes(k))) throw new Error('Unknown policy setting.');
@@ -58,17 +72,10 @@ export function validateConfig(config) {
   }
   if (config.restore !== undefined) {
     if (!config.restore || typeof config.restore !== 'object' || Array.isArray(config.restore)) throw new Error('Invalid restore settings.');
-    if (Object.keys(config.restore).some(k => !['actAs', 'notifyUsers', 'perFieldRetries', 'commentOnRestore'].includes(k))) throw new Error('Unknown restore setting.');
-    if (config.restore.commentOnRestore !== undefined && typeof config.restore.commentOnRestore !== 'boolean') throw new Error('commentOnRestore must be a boolean.');
+    if (Object.keys(config.restore).some(k => !['actAs', 'notifyUsers', 'perFieldRetries'].includes(k))) throw new Error('Unknown restore setting.');
     if (config.restore.notifyUsers !== undefined && typeof config.restore.notifyUsers !== 'boolean') throw new Error('notifyUsers must be a boolean.');
     if (config.restore.perFieldRetries !== undefined && (!Number.isSafeInteger(config.restore.perFieldRetries) || config.restore.perFieldRetries < 0 || config.restore.perFieldRetries > 10)) throw new Error('perFieldRetries must be between 0 and 10.');
     if (config.restore.actAs !== undefined && !['app', 'user'].includes(config.restore.actAs)) throw new Error('Invalid actAs value.');
-  }
-  if (config.notifications !== undefined) {
-    if (!config.notifications || typeof config.notifications !== 'object' || Array.isArray(config.notifications)) throw new Error('Invalid notification settings.');
-    if (Object.keys(config.notifications).some(k => !['digest', 'digestAfterHours'].includes(k))) throw new Error('Unknown notification setting.');
-    if (config.notifications.digest !== undefined && typeof config.notifications.digest !== 'boolean') throw new Error('digest must be a boolean.');
-    if (config.notifications.digestAfterHours !== undefined && (!Number.isSafeInteger(config.notifications.digestAfterHours) || config.notifications.digestAfterHours < 1 || config.notifications.digestAfterHours > 168)) throw new Error('digestAfterHours must be between 1 and 168.');
   }
   // Only JSON data is persisted; reject prototype keys at every depth before merge.
   const walk = value => {
@@ -81,4 +88,24 @@ export function validateConfig(config) {
   walk(config);
   if (JSON.stringify(config).length > 20000) throw new Error('Configuration is too large.');
   return config;
+}
+
+/**
+ * Drops keys an earlier build stored but validateConfig no longer accepts.
+ *
+ * saveConfig validates the MERGE of the stored row and the incoming patch, so
+ * without this a project configured before a key was retired could never save
+ * any setting again — the stored value alone would fail validation. Read paths
+ * use it too, so the page never renders a control for a dead setting.
+ *
+ * Returns a new object; siblings that are still live are preserved.
+ */
+export function stripRetiredConfig(config) {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) return config;
+  const { visibility, notifications, ...rest } = config;
+  if (rest.restore && typeof rest.restore === 'object' && !Array.isArray(rest.restore)) {
+    const { commentOnRestore, ...restore } = rest.restore;
+    rest.restore = restore;
+  }
+  return rest;
 }

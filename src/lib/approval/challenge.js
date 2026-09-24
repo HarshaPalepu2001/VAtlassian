@@ -18,8 +18,7 @@ export function challengeContextHash({ issue, transition, prepared, policy }) {
     baselineHash: prepared.baseline?.tree_hash ?? prepared.baseline?.content_hash ?? null,
     evidenceHash: prepared.evidenceHash ?? null, plan: prepared.plan ?? null, treeDiff: prepared.treeDiff ?? null,
     policy: { meaning: policy.meaning, role: policy.required_role,
-      assurance: policy.required_assurance, captureBaseline: !!Number(policy.capture_baseline),
-      blockOnDrift: !!Number(policy.block_on_drift) }
+      assurance: policy.required_assurance, captureBaseline: !!Number(policy.capture_baseline) }
   }));
 }
 

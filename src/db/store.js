@@ -77,7 +77,8 @@ export async function throwing(queryText, params) {
 // a non-null approval_id would falsely report as tampered.
 const AUDIT_COLUMNS = `
   seq, TO_BASE64(event_id) AS event_id, occurred_at, actor_account_id, event_type,
-  issue_id, TO_BASE64(approval_id) AS approval_id, payload, prev_hash, entry_hash
+  issue_id, TO_BASE64(approval_id) AS approval_id, payload, prev_hash, entry_hash,
+  product, content_type, content_id, container_id, baseline_subject_identity
 `;
 
 function decodeAuditRow(row) {
@@ -93,8 +94,8 @@ export async function readTail() {
 export async function insertEntry(row) {
   await throwing(
     `INSERT INTO va_audit
-     (seq, event_id, occurred_at, actor_account_id, event_type, issue_id, approval_id, payload, prev_hash, entry_hash)
-     VALUES (?, FROM_BASE64(?), ?, ?, ?, ?, FROM_BASE64(?), ?, ?, ?)`,
+     (seq, event_id, occurred_at, actor_account_id, event_type, issue_id, approval_id, payload, prev_hash, entry_hash, product, content_type, content_id, container_id, baseline_subject_identity)
+     VALUES (?, FROM_BASE64(?), ?, ?, ?, ?, FROM_BASE64(?), ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       row.seq,
       toBinaryParam(row.event_id),
@@ -105,7 +106,12 @@ export async function insertEntry(row) {
       row.approval_id != null ? toBinaryParam(row.approval_id) : null,
       row.payload,
       row.prev_hash,
-      row.entry_hash
+      row.entry_hash,
+      row.product ?? null,
+      row.content_type ?? null,
+      row.content_id ?? null,
+      row.container_id ?? null,
+      row.baseline_subject_identity ?? null
     ]
   );
 }

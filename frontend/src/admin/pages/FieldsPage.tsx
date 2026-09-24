@@ -51,7 +51,7 @@ export default function FieldsPage({ projects }: { projects: Project[] }) {
           }} /> Retain contents</label>
           {!f.pinned && <Button isDisabled={busy} onClick={() => mutate(() => invoke<Result>('admin:saveField', { projectId, issueTypeId: '*', fieldId: f.field_id, state: 'EXCLUDED' }))}>Exclude</Button>}
         </div></div>)}</Card>
-        {[{ title: 'Deliberately excluded', fields: data.excluded }, { title: 'Not yet reviewed', fields: data.available }].map(group => <Card key={group.title} title={group.title}>{!group.fields.length ? <p className="va-muted">No fields in this group.</p> : group.fields.map(f => <div className="va-record-field va-row" key={f.fieldId}><strong>{f.fieldName}</strong><span className="va-spacer" /><Button isDisabled={busy} onClick={() => mutate(() => invoke<Result>('admin:trackField', { projectId, issueTypeId: '*', fieldId: f.fieldId }))}>Track</Button></div>)}</Card>)}
+        {[{ title: 'Deliberately excluded', fields: data.excluded }, { title: 'Not yet reviewed', fields: data.available }].map(group => <Card key={group.title} title={group.title}>{!group.fields.length ? <p className="va-muted">No fields in this group.</p> : group.fields.map(f => <div className="va-record-field va-row" key={f.fieldId}><strong>{f.fieldName}</strong><span className="va-spacer" /><Button isDisabled={busy} onClick={() => mutate(() => invoke<Result>('admin:trackField', { projectId, issueTypeId: '*', fieldId: f.fieldId, storeValues: true }))}>Track and retain</Button></div>)}</Card>)}
       </> : projectId && !error ? <Loading label="Loading controlled fields…" /> : null}
     </div>
   </Page>;

@@ -8,6 +8,36 @@ export async function getProjectPermissionScheme(projectId, forgeApi = api) {
   return res.json();
 }
 
+export async function getProjectsUsingPermissionScheme(schemeId, projectIdToExclude = null, forgeApi = api) {
+  const { lookupProjects } = await import('./directory.js');
+  const projectsMap = await lookupProjects();
+  if (projectsMap.size === 0) return [];
+  
+  const allProjects = Array.from(projectsMap.entries())
+    .map(([id, info]) => ({ id, key: info.key }))
+    .filter(p => String(p.id) !== String(projectIdToExclude));
+    
+  const matches = [];
+  const CONCURRENCY = 5;
+  for (let i = 0; i < allProjects.length; i += CONCURRENCY) {
+    const batch = allProjects.slice(i, i + CONCURRENCY);
+    const results = await Promise.all(batch.map(async (project) => {
+      try {
+        const res = await forgeApi.asApp().requestJira(route`/rest/api/3/project/${project.id}/permissionscheme`);
+        if (res.ok) {
+          const ps = await res.json();
+          if (String(ps.id) === String(schemeId)) return project.key;
+        }
+      } catch (e) {
+        // ignore
+      }
+      return null;
+    }));
+    matches.push(...results.filter(Boolean));
+  }
+  return matches;
+}
+
 export function attachmentDeleteGrantIds(scheme) {
   return (scheme?.permissions ?? [])
     .filter((p) => ATTACHMENT_DELETE_PERMISSIONS.includes(p.permission))

@@ -326,6 +326,46 @@
   border-left-color: var(--va-mat-major);
 }
 
+/* A table in a description stays a table. Row colour carries the change, so
+   this borrows the same insert/delete/modified vocabulary the blocks above
+   use rather than introducing a second one. */
+.va-block-table {
+  border-left-color: var(--va-border-strong);
+}
+.va-table-caption {
+  margin-bottom: 4px;
+}
+.va-diff-table {
+  border-collapse: collapse;
+  width: 100%;
+  table-layout: auto;
+}
+.va-diff-table th,
+.va-diff-table td {
+  border: 1px solid var(--va-border);
+  padding: 4px 8px;
+  text-align: left;
+  vertical-align: top;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.va-diff-table th {
+  background: var(--va-surface-sunken);
+  font-weight: 600;
+}
+.va-diff-table__row--insert > * {
+  background: var(--va-ins-bg);
+}
+.va-diff-table__row--delete > * {
+  background: var(--va-del-bg);
+  text-decoration: line-through;
+}
+.va-diff-table__cell--modified,
+.va-diff-table__cell--insert,
+.va-diff-table__cell--delete {
+  border-left-color: var(--va-mat-major);
+}
+
 .va-ins {
   background: var(--va-ins-bg);
   color: var(--va-ins-ink);

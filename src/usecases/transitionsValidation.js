@@ -49,7 +49,7 @@ export function transitionInput(payload = {}) {
   controlledAuthenticationMethod(requiredAssurance); // throws for anything other than ESIGNATURE or BIOMETRIC
   const flags = {};
   for (const [camel, snake, fallback] of [['captureBaseline', 'capture_baseline', true],
-    ['blockOnDrift', 'block_on_drift', true], ['requireDecision', 'require_decision', false]]) {
+    ['requireDecision', 'require_decision', false]]) {
     const value = payload[camel] ?? payload[snake] ?? fallback;
     if (typeof value !== 'boolean') throw new Error(`${camel} must be a boolean.`);
     flags[camel] = value;

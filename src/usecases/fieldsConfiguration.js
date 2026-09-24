@@ -1,5 +1,5 @@
 import { runAdmin } from './adminRuntime.js';
-import { fieldScope, fieldCatalogue, fieldRow, validateConfig } from './fieldsValidation.js';
+import { fieldScope, fieldCatalogue, fieldRow, validateConfig, stripRetiredConfig } from './fieldsValidation.js';
 
 /** listGatedTransitions() already decodes capture_baseline to a real boolean
  *  (configStore.js normalizes Forge SQL's 0/1 with `!!Number(...)`), so a
@@ -69,7 +69,9 @@ export async function saveConfig(req, overrides) {
     }
     const merge = (base, over) => Object.fromEntries(Object.entries({ ...base, ...over }).map(([k, v]) =>
       [k, over[k] && typeof over[k] === 'object' && !Array.isArray(over[k]) ? merge(base?.[k] ?? {}, over[k]) : v]));
-    const config = validateConfig(merge(current.config, patch));
+    // Retired keys are dropped from the stored side before the merge: a value
+    // written before a key was retired must not make every later save fail.
+    const config = validateConfig(merge(stripRetiredConfig(current.config), patch));
     if (config.policy?.mode === 'STRICT') {
       if (await deps.hasUnresolvedDrift(pid)) {
         throw new Error('Cannot enable STRICT mode: there is unresolved drift. Approve or reject all pending drift first.');
@@ -94,6 +96,8 @@ export async function getConfig(req, overrides) {
     const key = pid ? `project:${pid}` : 'site';
     const record = await deps.readConfigRecord(key);
     if (pid != null) await deps.readConfigRecord('site');
-    return { config: await deps.projectConfig(pid), revision: record.revision };
+    // Stripped on read as well as on write, so the page never renders a
+    // control for a setting no module reads.
+    return { config: stripRetiredConfig(await deps.projectConfig(pid)), revision: record.revision };
   }, overrides, 'fields');
 }

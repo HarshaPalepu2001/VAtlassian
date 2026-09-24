@@ -388,3 +388,52 @@ test('the starting node itself is protected from a one-hop cycle back to it', as
   assert.deepEqual(result, []);
   assert.equal(requests.length, 1, 'the walk must not follow the chain back to the node that started it');
 });
+
+// ─── The counter is the comparison's answer, not the row count ──────────────
+//
+// VJIRA-17 sat at drift_count 0 with content that had plainly moved, so it
+// never entered the My approvals queue (which selects on state and reads
+// drift_count) and the panel showed a change nobody was allowed to decide.
+//
+// The cause was counting undecided va_drift ROWS. A row is skipped whenever the
+// dedupe key already holds one, and no later pass can recover it — every sweep
+// skips the same row and recounts the same zero.
+
+test('a field whose drift row is deduped away is still counted as drift', async () => {
+  const f = flatFixture();
+  // The row already exists from an earlier pass: recordDrift reports the
+  // duplicate and inserts nothing.
+  f.recordDrift = async () => ({ inserted: false, duplicate: true });
+
+  const result = await collect({ issueId: 1, issueKey: 'FEAT-1', now: 1000 });
+
+  assert.equal(result.outcome, 'DRIFT_RECORDED');
+  assert.equal(f.driftRows.length, 0, 'no new evidence row was written');
+  assert.equal(result.driftCount, 1, 'but the content still differs from the signature');
+  assert.equal(f.review.drift_count, 1, 'and the queue index says so');
+  assert.equal(f.review.state, 'DRIFTED');
+});
+
+test('the counter does not depend on how many rows the evidence trail holds', async () => {
+  // driftSummary counts rows for the whole baseline version, including ones
+  // decided long ago. The counter must reflect what changed now.
+  const f = flatFixture();
+  f.driftSummary = async () => ({ total: 97, fields: 97 });
+
+  const result = await collect({ issueId: 1, issueKey: 'FEAT-1', now: 1000 });
+
+  assert.equal(result.driftCount, 1);
+  assert.equal(f.review.drift_count, 1);
+});
+
+test('content that matches its baseline reports no drift, whatever rows exist', async () => {
+  const f = flatFixture();
+  f.issue.fields.summary = 'approved';
+  f.touch = async () => {};
+  f.driftSummary = async () => ({ total: 12, fields: 12 });
+
+  const result = await collect({ issueId: 1, issueKey: 'FEAT-1', now: 1000 });
+
+  assert.equal(result.outcome, 'NO_CHANGE');
+  assert.notEqual(f.review.state, 'DRIFTED');
+});

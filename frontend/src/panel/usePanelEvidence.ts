@@ -13,6 +13,9 @@ type Options = {
   baselineId?: string | null;
   /** The review row version from the compact summary; advances on same-baseline drift updates. */
   evidenceVersion?: number | null;
+  /** The tracked content's own hash. Moves on every edit, including ones the
+   *  collector has not recorded yet, so the diff never lags the summary. */
+  contentHash?: string | null;
   enabled: boolean;
   /** Called when evidence proves the summary's baseline is no longer current. */
   onStale?: () => void | Promise<void>;
@@ -37,9 +40,12 @@ export const STALE_EVIDENCE_MESSAGE = 'The evidence changed while it was loading
  * baseline. If the refreshed summary still names the same key, loading stops
  * with a scoped error and a manual retry rather than looping.
  */
-export default function usePanelEvidence({ issueKey, actionId, baselineVersion, baselineId = null, evidenceVersion = null, enabled, onStale }: Options) {
-  const cacheKey = baselineVersion == null ? null : `${actionId}::${baselineVersion}::${baselineId ?? ''}::${evidenceVersion ?? ''}`;
+export default function usePanelEvidence({ issueKey, actionId, baselineVersion, baselineId = null, evidenceVersion = null, contentHash = null, enabled, onStale }: Options) {
+  const cacheKey = baselineVersion == null ? null : `${actionId}::${baselineVersion}::${baselineId ?? ''}::${evidenceVersion ?? ''}::${contentHash ?? ''}`;
   const [loaded, setLoaded] = useState<Loaded | null>(null);
+  // The last evidence that loaded cleanly, and the baseline it was read
+  // against. Display-only: see `heldEvidence` below.
+  const lastGood = useRef<{ baselineVersion: number; baselineId: string | null; evidence: PanelEvidence } | null>(null);
   const mounted = useRef(true);
   const sequence = useRef(0);
   const staleKeys = useRef(new Set<string>());
@@ -67,6 +73,7 @@ export default function usePanelEvidence({ issueKey, actionId, baselineVersion, 
         return;
       }
       const evidence = assertResult(raw ?? ({ error: 'The evidence could not be loaded.' } as PanelEvidence & Result));
+      lastGood.current = { baselineVersion, baselineId, evidence };
       setLoaded({ cacheKey, evidence, loading: false, error: '' });
     } catch (e) {
       if (mounted.current && ticket === sequence.current) setLoaded({ cacheKey, evidence: null, loading: false, error: errorMessage(e) });
@@ -85,9 +92,23 @@ export default function usePanelEvidence({ issueKey, actionId, baselineVersion, 
 
   const retry = useCallback(() => { void load(); }, [load]);
   const current = loaded && loaded.cacheKey === cacheKey ? loaded : null;
+  const loading = current ? current.loading : enabled && cacheKey != null;
+  // A REFRESH IS NOT A RESET. Every edit moves `contentHash`, and with it the
+  // key — so a background refresh used to blank the change list and tracked
+  // fields to "Checking…" for the whole of this (slow) read, then paint them
+  // back. While the replacement for the SAME baseline is still loading, the
+  // previous read is offered for display. It is never `evidence`: callers
+  // that gate a decision keep waiting for the authoritative read, so nothing
+  // can be approved or rejected on what is merely still on screen. A
+  // different baseline, or a failed read, gets no stand-in.
+  const held = lastGood.current;
+  const heldEvidence = loading && !current?.evidence && held
+    && held.baselineVersion === baselineVersion && held.baselineId === baselineId
+    ? held.evidence : null;
   return {
     evidence: current?.evidence ?? null,
-    loading: current ? current.loading : enabled && cacheKey != null,
+    heldEvidence,
+    loading,
     error: current?.error ?? '',
     retry
   };

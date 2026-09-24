@@ -1,14 +1,21 @@
 import { transitionInput, verifyControlledTransition } from './transitionsValidation.js';
 import { runAdmin, query, validId, audit } from './adminRuntime.js';
+import { createHash } from 'node:crypto';
+import { affectedRows } from '../lib/db.js';
 const ACTIVE = 'ACTIVE';
 const REVOKED = 'REVOKED';
+const EDIT_COLUMNS = ['project_id', 'issue_type_id', 'from_status_id', 'to_status_id', 'required_role',
+  'meaning', 'reject_to_status_id', 'transition_id', 'required_assurance', 'capture_baseline', 'require_decision'];
+function editRevision(row) {
+  return createHash('sha256').update(JSON.stringify(EDIT_COLUMNS.map(k => row[k] == null ? null : String(row[k])))).digest('hex');
+}
 
 export async function listControlledTransitions(req, overrides) {
   return runAdmin(req, async (deps) => {
     const { executeQuery, fromBinaryColumn, lookupProjects, lookupIssueTypes, lookupStatuses, lookupUsers } = deps;
     const result = await executeQuery(
     `SELECT TO_BASE64(ct_id) AS ct_id, project_id, issue_type_id, from_status_id, to_status_id,
-            required_role, meaning, reject_to_status_id, required_assurance, capture_baseline, block_on_drift, require_decision, transition_id, state, created_at, created_by
+            required_role, meaning, reject_to_status_id, required_assurance, capture_baseline, require_decision, transition_id, state, created_at, created_by
      FROM va_controlled_transition WHERE state = ? ORDER BY created_at DESC`,
     [ACTIVE]
   );
@@ -27,11 +34,12 @@ export async function listControlledTransitions(req, overrides) {
       const project = projects.get(String(row.project_id));
       return {
         ctId: fromBinaryColumn(row.ct_id).toString('hex'),
+        revision: editRevision(row),
         projectId: String(row.project_id), issueTypeId: row.issue_type_id,
         fromStatusId: row.from_status_id, toStatusId: row.to_status_id,
         rejectToStatusId: row.reject_to_status_id, transitionId: row.transition_id,
         requiredAssurance: row.required_assurance,
-        captureBaseline: Boolean(Number(row.capture_baseline)), blockOnDrift: Boolean(Number(row.block_on_drift)),
+        captureBaseline: Boolean(Number(row.capture_baseline)),
         requireDecision: Boolean(Number(row.require_decision)),
         projectKey: project?.key ?? null,
         projectName: project?.name ?? null,
@@ -67,8 +75,8 @@ export async function createControlledTransition(req, overrides) {
     await audit(deps, req.context.accountId, deps.EVENT.CONTROLLED_TRANSITION_CHANGED, { action: 'CREATE_REQUESTED', ctId: id.toString('hex'), ...input });
     await query(deps, `INSERT INTO va_controlled_transition
       (ct_id, project_id, issue_type_id, from_status_id, to_status_id, required_role, meaning,
-       reject_to_status_id, transition_id, required_assurance, capture_baseline, block_on_drift, require_decision, state, created_at, created_by)
-      VALUES (FROM_BASE64(?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?)`,
+       reject_to_status_id, transition_id, required_assurance, capture_baseline, require_decision, state, created_at, created_by)
+      VALUES (FROM_BASE64(?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?)`,
       [deps.toBinaryParam(id), ...edgeParams(input), Date.now(), req.context.accountId]);
     let note;
     if (input.captureBaseline) {
@@ -78,7 +86,7 @@ export async function createControlledTransition(req, overrides) {
         return { errors: [{ step: 'provisionVault', error: String(error?.message ?? error) }] };
       });
       if (provisioned.errors?.length) {
-        note = 'Rule saved. Attachment vaulting could not be fully provisioned yet and will retry automatically at the next baseline.';
+        note = 'Rule saved. Attachment vaulting could not be fully provisioned yet and will retry automatically every hour.';
       }
     }
     return { success: true, ctId: id.toString('hex'), ...(note ? { note } : {}) };
@@ -88,7 +96,7 @@ export async function createControlledTransition(req, overrides) {
 function edgeParams(input) {
   return [input.projectId, input.issueTypeId, input.fromStatusId, input.toStatusId, input.requiredRole,
     input.meaning, input.rejectToStatusId, input.transitionId, input.requiredAssurance,
-    input.captureBaseline ? 1 : 0, input.blockOnDrift ? 1 : 0, input.requireDecision ? 1 : 0];
+    input.captureBaseline ? 1 : 0, input.requireDecision ? 1 : 0];
 }
 
 export async function updateControlledTransition(req, overrides) {
@@ -106,12 +114,23 @@ export async function updateControlledTransition(req, overrides) {
         throw new Error('This project has fields with retention disabled. Enable retention for all tracked fields before updating a capture-baseline policy.');
       }
     }
-    const existing = (await query(deps, "SELECT state FROM va_controlled_transition WHERE ct_id = FROM_BASE64(?) AND state = 'ACTIVE'", [id])).data;
+    const existing = (await query(deps, `SELECT state, ${EDIT_COLUMNS.join(', ')} FROM va_controlled_transition WHERE ct_id = FROM_BASE64(?) AND state = 'ACTIVE'`, [id])).data;
     if (!existing?.length) throw new Error('Active controlled transition not found.');
+    const previous = existing[0];
+    if (req.payload.expectedRevision !== undefined && req.payload.expectedRevision !== editRevision(previous)) {
+      throw new Error('This rule changed since it was loaded. Reload and review it before saving.');
+    }
+    const values = edgeParams(input);
+    if (EDIT_COLUMNS.every((k, i) => (previous[k] == null ? null : String(previous[k])) === (values[i] == null ? null : String(values[i])))) {
+      return { success: true, ctId: req.payload.ctId, note: 'The rule already has these settings.' };
+    }
     await audit(deps, req.context.accountId, deps.EVENT.CONTROLLED_TRANSITION_CHANGED, { action: 'UPDATE_REQUESTED', ctId: req.payload.ctId, ...input });
-    await query(deps, `UPDATE va_controlled_transition SET project_id = ?, issue_type_id = ?, from_status_id = ?, to_status_id = ?,
+    const compare = req.payload.expectedRevision === undefined ? '' : EDIT_COLUMNS.map(k => ` AND ${k} <=> ?`).join('');
+    const updated = await query(deps, `UPDATE va_controlled_transition SET project_id = ?, issue_type_id = ?, from_status_id = ?, to_status_id = ?,
       required_role = ?, meaning = ?, reject_to_status_id = ?, transition_id = ?, required_assurance = ?, capture_baseline = ?,
-      block_on_drift = ?, require_decision = ? WHERE ct_id = FROM_BASE64(?) AND state = 'ACTIVE'`, [...edgeParams(input), id]);
+      require_decision = ? WHERE ct_id = FROM_BASE64(?) AND state = 'ACTIVE'${compare}`,
+      [...values, id, ...(compare ? EDIT_COLUMNS.map(k => previous[k] ?? null) : [])]);
+    if (affectedRows(updated) === 0) throw new Error('This rule changed or was revoked during the save. Reload before trying again.');
     let note;
     if (input.captureBaseline) {
       const provisionVault = deps.provisionVault ?? (await import('../lib/vaultProvision.js')).provisionVault;
@@ -120,7 +139,7 @@ export async function updateControlledTransition(req, overrides) {
         return { errors: [{ step: 'provisionVault', error: String(error?.message ?? error) }] };
       });
       if (provisioned.errors?.length) {
-        note = 'Rule saved. Attachment vaulting could not be fully provisioned yet and will retry automatically at the next baseline.';
+        note = 'Rule saved. Attachment vaulting could not be fully provisioned yet and will retry automatically every hour.';
       }
     }
     return { success: true, ctId: req.payload.ctId, ...(note ? { note } : {}) };

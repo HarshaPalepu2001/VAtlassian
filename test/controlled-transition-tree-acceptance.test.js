@@ -125,8 +125,8 @@ test('Acceptance: Capture Baseline ON vs OFF', async (t) => {
   });
 });
 
-test('Acceptance: Block on Drift ON vs OFF', async (t) => {
-  await t.test('9. block_on_drift: true - drift produces steps', async () => {
+test('Acceptance: a changed tree yields restore steps, an unchanged one none', async (t) => {
+  await t.test('9. drift produces steps', async () => {
     const baselineTree = { nodes: [{ logicalNodeId: 'root', digests: {} }, { logicalNodeId: 'child', parentLogicalId: 'root', digests: { field_0: 'a' } }], values: { root: {}, child: { field_0: 'approved' } } };
     const currentTree = { nodes: [{ logicalNodeId: 'root', digests: {} }, { logicalNodeId: 'child', parentLogicalId: 'root', digests: { field_0: 'b' } }] };
     const diff = diffTree({ baselineTree, currentTree, controlledFields: SIXTEEN_FIELDS });
@@ -135,7 +135,7 @@ test('Acceptance: Block on Drift ON vs OFF', async (t) => {
     assert.equal(plan.steps.length > 0, true);
   });
 
-  await t.test('10. block_on_drift: false - transition allowed (no diff = no steps)', async () => {
+  await t.test('10. no diff = no steps', async () => {
     const tree = { nodes: [{ logicalNodeId: 'root', parentLogicalId: null, digests: {} }] };
     const diff = diffTree({ baselineTree: tree, currentTree: tree, controlledFields: SIXTEEN_FIELDS });
     assert.equal(diff.changes.length, 0);

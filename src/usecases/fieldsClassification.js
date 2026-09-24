@@ -47,7 +47,8 @@ export async function classifyFieldsForBaseline(req, overrides) {
         decision: alwaysIds.has(c.fieldId) ? CLASSIFICATION.GXP : c.decision,
         rationale: c.rationale,
         pinned: alwaysIds.has(c.fieldId),
-        currentState: stateByField.get(c.fieldId) ?? 'UNRULED'
+        currentState: stateByField.get(c.fieldId) ?? 'UNRULED',
+        storeValues: candidate?.store_values === true
       };
     })
   };
@@ -79,7 +80,9 @@ export async function saveControlledFieldsBaseline(req, overrides) {
   }
   const fieldsById = catalogue.byId;
   const retentionById = new Map(submitted.map(f => [f.fieldId, f.storeValues]));
-  const storeValuesFor = id => retentionById.get(id) ?? Boolean(Number(catalogue.rows.find(r => r.field_id === id && String(r.issue_type_id) === issueTypeId)?.store_values ?? 0));
+  const storeValuesFor = id => retentionById.get(id) ?? Boolean(Number(
+    catalogue.rows.find(r => r.field_id === id && String(r.issue_type_id) === issueTypeId)?.store_values
+    ?? (deps.ALWAYS_CONTROLLED_FIELDS.some(f => f.field_id === id) ? catalogue.byId.get(id)?.store_values : false)));
   const { tracked, excluded } = partitionForBaseline(submitted, fieldsById);
   if (tracked.some(f => !storeValuesFor(f.fieldId))) {
     await assertRetentionRemovable(deps, { projectId, issueTypeId });

@@ -20,7 +20,6 @@ export type TransitionFacts = {
   label?: string | null;
   anyStatus?: boolean;
   capturesBaseline?: boolean;
-  blocksOnDrift?: boolean;
 };
 
 const ARROW = '->';
@@ -71,8 +70,9 @@ export function captureFact(transition: TransitionFacts): string {
   return transition.capturesBaseline ? 'Captures a new baseline' : 'Does not capture a baseline';
 }
 
-export function driftFact(transition: TransitionFacts): string {
-  return transition.blocksOnDrift ? 'Blocked while changes are unapproved' : 'Not blocked by unapproved changes';
+/** Drift always holds a work item still; no transition can opt out of it. */
+export function driftFact(): string {
+  return 'Blocked while changes are unapproved';
 }
 
 export function movingTo(transition?: TransitionFacts): string {
@@ -123,4 +123,24 @@ export function resolveSelectedAction(summary: PanelSummary | null | undefined, 
   if (reviewingDrift) return { reviewingDrift, eligible, actionKey: 'drift' };
   const transition = eligible.length === 1 ? eligible[0] : eligible.find(t => t.transitionId === selectedTransitionId);
   return { reviewingDrift, eligible, transition, actionKey: transition ? `transition:${transition.transitionId}` : '' };
+}
+
+/**
+ * How many FIELDS changed, from a node-level change list.
+ *
+ * `drift.changedFields` holds one entry per NODE — `diffTree` emits a single
+ * FIELD_CHANGED change per node carrying its own `fields` array — while every
+ * number shown beside it counts fields. Reading `.length` off it is what made
+ * three edits to one work item render as "3 changes since approval · 1 changed
+ * fields": two true numbers in two different units.
+ *
+ * Shared by the panel header and the drift breakdown so the two cannot drift
+ * apart again. A node with no field list still counts as one change, because
+ * something about it did change.
+ */
+export function changedFieldCount(drift?: { changedFields?: { fields?: unknown[] }[] } | null): number {
+  return (drift?.changedFields ?? []).reduce(
+    (total, change) => total + Math.max(1, change?.fields?.length ?? 0),
+    0
+  );
 }

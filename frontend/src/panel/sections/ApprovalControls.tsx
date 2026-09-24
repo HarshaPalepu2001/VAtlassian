@@ -57,7 +57,7 @@ const DD = { margin: 0 };
  * controlled by the parent when `onSelectTransition` is given; it does not
  * create a competing evidence read.
  */
-export default function ApprovalControls({ summary, issueKey, onDone, disabled = false, evidence, evidenceLoading, evidenceError, selectedTransitionId, onSelectTransition }: {
+export default function ApprovalControls({ summary, issueKey, onDone, disabled = false, evidence, evidenceLoading, evidenceError, evidenceHeld = false, selectedTransitionId, onSelectTransition }: {
   summary: PanelSummary;
   issueKey?: string;
   onDone: () => Promise<void>;
@@ -65,6 +65,9 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
   evidence?: PanelEvidence | null;
   evidenceLoading?: boolean;
   evidenceError?: string;
+  /** A previous same-baseline read is still on screen while its replacement
+   *  loads. Keeps the facts line steady; never enables a decision. */
+  evidenceHeld?: boolean;
   selectedTransitionId?: string;
   onSelectTransition?: (transitionId: string) => void;
 }) {
@@ -327,7 +330,7 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
           ) : (
             <div className="va-stack" style={{ marginLeft: 12 }}>
               <span>{reviewingDrift || transition?.capturesBaseline ? 'A recursive baseline will be captured from the approved issue tree.' : 'This transition records the approval without replacing the active baseline.'}</span>
-              {transition?.blocksOnDrift && !!summary.baseline && (
+              {!!summary.baseline && (
                 <span className="va-warning-text">This transition is blocked if there are unapproved changes.</span>
               )}
             </div>
@@ -353,7 +356,7 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
     <ControlFacts
       summary={summary}
       fromStatusName={fromStatusName}
-      authoritativeReady={!summary.baseline || Boolean(evidence) || Boolean(evidenceError)}
+      authoritativeReady={!summary.baseline || Boolean(evidence) || Boolean(evidenceError) || evidenceHeld}
     />
     {liveRegion}
     {outcome && <Notice danger={outcome.failed}>{outcome.message}</Notice>}
@@ -433,7 +436,7 @@ function ControlFacts({ summary, fromStatusName, authoritativeReady = true }: { 
                   <span className="va-secondary">{t.requiredRole ?? 'Any approver role'}</span>
                   <AssuranceChip level={t.requiredAssurance} />
                   <span className="va-secondary">{captureFact(t)}</span>
-                  <span className="va-secondary">{driftFact(t)}</span>
+                  <span className="va-secondary">{driftFact()}</span>
                 </li>
               ))}
             </ul>

@@ -49,11 +49,10 @@ const optionKey = (t: WorkflowTransition) => `${t.transitionId}:${t.fromStatusId
  * rule has to name one — and it is never rendered.
  */
 type ControlledTransition = {
-  ctId: string;
+  ctId: string; revision?: string;
   projectId: string; issueTypeId: string; transitionId: string | null; fromStatusId: string; toStatusId: string; rejectToStatusId?: string; requireDecision?: boolean;
   requiredAssurance: AssuranceLevel;
   captureBaseline: boolean;
-  blockOnDrift: boolean;
   projectKey: string | null;
   projectName: string | null;
   issueTypeName: string | null;
@@ -79,6 +78,7 @@ const COLUMNS = [
 export default function TransitionsPage({ projects }: { projects: Project[] }) {
   const [editing, setEditing] = useState<ControlledTransition | null>(null);
   const [refresh, setRefresh] = useState(0);
+  const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -103,17 +103,16 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
   const [meaning, setMeaning] = useState('');
   const [requiredAssurance,setAssurance]=useState<AssuranceLevel>('ESIGNATURE');
   const [captureBaseline,setCapture]=useState(true);
-  const [blockOnDrift,setBlock]=useState(true);
   const [rejectStatus, setRejectStatus] = useState('');
   const [availableRoles, setAvailableRoles] = useState<string[]>([]);
 
   const loadTransitions = async () => {
-    setLoading(true);
+    setLoading(true); setLoaded(false); setTransitions([]);
     try {
       const response = await invoke('admin:listControlledTransitions') as
         { success: boolean; transitions?: ControlledTransition[]; error?: string };
 
-      if (response.success) setTransitions(response.transitions ?? []);
+      if (response.success) {setTransitions(response.transitions ?? []);setLoaded(true);}
       else setMessage({ type: 'error', text: response.error || 'Failed to load controlled transitions.' });
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message || 'Failed to load data.' });
@@ -208,7 +207,7 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
   const statusOptions = projectStatuses.map((s) => ({ value: s.id, label: s.name }));
 
   const complete = Boolean(projectId && issueTypeId && selectedTransition && role.trim() && meaning.trim());
-  const canSave = complete && discovery === 'loaded' && !blockingFinding && availableRoles.includes(role) && (!rejectStatus || projectStatuses.some(s=>s.id===rejectStatus));
+  const canSave = loaded && complete && discovery === 'loaded' && !blockingFinding && availableRoles.includes(role) && (!rejectStatus || projectStatuses.some(s=>s.id===rejectStatus));
 
   const handleCreate = async () => {
     setMessage(null);
@@ -219,12 +218,12 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
     setSaving(true);
     try {
       const result = await invoke(editing ? 'admin:updateControlledTransition' : 'admin:createControlledTransition', {
-        ...(editing ? {ctId:editing.ctId, requireDecision:editing.requireDecision ?? false} : {}),
+        ...(editing ? {ctId:editing.ctId, expectedRevision:editing.revision, requireDecision:editing.requireDecision ?? false} : {}),
         projectId, issueTypeId,
         transitionId: selectedTransition.transitionId,
         fromStatusId: selectedTransition.fromStatusId,
         toStatusId: selectedTransition.toStatusId,
-        requiredAssurance,captureBaseline,blockOnDrift,requiredRole: role.trim(), meaning: meaning.trim(), rejectToStatusId: rejectStatus || null
+        requiredAssurance,captureBaseline,requiredRole: role.trim(), meaning: meaning.trim(), rejectToStatusId: rejectStatus || null
       }) as { success: boolean; error?: string };
 
       if (result.success) {
@@ -258,7 +257,7 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
   const edit = (rule: ControlledTransition) => {
     setEditing(rule); setMessage(null); setProjectId(rule.projectId); setIssueTypeId(rule.issueTypeId);
     setMeaning(rule.meaning); setRole(rule.requiredRole); setAssurance(rule.requiredAssurance);
-    setCapture(rule.captureBaseline); setBlock(rule.blockOnDrift); setRejectStatus(rule.rejectToStatusId ?? '');
+    setCapture(rule.captureBaseline); setRejectStatus(rule.rejectToStatusId ?? '');
     setSelectedKey(`${rule.transitionId}:${rule.fromStatusId}`);
   };
 
@@ -368,7 +367,7 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
 
         <div className="va-form-grid" style={{marginTop:16}}><Field label="Required assurance" hint={requiredAssurance==='BIOMETRIC'
           ? 'Add the "Biometric Authentication" field to this transition screen.'
-          : 'Add the "Electronic Signature" field to this transition screen.'}><Select value={requiredAssurance} onChange={v=>setAssurance(v as AssuranceLevel)} placeholder="Choose assurance" options={CONTROLLED_TRANSITION_ASSURANCE_OPTIONS}/></Field><Field label="Capture approved baseline"><input type="checkbox" checked={captureBaseline} onChange={e=>setCapture(e.target.checked)}/></Field><Field label="Block transition on unresolved drift"><input type="checkbox" checked={blockOnDrift} onChange={e=>setBlock(e.target.checked)}/></Field></div>
+          : 'Add the "Electronic Signature" field to this transition screen.'}><Select value={requiredAssurance} onChange={v=>setAssurance(v as AssuranceLevel)} placeholder="Choose assurance" options={CONTROLLED_TRANSITION_ASSURANCE_OPTIONS}/></Field><Field label="Capture approved baseline"><input type="checkbox" checked={captureBaseline} onChange={e=>setCapture(e.target.checked)}/></Field></div>
         <div className="va-form-actions">
           <Button appearance="primary" onClick={handleCreate} isDisabled={saving || !canSave}>
             {saving ? 'Saving…' : editing ? 'Save rule' : 'Add rule'}
@@ -386,7 +385,7 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
         <Card flush>
           {loading ? (
             <EmptyState title="Loading rules…" />
-          ) : transitions.length === 0 ? (
+          ) : !loaded ? <EmptyState title="Rules are unavailable. Retry loading before making changes."/> : transitions.length === 0 ? (
             <EmptyState title="No transitions are controlled yet">
               Until a rule exists here, no workflow transition requires approval and the
               validator has nothing to enforce.
@@ -410,7 +409,7 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
                     />
                   </td>
                   <td>
-                    <div className="va-primary">{rule.meaning}</div><AssuranceChip level={rule.requiredAssurance}/><p className="va-secondary">{rule.captureBaseline?'Captures baseline':'No baseline capture'} · {rule.blockOnDrift?'Blocks drift':'Allows unresolved drift'}</p>
+                    <div className="va-primary">{rule.meaning}</div><AssuranceChip level={rule.requiredAssurance}/><p className="va-secondary">{rule.captureBaseline?'Captures baseline':'No baseline capture'}</p>
                     {rule.createdAt != null && (
                       <div className="va-secondary">
                         Added {formatDate(rule.createdAt)}

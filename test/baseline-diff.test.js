@@ -286,3 +286,92 @@ test('issuelinks drift carries link type and linked issue summary labels instead
   assert.equal(result.fields[0].valueLabels['10001'], 'Blocks');
   assert.equal(result.fields[0].valueLabels['66382'], 'VJIRA-8 - Security audit logging');
 });
+
+// ─── Tables stay tables ──────────────────────────────────────────────────────
+//
+// A table added, removed or edited after approval used to flatten into one
+// block per CELL, so a reviewer saw a column of green lines — "Planet",
+// "Diameter (km)", "Type", "Jupiter", … — with no way to tell which value sat
+// in which column. The row is the block, and it carries its cells.
+
+const cell = (text, header = false) => ({
+  type: header ? 'tableHeader' : 'tableCell',
+  attrs: {},
+  content: [{ type: 'paragraph', content: [{ type: 'text', text }] }]
+});
+const trow = (texts, header = false) => ({ type: 'tableRow', content: texts.map((t) => cell(t, header)) });
+const table = (...rows) => ({ type: 'table', attrs: { layout: 'default' }, content: rows });
+
+test('a table flattens to one block per row, carrying its cells', () => {
+  const blocks = flatten(doc(
+    para('Solar system reference.'),
+    table(trow(['Planet', 'Type'], true), trow(['Jupiter', 'Gas Giant']))
+  ));
+
+  assert.equal(blocks.length, 3, 'one paragraph plus two rows — not one block per cell');
+  assert.equal(blocks[1].type, 'tableRow');
+  assert.deepEqual(blocks[1].cells.map((c) => c.text), ['Planet', 'Type']);
+  assert.deepEqual(blocks[1].cells.map((c) => c.header), [true, true]);
+  assert.deepEqual(blocks[2].cells.map((c) => c.text), ['Jupiter', 'Gas Giant']);
+  // Rows of the same table share a table id so the panel can group them back
+  // into one rendered table rather than a run of unrelated rows.
+  assert.equal(blocks[1].tableId, blocks[2].tableId);
+  assert.notEqual(blocks[1].tableId, null);
+});
+
+test('adding a table reports one insert per row, not one per cell', () => {
+  const before = doc(para('Solar system reference.'));
+  const after = doc(
+    para('Solar system reference.'),
+    table(trow(['Planet', 'Type'], true), trow(['Jupiter', 'Gas Giant']), trow(['Earth', 'Terrestrial']))
+  );
+
+  const { blocks } = diffAdf(before, after);
+  const inserts = blocks.filter((b) => b.op === BLOCK_OP.INSERT);
+  assert.equal(inserts.length, 3);
+  assert.deepEqual(inserts[0].after.cells.map((c) => c.text), ['Planet', 'Type']);
+  assert.deepEqual(inserts[2].after.cells.map((c) => c.text), ['Earth', 'Terrestrial']);
+});
+
+test('removing a table reports one delete per row, with the approved cells intact', () => {
+  const before = doc(para('Intro.'), table(trow(['Planet', 'Type'], true), trow(['Jupiter', 'Gas Giant'])));
+  const after = doc(para('Intro.'));
+
+  const { blocks } = diffAdf(before, after);
+  const deletes = blocks.filter((b) => b.op === BLOCK_OP.DELETE);
+  assert.equal(deletes.length, 2);
+  assert.deepEqual(deletes[1].before.cells.map((c) => c.text), ['Jupiter', 'Gas Giant']);
+});
+
+test('editing one cell is one modified row, with the change isolated to that cell', () => {
+  const before = doc(table(trow(['Planet', 'Diameter'], true), trow(['Jupiter', '139,820'])));
+  const after = doc(table(trow(['Planet', 'Diameter'], true), trow(['Jupiter', '142,984'])));
+
+  const { blocks } = diffAdf(before, after);
+  const modified = blocks.filter((b) => b.op === BLOCK_OP.MODIFIED);
+  assert.equal(modified.length, 1);
+  assert.equal(modified[0].cells.length, 2);
+  assert.equal(modified[0].cells[0].op, 'equal');
+  assert.equal(modified[0].cells[1].op, 'modified');
+  assert.equal(modified[0].cells[1].before, '139,820');
+  assert.equal(modified[0].cells[1].after, '142,984');
+  assert.ok(modified[0].cells[1].ops.some((o) => o.op === 'insert'));
+});
+
+test('a row that gains a column reports the new cell as added, not the whole row as rewritten', () => {
+  const before = doc(table(trow(['Jupiter', '139,820'])));
+  const after = doc(table(trow(['Jupiter', '139,820', 'Gas Giant'])));
+
+  const { blocks } = diffAdf(before, after);
+  const [row] = blocks.filter((b) => b.op === BLOCK_OP.MODIFIED);
+  assert.equal(row.cells.length, 3);
+  assert.equal(row.cells[2].op, 'insert');
+  assert.equal(row.cells[2].after, 'Gas Giant');
+});
+
+test('an untouched table is equal, and its rows are not reported as changes', () => {
+  const same = () => doc(para('Intro.'), table(trow(['Planet'], true), trow(['Jupiter'])));
+  const { blocks, semanticChange } = diffAdf(same(), same());
+  assert.equal(semanticChange, false);
+  assert.ok(blocks.every((b) => b.op === BLOCK_OP.EQUAL));
+});

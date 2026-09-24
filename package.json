@@ -17,6 +17,7 @@
     "@forge/bridge": "^6.3.0",
     "@forge/events": "^3.0.5",
     "@forge/llm": "^1.0.0",
+    "@forge/object-store": "^3.0.0",
     "@forge/react": "^12.1.2",
     "@forge/resolver": "^1.6.0",
     "@forge/sql": "^2.0.0",

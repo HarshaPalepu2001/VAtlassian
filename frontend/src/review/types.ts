@@ -1,6 +1,10 @@
 export type DiffOp = { op: string; text: string };
 export type MarkChange = { from?: string[]; to?: string[] };
-export type DiffBlock = { op: string; before?: { text?: string }; after?: { text?: string }; ops?: DiffOp[]; markChange?: MarkChange };
+/** One cell of a table row, paired with the cell in the same position on the
+ *  other side. `before`/`after` are the cell's plain text. */
+export type DiffCell = { op: string; before?: string | null; after?: string | null; header?: boolean; ops?: DiffOp[] };
+export type DiffBlockSide = { text?: string; type?: string; tableId?: string; cells?: { text?: string; header?: boolean }[] };
+export type DiffBlock = { op: string; before?: DiffBlockSide; after?: DiffBlockSide; ops?: DiffOp[]; cells?: DiffCell[]; markChange?: MarkChange };
 export type DiffItem = string | { id?: string; filename?: string; type?: string; inward?: string; outward?: string };
 export type DiffField = {
  fieldId: string; fieldName: string; summary?: string; driftIds?: string[]; semanticChange?: boolean; materiality?: string;

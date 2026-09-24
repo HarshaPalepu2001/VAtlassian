@@ -31,6 +31,7 @@ resolver.define('admin:revokeControlledTransition', req => admin.revokeControlle
 resolver.define('admin:getRetentionPolicy', req => admin.getRetentionPolicy(req));
 resolver.define('admin:setRetentionPolicy', req => admin.setRetentionPolicy(req));
 resolver.define('admin:listLedger', req => admin.listLedger(req));
+resolver.define('admin:ledgerHead', req => admin.ledgerHead(req));
 resolver.define('admin:verifyLedger', req => admin.verifyLedger(req));
 resolver.define('admin:exportRecords', req => admin.exportRecords(req));
 resolver.define('admin:debugDump', req => admin.debugDump(req));

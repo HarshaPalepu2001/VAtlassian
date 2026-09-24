@@ -51,19 +51,44 @@ export async function query(deps, sql, params = []) {
   return result;
 }
 
-export async function requireAdmin(deps, context) {
+/**
+ * Two authorities, deliberately unequal.
+ *
+ * A VAtlassian administrator is the ordinary one: it is the authority that
+ * decides what is approved, signed, captured and retained.
+ *
+ * A Jira administrator owns the roster only. They can appoint and remove
+ * VAtlassian administrators — which they could achieve anyway by appointing
+ * themselves, and which somebody must be able to do when a roster is stranded
+ * — but that authority does not extend to any control. Callers opt in with
+ * `allowJiraAdmin`, so the reach of the weaker authority is a visible list of
+ * use cases rather than a default.
+ *
+ * Returns how the caller was authorized, so an action that both authorities
+ * can take records which one it was.
+ */
+export async function authorizeAdmin(deps, context, allowJiraAdmin = false) {
   if (!context?.accountId) throw new Error('Unauthorized. Sign in to continue.');
   const result = await query(deps,
     'SELECT account_id FROM va_admin WHERE account_id = ? AND state = ?', [context.accountId, 'ACTIVE']);
-  if (!Array.isArray(result.data) || !result.data.length) throw new Error('Unauthorized. An active VAtlassian administrator is required.');
+  if (Array.isArray(result.data) && result.data.length) return 'ADMIN';
+  // Checked only after the roster misses, so the ordinary path costs no Jira
+  // call, and a Jira permission read that fails is an error rather than a
+  // silent denial.
+  if (allowJiraAdmin && await deps.isJiraAdmin()) return 'JIRA_ADMIN';
+  throw new Error('Unauthorized. An active VAtlassian administrator is required.');
 }
 
-export async function runAdmin(req, action, overrides, profile = '', { bootstrap = false } = {}) {
+export async function requireAdmin(deps, context) {
+  await authorizeAdmin(deps, context, false);
+}
+
+export async function runAdmin(req, action, overrides, profile = '', { bootstrap = false, allowJiraAdmin = false } = {}) {
   try {
     if (!req?.context?.accountId) throw new Error('Unauthorized. Sign in to continue.');
     const deps = await adminDependencies(overrides, profile);
-    if (!bootstrap) await requireAdmin(deps, req.context);
-    const result = await action(deps);
+    const authorizedAs = bootstrap ? 'BOOTSTRAP' : await authorizeAdmin(deps, req.context, allowJiraAdmin);
+    const result = await action(deps, { authorizedAs });
     const success = result?.success ?? result?.ok ?? true;
     return { ...result, success, ok: success };
   } catch (error) {

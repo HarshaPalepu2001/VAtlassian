@@ -32,7 +32,7 @@ let root,container;
 const projects=[{id:'1',name:'First project',key:'ONE'},{id:'2',name:'Second project',key:'TWO'}];
 const flush=()=>act(async()=>{await new Promise(r=>setTimeout(r,0));});
 const defer=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
-async function mount(page,invoke){globalThis.transport=(key,payload)=>key==='harness:logAction'?Promise.resolve({ok:true}):invoke(key,payload);container=document.createElement('div');document.body.append(container);root=createRoot(container);await act(()=>root.render(React.createElement(pages[page],{projects})));await flush();}
+async function mount(page,invoke,props={}){globalThis.transport=(key,payload)=>key==='harness:logAction'?Promise.resolve({ok:true}):invoke(key,payload);container=document.createElement('div');document.body.append(container);root=createRoot(container);await act(()=>root.render(React.createElement(pages[page],{projects,...props})));await flush();}
 afterEach(async()=>{if(root)await act(()=>root.unmount());container?.remove();root=null;});
 const text=()=>container.textContent;
 const button=label=>[...container.querySelectorAll('button')].find(b=>b.textContent.includes(label));
@@ -97,28 +97,18 @@ test('ledger clears stale pagination when a lookup fails',async()=>{
  await act(()=>button('Load more').click());await flush();assert.equal(button('Load more'),undefined);
 });
 
-test('settings renders operational controls and saves modified values',async()=>{
- let savedConfig = null;
+test('settings saves only changed live preferences without materializing inherited values',async()=>{
+ let savedConfig;
  await mount('Settings',(key,payload)=>{
-  if(key==='admin:getConfig') return {success:true,revision:'rev-1',config:{enabled:true,visibility:'reviewer-only',queueThreshold:'MINOR',ai:{enabled:true,maxCompletionTokens:4096},restore:{commentOnRestore:true,notifyUsers:false},policy:{mode:'DETECT'}}};
-  if(key==='admin:saveConfig') { savedConfig = payload; return {success:true}; }
+  if(key==='admin:getConfig') return {success:true,revision:'site-rev',config:{enabled:true,visibility:'reviewer-only',queueThreshold:'MINOR',ai:{enabled:true,maxCompletionTokens:4096},restore:{commentOnRestore:true,notifyUsers:false}}};
+  if(key==='admin:saveConfig'){savedConfig=payload;return {success:true};}
   return {success:true};
  });
- assert.match(text(),/Enable VAtlassian protection/);
- assert.match(text(),/Panel visibility boundary/);
- assert.match(text(),/Review queue threshold/);
- assert.match(text(),/Post audit comment on restoration/);
- assert.match(text(),/Notify authors of unapproved modifications/);
-
- // Toggle comment on restore
- const checkboxes = container.querySelectorAll('input[type=checkbox]');
- await act(()=>checkboxes[2].click());
- assert.ok(button('Save settings'));
-
- await act(()=>button('Save settings').click());
- await flush();
- assert.ok(savedConfig);
- assert.equal(savedConfig.config.restore.commentOnRestore, false);
+ assert.doesNotMatch(text(),/transitions proceed without VAtlassian validator blocks/);
+ assert.equal([...container.querySelectorAll('label')].some(l=>l.textContent.includes('Post audit comment')&&l.querySelector('input:not(:disabled)')),false);
+ const label=[...container.querySelectorAll('label')].find(l=>l.textContent.includes('Enable AI assistance'));
+ await act(()=>label.querySelector('input').click());await act(()=>button('Save settings').click());await flush();
+ assert.deepEqual(savedConfig.config,{ai:{enabled:false}});
  assert.match(text(),/Site-wide default settings saved/);
 });
 
@@ -153,7 +143,7 @@ test('admin console configure mode defaults to settings and renders in-app tabs'
  const tabs = container.querySelectorAll('.va-nav-tab');
  assert.ok(tabs.length >= 8);
  assert.match(tabs[0].textContent, /Settings/);
- assert.match(text(), /Operational policies/);
+ assert.match(text(), /Settings/);
 
  // Click on Administrators tab
  const adminsTab = [...tabs].find(t=>t.textContent.includes('Administrators'));
@@ -200,4 +190,192 @@ test('roles page allows site-wide role grant with all projects option',async()=>
     role: 'Site QA',
     projectId: '*'
   });
+});
+
+test('a failed project directory read leaves administrator recovery accessible',async()=>{
+ await mount('AdminConsole',key=>key==='admin:check'?{success:true,isAdmin:true,needsBootstrap:false}:key==='admin:listProjects'?{success:false,error:'Jira projects unavailable'}:{success:true,admins:[]});
+ assert.match(text(),/Add administrator/);
+});
+test('tracking an unreviewed field explicitly retains contents for baseline restoration',async()=>{
+ let payload;
+ await mount('Fields',(key,p)=>{if(key==='admin:trackField'){payload=p;return {success:true};}return {...setup('Summary'),available:[{fieldId:'customfield_1',fieldName:'Requirement'}]};});
+ await select(0,'1');const track=button('Track and retain');assert.ok(track);await act(()=>track.click());await flush();assert.equal(payload.storeValues,true);
+});
+
+test('editing a transition saves its exact edge, revision and authentication settings',async()=>{
+ const rule={ctId:'a'.repeat(32),revision:'rule-version',projectId:'1',issueTypeId:'2',transitionId:'100',fromStatusId:'*',toStatusId:'3',meaning:'Approved',requiredRole:'QA',requiredAssurance:'BIOMETRIC',captureBaseline:true,blockOnDrift:true,requireDecision:true};
+ let update;
+ await mount('Transitions',(key,payload)=>{
+  if(key==='admin:listControlledTransitions')return {success:true,transitions:[rule]};
+  if(key==='admin:listIssueTypesForProject')return {success:true,issueTypes:[{id:'2',name:'Change'}]};
+  if(key==='admin:listStatusesForProject')return {success:true,statuses:[{id:'3',name:'Done'}]};
+  if(key==='admin:listAvailableRoles')return {success:true,roles:['QA']};
+  if(key==='admin:listWorkflowTransitions')return {success:true,transitions:[{transitionId:'100',name:'Approve',fromStatusId:'*',fromStatusName:'Any status',toStatusId:'3',toStatusName:'Done',global:true,validatorAttached:true,hasScreen:true,jiraRules:{conditions:false,otherValidators:0,postFunctions:0}}]};
+  if(key==='admin:updateControlledTransition'){update=payload;return {success:true};}
+  throw Error('unexpected '+key);
+ });
+ await act(()=>button('Edit').click());await flush();
+ const meaning=container.querySelector('input[placeholder="Approved for release"]');await act(()=>typeInto(meaning,'Approved for use'));await flush();
+ assert.equal(button('Save rule').disabled,false);await act(()=>button('Save rule').click());await flush();
+ assert.equal(update.expectedRevision,'rule-version');assert.equal(update.requiredAssurance,'BIOMETRIC');assert.equal(update.transitionId,'100');assert.equal(update.fromStatusId,'*');assert.equal(update.requireDecision,true);assert.equal(update.meaning,'Approved for use');
+});
+
+test('failed rule and role reads never claim empty authoritative rosters',async()=>{
+ await mount('Transitions',()=>({success:false,error:'Rules unavailable'}));assert.doesNotMatch(text(),/No transitions are controlled yet/);assert.match(text(),/Rules are unavailable/);
+ await act(()=>root.unmount());container.remove();root=null;
+ await mount('Roles',()=>({success:false,error:'Roles unavailable'}));assert.doesNotMatch(text(),/Nobody is eligible to sign yet/);assert.match(text(),/Eligibility is unavailable/);
+});
+
+// ── Settings controls must reach their runtime consumer ──────────────────────
+const liveConfig=()=>({success:true,revision:'rev-1',config:{
+ enabled:true,queueThreshold:'MINOR',reviewStatusIds:[],
+ ai:{enabled:true,maxCompletionTokens:4096},
+ restore:{actAs:'app',notifyUsers:false,perFieldRetries:2}}});
+const labelled=t=>[...container.querySelectorAll('label')].find(l=>l.textContent.includes(t));
+
+test('settings offers every preference that has a runtime consumer',async()=>{
+ await mount('Settings',key=>key==='admin:getConfig'?liveConfig():{success:true,statuses:[]});
+ for(const control of ['Content processing','Queue threshold','Restore as','Notify watchers','Retries per field']){
+  assert.ok(text().includes(control),`${control} is missing from the settings page`);
+ }
+});
+
+test('settings never claims a working preference is unsupported',async()=>{
+ await mount('Settings',key=>key==='admin:getConfig'?liveConfig():{success:true,statuses:[]});
+ // queueThreshold drives collect.js shouldQueue(); restore.notifyUsers drives
+ // executor.js. Telling an administrator otherwise is a false statement about
+ // a control that does work.
+ assert.doesNotMatch(text(),/queue-threshold filtering[^.]*do not have complete runtime support/i);
+ assert.doesNotMatch(text(),/author notifications[^.]*do not have complete runtime support/i);
+});
+
+test('settings sends each changed preference to the resolver unchanged',async()=>{
+ let saved;
+ await mount('Settings',(key,payload)=>{
+  if(key==='admin:getConfig')return liveConfig();
+  if(key==='admin:saveConfig'){saved=payload;return {success:true};}
+  return {success:true,statuses:[]};
+ });
+ const threshold=[...container.querySelectorAll('select')].find(s=>[...s.options].some(o=>o.value==='CRITICAL'));
+ await act(()=>{threshold.value='CRITICAL';threshold.dispatchEvent(new window.Event('change',{bubbles:true}));});
+ await act(()=>labelled('Notify watchers').querySelector('input').click());
+ await flush();
+ await act(()=>button('Save settings').click());await flush();
+ assert.equal(saved.config.queueThreshold,'CRITICAL');
+ assert.equal(saved.config.restore.notifyUsers,true);
+ // Untouched preferences stay absent so the project keeps inheriting them.
+ assert.equal(saved.config.ai,undefined);
+ assert.equal(saved.config.enabled,undefined);
+});
+
+test('settings refuses to save a retries value the resolver would reject',async()=>{
+ await mount('Settings',key=>key==='admin:getConfig'?liveConfig():{success:true,statuses:[]});
+ const retries=container.querySelector('input[type=number][max="10"]');
+ assert.ok(retries,'retries input is missing');
+ await act(()=>typeInto(retries,'50'));await flush();
+ assert.equal(button('Save settings').disabled,true);
+});
+
+test('settings separates a failed status lookup from a project with no statuses',async()=>{
+ await mount('Settings',key=>key==='admin:getConfig'?liveConfig():{success:false,error:'Jira statuses unavailable'});
+ await select(0,'1');
+ assert.doesNotMatch(text(),/No statuses were returned/);
+ assert.match(text(),/statuses could not be loaded|unavailable/i);
+});
+
+test('settings discloses stored review statuses missing from the project and preserves them',async()=>{
+ let saved;
+ await mount('Settings',(key,payload)=>{
+  if(key==='admin:getConfig')return {...liveConfig(),config:{...liveConfig().config,reviewStatusIds:['3','99']}};
+  if(key==='admin:saveConfig'){saved=payload;return {success:true};}
+  return {success:true,statuses:[{id:'3',name:'In Review'}]};
+ });
+ await select(0,'1');
+ // '99' is stored but absent from this project's live statuses. Hiding it
+ // would make the page disagree with what the runtime actually uses.
+ assert.match(text(),/1 stored status|not in this project/i);
+ const open=[...container.querySelectorAll('label')].find(l=>l.textContent.includes('In Review'));
+ await act(()=>open.querySelector('input').click());await flush();
+ await act(()=>button('Save settings').click());await flush();
+ assert.ok(saved.config.reviewStatusIds.includes('99'),'an unlisted stored status was silently dropped');
+});
+
+test('the ledger reports new activity without redrawing the record being read',async()=>{
+ let head=7;
+ const entries=[{seq:7,occurredAt:Date.now(),actorName:'Harsha',eventType:'SIGNATURE_CONSUMED',title:'Signed',entryHash:'h'}];
+ await mount('Ledger',key=>{
+  if(key==='admin:ledgerHead')return {success:true,maxSeq:head};
+  return {success:true,entries,counts:{SIGNATURE_CONSUMED:2},hasMore:false};
+ });
+ assert.doesNotMatch(text(),/new (event|activity)/i);
+ head=9;
+ await act(()=>document.dispatchEvent(new window.Event('visibilitychange')));await flush();
+ assert.match(text(),/new (event|activity)/i,'new activity was never disclosed');
+ // The displayed record must not have been replaced behind the reader's back.
+ assert.match(text(),/Harsha/);
+ assert.ok(button('Refresh'),'no way to pull the new activity in');
+});
+
+test('a failing freshness check never implies the ledger is up to date',async()=>{
+ await mount('Ledger',key=>key==='admin:ledgerHead'
+  ?{success:false,error:'head unavailable'}
+  :{success:true,entries:[],counts:null,hasMore:false});
+ await act(()=>document.dispatchEvent(new window.Event('visibilitychange')));await flush();
+ assert.doesNotMatch(text(),/up to date/i);
+});
+
+// ── Two authorities in the console ──────────────────────────────────────────
+const asJiraAdminOnly=key=>key==='admin:check'
+ ?{success:true,isAdmin:false,isJiraAdmin:true,needsBootstrap:false}
+ :{success:true,admins:[{accountId:'a',displayName:'Existing admin',state:'ACTIVE'}]};
+
+test('a Jira administrator who is not a VAtlassian administrator lands on the roster',async()=>{
+ await mount('AdminConsole',asJiraAdminOnly);
+ assert.doesNotMatch(text(),/An existing VAtlassian administrator must grant access/);
+ assert.match(text(),/administrator/i);
+ // They must be able to appoint somebody, which is the whole point.
+ assert.ok(container.querySelector('input,button'),'roster controls are missing');
+});
+
+test('a Jira administrator is told the controls are not theirs',async()=>{
+ await mount('AdminConsole',asJiraAdminOnly);
+ assert.match(text(),/cannot|not able|only.*VAtlassian|appoint/i);
+});
+
+test('a Jira administrator alone is not offered the control pages',async()=>{
+ await act(()=>{container=document.createElement('div');document.body.append(container);root=createRoot(container);});
+ globalThis.transport=(key,payload)=>key==='harness:logAction'?Promise.resolve({ok:true}):Promise.resolve(asJiraAdminOnly(key,payload));
+ await act(()=>root.render(React.createElement(pages['AdminConsole'],{configure:true})));await flush();
+ // Naming the control pages in prose is fine; offering them as navigation is
+ // not, so this looks at the tabs rather than the page text.
+ const tabs=[...container.querySelectorAll('.va-nav-tab')].map(t=>t.textContent);
+ assert.deepEqual(tabs,[],`control pages were offered to a non-VAtlassian administrator: ${tabs.join(', ')}`);
+});
+
+test('somebody with neither authority is still refused',async()=>{
+ await mount('AdminConsole',key=>key==='admin:check'
+  ?{success:true,isAdmin:false,isJiraAdmin:false,needsBootstrap:false}
+  :{success:true,admins:[]});
+ assert.match(text(),/access required|must grant access/i);
+});
+
+const ledgerWith=counts=>key=>key==='admin:ledgerHead'
+ ?{success:true,maxSeq:0}
+ :{success:true,issue:{issueId:'10006',issueKey:'VJIRA-6',summary:'child tickets'},counts,entries:[],hasMore:false,signaturesSummary:[]};
+
+test('the ledger counts reconcile with the total they report',async()=>{
+ // VJIRA-6 as observed: 2 signatures against 7 recorded events. The five that
+ // belong to no named category must be accounted for, not left as a silent
+ // gap between the badges and the total.
+ await mount('Ledger',ledgerWith({SIGNATURE_CONSUMED:2,BASELINE_CAPTURED:3,ITEM_FIRST_OBSERVED:1,SIGNATURE_CREATED:1}));
+ assert.match(text(),/2 signatures/);
+ assert.match(text(),/7 events recorded in total/);
+ assert.match(text(),/5 other/,'the events outside the named categories are unaccounted for');
+});
+
+test('an approved change is shown, not only a rejected one',async()=>{
+ await mount('Ledger',ledgerWith({CHANGE_APPROVED:2,CHANGE_REJECTED:1}));
+ assert.match(text(),/2 approv/i,'approved changes are invisible while rejections are not');
+ assert.match(text(),/1 reject/);
+ assert.doesNotMatch(text(),/other/,'nothing should be left over when every event is named');
 });

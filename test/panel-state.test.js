@@ -22,7 +22,7 @@ const modules = {
   'db/configStore.js': ['controlledFields', 'projectConfig', 'gateActiveOutOf', 'gatedTransition',
     'listGatedTransitions', 'declaredFieldRows', 'seedControlledFields', 'countControlledFields'],
   'db/baselineStore.js': ['activeBaseline', 'readAllValues', 'baselineHistory'],
-  'db/baselineTreeStore.js': ['readBaselineTree', 'activeRootsForNode'],
+  'db/baselineTreeStore.js': ['readBaselineTree', 'activeRootsForNode', 'rootNodeDigests'],
   'db/itemStateStore.js': ['getReview'],
   'db/driftStore.js': ['driftForIssue'],
   'db/approvalStore.js': ['approvalById', 'pendingApprovalForActor', 'latestApproval'],
@@ -100,6 +100,7 @@ function fixture(overrides = {}) {
     // its governing approval through this. Most fixtures here are roots, so the
     // default is "covered by nothing of its own".
     activeRootsForNode: async () => [],
+    rootNodeDigests: async () => null,
     credentialState: async () => f.credential,
     isActiveAdmin: async () => false,
     isEligible: async () => true,

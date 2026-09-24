@@ -19,12 +19,6 @@ function sanitizeMultipartFilename(filename) {
   return String(filename).replace(/[\r\n]/g, '').replace(/"/g, "'");
 }
 
-export function deriveSpaceKey(projectKey) {
-  const cleaned = String(projectKey ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-  if (!cleaned) throw new Error('Cannot derive a vault space key from an empty project key');
-  return `VLT${cleaned}`.slice(0, 64);
-}
-
 export async function findSpaceByKey(spaceKey, forgeApi = api) {
   const res = await forgeApi.asApp().requestConfluence(route`/wiki/api/v2/spaces?keys=${spaceKey}`);
   if (!res.ok) throw new Error(`Failed to look up Confluence space ${spaceKey}: ${res.status}`);
@@ -32,64 +26,116 @@ export async function findSpaceByKey(spaceKey, forgeApi = api) {
   return data.results?.[0] ?? null;
 }
 
-export async function createSpace({ spaceKey, name }, forgeApi = api) {
-  const res = await forgeApi.asApp().requestConfluence(route`/wiki/api/v2/spaces`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ key: spaceKey, name })
-  });
-  if (res.status === 409) {
-    const existing = await findSpaceByKey(spaceKey, forgeApi);
-    if (existing) return existing;
-    throw new Error(`Confluence reported space key ${spaceKey} already exists but it could not be found`);
-  }
-  if (!res.ok) throw new Error(`Failed to create Confluence space ${spaceKey}: ${res.status}`);
-  return res.json();
+/**
+ * ONE VAULT FOR THE WHOLE SITE. Every project's evidence lives in this single
+ * space, as a project page with one child page per work item — a site with a
+ * thousand controlled projects still has exactly one vault, not a thousand
+ * spaces cluttering anyone's directory.
+ */
+export const SITE_VAULT_KEY = 'VATVAULT';
+export const SITE_VAULT_NAME = 'VAtlassian Vault';
+
+/** The account the app itself acts as in Confluence. */
+export async function appAccountId(forgeApi = api) {
+  const res = await forgeApi.asApp().requestConfluence(route`/wiki/rest/api/user/current`);
+  if (!res.ok) throw new Error(`Failed to read the app's own Confluence account: ${res.status}`);
+  const user = await res.json();
+  if (!user?.accountId) throw new Error("Confluence did not report the app's account id");
+  return user.accountId;
 }
 
 /**
- * A freshly created space's only grants are Confluence's own defaults, so
- * removing all of them (rather than filtering by subject) is safe here
- * specifically — this must never be called against a pre-existing space.
+ * Creates the space PRIVATE to the app (`createPrivateSpace`): the creator is
+ * the only principal with access, and here the creator is the app. No person
+ * — not even a Confluence admin browsing the directory — sees it or finds its
+ * content in search. Access is granted to a named person only when an audit
+ * needs it; a site admin can always recover it from Confluence administration.
  *
- * VERIFY AGAINST THE LIVE TEST SITE: confirm the legacy permission-list shape
- * below matches what a new space actually receives, and that DELETE removes
- * access rather than erroring when the last grant for an operation is removed.
+ * This replaced creating an ordinary space and deleting its grants afterwards,
+ * which left the space open until the deletes ran and would have removed the
+ * app's own access along with everyone else's.
+ *
+ * On a key collision (a half-finished earlier attempt) the existing space is
+ * adopted ONLY if this app created it. A same-key space someone else made
+ * could be readable by anyone; evidence must never be written into it.
  */
-export async function restrictSpacePermissions(spaceKey, forgeApi = api) {
-  const res = await forgeApi.asApp().requestConfluence(route`/wiki/rest/api/space/${spaceKey}/permission`);
-  if (!res.ok) throw new Error(`Failed to read permissions for space ${spaceKey}: ${res.status}`);
-  const data = await res.json();
-  for (const grant of data.results ?? []) {
-    const delRes = await forgeApi.asApp().requestConfluence(
-      route`/wiki/rest/api/space/${spaceKey}/permission/${grant.id}`, { method: 'DELETE' }
-    );
-    if (!delRes.ok && delRes.status !== 404) {
-      throw new Error(`Failed to remove space permission ${grant.id} on ${spaceKey}: ${delRes.status}`);
+export async function createSpace({ spaceKey, name, ownerAccountId }, forgeApi = api) {
+  const res = await forgeApi.asApp().requestConfluence(route`/wiki/api/v2/spaces`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      key: spaceKey,
+      name,
+      createPrivateSpace: true,
+      description: { value: 'Tamper-evident copies of attachments on approved Jira work items, kept by VAtlassian. Managed by the app — do not edit.', representation: 'plain' }
+    })
+  });
+  if (res.ok) {
+    const data = await res.json();
+    return { ...data, created: true, adopted: false };
+  }
+  if (res.status === 409 || res.status === 400) {
+    const existing = await findSpaceByKey(spaceKey, forgeApi);
+    if (existing) {
+      if (!ownerAccountId || existing.authorId !== ownerAccountId) {
+        throw new Error(`Confluence space ${spaceKey} already exists but was not created by this app; refusing to store evidence in it`);
+      }
+      return { ...existing, created: false, adopted: true };
     }
   }
+  throw new Error(`Failed to create Confluence space ${spaceKey}: ${res.status}`);
 }
 
-export async function createVaultPage({ spaceId, issueKey }, forgeApi = api) {
+export async function findPageByTitle({ spaceId, title }, forgeApi = api) {
+  const res = await forgeApi.asApp().requestConfluence(
+    route`/wiki/api/v2/pages?space-id=${spaceId}&title=${title}&status=current&limit=1`
+  );
+  if (!res.ok) throw new Error(`Failed to look up vault page "${title}": ${res.status}`);
+  const data = await res.json();
+  return data.results?.[0] ?? null;
+}
+
+async function createPage({ spaceId, parentId, title, html }, forgeApi) {
   const res = await forgeApi.asApp().requestConfluence(route`/wiki/api/v2/pages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      spaceId, status: 'current', title: issueKey,
-      body: { representation: 'storage', value: `<p>Vaulted attachment evidence for ${escapeHtml(issueKey)}.</p>` }
+      spaceId, status: 'current', title,
+      ...(parentId ? { parentId } : {}),
+      body: { representation: 'storage', value: html }
     })
   });
-  if (!res.ok) throw new Error(`Failed to create vault page for ${issueKey}: ${res.status}`);
+  if (!res.ok) throw new Error(`Failed to create vault page "${title}": ${res.status}`);
   return res.json();
 }
 
+/** The per-project parent page every issue page of that project sits under. */
+export async function createProjectPage({ spaceId, parentId, title }, forgeApi = api) {
+  return createPage({ spaceId, parentId, title,
+    html: `<p>Vaulted attachment evidence for work items in ${escapeHtml(title)}.</p>` }, forgeApi);
+}
+
+export async function createVaultPage({ spaceId, parentId, issueKey }, forgeApi = api) {
+  return createPage({ spaceId, parentId, title: issueKey,
+    html: `<p>Vaulted attachment evidence for ${escapeHtml(issueKey)}.</p>` }, forgeApi);
+}
+
+/**
+ * PUT, not POST: PUT creates the attachment or adds a new VERSION of one with
+ * the same name, where POST refuses a name already on the page — which every
+ * second baseline of the same file would hit. `minorEdit` is a required form
+ * field on this endpoint.
+ */
 export async function uploadAttachmentToPage({ pageId, filename, buffer }, forgeApi = api) {
   const boundary = '----VAtlassianVault' + Math.random().toString(36).slice(2);
-  const header = `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${sanitizeMultipartFilename(filename)}"\r\nContent-Type: application/octet-stream\r\n\r\n`;
-  const footer = `\r\n--${boundary}--\r\n`;
-  const body = Buffer.concat([Buffer.from(header, 'utf8'), buffer, Buffer.from(footer, 'utf8')]);
+  const body = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${sanitizeMultipartFilename(filename)}"\r\nContent-Type: application/octet-stream\r\n\r\n`, 'utf8'),
+    buffer,
+    Buffer.from(`\r\n--${boundary}\r\nContent-Disposition: form-data; name="minorEdit"\r\n\r\ntrue`, 'utf8'),
+    Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8')
+  ]);
   const res = await forgeApi.asApp().requestConfluence(route`/wiki/rest/api/content/${pageId}/child/attachment`, {
-    method: 'POST',
+    method: 'PUT',
     headers: { 'X-Atlassian-Token': 'nocheck', 'Content-Type': `multipart/form-data; boundary=${boundary}` },
     body
   });

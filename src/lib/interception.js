@@ -38,6 +38,47 @@ export function supersedeOnReviewEntry({ prior, currentStatusId, reviewStatusIds
   };
 }
 
+/**
+ * WHICH TRACKED FIELDS NO LONGER MATCH THE SIGNATURE — the whole definition of
+ * drift, as one pure function.
+ *
+ * DRIFT IS DERIVED, NOT COUNTED. It used to be a number on va_item_state that
+ * the collector wrote and the decision paths zeroed, which made it a second
+ * answer to a question the content already settles — and on VJIRA-17 the two
+ * disagreed permanently: the row said 0 while the live comparison said one
+ * field had moved, so the panel showed a change it would not let anyone decide.
+ * A stored counter can be missed, double-cleared or left stale by any path that
+ * forgets to update it. A comparison cannot.
+ *
+ * So this is the single implementation, and observe() and the panel summary
+ * both call it. They cannot disagree about what drift is, because there is only
+ * one place that decides.
+ *
+ * A BASELINE THAT CANNOT BE READ REPORTS EVERYTHING, for the reason spelled out
+ * in observe() below: an absence of digests is not evidence of a match, and
+ * concluding "clean" from it would report a corrupt baseline as an approved one.
+ */
+export function driftedFields({ baselineDigests, issueFields, controlledFields }) {
+  const fields = controlledFields ?? [];
+  const ids = fields.map((f) => f.field_id);
+  const { contentHash, digests } = project(issueFields, fields);
+
+  let bDigests = baselineDigests;
+  if (typeof bDigests === 'string') {
+    try { bDigests = JSON.parse(bDigests); } catch { bDigests = null; }
+  }
+  if (!bDigests || typeof bDigests !== 'object' || Object.keys(bDigests).length === 0) {
+    return { changed: ids, contentHash, digests, baselineReadable: false };
+  }
+
+  try {
+    return { changed: changedFields(bDigests, digests, ids), contentHash, digests, baselineReadable: true };
+  } catch {
+    // FAILS TOWARDS DRIFT, for the same reason as an unreadable baseline.
+    return { changed: ids, contentHash, digests, baselineReadable: false };
+  }
+}
+
 export function observe({ prior, baselineDigests, issueFields, controlledFields, reviewStatusIds, currentStatusId, now }) {
   if (controlledFields.length === 0) return { outcome: OUTCOME.NOT_CONTROLLED, review: prior };
   if (!prior?.baseline_id) return { outcome: OUTCOME.NO_BASELINE, review: prior };
@@ -81,19 +122,9 @@ export function observe({ prior, baselineDigests, issueFields, controlledFields,
   //
   // Over-report instead. The reviewer sees every field once, and the next
   // successful capture self-corrects.
-  const baselineReadable = bDigests && Object.keys(bDigests).length > 0;
-
-  let changes = [];
-  if (!baselineReadable) {
-    changes = controlledFields.map(f => f.field_id);
-  } else {
-    try {
-      changes = changedFields(bDigests, currentDigests, controlledFields.map(f => f.field_id));
-    } catch (e) {
-      // FAILS TOWARDS DRIFT, for the same reason.
-      changes = controlledFields.map(f => f.field_id);
-    }
-  }
+  // driftedFields() is the single definition, shared with the panel summary so
+  // the two can never disagree about what counts as drift.
+  const changes = driftedFields({ baselineDigests: bDigests, issueFields, controlledFields }).changed;
 
   if (changes.length === 0) {
     // Returning values by hand does not erase the outstanding review decision.

@@ -36,7 +36,7 @@ import { executeQuery } from '../lib/db.js';
 import { append, EVENT } from '../lib/ledger.js';
 import { auditStore, newId } from '../db/store.js';
 import { diffWorkflow, groupByPair, FINDING, SEVERITY } from '../lib/gateDrift.js';
-import { gateUnenforcedAlert } from '../lib/alerts.js';
+import { gateUnenforcedAlert, driftHoldAbsentAlert } from '../lib/alerts.js';
 import { enqueue } from '../db/alertStore.js';
 import { readWorkflowForPair, defaultRequest, runtimeAppId, MODULE_KEY } from '../lib/workflowSource.js';
 
@@ -162,13 +162,16 @@ export async function run({ request = defaultRequest, appId = runtimeAppId() } =
       // nobody must act on tonight stops being read — which would cost us the
       // two findings that genuinely mean items are crossing unsigned.
       if (finding.severity === SEVERITY.CRITICAL) {
-        await enqueue(gateUnenforcedAlert({
+        const alertInput = {
           findingKey: finding.key,
           findingType: finding.type,
           detail: finding.detail,
           projectKey: null, // resolved for display in the console, not here
           occurredAt: now
-        }));
+        };
+        await enqueue(finding.type === FINDING.HOLD_ABSENT
+          ? driftHoldAbsentAlert(alertInput)
+          : gateUnenforcedAlert(alertInput));
       }
       await audit(EVENT.GATE_DRIFT_DETECTED, {
         findingKey: finding.key,

@@ -15,19 +15,39 @@ const GateConfig=lazy(()=>import('./gate/GateConfig'));
 const DiffModal=lazy(()=>import('./review/DiffModal'));
 const WebAuthnPopup=lazy(()=>import('./panel/WebAuthnPopup'));
 const ApprovalField=lazy(()=>import('./field/ApprovalField'));
-type Context=Awaited<ReturnType<typeof view.getContext>>;
-function isWebAuthnPopup(){
- try{return new URL(window.location.href).searchParams.get('mode')==='webauthn-popup';}
- catch{return false;}
+const ConfluenceSpaceSetup = lazy(() => import('./confluence/ConfluenceSpaceSetup'));
+const ConfluencePageStatus = lazy(() => import('./confluence/ConfluencePageStatus'));
+const ConfluenceProtectAction = lazy(() => import('./confluence/ConfluenceProtectAction'));
+
+type Context = Awaited<ReturnType<typeof view.getContext>>;
+function isWebAuthnPopup() {
+  try { return new URL(window.location.href).searchParams.get('mode') === 'webauthn-popup'; }
+  catch { return false; }
 }
-function App(){const [context,setContext]=useState<Context|null>(null);const [error,setError]=useState(false);
- useEffect(()=>{view.getContext().then(setContext).catch(()=>setError(true));},[]);
- useEffect(()=>{let active=true;let cleanup:(()=>void)|undefined;view.theme.enable().catch(()=>{if(!active)return;const media=window.matchMedia('(prefers-color-scheme: dark)');const apply=()=>document.documentElement.setAttribute('data-color-mode',media.matches?'dark':'light');apply();media.addEventListener('change',apply);cleanup=()=>media.removeEventListener('change',apply);});return()=>{active=false;cleanup?.();};},[]);
- if(error)return <Page title="Could not start"><Notice danger>Jira context could not be read. Reload this page.</Notice></Page>;
- if(!context)return <Loading/>;
- let screen:React.ReactNode;
- if(context.extension.modal?.fields)screen=<DiffModal/>;
- else switch(context.moduleKey){case 'va-device-approval-field':screen=<ApprovalField context={context as {extension?:{issue?:{key?:string;id?:string}}}}/>;break;case 'va-panel':screen=<IssuePanel/>;break;case 'va-context':screen=<IssueContext/>;break;case 'va-worklist':screen=<QueueList/>;break;case 'va-admin':screen=<AdminConsole/>;break;case 'va-admin-configure':screen=<AdminConsole configure/>;break;case 'va-authenticator':screen=<TotpEnrollment/>;break;case 'va-gate':screen=<GateConfig readOnly={context.extension.entryPoint==='view'}/>;break;default:screen=<Page title="Screen unavailable"><Notice>This module is not configured. Contact your administrator.</Notice></Page>;}
+function App() {
+  const [context, setContext] = useState<Context | null>(null); const [error, setError] = useState(false);
+  useEffect(() => { view.getContext().then(setContext).catch(() => setError(true)); }, []);
+  useEffect(() => { let active = true; let cleanup: (() => void) | undefined; view.theme.enable().catch(() => { if (!active) return; const media = window.matchMedia('(prefers-color-scheme: dark)'); const apply = () => document.documentElement.setAttribute('data-color-mode', media.matches ? 'dark' : 'light'); apply(); media.addEventListener('change', apply); cleanup = () => media.removeEventListener('change', apply); }); return () => { active = false; cleanup?.(); }; }, []);
+  if (error) return <Page title="Could not start"><Notice danger>Context could not be read. Reload this page.</Notice></Page>;
+  if (!context) return <Loading />;
+  let screen: React.ReactNode;
+  if (context.extension.modal?.fields) screen = <DiffModal />;
+  else switch (context.moduleKey) {
+    case 'va-device-approval-field': screen = <ApprovalField context={context as any} />; break;
+    case 'va-panel': screen = <IssuePanel />; break;
+    case 'va-context': screen = <IssueContext />; break;
+    case 'va-worklist': screen = <QueueList />; break;
+    case 'va-admin': screen = <AdminConsole />; break;
+    case 'va-admin-configure': screen = <AdminConsole configure />; break;
+    case 'va-authenticator': screen = <TotpEnrollment />; break;
+    case 'va-gate': screen = <GateConfig readOnly={context.extension.entryPoint === 'view'} />; break;
+    case 'confluence-byline':
+    case 'confluence-banner': screen = <ConfluencePageStatus view={context.moduleKey} />; break;
+    case 'confluence-action': screen = <ConfluenceProtectAction />; break;
+    case 'confluence-global': screen = <QueueList />; break;
+    case 'confluence-space': screen = <ConfluenceSpaceSetup />; break;
+    default: screen = <Page title="Screen unavailable"><Notice>This module is not configured. Contact your administrator.</Notice></Page>;
+  }
  return <Suspense fallback={<Loading/>}>{screen}</Suspense>;
 }
 class ErrorBoundary extends React.Component<{children:React.ReactNode},{failed:boolean}>{state={failed:false};static getDerivedStateFromError(){return {failed:true};}render(){return this.state.failed?<Page title="This screen could not be displayed"><Notice danger>Reload the page. If this persists, contact your administrator.</Notice></Page>:this.props.children;}}

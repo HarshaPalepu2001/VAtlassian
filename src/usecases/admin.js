@@ -6,7 +6,7 @@ export { getAlertDestination, setAlertDestination, listGateFindings } from './ad
 export { listAvailableRoles, listEligibility, grantEligibility, revokeEligibility } from './eligibility.js';
 export { listControlledTransitions, createControlledTransition, updateControlledTransition, revokeControlledTransition } from './transitions.js';
 export { getRetentionPolicy, setRetentionPolicy } from './retention.js';
-export { listLedger, verifyLedger } from './evidence.js';
+export { listLedger, ledgerHead, verifyLedger } from './evidence.js';
 export { exportRecords } from './evidenceExport.js';
 export { debugDump, listContentChanges, storage, listCredentials, reconcileDirectory } from './adminDiagnostics.js';
 export { fieldSetup, syncFields } from './fields.js';

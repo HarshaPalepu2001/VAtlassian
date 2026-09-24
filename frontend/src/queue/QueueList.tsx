@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '../lib/bridge';
+import { subscribeIssueUpdates, type RefreshOptions } from '../lib/issueUpdates';
 import { recordHarnessEvent } from '../lib/harness';
 import Button from '@atlaskit/button';
 import { Badge, Card, EmptyState, IssueLink, Loading, Page, Table } from '../ui/primitives';
@@ -31,20 +32,40 @@ export default function QueueList() {
   const [expanded, setExpanded] = useState('');
   const [next, setNext] = useState<string | null>(null);
 
-  const load = useCallback(async (token?: string) => {
-    setLoading(true); setError('');
+  const loadedOnce = useRef(false);
+  // `background` is a refresh nobody asked for (lib/issueUpdates.ts): it
+  // updates the list in place, without the busy state, and once the list has
+  // loaded a failure is kept quiet — the next event or focus retries it.
+  const load = useCallback(async (token?: string, { background = false }: RefreshOptions = {}) => {
+    const quiet = background && loadedOnce.current;
+    if (!quiet) { setLoading(true); setError(''); }
     try {
       const r = assertResult(await invoke<Result&{items:Item[];nextPageToken?:string|null}>('queue:list', token ? {nextPageToken: token} : {}));
       setItems(prev => token ? [...prev, ...r.items.filter(i => !prev.some(p => p.issueId === i.issueId))] : r.items);
       setNext(r.nextPageToken ?? null);
+      loadedOnce.current = true;
+      setError('');
       recordHarnessEvent('UI', 'queue:loaded', { itemCount: r.items?.length ?? 0 });
     } catch (e) {
-      setError(errorMessage(e));
-      recordHarnessEvent('ERROR', 'queue:loadFailed', {}, e);
-    } finally { setLoading(false); }
+      if (!quiet) setError(errorMessage(e));
+      recordHarnessEvent('ERROR', 'queue:loadFailed', { background }, e);
+    } finally { if (!quiet) setLoading(false); }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  // LIVE, LIKE THE PANEL.
+  //
+  // This loaded once on mount and then sat there until somebody pressed
+  // Refresh, so a decision taken in the issue panel — or an edit made anywhere
+  // in Jira — left this list showing work that was already done. The panel and
+  // the context lozenge have subscribed to the same signals all along
+  // (lib/issueUpdates.ts); the queue was the surface that never did.
+  //
+  // Reloading the FIRST page only is deliberate: re-requesting every page the
+  // reviewer had scrolled through would reorder the list under their cursor.
+  useEffect(() => {
+    void load();
+    return subscribeIssueUpdates(options => load(undefined, options));
+  }, [load]);
 
   return (
     <Page

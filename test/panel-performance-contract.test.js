@@ -25,7 +25,10 @@ const poisoned = {
 };
 
 const modules = {
-  'db/configStore.js': ['gatedTransition'],
+  // trackedFields.js imports these; getSummary never calls them, and the
+  // poisoned list above is what enforces that boundary.
+  'db/configStore.js': ['gatedTransition', 'controlledFields', 'declaredFieldRows',
+    'seedControlledFields', 'countControlledFields'],
   'db/itemStateStore.js': ['getReview'],
   'db/approvalStore.js': ['latestApproval', 'pendingApprovalForActor'],
   'db/incidentStore.js': ['adminIncidentCount'],
@@ -33,7 +36,8 @@ const modules = {
   'db/adminStore.js': ['isActiveAdmin'],
   'db/restoreStore.js': ['restoresForIssue'],
   'lib/reviewer.js': ['isEligible'],
-  'lib/transitions.js': ['availableTransitions']
+  'lib/transitions.js': ['availableTransitions'],
+  'db/baselineTreeStore.js': ['activeRootsForNode', 'rootNodeDigests']
 };
 
 const hooks = registerHooks({
@@ -66,7 +70,12 @@ const hooks = registerHooks({
   }
 });
 const { getSummary } = await import('../src/usecases/panelSummary.js');
+const { project } = await import('../src/lib/content.js');
 hooks.deregister();
+
+/** One tracked field, and the digest map a baseline over it would carry. */
+const TRACKED = [{ field_id: 'summary', field_name: 'Summary', field_kind: 'TEXT', store_values: true, materiality: 'MAJOR' }];
+const digestsFor = value => JSON.stringify(project({ summary: value }, TRACKED).digests);
 
 const NOW = 1_700_000_000_000;
 
@@ -86,7 +95,10 @@ function fixture(overrides = {}) {
     isActiveAdmin: async () => false,
     restoresForIssue: async () => [],
     activeBaseline: async () => null,
+    controlledFields: async () => [{ field_id: 'summary', field_name: 'Summary', field_kind: 'TEXT', store_values: true, materiality: 'MAJOR' }],
     isEligible: async () => true,
+    activeRootsForNode: async () => [],
+    rootNodeDigests: async () => null,
     availableTransitions: async () => [{ id: '31', name: 'Approve to next', toStatusId: '200', toStatusName: 'Done', isAvailable: true }],
     request: async (_identity, url) => {
       if (String(url).includes('editmeta')) throw new Error('FORBIDDEN: editmeta must not be requested by getSummary');
@@ -110,11 +122,16 @@ test('summary never invokes tree, changelog, editmeta, or baseline-value readers
   assert.equal(summary.issue.key, 'T-10');
 });
 
-test('summary reads only the narrow issue fields, never the full field set', async () => {
-  let requestedUrl = null;
+// The issue read is now `*all`, DELIBERATELY. Drift is derived from the
+// content, and content cannot be compared without reading it. What this test
+// protects is the boundary that actually costs latency: the number of round
+// trips, and the four readers poisoned at the top of this file. Widening the
+// field list on a request the summary already makes adds no round trip.
+test('summary reads the issue once, and reads no other Jira resource', async () => {
+  const issueReads = [];
   fixture({
     request: async (_identity, url) => {
-      if (String(url).includes('/issue/')) requestedUrl = String(url);
+      if (String(url).includes('/issue/')) issueReads.push(String(url));
       const response = body => ({ ok: true, status: 200, json: async () => body });
       if (String(url).includes('/myself')) return response({ displayName: 'A reviewer' });
       return response({ id: '10', key: 'T-10',
@@ -122,8 +139,9 @@ test('summary reads only the narrow issue fields, never the full field set', asy
     }
   });
   await getSummary(args);
-  assert.match(requestedUrl, /fields=project,issuetype,status,summary/);
-  assert.doesNotMatch(requestedUrl, /fields=\*all/);
+  assert.equal(issueReads.length, 1, 'one issue read, however wide it is');
+  assert.match(issueReads[0], /fields=\*all/, 'wide enough to compare content against the signature');
+  assert.doesNotMatch(issueReads[0], /editmeta|changelog|expand=/);
 });
 
 test('observer sees control and provenance but no enabled actions', async () => {
@@ -265,4 +283,222 @@ test('an unavailable admin incident read preserves the summary with an explicit 
   const summary = await getSummary(args);
   assert.equal(summary.error, undefined);
   assert.equal(summary.adminIncidentUnavailable, true);
+});
+
+// ─── Eligibility is a fact about the viewer, not about the counter ───────────
+//
+// VJIRA-17: the panel showed "1 change since approval · 1 changed field" and
+// refused to let the viewer decide it, saying "only Reviewer can decide them"
+// to someone who held Reviewer on that project and work item type.
+//
+// `decidesDrift` short-circuited on `va_item_state.drift_count`, so when the
+// stored counter said 0 while the live re-diff the panel was rendering said 1,
+// isEligible() was never called at all. The role in that sentence had never
+// been checked — it was a fallback string.
+//
+// The summary now reports eligibility on its own, so the client can pair it
+// with whichever count it is actually displaying, and a viewer is never told a
+// role is the reason when the role was not consulted.
+
+const baselineWithRole = () => ({
+  baseline_id: Buffer.alloc(16, 1), version: 3, transition_id: '31',
+  from_status_id: '100', to_status_id: '200',
+  required_role: 'baseline-signer', required_assurance: 'ESIGNATURE',
+  controlled_fields_hash: 'a'.repeat(64),
+  field_digests: digestsFor('the approved text')
+});
+
+test('eligibility is reported even when there is no drift to decide', async () => {
+  const f = fixture({
+    isEligible: async ({ role }) => role === 'baseline-signer',
+    gatedTransition: async () => null,
+    availableTransitions: async () => [],
+    activeBaseline: baselineWithRole,
+    // The counter the restore zeroed; the content is genuinely clean.
+    getReview: async () => ({ state: 'BASELINED', version: 2, baseline_version: 3, drift_count: 0, drifted_field_count: 0 }),
+    controlledFields: async () => TRACKED
+  });
+  f.issue.fields.summary = 'the approved text';
+  const summary = await getSummary(args);
+
+  assert.equal(summary.drift.count, 0);
+  assert.equal(summary.drift.decidesDrift, false, 'nothing to decide');
+  assert.equal(summary.drift.eligible, true, 'but this viewer WOULD be allowed to decide it');
+});
+
+test('a viewer without the baseline role is reported ineligible, counter or not', async () => {
+  fixture({
+    isEligible: async () => false,
+    gatedTransition: async () => null,
+    availableTransitions: async () => [],
+    activeBaseline: baselineWithRole,
+    getReview: async () => ({ state: 'BASELINED', version: 2, baseline_version: 3, drift_count: 0, drifted_field_count: 0 })
+  });
+  const summary = await getSummary(args);
+
+  assert.equal(summary.drift.eligible, false);
+});
+
+test('an item with no baseline reports no drift eligibility to anyone', async () => {
+  fixture({
+    isEligible: async () => true,
+    gatedTransition: async () => null,
+    availableTransitions: async () => [],
+    activeBaseline: async () => null,
+    getReview: async () => ({ state: 'BASELINED', version: 2, drift_count: 0, drifted_field_count: 0 })
+  });
+  const summary = await getSummary(args);
+
+  assert.equal(summary.drift.eligible, false);
+});
+
+test('recorded drift the viewer is eligible for still decides, exactly as before', async () => {
+  fixture({
+    isEligible: async ({ role }) => role === 'baseline-signer',
+    gatedTransition: async () => null,
+    availableTransitions: async () => [],
+    activeBaseline: baselineWithRole,
+    getReview: async () => ({ state: 'DRIFTED', version: 2, baseline_version: 3, drift_count: 1, drifted_field_count: 1 })
+  });
+  const summary = await getSummary(args);
+
+  assert.equal(summary.drift.decidesDrift, true);
+  assert.equal(summary.drift.eligible, true);
+  assert.equal(summary.drift.canApprove, true);
+});
+
+// ─── The count is derived from the issue, not carried on the state row ──────
+//
+// A stored counter is a second answer to a question the content already
+// settles, and on VJIRA-17 the two disagreed permanently: va_item_state said 0
+// while the live comparison said one field had moved. Drift IS "the content no
+// longer matches the digests the signature covers", so the summary computes it
+// the same way the collector does — lib/interception.js's driftedFields() is
+// the single implementation both call.
+
+const signedBaseline = (approvedSummary) => async () => ({
+  baseline_id: Buffer.alloc(16, 1), version: 3, transition_id: '31',
+  from_status_id: '100', to_status_id: '200',
+  required_role: 'reviewer', required_assurance: 'ESIGNATURE',
+  controlled_fields_hash: 'a'.repeat(64),
+  field_digests: digestsFor(approvedSummary)
+});
+
+test('drift is counted from the live issue even when the stored counter says zero', async () => {
+  const f = fixture({
+    activeBaseline: signedBaseline('the approved text'),
+    controlledFields: async () => TRACKED,
+    getReview: async () => ({ state: 'BASELINED', version: 2, baseline_version: 3, drift_count: 0, drifted_field_count: 0 })
+  });
+  f.issue.fields.summary = 'edited after approval';
+
+  const summary = await getSummary(args);
+
+  assert.equal(summary.drift.count, 1, 'the content moved, so there is drift to decide');
+  assert.equal(summary.drift.decidesDrift, true);
+  assert.equal(summary.drift.canApprove, true);
+});
+
+test('a stale counter cannot invent drift on content that matches its baseline', async () => {
+  const f = fixture({
+    activeBaseline: signedBaseline('the approved text'),
+    controlledFields: async () => TRACKED,
+    // A counter left high by an interrupted decision.
+    getReview: async () => ({ state: 'DRIFTED', version: 2, baseline_version: 3, drift_count: 5, drifted_field_count: 5 })
+  });
+  f.issue.fields.summary = 'the approved text';
+
+  const summary = await getSummary(args);
+
+  assert.equal(summary.drift.count, 0, 'the content matches the signature, so nothing is outstanding');
+  assert.equal(summary.drift.decidesDrift, false);
+});
+
+test('an unreadable baseline over-reports rather than reporting clean', async () => {
+  // Same rule as the collector: an absence of digests is not evidence of a
+  // match, and concluding "clean" from it would report a corrupt baseline as
+  // an approved one.
+  const f = fixture({
+    activeBaseline: async () => ({
+      baseline_id: Buffer.alloc(16, 1), version: 3, transition_id: '31',
+      from_status_id: '100', to_status_id: '200', required_role: 'reviewer',
+      required_assurance: 'ESIGNATURE', controlled_fields_hash: 'a'.repeat(64),
+      field_digests: '{}'
+    }),
+    controlledFields: async () => TRACKED,
+    getReview: async () => ({ state: 'BASELINED', version: 2, baseline_version: 3, drift_count: 0, drifted_field_count: 0 })
+  });
+  f.issue.fields.summary = 'anything at all';
+
+  assert.equal((await getSummary(args)).drift.count, 1);
+});
+
+test('an item with no baseline has nothing to drift from', async () => {
+  const f = fixture({ controlledFields: async () => TRACKED });
+  f.issue.fields.summary = 'never approved';
+
+  assert.equal((await getSummary(args)).drift.count, 0);
+});
+
+test('the summary carries the content hash, so the panel can key its diff on the content', async () => {
+  // review.version alone only moves when the collector writes a row, which is
+  // exactly what lags. The content's own hash moves on every edit.
+  const f = fixture({
+    activeBaseline: signedBaseline('the approved text'),
+    controlledFields: async () => TRACKED,
+    getReview: async () => ({ state: 'BASELINED', version: 2, baseline_version: 3, drift_count: 0, drifted_field_count: 0 })
+  });
+  f.issue.fields.summary = 'the approved text';
+  const clean = await getSummary(args);
+
+  f.issue.fields.summary = 'edited, and no row written yet';
+  const dirty = await getSummary(args);
+
+  assert.match(clean.contentHash, /^[a-f0-9]{64}$/);
+  assert.notEqual(dirty.contentHash, clean.contentHash, 'an edit must change the key');
+  assert.equal(dirty.evidenceVersion, clean.evidenceVersion, 'even though the row version did not move');
+});
+
+// A baseline captured by a controlled transition is a TREE baseline: its field
+// digests live on the tree's nodes (va_baseline_node) and the va_baseline row
+// carries field_digests '{}' (lib/capture.js). Comparing against that empty
+// map "failed towards drift" on every read, so the panel said "Changes since
+// approval need a decision" forever — even straight after a verified restore.
+const treeBaseline = () => ({
+  baseline_id: Buffer.alloc(16, 2), version: 2, transition_id: '31',
+  from_status_id: '100', to_status_id: '200', approved_by: 'reviewer-1',
+  required_role: 'reviewer', required_assurance: 'ESIGNATURE',
+  controlled_fields_hash: 'a'.repeat(64), tree_hash: 't'.repeat(64), field_digests: '{}'
+});
+
+test('a tree baseline is compared against its root node, so matching content reads clean', async () => {
+  const asked = [];
+  fixture({
+    activeBaseline: async () => treeBaseline(),
+    rootNodeDigests: async (baselineId, issueId) => { asked.push([baselineId, issueId]); return digestsFor('a signed item'); }
+  });
+  const summary = await getSummary(args);
+  assert.equal(summary.drift.count, 0);
+  assert.notEqual(summary.state, 'Changes since approval need a decision');
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0][1], 10);
+});
+
+test('a tree baseline still reports a real change to the root', async () => {
+  fixture({
+    activeBaseline: async () => treeBaseline(),
+    rootNodeDigests: async () => digestsFor('what was signed')
+  });
+  const summary = await getSummary(args);
+  assert.equal(summary.drift.count, 1);
+  assert.equal(summary.state, 'Changes since approval need a decision');
+});
+
+test('a tree baseline whose root cannot be read still over-reports rather than reporting clean', async () => {
+  fixture({
+    activeBaseline: async () => treeBaseline(),
+    rootNodeDigests: async () => { throw new Error('storage unavailable'); }
+  });
+  const summary = await getSummary(args);
+  assert.equal(summary.drift.count, 1);
 });

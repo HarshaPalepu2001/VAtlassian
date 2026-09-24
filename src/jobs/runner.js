@@ -10,6 +10,7 @@ const jobs = {
   reconcile: () => import('./reconcile.js').then(m => m.run()),
   rehash: () => import('./rehash.js').then(m => m.run()),
   gatecheck: () => import('./gatecheck.js').then(m => m.run()),
+  vaultBackfill: () => import('./vaultBackfill.js').then(m => m.run()),
   verify: () => import('./verify.js').then(m => m.run()),
   seal: () => import('./seal.js').then(m => m.run()),
   directoryReconcile: () => import('./directoryReconcile.js').then(m => m.run()),
@@ -40,7 +41,7 @@ export function runFiveMinute(_request, { jobs: implementations = jobs } = {}) {
 
 // Field adoption must finish before either collector measures the tracked set.
 export function runHourly(_request, { jobs: implementations = jobs } = {}) {
-  return withRequestCache(() => runList(['adoptFields', 'reconcile', 'rehash', 'gatecheck'], implementations));
+  return withRequestCache(() => runList(['adoptFields', 'reconcile', 'rehash', 'gatecheck', 'vaultBackfill'], implementations));
 }
 
 export function runDaily(_request, { jobs: implementations = jobs } = {}) {

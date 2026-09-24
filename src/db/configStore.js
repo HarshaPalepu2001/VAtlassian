@@ -97,10 +97,9 @@ export async function projectConfig(projectId) {
   });
 }
 
-export async function isStrictMode(projectId) {
-  const config = await projectConfig(projectId);
-  return config?.policy?.mode === 'STRICT';
-}
+// isStrictMode() was removed: it had no callers, so it read as enforcement
+// that did not exist. STRICT is refused at save time in fieldsConfiguration.js
+// until the locking architecture (docs/AUDIT-2026-09-07.md, Plan 2) lands.
 
 export const DEFAULT_PROJECT_CONFIG = {
   enabled: true,
@@ -108,8 +107,6 @@ export const DEFAULT_PROJECT_CONFIG = {
   reviewStatusIds: [],
   /** Materiality at or above which drift enters a reviewer's queue. */
   queueThreshold: 'MINOR',
-  /** Reviewer-only is the default; see ARCHITECTURE.md §12. */
-  visibility: 'reviewer-only',
   ai: {
     enabled: true,
     models: {
@@ -124,12 +121,7 @@ export const DEFAULT_PROJECT_CONFIG = {
      *  per-user permission surprises mid-rejection. */
     actAs: 'app',
     notifyUsers: false,
-    perFieldRetries: 2,
-    commentOnRestore: true
-  },
-  notifications: {
-    digest: true,
-    digestAfterHours: 24
+    perFieldRetries: 2
   },
   policy: {
     mode: 'DETECT'
@@ -208,7 +200,6 @@ function decodeControlledTransition(r) {
     // Forge SQL returns BOOLEAN as 0/1. Coerced here so no caller has to
     // remember that `if (row.require_decision)` is true for the string "0".
     require_decision: !!Number(r.require_decision),
-    block_on_drift: !!Number(r.block_on_drift),
     required_assurance: r.required_assurance,
     capture_baseline: !!Number(r.capture_baseline)
   };
@@ -231,7 +222,7 @@ export async function gatedTransition({ projectId, issueTypeId, fromStatusId, to
   return memo(`gatedTransition:${projectId}:${issueTypeId}:${fromStatusId}:${toStatusId}:${transitionId}`, async () => {
     const rows = await throwing(
       `SELECT TO_BASE64(ct_id) AS ct_id, issue_type_id, from_status_id, to_status_id, transition_id,
-              required_role, meaning, require_decision, block_on_drift, required_assurance, capture_baseline
+              required_role, meaning, require_decision, required_assurance, capture_baseline
        FROM va_controlled_transition
        WHERE project_id = ?
          AND (issue_type_id = ? OR issue_type_id = '*')
@@ -250,7 +241,7 @@ export async function gatedTransition({ projectId, issueTypeId, fromStatusId, to
 export async function gateActiveOutOf({ projectId, issueTypeId, fromStatusId }) {
   return memo(`gateActiveOutOf:${projectId}:${issueTypeId}:${fromStatusId}`, async () => {
     const rows = await throwing(
-      `SELECT required_role, meaning, required_assurance, capture_baseline, block_on_drift FROM va_controlled_transition
+      `SELECT required_role, meaning, required_assurance, capture_baseline FROM va_controlled_transition
        WHERE project_id = ?
          AND (issue_type_id = ? OR issue_type_id = '*')
          AND (from_status_id = ? OR from_status_id = '*')
@@ -261,7 +252,7 @@ export async function gateActiveOutOf({ projectId, issueTypeId, fromStatusId }) 
     );
     return rows.length > 0
       ? { gated: true, required_role: rows[0].required_role, required_assurance: rows[0].required_assurance,
-          capture_baseline: !!Number(rows[0].capture_baseline), block_on_drift: !!Number(rows[0].block_on_drift),
+          capture_baseline: !!Number(rows[0].capture_baseline),
           meaning: rows[0].meaning }
       : { gated: false, required_role: null };
   });
@@ -324,7 +315,7 @@ export async function gatedReviewStatuses() {
 export async function listGatedTransitions(projectId) {
   const rows = await throwing(
     `SELECT TO_BASE64(ct_id) AS ct_id, project_id, issue_type_id, from_status_id, to_status_id,
-            transition_id, required_role, meaning, require_decision, block_on_drift, required_assurance, capture_baseline, state, created_at, created_by
+            transition_id, required_role, meaning, require_decision, required_assurance, capture_baseline, state, created_at, created_by
      FROM va_controlled_transition WHERE project_id = ? ORDER BY created_at DESC LIMIT ${limitClause(200)}`,
     [projectId]
   );
@@ -332,7 +323,6 @@ export async function listGatedTransitions(projectId) {
     ...r,
     ct_id: fromBinaryColumn(r.ct_id).toString('hex'),
     require_decision: !!Number(r.require_decision),
-    block_on_drift: !!Number(r.block_on_drift),
     required_assurance: r.required_assurance,
     capture_baseline: !!Number(r.capture_baseline)
   }));
@@ -370,13 +360,13 @@ export async function upsertGatedTransition(row) {
   await throwing(
     `REPLACE INTO va_controlled_transition
      (ct_id, project_id, issue_type_id, from_status_id, to_status_id, transition_id,
-      required_role, meaning, require_decision, block_on_drift, required_assurance, capture_baseline, state, created_at, created_by)
-     VALUES (FROM_BASE64(?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      required_role, meaning, require_decision, required_assurance, capture_baseline, state, created_at, created_by)
+     VALUES (FROM_BASE64(?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       toBinaryParam(id), row.project_id, row.issue_type_id, row.from_status_id, row.to_status_id,
       // Recorded, never matched on. See migrations.js v034.
       row.transition_id ?? null,
-      row.required_role, row.meaning ?? 'Approved', row.require_decision === false ? 0 : 1, row.block_on_drift === false ? 0 : 1,
+      row.required_role, row.meaning ?? 'Approved', row.require_decision === false ? 0 : 1,
       effectiveAssurance(row.required_assurance), row.capture_baseline === false ? 0 : 1, row.state ?? ACTIVE, row.created_at, row.created_by
     ]
   );

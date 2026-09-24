@@ -27,7 +27,7 @@ const hooks=registerHooks({
   if(url==='panel:bridge')return {format:'module',shortCircuit:true,source:`
    export const invoke=(...args)=>globalThis.panelTransport.invoke(...args);
    export const events={on:async(name,cb)=>globalThis.panelTransport.on(name,cb),emit:async(...args)=>{globalThis.panelTransport.emitted.push(args);globalThis.panelTransport.deliver?.(...args);}};
-   export const view={refresh:async()=>{},submit:v=>{globalThis.panelTransport.submitted.push(v);},getContext:async()=>globalThis.panelTransport.context};export const router={open:async()=>{}};`};
+   export const view={refresh:async()=>{globalThis.panelTransport.redraws=(globalThis.panelTransport.redraws??0)+1;},submit:v=>{globalThis.panelTransport.submitted.push(v);},getContext:async()=>globalThis.panelTransport.contextPromise??globalThis.panelTransport.context};export const router={open:async()=>{}};`};
   if(url==='panel:button')return {format:'module',shortCircuit:true,source:`
    import React from '${frontendReact('react')}';
    export default function Button({children,onClick,isDisabled}){return React.createElement('button',{onClick,disabled:isDisabled},children);}`};
@@ -45,7 +45,9 @@ const hooks=registerHooks({
    export const Textfield=({value,onChange,isDisabled,name})=>h('input',{className:'uk-textfield',name,value,onChange,disabled:isDisabled});
    export const Select=()=>h('select',{className:'uk-select'});
    export const CustomFieldEdit=({children})=>h('div',{className:'uk-field'},children);
-   export const useProductContext=()=>globalThis.panelTransport?.context;
+   // Mirrors node_modules/@forge/react/out/hooks/useProductContext.js: the
+   // first render has no context; it arrives from view.getContext() later.
+   export const useProductContext=()=>{const [c,set]=React.useState();React.useEffect(()=>{Promise.resolve(globalThis.panelTransport?.contextPromise??globalThis.panelTransport?.context).then(set,()=>{});},[]);return c;};
    export default {render:element=>{globalThis.uiKitEdit=element;}};`};
   if(/\.(tsx?|jsx)$/.test(url))return {format:'module',shortCircuit:true,source:ts.transpileModule(fs.readFileSync(fileURLToPath(url),'utf8'),{fileName:fileURLToPath(url),compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText};
   return next(url,context);
@@ -58,11 +60,13 @@ const {default:ApprovalControls}=await import('../src/panel/sections/ApprovalCon
 const {default:usePanelState}=await import('../src/panel/usePanelState.ts');
 const {default:IssueContext}=await import('../src/context/IssueContext.tsx');
 const {invoke}=await import('../src/lib/bridge.ts');
+const {getHarnessEvents}=await import('../src/lib/harness.ts');
 const {approvalMode}=await import('../src/lib/assurance.ts');
 const {default:RestoreStatus}=await import('../src/panel/sections/RestoreStatus.tsx');
 const {default:ApprovalField}=await import('../src/field/ApprovalField.tsx');
 const {default:QueueList}=await import('../src/queue/QueueList.tsx');
 const {default:TransitionsPage}=await import('../src/admin/pages/TransitionsPage.tsx');
+const {default:DiffView}=await import('../src/review/DiffView.tsx');
 await import('../../src/ui-kit/edit.jsx');
 const UiKitEdit=globalThis.uiKitEdit;
 const deviceAuth=await import('../src/panel/deviceAuth.ts');
@@ -148,8 +152,11 @@ function setup(handler,{context={extension:{issue:{key:'T-1',id:'10'}}},loopback
   // An app event can echo back to the view that emitted it.
   deliver:loopback?(name,payload)=>listeners.get(name)?.(payload):undefined};
  container=document.createElement('div');document.body.append(container);root=createRoot(container);
+ lastListeners=listeners;
  return listeners;
 }
+let lastListeners=null;
+const listeners0=()=>lastListeners;
 
 // ── Summary fixtures ──────────────────────────────────────────────────────
 // Matches src/usecases/panelSummary.js's getSummary() payload exactly.
@@ -159,7 +166,7 @@ function summary(over={}){
   controlled:true,tier:'observer',state:'Waiting on signature',actorName:null,
   eligibility:{eligible:false,reason:null},credentialEnrolled:undefined,
   transitions:[],baseline:null,latestApproval:null,
-  drift:{count:0,materialCount:0,decidesDrift:false,policyIncomplete:false,canApprove:false,canReject:false},
+  drift:{count:0,materialCount:0,decidesDrift:false,policyIncomplete:false,canApprove:false,canReject:false,eligible:false},
   restore:null,approval:{requiredRole:null,requiredAssurance:null,meaning:null,pending:null},
   ...over
  };
@@ -178,7 +185,7 @@ const evidenceWithField=(fieldName,over={})=>evidence({record:{...evidence().rec
 function baseline(over={}){
  return {baselineId:'ab'.repeat(8),version:1,approvedName:'Priya',transitionAt:1000,capturedAt:1000,assuranceLevel:'ESIGNATURE',fidelity:'EXACT',nodeCount:1,edgeCount:0,totalFieldCount:1,treeHash:null,policyIncomplete:false,...over};
 }
-const driftOn=(over={})=>({count:1,materialCount:1,decidesDrift:true,policyIncomplete:false,canApprove:true,canReject:true,...over});
+const driftOn=(over={})=>({count:1,materialCount:1,decidesDrift:true,policyIncomplete:false,canApprove:true,canReject:true,eligible:true,...over});
 const challengeOk=(over={})=>({success:true,challengeId:'c'.repeat(32),nonce:'n',meaning:'Approved',requiredAssurance:'ESIGNATURE',expiresAt:Date.now()+60000,...over});
 // Signs the open challenge with an authenticator code.
 async function signWithCode(code='123456'){
@@ -1070,6 +1077,111 @@ test('a same-baseline Jira refresh reloads evidence when the review version adva
  assert.doesNotMatch(text(),/Before event/);
 });
 
+test('a background refresh keeps the change list on screen while evidence reloads, but no decision can use it',async()=>{
+ let summaryReads=0;const evidenceReads=[];
+ const listeners=setup(key=>{
+  if(key==='panel:getSummary'){summaryReads++;return Promise.resolve(actor([],{baseline:baseline(),drift:driftOn(),evidenceVersion:summaryReads}));}
+  if(key==='panel:getEvidence'){const d=deferred();evidenceReads.push(d);return d.promise;}
+  return Promise.resolve({restores:[]});
+ });
+ await act(()=>root.render(h(IssuePanel,{issueKey:'T-1'})));await flush();await flush();
+ await act(()=>evidenceReads[0].resolve(evidenceWithField('Before event')));await flush();
+ await act(()=>disclosure().click());await flush();
+ assert.match(text(),/Before event/);
+ await act(()=>listeners.get('JIRA_ISSUE_CHANGED')());await flush();await flush();
+ assert.equal(evidenceReads.length,2,'the newer review version is re-read');
+ assert.doesNotMatch(text(),/Checking the current record/,'a refresh must not blank the panel');
+ assert.match(text(),/Before event/,'the previous read stays on screen while its replacement loads');
+ assert.ok([...container.querySelectorAll('button')].filter(b=>/approve|reject|sign/i.test(b.textContent)).every(b=>b.disabled),
+  'decisions wait for the authoritative read');
+ await act(()=>evidenceReads[1].resolve(evidenceWithField('After event')));await flush();
+ assert.match(text(),/After event/);
+ assert.doesNotMatch(text(),/Before event/);
+});
+
+test('a background refresh that fails keeps the loaded panel and shows no error',async()=>{
+ let reads=0;
+ const listeners=setup(async key=>{
+  if(key==='panel:getSummary'){if(++reads>1)throw new Error('Tunnel could not be reached');return summary({state:'Loaded state'});}
+  return {restores:[]};
+ });
+ await act(()=>root.render(h(IssuePanel,{issueKey:'T-1'})));await flush();
+ await act(()=>listeners.get('VA_ISSUE_CHANGED')());await flush();
+ await act(()=>window.dispatchEvent(new window.Event('focus')));await flush();
+ assert.ok(reads>=3);
+ assert.match(text(),/Loaded state/);
+ assert.doesNotMatch(text(),/Tunnel could not be reached|Refresh before making an approval decision/);
+});
+
+test('a refresh someone asks for still reports its failure, even if it joined a background one',async()=>{
+ let reads=0;const pending=[];
+ setup(key=>{
+  if(key==='panel:getSummary'){if(++reads===1)return Promise.resolve(summary({state:'Loaded state'}));const d=deferred();pending.push(d);return d.promise;}
+  return Promise.resolve({restores:[]});
+ });
+ let api;
+ function Probe(){api=usePanelState('T-1');return h('div',{children:api.error||api.state?.state||''});}
+ await act(()=>root.render(h(Probe)));await flush();
+ let joined;
+ await act(()=>{void api.refresh({background:true});joined=api.refresh();});
+ await act(()=>pending[0].reject(new Error('Service unavailable')));await flush();
+ if(pending[1])await act(()=>pending[1].reject(new Error('Service unavailable')));
+ await act(()=>joined);await flush();
+ assert.match(text(),/Service unavailable/);
+});
+
+test('the context lozenge keeps its last state when a later refresh fails',async()=>{
+ let reads=0;
+ const listeners=setup(async key=>{if(key==='panel:getGlanceState'){if(++reads>1)throw new Error('Tunnel could not be reached');return {state:'BASELINED',baselineVersion:3};}return {};});
+ await act(()=>root.render(h(IssueContext)));await flush();
+ await act(()=>listeners.get('JIRA_ISSUE_CHANGED')());await flush();
+ assert.equal(reads,2);
+ assert.match(text(),/BASELINED/);
+ assert.doesNotMatch(text(),/Tunnel could not be reached/);
+});
+
+test('My approvals refreshes in the background without the busy state or an error flash',async()=>{
+ let reads=0;const second=deferred();
+ const listeners=setup(key=>{
+  if(key==='queue:list'){if(++reads===1)return Promise.resolve({success:true,items:[{issueId:'1',issueKey:'T-1',summary:'First',status:'Open',state:'DRIFTED',baselineVersion:1,driftCount:1,materialCount:1}]});return second.promise;}
+  return Promise.resolve({});
+ });
+ await act(()=>root.render(h(QueueList)));await flush();
+ await act(()=>listeners.get('VA_ISSUE_CHANGED')());await flush();
+ assert.equal(clickButton('Refresh').disabled,false,'a background reload does not lock the Refresh button');
+ await act(()=>second.reject(new Error('Tunnel could not be reached')));await flush();
+ assert.match(text(),/First/);
+ assert.doesNotMatch(text(),/Tunnel could not be reached/);
+});
+
+// A rejection's restore runs as a queued job AFTER the submit returns, so the
+// redraw ApprovalControls asks for on submit lands before any field changed.
+// The panel watches a running restore itself and redraws Jira once it ends.
+const restoring=(state)=>({restoreId:'r1',state,succeeded:0,failed:0,skipped:0});
+test('a running restore is checked quietly until it ends, and Jira is redrawn once when it does',async()=>{
+ let reads=0;
+ setup(async key=>{
+  if(key==='panel:getSummary'){reads++;return summary({restore:restoring(reads<3?'RESTORING':'COMPLETE')});}
+  if(key==='restore:getState')return {restores:[]};
+  return {restores:[]};
+ });
+ await act(()=>root.render(h(IssuePanel,{issueKey:'T-1'})));await flush();
+ assert.equal(globalThis.panelTransport.redraws??0,0);
+ for(let i=0;i<3;i++){await act(async()=>{await new Promise(r=>setTimeout(r,2700));});await flush();}
+ assert.ok(reads>=3,`the panel keeps checking a running restore (reads: ${reads})`);
+ assert.equal(globalThis.panelTransport.redraws,1,'Jira is redrawn once the restore has written its fields');
+ const settled=reads;
+ await act(async()=>{await new Promise(r=>setTimeout(r,2800));});await flush();
+ assert.equal(reads,settled,'no more polling once the restore has ended');
+});
+
+test('opening a panel on an old, finished restore does not redraw Jira',async()=>{
+ setup(async key=>key==='panel:getSummary'?summary({restore:restoring('COMPLETE')}):{restores:[]});
+ await act(()=>root.render(h(IssuePanel,{issueKey:'T-1'})));await flush();
+ await act(()=>window.dispatchEvent(new window.Event('focus')));await flush();
+ assert.equal(globalThis.panelTransport.redraws??0,0);
+});
+
 // ── Event ownership: exactly one event per durable mutation ──────────────
 
 test('a successful durable mutation emits VA_ISSUE_CHANGED exactly once',async()=>{
@@ -1250,6 +1362,30 @@ test('the transition screen announces "Preparing signature" and "Checking biomet
  assert.match(liveStatus().textContent,/Checking biometric/);
 });
 
+test('the diagnostics harness never records an authenticator code, even nested inside a resolver request',async()=>{
+ setup(async()=>({success:false,error:'That code could not be verified.'}));
+ await invoke('approval:submit',{issueKey:'T-1',challengeId:'c'.repeat(32),code:'343968',confirmed:true});
+ setup(async()=>{throw new Error('Tunnel could not be reached');});
+ await invoke('signature:submit',{issueKey:'T-1',code:'112233'}).catch(()=>{});
+ const logged=JSON.stringify(getHarnessEvents());
+ assert.doesNotMatch(logged,/343968|112233/);
+ assert.match(logged,/REDACTED_LEN_6/);
+});
+
+test('the transition screen withdraws a refused code\'s error as soon as the next code is typed',async()=>{
+ setup(async key=>{
+  if(key==='signing:context')return fieldState('ESIGNATURE');
+  if(key==='approval:challenge')return {success:true,challengeId:'ch-1',meaning:'Bug Resolved',requiredAssurance:'ESIGNATURE'};
+  if(key==='approval:submit')return {success:false,error:'That code could not be verified.'};
+  return {};},{context:fieldContext});
+ await act(()=>root.render(h(ApprovalField,{context:fieldContext})));await settle();
+ await act(()=>affirm().click());await settle();
+ await act(()=>typeInto(codeBox(),'123456'));await settle();
+ assert.match(text(),/That code could not be verified/);
+ await act(()=>typeInto(codeBox(),'6'));
+ assert.doesNotMatch(text(),/That code could not be verified/);
+});
+
 test('the transition screen still signs an electronic-signature edge with a code',async()=>{
  const calls=[];
  setup(async(key,payload)=>{calls.push([key,payload]);
@@ -1407,6 +1543,50 @@ test('the UI Kit field announces "Preparing signature", then emits exactly one e
  await act(()=>challenge.resolve({success:true,challengeId:'ch-1'}));await settle();
  assert.equal(globalThis.panelTransport.submitted.at(-1),'e'.repeat(32));
  assert.deepEqual(globalThis.panelTransport.emitted,[['VA_ISSUE_CHANGED',{issueKey:'T-1'}]]);
+});
+
+// Jira hands a UI Kit field its context asynchronously: the first render has
+// none. That gap was painted as "could not determine which work item" and
+// then replaced once the context landed, so every transition dialog opened
+// on an error.
+test('the UI Kit field shows a loading state, never an error, while Jira is still handing over its context',async()=>{
+ const context=deferred();
+ const calls=[];
+ setup(async(key,payload)=>{calls.push([key,payload]);return key==='signing:context'?fieldState('ESIGNATURE'):{};},{context:fieldContext});
+ globalThis.panelTransport.contextPromise=context.promise;
+ await act(()=>root.render(UiKitEdit));await settle();
+ assert.ok(!container.querySelector('.uk-section--error'),'no error may be shown before the context has arrived: '+text());
+ assert.match(text(),/Loading this work item/);
+ assert.equal(calls.length,0,'nothing is requested without a context');
+ await act(()=>context.resolve(fieldContext));await settle();
+ assert.ok(!container.querySelector('.uk-section--error'),text());
+ assert.match(text(),/Bug Resolved/);
+ assert.ok(uiKitAffirm());
+});
+
+test('the UI Kit field says so, rather than spinning forever, when Jira never hands over a context',async()=>{
+ setup(async key=>key==='signing:context'?fieldState('ESIGNATURE'):{},{context:fieldContext});
+ globalThis.panelTransport.contextPromise=Promise.reject(new Error('bridge unavailable'));
+ await act(()=>root.render(UiKitEdit));await settle();
+ assert.ok(container.querySelector('.uk-section--error'));
+ assert.doesNotMatch(text(),/Loading this work item/);
+});
+
+test('after a refused code the UI Kit box is cleared for the next attempt, and typing withdraws the old error',async()=>{
+ setup(async key=>{
+  if(key==='signing:context')return fieldState('ESIGNATURE');
+  if(key==='approval:challenge')return {success:true,challengeId:'ch-1'};
+  if(key==='approval:submit')return {success:false,reason:'INVALID_CODE',error:'That code could not be verified.'};
+  return {};
+ },{context:fieldContext});
+ await act(()=>root.render(UiKitEdit));await settle();
+ await act(()=>uiKitAffirm().click());
+ await act(()=>typeInto(uiKitCode(),'123456'));await settle();
+ assert.match(text(),/That code could not be verified/);
+ assert.equal(uiKitCode().value,'','the refused code is cleared so the next one can be typed straight in');
+ assert.equal(uiKitCode().disabled,false);
+ await act(()=>typeInto(uiKitCode(),'6'));
+ assert.doesNotMatch(text(),/That code could not be verified/);
 });
 
 test('the UI Kit field emits nothing when the signature is refused',async()=>{
@@ -1615,4 +1795,231 @@ test('UI Kit edit renders explicit error banner when evidenceHash is unavailable
  await settle();
  assert.match(text(), /Evidence hash (could not be loaded|is unavailable)/);
  assert.ok(!calls.some(([k]) => k === 'approval:challenge'), 'challenge must not be called when evidenceHash is missing');
+});
+
+// ── A table renders as a table ────────────────────────────────────────────────
+//
+// The backend now emits one block per table ROW carrying its cells (see
+// src/lib/diff/adf.js). A table added after approval used to arrive here as one
+// inserted block per CELL and rendered as a column of green lines, with nothing
+// saying which value belonged to which column.
+
+const adfField=blocks=>({fieldId:'description',fieldName:'Description',kind:'adf',
+ retained:true,semanticChange:true,materiality:'MAJOR',blocks,attribution:[]});
+const cells=(...texts)=>texts.map(text=>({text,header:false}));
+const headerCells=(...texts)=>texts.map(text=>({text,header:true}));
+
+async function renderDiff(field){
+ container=document.createElement('div');document.body.append(container);root=createRoot(container);
+ await act(()=>{root.render(React.createElement(DiffView,{fields:[field]}));});
+ return container;
+}
+
+test('a table added after approval renders as a table, one row per row',async()=>{
+ const rows=[
+  {op:'insert',after:{type:'tableRow',tableId:'content.1',cells:headerCells('Planet','Diameter (km)','Type')}},
+  {op:'insert',after:{type:'tableRow',tableId:'content.1',cells:cells('Jupiter','139,820','Gas Giant')}},
+  {op:'insert',after:{type:'tableRow',tableId:'content.1',cells:cells('Earth','12,742','Terrestrial')}}
+ ];
+ const html=(await renderDiff(adfField([{op:'equal',before:{type:'paragraph',text:'Intro.'},after:{type:'paragraph',text:'Intro.'}},...rows]))).innerHTML;
+
+ const table=container.querySelector('table.va-diff-table');
+ assert.ok(table,'the rows must be drawn as one HTML table');
+ assert.equal(table.querySelectorAll('tr').length,3);
+ assert.equal(table.querySelectorAll('th').length,3,'header cells render as headers');
+ const body=[...table.querySelectorAll('tr')][1];
+ assert.deepEqual([...body.querySelectorAll('td')].map(c=>c.textContent),['Jupiter','139,820','Gas Giant']);
+ assert.match(body.getAttribute('class')??'',/insert/);
+ assert.match(html,/Added/);
+});
+
+test('a removed table still shows the approved rows, marked as removed',async()=>{
+ await renderDiff(adfField([
+  {op:'delete',before:{type:'tableRow',tableId:'content.0',cells:headerCells('Planet','Type')}},
+  {op:'delete',before:{type:'tableRow',tableId:'content.0',cells:cells('Jupiter','Gas Giant')}}
+ ]));
+ const rows=[...container.querySelectorAll('table.va-diff-table tr')];
+ assert.equal(rows.length,2);
+ assert.deepEqual([...rows[1].querySelectorAll('td')].map(c=>c.textContent),['Jupiter','Gas Giant']);
+ assert.match(rows[1].getAttribute('class')??'',/delete/);
+});
+
+test('an edited cell shows before and after inside that cell only',async()=>{
+ await renderDiff(adfField([
+  {op:'equal',before:{type:'tableRow',tableId:'content.0',cells:headerCells('Planet','Diameter')},
+   after:{type:'tableRow',tableId:'content.0',cells:headerCells('Planet','Diameter')}},
+  {op:'modified',
+   before:{type:'tableRow',tableId:'content.0',cells:cells('Jupiter','139,820')},
+   after:{type:'tableRow',tableId:'content.0',cells:cells('Jupiter','142,984')},
+   cells:[
+    {op:'equal',before:'Jupiter',after:'Jupiter',header:false,ops:[]},
+    {op:'modified',before:'139,820',after:'142,984',header:false,
+     ops:[{op:'delete',text:'139,820'},{op:'insert',text:'142,984'}]}
+   ]}
+ ]));
+ const rows=[...container.querySelectorAll('table.va-diff-table tr')];
+ assert.equal(rows.length,2,'the unchanged header row is kept so the table still reads as a table');
+ const changed=[...rows[1].querySelectorAll('td')];
+ assert.equal(changed[0].textContent,'Jupiter');
+ assert.equal(changed[1].querySelector('del')?.textContent,'139,820');
+ assert.equal(changed[1].querySelector('ins')?.textContent,'142,984');
+});
+
+test('two adjacent tables are never merged into one',async()=>{
+ await renderDiff(adfField([
+  {op:'insert',after:{type:'tableRow',tableId:'content.0',cells:cells('a')}},
+  {op:'insert',after:{type:'tableRow',tableId:'content.1',cells:cells('b')}}
+ ]));
+ assert.equal(container.querySelectorAll('table.va-diff-table').length,2);
+});
+
+// ── The drift header counts one thing, not two ───────────────────────────────
+//
+// VJIRA-16 read "3 changes since approval · 1 changed fields": three fields
+// edited on one work item. `drift.count` is field-level (treeCollect sums
+// Math.max(1, fields.length) per change) while `changedFields` is node-level
+// (one FIELD_CHANGED entry per node, carrying its own field list). Both numbers
+// were true and they were counting different units.
+
+test('three fields edited on one work item read as three, not as one',async()=>{
+ setup(async key=>{
+  if(key==='panel:getSummary')return actor([],{baseline:baseline(),drift:driftOn({count:3,materialCount:3})});
+  if(key==='panel:getEvidence')return evidence({drift:{fields:[],
+   // One node, three fields — exactly the shape diffTree emits.
+   changedFields:[{logicalNodeId:'n1',fields:['assignee','labels','customfield_10015']}]}});
+  return {restores:[]};
+ });
+ await act(()=>root.render(React.createElement(IssuePanel,{issueKey:'T-1'})));
+ await flush();await flush();
+ const shown=text();
+ assert.match(shown,/3 changes since approval/);
+ assert.match(shown,/3 changed fields/);
+ assert.doesNotMatch(shown,/1 changed fields/,'the headline and the breakdown must count the same unit');
+});
+
+test('a single changed field is not pluralised',async()=>{
+ setup(async key=>{
+  if(key==='panel:getSummary')return actor([],{baseline:baseline(),drift:driftOn({count:1,materialCount:1})});
+  if(key==='panel:getEvidence')return evidence({drift:{fields:[],
+   changedFields:[{logicalNodeId:'n1',fields:['assignee']}]}});
+  return {restores:[]};
+ });
+ await act(()=>root.render(React.createElement(IssuePanel,{issueKey:'T-1'})));
+ await flush();await flush();
+ assert.match(text(),/1 changed field(?!s)/);
+});
+
+test('node categories keep their own unit alongside the field count',async()=>{
+ setup(async key=>{
+  if(key==='panel:getSummary')return actor([],{baseline:baseline(),drift:driftOn({count:4,materialCount:4})});
+  if(key==='panel:getEvidence')return evidence({drift:{fields:[],
+   changedFields:[{logicalNodeId:'n1',fields:['a','b','c']}],addedNodes:[{key:'T-2'}]}});
+  return {restores:[]};
+ });
+ await act(()=>root.render(React.createElement(IssuePanel,{issueKey:'T-1'})));
+ await flush();await flush();
+ assert.match(text(),/3 changed fields, 1 added node(?!s)/);
+});
+
+// ── Permission travels with the count it belongs to ──────────────────────────
+//
+// VJIRA-17: the panel replaced summary.drift.count with the live re-diff's
+// number for display, but left canApprove/canReject as the server computed them
+// from the stored counter. With the counter at 0 and the diff at 1, the panel
+// switched into drift-review mode on one number and refused on the other,
+// telling a Reviewer that only Reviewer could decide.
+
+const driftOff=(over={})=>({count:0,materialCount:0,decidesDrift:false,policyIncomplete:false,
+ canApprove:false,canReject:false,eligible:false,...over});
+
+test('an eligible reviewer can decide drift the live diff sees but the stored counter missed',async()=>{
+ setup(async key=>{
+  // The counter a completed restore zeroed; the viewer holds the baseline role.
+  if(key==='panel:getSummary')return actor([],{baseline:baseline(),drift:driftOff({eligible:true})});
+  if(key==='panel:getEvidence')return evidence({drift:{count:1,materialCount:1,
+   fields:[{fieldId:'issuelinks',fieldName:'Linked work items',kind:'links',semanticChange:true,materiality:'MAJOR'}]}});
+  return {restores:[]};
+ });
+ await act(()=>root.render(React.createElement(IssuePanel,{issueKey:'T-1'})));
+ await flush();await flush();
+ const shown=text();
+ assert.match(shown,/1 change since approval/);
+ assert.doesNotMatch(shown,/only .* can decide them/,'the role was never the reason');
+ assert.ok(clickButton('Approve changes'),'an eligible viewer gets the decision controls');
+});
+
+test('an ineligible viewer is still told the role, and still cannot decide',async()=>{
+ setup(async key=>{
+  if(key==='panel:getSummary')return actor([],{baseline:baseline(),
+   drift:driftOff({eligible:false}),approval:{requiredRole:'Reviewer',requiredAssurance:'ESIGNATURE',meaning:null,pending:null}});
+  if(key==='panel:getEvidence')return evidence({drift:{count:1,materialCount:1,
+   fields:[{fieldId:'summary',fieldName:'Summary',kind:'scalar',semanticChange:true,materiality:'MAJOR'}]}});
+  return {restores:[]};
+ });
+ await act(()=>root.render(React.createElement(IssuePanel,{issueKey:'T-1'})));
+ await flush();await flush();
+ assert.match(text(),/only Reviewer can decide them/);
+});
+
+test('no changes at all means no drift decision offered, whatever the viewer holds',async()=>{
+ setup(async key=>{
+  if(key==='panel:getSummary')return actor([],{baseline:baseline(),drift:driftOff({eligible:true})});
+  if(key==='panel:getEvidence')return evidence({drift:{count:0,materialCount:0,fields:[]}});
+  return {restores:[]};
+ });
+ await act(()=>root.render(React.createElement(IssuePanel,{issueKey:'T-1'})));
+ await flush();await flush();
+ assert.doesNotMatch(text(),/Approve changes/);
+});
+
+// ── Live surfaces ────────────────────────────────────────────────────────────
+//
+// A decision taken anywhere emits VA_ISSUE_CHANGED (lib/bridge.ts) and Jira
+// emits JIRA_ISSUE_CHANGED on its own edits. The panel and the context lozenge
+// have always listened; My approvals never did, so it showed work that was
+// already done until somebody pressed Refresh.
+
+test('My approvals reloads when an issue changes, without anyone pressing Refresh',async()=>{
+ let loads=0;
+ const listeners=setup(async key=>{
+  if(key==='queue:list'){loads++;return {items:[],nextPageToken:null};}
+  return {restores:[]};
+ });
+ const {default:QueueListLive}=await import('../src/queue/QueueList.tsx');
+ await act(()=>root.render(React.createElement(QueueListLive,{})));
+ await flush();
+ assert.equal(loads,1,'loads once on mount');
+
+ await act(()=>listeners.get('VA_ISSUE_CHANGED')({issueKey:'T-1'}));
+ await flush();
+ assert.equal(loads,2,'a decision taken elsewhere refreshes the queue');
+
+ await act(()=>listeners.get('JIRA_ISSUE_CHANGED')());
+ await flush();
+ assert.equal(loads,3,'and so does an edit made in Jira itself');
+});
+
+// The evidence read used to be keyed on the review row's version, which only
+// moves when the collector writes a row. An edit the collector has not recorded
+// yet left the diff showing the previous content beside a summary that had
+// already moved on. It is keyed on the content's own hash now.
+test('the diff reloads when the content changes, not only when a row is written',async()=>{
+ let summaryReads=0;const evidenceReads=[];
+ setup(async(key,payload)=>{
+  if(key==='panel:getSummary'){
+   summaryReads++;
+   // Same baseline, same review row version — only the content moved.
+   return actor([],{baseline:baseline(),drift:driftOn({count:1,eligible:true}),
+    evidenceVersion:7,contentHash:summaryReads===1?'hash-before':'hash-after'});
+  }
+  if(key==='panel:getEvidence'){evidenceReads.push(payload);return evidence({drift:{count:1,materialCount:1,fields:[]}});}
+  return {restores:[]};
+ });
+ await act(()=>root.render(React.createElement(IssuePanel,{issueKey:'T-1'})));
+ await flush();await flush();
+ assert.equal(evidenceReads.length,1);
+
+ await act(()=>listeners0().get('JIRA_ISSUE_CHANGED')());
+ await flush();await flush();
+ assert.ok(evidenceReads.length>1,'new content must produce a fresh evidence read');
 });

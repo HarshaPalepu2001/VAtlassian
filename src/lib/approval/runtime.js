@@ -8,6 +8,7 @@ import { availableTransitions, exactAvailableTransition, applyTransition } from 
 import { readStableTree } from '../tree/stableRead.js';
 import { planTreeCapture } from '../tree/capturePlan.js';
 import { createTreeReader } from '../tree/jira.js';
+import { baselineDrift } from '../liveDrift.js';
 
 export async function approvalContentHash({ issue, declared, modifiedFields = {}, activeBaseline, readTree }) {
   const { fields } = scopeFromIssue({ declared, issueFields: issue.fields, editmetaFields: {} });
@@ -86,9 +87,54 @@ export async function approvalRuntime() {
   };
 }
 
+/**
+ * Which exact Jira transition is running, and does VAtlassian control it?
+ *
+ * Returns `edgeFailure` rather than throwing: the validator must still be able
+ * to refuse a drifted item for its drift, whatever is wrong with the edge.
+ */
+export async function resolveEdge({ gated, signedTransitionId, transitions }, { toStatusId, transitionId, approvalId }) {
+  let id = transitionId == null ? null : String(transitionId);
+  if (!id && approvalId) {
+    const signed = await signedTransitionId();
+    if (signed != null) id = String(signed);
+  }
+  if (id) return { transitionId: id, ct: await gated(id), edgeFailure: null };
+
+  let available;
+  try { available = await transitions(); }
+  catch { return { transitionId: null, ct: null, edgeFailure: 'SERVICE_UNAVAILABLE' }; }
+  const matches = available.filter(candidate => candidate.isAvailable !== false
+    && String(candidate.toStatusId) === String(toStatusId));
+  if (matches.length === 0) return { transitionId: null, ct: null, edgeFailure: 'NOT_CONFIGURED' };
+  if (matches.length === 1) {
+    id = String(matches[0].id);
+    return { transitionId: id, ct: await gated(id), edgeFailure: null };
+  }
+  // Sibling transitions share this destination and Jira's validator payload
+  // does not say which one is running. When none of them is controlled it does
+  // not matter which: each carries only the drift hold, which has already
+  // passed. When any one is, a signature could be spent on the wrong sibling,
+  // so the edge fails closed.
+  const rules = await Promise.all(matches.map(candidate => gated(String(candidate.id))));
+  return { transitionId: null, ct: null,
+    edgeFailure: rules.every(rule => rule == null) ? null : 'SERVICE_UNAVAILABLE' };
+}
+
 /** No diff/LLM or writes on the hot-path snapshot; fresh Jira content closes trigger lag. */
 export async function gateRuntime() {
   const { api, route, query, audit, eligible, approvals, config, baselines } = await shared();
+  const { rootNodeDigests } = await import('../../db/baselineTreeStore.js');
+  const resolve = args => resolveEdge({
+    gated: id => config.gatedTransition({ projectId: args.issue.projectId, issueTypeId: args.issue.issueTypeId,
+      fromStatusId: args.fromStatusId, toStatusId: args.toStatusId, transitionId: id }),
+    signedTransitionId: async () => (await approvals.pendingApprovalByToken({
+      issueId: args.issue.issueId, fromStatusId: args.fromStatusId, toStatusId: args.toStatusId,
+      approvalId: Buffer.from(args.approvalId, 'hex'), now: Date.now()
+    }))?.transition_id,
+    transitions: () => availableTransitions(api, args.issue.issueKey)
+  }, args);
+
   return {
     now: Date.now, log: data => console.log('gate', JSON.stringify(data)), audit, eligible,
     pending: approvals.pendingApprovalFor, consume: approvals.casConsume, voidOthers: approvals.voidOthers,
@@ -105,8 +151,7 @@ export async function gateRuntime() {
         required_role: policy.requiredRole,
         required_assurance: policy.requiredAssurance,
         meaning: baselineDecisionMeaning(approval.decision, policy.version),
-        capture_baseline: true,
-        block_on_drift: true
+        capture_baseline: true
       };
     },
     load: async ({ issueKey, fromStatusId, toStatusId, transitionId, approvalId, modifiedFields }) => {
@@ -114,30 +159,15 @@ export async function gateRuntime() {
       if (!response.ok) throw new FailClosed('SERVICE_UNAVAILABLE');
       const issue = describeIssue(await response.json());
       if (issue.statusId !== fromStatusId) throw new FailClosed('STATUS_CHANGED');
-      let effectiveTransitionId = transitionId == null ? null : String(transitionId);
-      if (!effectiveTransitionId && approvalId) {
-        const signedApproval = await approvals.pendingApprovalByToken({
-          issueId: issue.issueId, fromStatusId, toStatusId,
-          approvalId: Buffer.from(approvalId, 'hex'), now: Date.now()
-        });
-        if (signedApproval?.transition_id != null) effectiveTransitionId = String(signedApproval.transition_id);
-      }
-      if (!effectiveTransitionId) {
-        const transitions = await availableTransitions(api, issueKey).catch(() => {
-          throw new FailClosed('SERVICE_UNAVAILABLE');
-        });
-        const matches = transitions.filter(candidate => candidate.isAvailable !== false
-          && String(candidate.toStatusId) === String(toStatusId));
-        // A status pair is only a safe substitute when Jira exposes one and
-        // only one outbound transition for it. Sibling transitions fail closed.
-        if (matches.length !== 1) throw new FailClosed(matches.length === 0 ? 'NOT_CONFIGURED' : 'SERVICE_UNAVAILABLE');
-        effectiveTransitionId = String(matches[0].id);
-      }
-      const [ct, items, declared, drift, health, active] = await Promise.all([
-        config.gatedTransition({ projectId: issue.projectId, issueTypeId: issue.issueTypeId, fromStatusId, toStatusId, transitionId: effectiveTransitionId }),
+
+      // THE ITEM FIRST, THE EDGE SECOND. This validator is attached to every
+      // transition, and drift holds the item on all of them — so nothing about
+      // which transition this is may stand between a drifted item and its
+      // refusal. Everything below that can fail on the edge is reported, not
+      // thrown, and gate.js refuses on it only after the drift hold has run.
+      const [items, declared, health, active] = await Promise.all([
         query('SELECT state, baseline_version FROM va_item_state WHERE issue_id = ?', [issue.issueId]),
         config.controlledFields({ projectId: issue.projectId, issueTypeId: issue.issueTypeId }),
-        query('SELECT COUNT(*) AS count FROM va_drift WHERE issue_id = ? AND approval_id IS NULL', [issue.issueId]),
         config.projectConfig(issue.projectId),
         baselines.activeBaseline(issue.issueId)
       ]);
@@ -146,10 +176,19 @@ export async function gateRuntime() {
         query('UPDATE va_item_state SET baseline_version = ? WHERE issue_id = ?', [active.version, issue.issueId]).catch(() => {});
         item.baseline_version = active.version;
       }
-      const content = await approvalContentHash({ issue, declared, modifiedFields, activeBaseline: active,
-        readTree: active?.tree_hash ? createTreeReader({ api, route }).read : null });
-      return { ...issue, ct, health, item, transitionId: effectiveTransitionId,
-        contentHash: content.contentHash, driftCount: Number(drift[0]?.count) };
+      // Drift is the live content against the active baseline, never a stored
+      // counter: this is what the panel offers a decision on, so an item held
+      // here always has a decision waiting for it, and an edit made a moment
+      // ago holds the item before any collector has seen it.
+      const drift = await baselineDrift({ baseline: active, issueId: issue.issueId, issueFields: issue.fields,
+        declared, readRootDigests: rootNodeDigests });
+
+      const edge = await resolve({ issue, fromStatusId, toStatusId, transitionId, approvalId });
+      // The approval content hash reads the whole tree for a tree baseline, so
+      // it is computed only when a signature is actually being checked.
+      const contentHash = async () => (await approvalContentHash({ issue, declared, modifiedFields, activeBaseline: active,
+        readTree: active?.tree_hash ? createTreeReader({ api, route }).read : null })).contentHash;
+      return { ...issue, ...edge, health, item, contentHash, driftCount: drift.changed.length };
     }
   };
 }

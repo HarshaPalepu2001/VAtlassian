@@ -14,10 +14,18 @@ test('every endpoint rejects missing identity before touching dependencies', asy
 
 test('all privileged endpoints reject inactive admins and database failure', async () => {
   const publicNames = new Set(['check', 'bootstrap', 'runMigrations']);
+  // The roster endpoints answer to a second authority: a Jira administrator
+  // may appoint and remove VAtlassian administrators. They are checked here
+  // with that authority absent, so this still proves the whole surface is shut
+  // to somebody holding neither. The fixture grants Jira-administrator
+  // standing by default, so for every other endpoint this loop also proves a
+  // Jira administrator alone cannot reach it.
+  const rosterNames = new Set(['listAdmins', 'grantAdmin', 'revokeAdmin']);
   for (const [name, handler] of Object.entries(admin)) {
     if (publicNames.has(name)) continue;
     for (const options of [{ unauthorized: true }, { authError: true }]) {
       const deps = fixture(options);
+      if (rosterNames.has(name)) deps.isJiraAdmin = async () => false;
       assert.equal((await handler(request(), deps)).ok, false, name);
       assert.equal(deps.calls.length, 1, name);
       assert.equal(deps.events.length, 0, name);

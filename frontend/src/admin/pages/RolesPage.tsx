@@ -42,6 +42,7 @@ const COLUMNS = [
 ];
 
 export default function RolesPage({ projects }: { projects: Project[] }) {
+  const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -58,11 +59,11 @@ export default function RolesPage({ projects }: { projects: Project[] }) {
   const [filter, setFilter] = useState('');
 
   const loadGrants = async () => {
-    setLoading(true);
+    setLoading(true); setLoaded(false); setGrants([]);
     try {
       const response = await invoke('admin:listEligibility', {}) as
         { success: boolean; grants?: EligibilityGrant[]; error?: string };
-      if (response.success) setGrants(response.grants ?? []);
+      if (response.success) {setGrants(response.grants ?? []);setLoaded(true);}
       else setMessage({ type: 'error', text: response.error || 'Failed to load approver eligibility.' });
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message || 'Failed to load approver eligibility.' });
@@ -83,7 +84,7 @@ export default function RolesPage({ projects }: { projects: Project[] }) {
   }, [projectId]);
 
   const isSiteWide = projectId === '*';
-  const complete = Boolean(selectedUser && projectId && (isSiteWide || issueTypeId) && role.trim());
+  const complete = Boolean(loaded && selectedUser && projectId && (isSiteWide || issueTypeId) && role.trim());
 
   const handleGrant = async () => {
     setMessage(null);
@@ -225,7 +226,7 @@ export default function RolesPage({ projects }: { projects: Project[] }) {
         <Card flush>
           {loading ? (
             <EmptyState title="Loading eligibility…" />
-          ) : grants.length === 0 ? (
+          ) : !loaded ? <EmptyState title="Eligibility is unavailable. Retry loading before making changes."/> : grants.length === 0 ? (
             <EmptyState title="Nobody is eligible to sign yet">
               A controlled transition whose role nobody holds cannot be signed by anyone, and
               the validator will refuse it for every user.

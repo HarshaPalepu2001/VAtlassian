@@ -13,7 +13,6 @@ export type PanelTransition = {
   requiredRole?: string | null;
   requiredAssurance: AssuranceLevel;
   capturesBaseline?: boolean;
-  blocksOnDrift?: boolean;
   anyStatus?: boolean;
   label?: string;
   canApprove: boolean;
@@ -75,7 +74,11 @@ export type PanelSummary = {
   transitions: PanelTransition[];
   baseline: PanelBaseline | null;
   latestApproval: PanelLatestApproval | null;
-  drift: { count: number; materialCount: number; decidesDrift: boolean; policyIncomplete: boolean; canApprove: boolean; canReject: boolean };
+  /** `eligible` is this viewer's standing on the baseline, answered independently
+   *  of any drift count, so the client can pair it with the count it displays. */
+  drift: { count: number; materialCount: number; decidesDrift: boolean; policyIncomplete: boolean; canApprove: boolean; canReject: boolean; eligible?: boolean };
+  /** Hash of the tracked content right now; moves on every edit. */
+  contentHash?: string | null;
   restore: PanelRestore | null;
   approval: { requiredRole?: string | null; requiredAssurance?: AssuranceLevel | null; meaning?: string | null; pending: PendingApproval | null };
   adminIncidentCount?: number;

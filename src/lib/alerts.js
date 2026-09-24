@@ -44,7 +44,10 @@ export const ALERT_KIND = {
   CHAIN_BROKEN: 'CHAIN_BROKEN',
   /** A controlled transition is running without our validator — 11.10(f).
    *  Items are crossing unsigned right now. */
-  GATE_UNENFORCED: 'GATE_UNENFORCED'
+  GATE_UNENFORCED: 'GATE_UNENFORCED',
+  /** A transition does not carry our validator, so it does not hold a work
+   *  item with unreviewed changes — it can change status across it right now. */
+  DRIFT_HOLD_ABSENT: 'DRIFT_HOLD_ABSENT'
 };
 
 export const ALERT_SEVERITY = {
@@ -58,13 +61,15 @@ export const ALERT_SEVERITY = {
 const CLAUSE = {
   [ALERT_KIND.CREDENTIAL_LOCKED]: '21 CFR 11.300(d)',
   [ALERT_KIND.CHAIN_BROKEN]: '21 CFR 11.10(e)',
-  [ALERT_KIND.GATE_UNENFORCED]: '21 CFR 11.10(f)'
+  [ALERT_KIND.GATE_UNENFORCED]: '21 CFR 11.10(f)',
+  [ALERT_KIND.DRIFT_HOLD_ABSENT]: '21 CFR 11.10(f)'
 };
 
 const SEVERITY_OF = {
   [ALERT_KIND.CREDENTIAL_LOCKED]: ALERT_SEVERITY.HIGH,
   [ALERT_KIND.CHAIN_BROKEN]: ALERT_SEVERITY.CRITICAL,
-  [ALERT_KIND.GATE_UNENFORCED]: ALERT_SEVERITY.CRITICAL
+  [ALERT_KIND.GATE_UNENFORCED]: ALERT_SEVERITY.CRITICAL,
+  [ALERT_KIND.DRIFT_HOLD_ABSENT]: ALERT_SEVERITY.CRITICAL
 };
 
 /** Anything matching this must never reach an alert body. Six or more digits in
@@ -143,7 +148,29 @@ export function gateUnenforcedAlert({ findingKey, findingType, detail, projectKe
       `Finding: ${findingType}`,
       detail,
       'This happens when the signature validator is detached from the transition or disabled in the Jira workflow editor. The app cannot block the transition in this state, because Jira no longer calls it.',
-      'Reattach the "Electronic signature required" validator to the transition, or retire the controlled transition if the requirement no longer applies.'
+      'Reattach the "VAtlassian Approval" validator to the transition, or retire the controlled transition if the requirement no longer applies.'
+    ]
+  });
+}
+
+/**
+ * Build the alert for a transition that does not hold drifted work items.
+ *
+ * Same dedupe rule as gateUnenforcedAlert: keyed on the stable finding key, so
+ * one open lapse is one work item however many hourly passes observe it.
+ */
+export function driftHoldAbsentAlert({ findingKey, detail, projectKey, occurredAt }) {
+  const where = projectKey ? ` in ${projectKey}` : '';
+  return build({
+    kind: ALERT_KIND.DRIFT_HOLD_ABSENT,
+    dedupeKey: `${ALERT_KIND.DRIFT_HOLD_ABSENT}:${findingKey}`,
+    occurredAt,
+    title: `Drifted work items are not held on a workflow transition${where}`,
+    lines: [
+      'A baselined work item that has changed since approval is meant to stay in its current status until the change is approved or reverted. This transition does not enforce that, so the status can still be changed.',
+      detail,
+      'This happens when the "VAtlassian Approval" validator has not been added to the transition in the Jira workflow editor, or has been removed or disabled. The app cannot stop the move in this state, because Jira does not call it on this transition.',
+      'Add the "VAtlassian Approval" validator to the transition in the Jira workflow editor. It belongs on every transition; which ones need a signature is set in VAtlassian administration.'
     ]
   });
 }

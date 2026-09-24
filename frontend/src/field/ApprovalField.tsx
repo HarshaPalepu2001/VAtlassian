@@ -56,7 +56,7 @@ const MISMATCH = 'The approval rule returned for this screen does not match the 
 type Action = {
   transitionId: string; toStatusId?: string; toStatusName?: string | null; name?: string | null; label?: string | null;
   meaning?: string | null; requiredRole?: string | null; requiredAssurance?: AssuranceLevel;
-  capturesBaseline?: boolean; blocksOnDrift?: boolean; anyStatus?: boolean; eligible?: boolean;
+  capturesBaseline?: boolean; anyStatus?: boolean; eligible?: boolean;
 };
 type SigningContext = {
   actions?: Action[]; transitions?: Action[]; blocker?: string | null; requiredRole?: string | null;
@@ -206,6 +206,8 @@ export default function ApprovalField({ context }: { context?: { extension?: { i
 
   function onCode(next: string) {
     setCode(next);
+    // A new code withdraws the previous attempt's refusal.
+    if (failed) { setFailed(false); setMessage(''); }
     if (next.length === CODE_LENGTH && affirmed && !signed) void record(next);
   }
 
@@ -230,7 +232,7 @@ export default function ApprovalField({ context }: { context?: { extension?: { i
           <div className="va-row"><dt className="va-secondary">Meaning</dt><dd style={{ margin: 0 }}>{action.meaning ?? 'Approved'}</dd></div>
           <div className="va-row"><dt className="va-secondary">Authentication</dt><dd style={{ margin: 0 }}><AssuranceChip level={level} /></dd></div>
           <div className="va-row"><dt className="va-secondary">Baseline</dt><dd style={{ margin: 0 }}>{captureFact(action)}</dd></div>
-          <div className="va-row"><dt className="va-secondary">Unapproved changes</dt><dd style={{ margin: 0 }}>{driftFact(action)}</dd></div>
+          <div className="va-row"><dt className="va-secondary">Unapproved changes</dt><dd style={{ margin: 0 }}>{driftFact()}</dd></div>
         </dl>
       )}
 

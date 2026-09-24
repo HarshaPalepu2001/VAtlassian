@@ -3,7 +3,7 @@ import { runAdmin, query } from './adminRuntime.js';
 export async function debugDump(req, overrides) {
   return runAdmin(req, async deps => {
     const statements = {
-      controlled_transitions: "SELECT project_id, issue_type_id, from_status_id, to_status_id, required_role, meaning, required_assurance, capture_baseline, block_on_drift, state FROM va_controlled_transition LIMIT 200",
+      controlled_transitions: "SELECT project_id, issue_type_id, from_status_id, to_status_id, required_role, meaning, required_assurance, capture_baseline, state FROM va_controlled_transition LIMIT 200",
       eligibility: 'SELECT account_id, issue_type_id, role, state, granted_by, project_id FROM va_eligibility LIMIT 200',
       admins: 'SELECT account_id, state, seeded_by FROM va_admin LIMIT 200',
       credentials: 'SELECT account_id, state, algo, digits, period_seconds FROM va_credential LIMIT 200'

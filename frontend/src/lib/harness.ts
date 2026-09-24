@@ -23,24 +23,28 @@ const MAX_BUFFER_SIZE = 120;
 const eventBuffer: HarnessEvent[] = [];
 let listeners: Array<(events: HarnessEvent[]) => void> = [];
 
-function sanitizeDetails(details?: Record<string, unknown>): Record<string, unknown> {
-  if (!details) return {};
+const SECRET_KEYS = ['code', 'secret', 'password', 'token'];
+
+/** Redacts at every depth. The bridge nests each resolver payload under
+ *  `request`, so a top-level-only check let `request.code` — the signer's
+ *  authenticator code — straight into the console and the server log. */
+function sanitizeValue(value: unknown, depth: number): unknown {
+  if (value instanceof Error) return { name: value.name, message: value.message, stack: value.stack };
+  if (depth > 6 || value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map(item => sanitizeValue(item, depth + 1));
+  if (Object.getPrototypeOf(value) !== Object.prototype) return value;
   const sanitized: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(details)) {
-    // Redact raw OTP secrets or authorization codes if present
-    if (['code', 'secret', 'password', 'token'].includes(key.toLowerCase()) && typeof value === 'string') {
-      sanitized[key] = value ? `[REDACTED_LEN_${value.length}]` : '[EMPTY]';
-    } else if (value instanceof Error) {
-      sanitized[key] = {
-        name: value.name,
-        message: value.message,
-        stack: value.stack
-      };
-    } else {
-      sanitized[key] = value;
-    }
+  for (const [key, inner] of Object.entries(value)) {
+    sanitized[key] = SECRET_KEYS.includes(key.toLowerCase()) && typeof inner === 'string'
+      ? (inner ? `[REDACTED_LEN_${inner.length}]` : '[EMPTY]')
+      : sanitizeValue(inner, depth + 1);
   }
   return sanitized;
+}
+
+function sanitizeDetails(details?: Record<string, unknown>): Record<string, unknown> {
+  if (!details) return {};
+  return sanitizeValue(details, 0) as Record<string, unknown>;
 }
 
 export function recordHarnessEvent(

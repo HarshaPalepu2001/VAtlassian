@@ -1,20 +1,27 @@
 import { events } from '@forge/bridge';
 
+export type RefreshOptions = { background?: boolean };
+
 /** Jira events can lag or be absent after app writes, and another browser tab
  * may have changed things since this one last painted — so this reconciles on
  * focus and on becoming visible again, not on a fixed timer. All listeners are
- * owned by the mounted view. */
-export function subscribeIssueUpdates(refresh: () => void | Promise<void>) {
+ * owned by the mounted view.
+ *
+ * Every refresh started here is `background`: nobody asked for it, so a view
+ * that already has data should update it in place and keep a failed attempt
+ * to itself rather than flash an error the next attempt clears anyway. */
+export function subscribeIssueUpdates(refresh: (options: RefreshOptions) => void | Promise<void>) {
   let stopped = false;
   const subscriptions: { unsubscribe: () => void }[] = [];
+  const background = { background: true };
   const update = () => {
     if (!stopped && document.visibilityState !== 'hidden') {
-      void refresh();
+      void refresh(background);
       // Jira REST API has read replica lag. When JIRA_ISSUE_CHANGED fires, a synchronous
       // fetch might return the old data. We schedule follow-up refreshes to ensure we
       // capture the drifted state once the replicas converge.
-      setTimeout(() => { if (!stopped && document.visibilityState !== 'hidden') void refresh(); }, 2000);
-      setTimeout(() => { if (!stopped && document.visibilityState !== 'hidden') void refresh(); }, 5000);
+      setTimeout(() => { if (!stopped && document.visibilityState !== 'hidden') void refresh(background); }, 2000);
+      setTimeout(() => { if (!stopped && document.visibilityState !== 'hidden') void refresh(background); }, 5000);
     }
   };
   window.addEventListener('focus', update);

@@ -4,6 +4,7 @@ import { Loading } from '../../ui/primitives';
 import { plural } from '../../ui/format';
 import type { PanelEvidence, PanelSummary } from '../types';
 import { recordHarnessEvent } from '../../lib/harness';
+import { changedFieldCount } from '../approvalModel';
 
 
 const ReviewWorkspace = lazy(() => import('../../review/ReviewWorkspace'));
@@ -42,7 +43,23 @@ export default function DriftSection({ drift, evidence, evidenceReady = true, is
     );
   }
 
-  const hasBreakdown = !!(evidence?.drift?.addedNodes?.length || evidence?.drift?.removedNodes?.length || evidence?.drift?.movedNodes?.length || evidence?.drift?.changedFields?.length);
+  // ONE UNIT FOR BOTH NUMBERS.
+  //
+  // `drift.count` is FIELD-level: treeCollect sums Math.max(1, fields.length)
+  // over every change. `changedFields` is NODE-level: buildTreeRejection pushes
+  // one entry per FIELD_CHANGED change, and diffTree emits one of those per
+  // node, carrying its own field list. Printing the two side by side is what
+  // produced "3 changes since approval · 1 changed fields" on a single work
+  // item with three edited fields — two true numbers counting different things.
+  //
+  // The breakdown is the one that has to move: it sits under a headline that is
+  // already field-level, so it counts fields too, and the node categories
+  // beside it stay node-level and say so in their own labels.
+  const fieldCount = changedFieldCount(evidence?.drift);
+  const addedCount = evidence?.drift?.addedNodes?.length ?? 0;
+  const removedCount = evidence?.drift?.removedNodes?.length ?? 0;
+  const movedCount = evidence?.drift?.movedNodes?.length ?? 0;
+  const hasBreakdown = !!(fieldCount || addedCount || removedCount || movedCount);
 
   return (
     <section className="va-stack">
@@ -52,11 +69,13 @@ export default function DriftSection({ drift, evidence, evidenceReady = true, is
         </span>
         <span className="va-review-head__detail va-grow">
           {hasBreakdown ? (
+            // plural() throughout, like the rest of this file. The hardcoded
+            // "s" is what made a single change read as "1 changed fields".
             [
-              evidence?.drift?.changedFields?.length ? `${evidence.drift.changedFields.length} changed fields` : '',
-              evidence?.drift?.addedNodes?.length ? `${evidence.drift.addedNodes.length} added nodes` : '',
-              evidence?.drift?.removedNodes?.length ? `${evidence.drift.removedNodes.length} removed nodes` : '',
-              evidence?.drift?.movedNodes?.length ? `${evidence.drift.movedNodes.length} moved nodes` : ''
+              fieldCount ? plural(fieldCount, 'changed field') : '',
+              addedCount ? plural(addedCount, 'added node') : '',
+              removedCount ? plural(removedCount, 'removed node') : '',
+              movedCount ? plural(movedCount, 'moved node') : ''
             ].filter(Boolean).join(', ')
           ) : (
             drift.materialCount === 0

@@ -552,6 +552,68 @@ export const MIGRATIONS = [
   ADD COLUMN last_checkpoint BIGINT NULL,
   ADD COLUMN last_error TEXT NULL` },
   { id: 'v041_baseline_node_value_mediumtext', sql: `ALTER TABLE va_baseline_node_value MODIFY COLUMN chunk MEDIUMTEXT NOT NULL` },
+  { id: 'v042_confluence_audit', sql: `ALTER TABLE va_audit
+    ADD COLUMN product VARCHAR(32) NULL,
+    ADD COLUMN content_type VARCHAR(64) NULL,
+    ADD COLUMN content_id VARCHAR(128) NULL,
+    ADD COLUMN container_id VARCHAR(128) NULL,
+    ADD COLUMN baseline_subject_identity VARCHAR(255) NULL` },
+  { id: 'v043_governance_subject', sql: `CREATE TABLE IF NOT EXISTS va_governed_subject (
+    subject_id VARCHAR(128) NOT NULL, product VARCHAR(32) NOT NULL, content_type VARCHAR(64) NOT NULL,
+    PRIMARY KEY (subject_id)
+  )` },
+  { id: 'v044_governance_policy', sql: `CREATE TABLE IF NOT EXISTS va_governance_policy (
+    policy_id VARCHAR(128) NOT NULL, subject_id VARCHAR(128) NOT NULL, type VARCHAR(32) NOT NULL,
+    PRIMARY KEY (policy_id)
+  )` },
+  { id: 'v045_scoped_role_grant', sql: `CREATE TABLE IF NOT EXISTS va_scoped_role_grant (
+    grant_id VARCHAR(128) NOT NULL, space_key VARCHAR(128) NOT NULL, role VARCHAR(64) NOT NULL, account_id VARCHAR(128) NOT NULL,
+    PRIMARY KEY (grant_id)
+  )` },
+  { id: 'v046_governance_state', sql: `CREATE TABLE IF NOT EXISTS va_governance_state (
+    subject_id VARCHAR(128) NOT NULL, state VARCHAR(32) NOT NULL,
+    PRIMARY KEY (subject_id)
+  )` },
+  { id: 'v047_governance_approval', sql: `CREATE TABLE IF NOT EXISTS va_governance_approval (
+    approval_id VARCHAR(128) NOT NULL, subject_id VARCHAR(128) NOT NULL, state VARCHAR(32) NOT NULL,
+    PRIMARY KEY (approval_id)
+  )` },
+  { id: 'v048_governance_challenge', sql: `CREATE TABLE IF NOT EXISTS va_governance_challenge (
+    challenge_id VARCHAR(128) NOT NULL, approval_id VARCHAR(128) NOT NULL,
+    PRIMARY KEY (challenge_id)
+  )` },
+  { id: 'v049_governance_baseline', sql: `CREATE TABLE IF NOT EXISTS va_governance_baseline (
+    baseline_id VARCHAR(128) NOT NULL, subject_id VARCHAR(128) NOT NULL, content_hash CHAR(64) NOT NULL,
+    PRIMARY KEY (baseline_id)
+  )` },
+  { id: 'v050_governance_node', sql: `CREATE TABLE IF NOT EXISTS va_governance_node (
+    node_id VARCHAR(128) NOT NULL, baseline_id VARCHAR(128) NOT NULL,
+    PRIMARY KEY (node_id)
+  )` },
+  { id: 'v051_governance_artifact', sql: `CREATE TABLE IF NOT EXISTS va_governance_artifact (
+    artifact_id VARCHAR(128) NOT NULL, baseline_id VARCHAR(128) NOT NULL, hash CHAR(64) NOT NULL,
+    PRIMARY KEY (artifact_id)
+  )` },
+  { id: 'v052_governance_workspace', sql: `CREATE TABLE IF NOT EXISTS va_governance_workspace (
+    workspace_id VARCHAR(128) NOT NULL, subject_id VARCHAR(128) NOT NULL,
+    PRIMARY KEY (workspace_id)
+  )` },
+  { id: 'v053_governance_operation', sql: `CREATE TABLE IF NOT EXISTS va_governance_operation (
+    operation_id VARCHAR(128) NOT NULL, subject_id VARCHAR(128) NOT NULL,
+    PRIMARY KEY (operation_id)
+  )` },
+  { id: 'v054_governance_event_receipt', sql: `CREATE TABLE IF NOT EXISTS va_governance_event_receipt (
+    receipt_id VARCHAR(128) NOT NULL, event_id VARCHAR(128) NOT NULL, processed_at BIGINT NOT NULL,
+    PRIMARY KEY (receipt_id)
+  )` },
+  { id: 'v055_va_events', sql: `CREATE TABLE IF NOT EXISTS va_events (
+    id VARCHAR(128) NOT NULL,
+    product VARCHAR(32) NOT NULL,
+    type VARCHAR(64) NOT NULL,
+    content_id VARCHAR(128) NOT NULL,
+    timestamp BIGINT NOT NULL,
+    PRIMARY KEY (id)
+  )` },
   { id: 'v056_vault_space', sql: `CREATE TABLE IF NOT EXISTS va_vault_space (
     project_id BIGINT NOT NULL,
     space_id VARCHAR(64) NOT NULL,
@@ -580,5 +642,17 @@ export const MIGRATIONS = [
     vaulted_at BIGINT NOT NULL,
     PRIMARY KEY (id),
     UNIQUE KEY uq_vault_attachment_baseline (baseline_id, jira_attachment_id)
-  )` }
+  )` },
+  // One vault space for the whole site, not one per project: each project is a
+  // page in it (va_vault_space.project_page_id). See lib/vaultConfluence.js.
+  { id: 'v059_vault_site', sql: `CREATE TABLE IF NOT EXISTS va_vault_site (
+    id VARCHAR(16) NOT NULL,
+    space_id VARCHAR(64) NOT NULL,
+    space_key VARCHAR(64) NOT NULL,
+    homepage_id VARCHAR(64) NULL,
+    created_at BIGINT NOT NULL,
+    created_by VARCHAR(128) NOT NULL,
+    PRIMARY KEY (id)
+  )` },
+  { id: 'v060_vault_project_page', sql: `ALTER TABLE va_vault_space ADD COLUMN project_page_id VARCHAR(64) NULL` }
 ];

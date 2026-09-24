@@ -50,24 +50,42 @@ const COLUMNS = [
 ];
 
 /** The audit-relevant counts a JIRA admin actually asks for: how many times
- *  was this signed, how many times was signing declined or blocked. Read
- *  from the issue's full ledger history server-side, not just the page on
- *  screen — see admin.js's admin:listLedger. */
+ *  was this signed, approved, declined, rejected or blocked. Read from the
+ *  issue's full ledger history server-side, not just the page on screen —
+ *  see admin.js's admin:listLedger.
+ *
+ *  The badges must add up to the total beside them. An issue records plenty
+ *  of events that belong to none of these categories — baselines captured,
+ *  supersessions, first observations — and leaving them as an unexplained
+ *  gap between "2 signatures" and "7 events in total" reads like a
+ *  miscount. Whatever is not named above is named in `other`, which lists
+ *  what it consists of. */
+const NAMED_COUNTS: [key: string, noun: string, tone: (n: number) => Tone][] = [
+  ['SIGNATURE_CONSUMED', 'signature', () => 'success'],
+  ['CHANGE_APPROVED', 'approved change', () => 'success'],
+  ['SIGNATURE_DECLINED', 'decline', n => (n > 0 ? 'danger' : 'neutral')],
+  ['CHANGE_REJECTED', 'reject', n => (n > 0 ? 'danger' : 'neutral')],
+  ['TRANSITION_DENIED', 'blocked attempt', n => (n > 0 ? 'danger' : 'neutral')],
+  ['CONTENT_CHANGED', 'content change', n => (n > 0 ? 'warning' : 'neutral')]
+];
+
 function CountStrip({ counts }: { counts: Record<string, number> }) {
-  const signed = counts['SIGNATURE_CONSUMED'] ?? 0;
-  const declined = counts['SIGNATURE_DECLINED'] ?? 0;
-  const denied = counts['TRANSITION_DENIED'] ?? 0;
-  const changed = counts['CONTENT_CHANGED'] ?? 0;
-  const rejects = counts['CHANGE_REJECTED'] ?? 0;
   const total = Object.values(counts).reduce((sum, c) => sum + c, 0);
+  const named = new Set(NAMED_COUNTS.map(([key]) => key));
+  const rest = Object.entries(counts).filter(([key, c]) => !named.has(key) && c > 0);
+  const other = rest.reduce((sum, [, c]) => sum + c, 0);
+  const breakdown = rest
+    .map(([key, c]) => `${c} ${key.replaceAll('_', ' ').toLowerCase()}`)
+    .join(', ');
   return (
     <div className="va-row" style={{ gap: '10px', flexWrap: 'wrap' }}>
-      <Badge tone="success">{plural(signed, 'signature')}</Badge>
-      <Badge tone={declined > 0 ? 'danger' : 'neutral'}>{plural(declined, 'decline')}</Badge>
-      <Badge tone={rejects > 0 ? 'danger' : 'neutral'}>{plural(rejects, 'reject')}</Badge>
-      <Badge tone={denied > 0 ? 'danger' : 'neutral'}>{plural(denied, 'blocked attempt')}</Badge>
-      <Badge tone={changed > 0 ? 'warning' : 'neutral'}>{plural(changed, 'content change')}</Badge>
+      {NAMED_COUNTS.map(([key, noun, tone]) => {
+        const value = counts[key] ?? 0;
+        return <Badge key={key} tone={tone(value)}>{plural(value, noun)}</Badge>;
+      })}
+      {other > 0 && <Badge tone="neutral"><span title={breakdown}>{plural(other, 'other event')}</span></Badge>}
       <span className="va-muted" style={{ fontSize: '12px' }}>{plural(total, 'event')} recorded in total</span>
+      {other > 0 && <span className="va-muted" style={{ fontSize: '12px', width: '100%' }}>{breakdown}</span>}
     </div>
   );
 }
@@ -204,6 +222,7 @@ function EntryRow({ entry }: { entry: LedgerEntry }) {
 
 export default function LedgerPage() {
   const [issueKeyInput, setIssueKeyInput] = useState('');
+  const [staleView, setStaleView] = useState(false);
   const [searching, setSearching] = useState(true);
   const [queryKey, setQueryKey] = useState<string | null>(null);
   const sequence = useRef(0);
@@ -222,7 +241,7 @@ export default function LedgerPage() {
     const seq = ++sequence.current;
     if (append) setLoadingMore(true);
     else { setSearching(true); setQueryKey(issueKey); setEntries([]); setIssue(null); setCounts(null); setSignaturesSummary([]); }
-    setHasMore(false); setMessage(null);
+    setHasMore(false); setMessage(null); setStaleView(false);
     try {
       const response = await invoke('admin:listLedger', { issueKey: issueKey ?? undefined, beforeSeq: beforeSeq ?? undefined }) as any;
       if (seq !== sequence.current) return;
@@ -262,6 +281,39 @@ export default function LedgerPage() {
     await runQuery(queryKey, nextBeforeSeq, true);
   };
 
+  // Ledger sequence numbers only increase and rows are never deleted, so a
+  // head above the newest entry on screen means activity was recorded after
+  // this view loaded.
+  //
+  // Checked when the reader comes back to the tab, never on a timer: this app
+  // does not poll (frontend/test/panel.test.mjs enforces that), and an admin
+  // page left open in a background tab should cost nothing.
+  //
+  // It is announced, not applied. Re-ordering rows under somebody reading an
+  // audit record is how a reader loses their place, so an evidence view
+  // changes only when its reader asks it to. A failed check leaves the view
+  // alone rather than implying it is current.
+  useEffect(() => {
+    let active = true;
+    const check = async () => {
+      if (!active || document.visibilityState === 'hidden') return;
+      if (searching || loadingMore || staleView) return;
+      try {
+        const head = await invoke('admin:ledgerHead', { issueId: issue?.issueId ?? undefined }) as any;
+        if (!active || !head?.success) return;
+        const newest = entries.length ? Math.max(...entries.map(e => Number(e.seq) || 0)) : 0;
+        if (Number(head.maxSeq) > newest) setStaleView(true);
+      } catch { /* left for the next return; never reported as up to date */ }
+    };
+    document.addEventListener('visibilitychange', check);
+    window.addEventListener('focus', check);
+    return () => {
+      active = false;
+      document.removeEventListener('visibilitychange', check);
+      window.removeEventListener('focus', check);
+    };
+  }, [searching, loadingMore, staleView, issue?.issueId, entries]);
+
   return (
     <Page
       eyebrow="Evidence"
@@ -271,6 +323,14 @@ export default function LedgerPage() {
       {message && (
         <div style={{ marginBottom: '20px' }}>
           <SectionMessage appearance={message.type}><p>{message.text}</p><Button isDisabled={searching||loadingMore} onClick={()=>runQuery(queryKey,null,false)}>Retry loading ledger</Button></SectionMessage>
+        </div>
+      )}
+      {staleView && (
+        <div style={{ marginBottom: '20px' }}>
+          <SectionMessage appearance="information">
+            <p>New activity has been recorded since this view loaded. The record below is unchanged until you refresh it.</p>
+            <Button isDisabled={searching || loadingMore} onClick={() => runQuery(queryKey, null, false)}>Refresh</Button>
+          </SectionMessage>
         </div>
       )}
 

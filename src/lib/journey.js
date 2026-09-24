@@ -82,7 +82,6 @@ function describeAction(transition, gate) {
     requiredRole: gate.required_role ?? null,
     requiredAssurance: gate.required_assurance ?? null,
     capturesBaseline: gate.capture_baseline === true,
-    blocksOnDrift: gate.block_on_drift === true,
     anyStatus: gate.matched_any_status === true,
     label: `Sign to move to ${toName}`
   };

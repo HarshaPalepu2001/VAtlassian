@@ -9,16 +9,19 @@ import { adminIncidentCount } from '../db/incidentStore.js';
 import { credentialState } from '../db/credentialStore.js';
 import { isActiveAdmin } from '../db/adminStore.js';
 import { restoresForIssue } from '../db/restoreStore.js';
-import { activeRootsForNode } from '../db/baselineTreeStore.js';
+import { activeRootsForNode, rootNodeDigests } from '../db/baselineTreeStore.js';
 import { isEligible } from '../lib/reviewer.js';
 import { baselinePolicy } from '../lib/baselinePolicy.js';
 import { baselineDecisionMeaning } from '../lib/approval/challenge.js';
+import { baselineDrift } from '../lib/liveDrift.js';
+import { controlledFields } from '../db/configStore.js';
+import { MATERIALITY } from '../lib/materiality.js';
 
 /**
  * THE COMPACT READ — everything the panel needs to paint immediately.
  *
- * Deliberately narrower than panelAccess.js's snapshot(): one Jira read for
- * `project,issuetype,status,summary` and a handful of indexed, independent SQL
+ * Deliberately narrower than panelAccess.js's snapshot(): one Jira read of the
+ * issue's own fields and a handful of indexed, independent SQL
  * reads run in parallel. It must never call snapshot(), readStableTree(),
  * fetchChangelog(), readAllValues(), or ask Jira for editmeta — those are
  * panelEvidence.js's job, loaded lazily. This is presentation only: every
@@ -32,7 +35,12 @@ export async function readIssueSummary({ payload = {}, context }) {
   const key = payload.issueKey ?? payload.issueId ?? context.extension?.issue?.key ?? context.extension?.issue?.id;
   if (!key) fail('ISSUE_REQUIRED');
   const response = await api.asUser().requestJira(
-    route`/rest/api/3/issue/${String(key)}?fields=project,issuetype,status,summary`
+    // *all, because the summary derives the drift count from the content
+    // itself rather than trusting a stored counter (see getSummary). Still ONE
+    // request — the boundary panel:getSummary must not cross is the tree, the
+    // changelog, editmeta and retained baseline values, none of which this
+    // widening touches.
+    route`/rest/api/3/issue/${String(key)}?fields=*all`
   );
   if (!response.ok) fail('ISSUE_ACCESS_DENIED');
   const issue = await response.json();
@@ -68,7 +76,6 @@ function describeTransitionForViewer(transition, gate, eligible) {
     requiredRole: gate.required_role ?? null,
     requiredAssurance: gate.required_assurance ?? null,
     capturesBaseline: gate.capture_baseline === true,
-    blocksOnDrift: gate.block_on_drift === true,
     anyStatus: gate.matched_any_status === true,
     label: `Sign to move to ${toName}`,
     canApprove: eligible === true
@@ -106,7 +113,7 @@ export async function getSummary(args) { return respond(async () => {
   const isDone = statusCategory === 'done' || issue.fields.status?.name?.toLowerCase() === 'done';
 
   const [available, baseline, review, approval, pendingRow, credentialEnrolled, isAdmin, restores,
-    governingRoots] = await Promise.all([
+    governingRoots, declared] = await Promise.all([
     availableTransitions(api, issue.key),
     activeBaseline(issueId),
     getReview(issueId),
@@ -117,7 +124,10 @@ export async function getSummary(args) { return respond(async () => {
     restoresForIssue(issueId, 1).catch(() => []),
     // Governed-by-coverage, for a work item that is a node inside a parent's
     // tree baseline and therefore has no va_baseline row of its own.
-    activeRootsForNode(issueId).catch(() => [])
+    activeRootsForNode(issueId).catch(() => []),
+    // The declared tracked set, so drift can be derived from the content
+    // rather than read off a counter. One indexed read, no Jira call.
+    controlledFields({ projectId, issueTypeId }).catch(() => [])
   ]);
 
   // Never offer a transition to the same status, and never offer any once the
@@ -143,14 +153,53 @@ export async function getSummary(args) { return respond(async () => {
   const transitions = gated.map(g => describeTransitionForViewer(g.transition, g.gate, g.eligible));
 
   const policy = safeBaselinePolicy(baseline);
-  const driftCount = baseline ? Number(review?.drift_count ?? 0) : 0;
-  const materialCount = baseline ? Number(review?.drifted_field_count ?? 0) : 0;
+
+  // DRIFT IS DERIVED FROM THE CONTENT, AT THE ISSUE LEVEL.
+  //
+  // This read `review.drift_count` — a counter written by the collector and
+  // zeroed by the decision paths. That made it a second answer to a question
+  // the content already settles, and the two came apart: on VJIRA-17 the row
+  // said 0 while the item genuinely differed from the digests its signature
+  // covers, so the panel rendered a change nobody was allowed to decide.
+  //
+  // driftedFields() is the same function the collector uses (lib/interception.js),
+  // so the summary and the collector cannot reach different verdicts. The drift
+  // rows in va_drift remain the durable EVIDENCE — who changed what, when — but
+  // they are no longer what decides whether drift exists.
+  //
+  // baselineDrift() is also what the validator holds a transition on, so the
+  // panel can always decide whatever the validator is holding the item for.
+  const comparison = await baselineDrift({ baseline, issueId, issueFields: issue.fields, declared,
+    readRootDigests: rootNodeDigests });
+  const drifted = comparison.changed;
+  const driftCount = drifted.length;
+  // Materiality comes from the declared rows, which is all this path has —
+  // classifying by value would need the retained baseline values, and reading
+  // those is exactly what panel:getSummary must not do.
+  const materialityOf = new Map((declared ?? []).map(f => [f.field_id, f.materiality]));
+  const materialCount = drifted.filter(id => (materialityOf.get(id) ?? MATERIALITY.MAJOR) !== MATERIALITY.COSMETIC).length;
   const pendingDrift = Boolean(baseline) && driftCount > 0;
   const policyIncomplete = pendingDrift && !policy;
-  const isOriginalApprover = pendingDrift && baseline?.approved_by === actor.accountId;
-  const baselineEligible = pendingDrift && policy
+
+  // ELIGIBILITY IS A FACT ABOUT THE VIEWER, NOT ABOUT THE COUNTER.
+  //
+  // This used to be gated behind `pendingDrift`, so when `drift_count` read 0
+  // the `&&` short-circuited and isEligible() was never called. That was fine
+  // while the panel rendered the same number — but it does not: the client
+  // substitutes the live re-diff for display (IssuePanel.tsx), and on VJIRA-17
+  // the two disagreed. The viewer was shown "1 change since approval" and told
+  // "only Reviewer can decide them" while holding Reviewer, because the role
+  // had never been checked and the message is a fallback.
+  //
+  // Answering it unconditionally costs one indexed read on an item that has a
+  // baseline, and it lets the client pair permission with whichever count it is
+  // actually displaying instead of inheriting a verdict about a different one.
+  const isOriginalApprover = Boolean(baseline) && baseline?.approved_by === actor.accountId;
+  const baselineEligible = baseline && policy
     ? (isOriginalApprover || await isEligible({ accountId: actor.accountId, projectId, issueTypeId, role: policy.requiredRole }))
     : false;
+
+  // Unchanged: what the SERVER is prepared to assert on its own evidence.
   const decidesDrift = pendingDrift && baselineEligible;
   const tier = (anyEligible || decidesDrift) ? 'actor' : 'observer';
 
@@ -235,12 +284,21 @@ export async function getSummary(args) { return respond(async () => {
       transitionId: approval.transition_id ?? null
     } : null,
     drift: { count: driftCount, materialCount, decidesDrift, policyIncomplete,
+      // Whether this viewer COULD decide drift on this baseline, independent of
+      // whether the stored counter currently shows any. The client needs both.
+      eligible: baselineEligible,
       canApprove: decidesDrift, canReject: decidesDrift },
     // The review row's own version counter — bumped on every re-observation,
     // independent of baselineVersion — so usePanelEvidence can key its cache
     // on "has the current-record evidence itself moved" rather than only on
     // whether the baseline changed.
     evidenceVersion: review?.version != null ? Number(review.version) : null,
+    // THE CONTENT'S OWN IDENTITY, so the panel's heavy evidence read can be
+    // keyed on what the item actually says rather than on a row version that
+    // only moves when the collector writes. A change the collector has not
+    // recorded yet still changes this, which is what makes the panel react to
+    // an edit instead of waiting for a trigger to catch up.
+    contentHash: comparison.contentHash ?? null,
     restore,
     approval: {
       requiredRole: policy?.requiredRole ?? transitions.find(t => t.requiredRole)?.requiredRole ?? null,

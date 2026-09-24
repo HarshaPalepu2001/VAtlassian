@@ -6,7 +6,7 @@ test('scheduler executes every control, isolates thrown and returned failures, a
   assert.equal(existsSync(new URL('../src/jobs/runner.js', import.meta.url)), true, 'scheduler must be implemented');
   const runner = await import('../src/jobs/runner.js');
   const calls = [];
-  const names = ['migrate','alerts','adoptFields','reconcile','rehash','gatecheck','verify','seal','directoryReconcile','devicecheck','prune'];
+  const names = ['migrate','alerts','adoptFields','reconcile','rehash','gatecheck','vaultBackfill','verify','seal','directoryReconcile','devicecheck','prune'];
   const jobs = Object.fromEntries(names.map(name => [name, async () => {
     calls.push(name);
     if (name === 'adoptFields') throw new Error('field catalogue unavailable');

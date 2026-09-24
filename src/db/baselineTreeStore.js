@@ -188,6 +188,23 @@ export async function publishTreeBaseline({ baselineId, issueId, version, query 
   return true;
 }
 
+/**
+ * The ROOT node's field digests for one tree baseline — the tree's
+ * equivalent of va_baseline.field_digests, which a tree baseline leaves as
+ * '{}'. One indexed row, no values: panel:getSummary may call this, where
+ * readBaselineTree (which decodes every retained value) is off limits.
+ * Returns the raw JSON text, or null when the node is not recorded.
+ */
+export async function rootNodeDigests(baselineId, issueId, query = store.throwing) {
+  const rows = await query(
+    `SELECT field_digests AS fieldDigests FROM va_baseline_node
+      WHERE baseline_id = FROM_BASE64(?) AND (current_issue_id = ? OR original_issue_id = ?)
+      ORDER BY node_order ASC LIMIT 1`,
+    [toBinaryParam(baselineId), Number(issueId), Number(issueId)]
+  );
+  return rows?.[0]?.fieldDigests ?? null;
+}
+
 export async function readBaselineTree(baselineId, query = store.throwing) {
   const bId = toBinaryParam(baselineId);
   const dbNodes = await query(

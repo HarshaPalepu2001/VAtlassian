@@ -55,8 +55,7 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
         required_role: baseline.required_role,
         required_assurance: baseline.required_assurance,
         meaning: 'REVIEW_REJECTED',
-        capture_baseline: true,
-        block_on_drift: true
+        capture_baseline: true
       };
     } else {
       gate = await gatedTransition({ projectId, issueTypeId,

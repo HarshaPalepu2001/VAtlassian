@@ -92,8 +92,7 @@
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import ForgeReconciler, {
-  Box, Checkbox, Heading, Inline, Lozenge, SectionMessage, Spinner, Stack, Text, Textfield,
-  useProductContext
+  Box, Checkbox, Heading, Inline, Lozenge, SectionMessage, Spinner, Stack, Text, Textfield
 } from '@forge/react';
 import { CustomFieldEdit } from '@forge/react/jira';
 import { events, invoke, view } from '@forge/bridge';
@@ -138,7 +137,27 @@ const Detail = ({ label, value }) => (
 );
 
 const Edit = () => {
-  const context = useProductContext();
+  // THE CONTEXT ARRIVES AFTER THE FIRST RENDER. Jira hands it over through
+  // view.getContext(), a round trip — @forge/react's useProductContext() is
+  // exactly that call wrapped in a useState whose first value is undefined.
+  // Every transition dialog therefore used to open on "could not determine
+  // which work item it is on" and then replace it moments later, because
+  // "not delivered yet" was read as "missing". Undefined here now means
+  // loading; only a context that has arrived can fail closed.
+  //
+  // Called directly rather than through the hook because the hook rethrows a
+  // rejection inside a promise, where nothing can catch it: a bridge failure
+  // would leave this screen spinning forever instead of saying so.
+  const [context, setContext] = useState(undefined);
+  const [contextFailed, setContextFailed] = useState(false);
+  useEffect(() => {
+    let active = true;
+    view.getContext()
+      .then((c) => { if (active) setContext(c ?? null); })
+      .catch(() => { if (active) setContextFailed(true); });
+    return () => { active = false; };
+  }, []);
+  const contextReady = context !== undefined;
   // jira:customField extensions get a JiraContext under platformContext —
   // `issueKey` / `issueId` (node_modules/@forge/react/out/types/forge.d.ts,
   // interface JiraContext). It is present here because this component only
@@ -181,6 +200,14 @@ const Edit = () => {
   // Anything else fails closed, because WHICH statement of meaning is being
   // attested to is the signature — guessing it would be exactly wrong.
   useEffect(() => {
+    if (contextFailed) {
+      setOptions([]);
+      setStatus({ kind: 'error', message: 'Jira did not provide the details of this transition, so nothing can be signed here. Close this dialog and open the transition again.' });
+      return;
+    }
+    // Still being handed over — options stay null, which renders the loading
+    // line below. Nothing is concluded from a context that has not arrived.
+    if (!contextReady) return;
     // Previously `if (!issueKey) return;` — which left options null, ctId
     // null, status 'idle' and every message below suppressed, so the
     // component rendered a single disabled textbox and NOTHING else. Never
@@ -222,8 +249,7 @@ const Edit = () => {
           eligible: t.eligible !== false,
           requiredAssurance: t.requiredAssurance,
           anyStatus: t.anyStatus === true,
-          capturesBaseline: t.capturesBaseline === true,
-          blocksOnDrift: t.blocksOnDrift === true
+          capturesBaseline: t.capturesBaseline === true
         }));
 
         let blockerMsg = null;
@@ -272,9 +298,9 @@ const Edit = () => {
         }
         setStatus({ kind: 'idle' });
       })
-      .catch((e) => { if (!cancelled) setStatus({ kind: 'error', message: e.message }); });
+      .catch((e) => { if (!cancelled) { setOptions([]); setStatus({ kind: 'error', message: e.message }); } });
     return () => { cancelled = true; };
-  }, [issueKey, transitionId]);
+  }, [contextReady, contextFailed, issueKey, transitionId]);
 
   // Verify + create the PENDING signature the moment a full code is present.
   // Keyed on [code, ctId] so one code is spent at most once: re-rendering
@@ -320,10 +346,14 @@ const Edit = () => {
           view.submit(res.approvalId);
         } else {
           setToken('');
+          // A refused code is spent. Empty the box so the next one can be
+          // typed straight in; this never re-fires the effect, which only
+          // runs on a full six digits.
+          setCode('');
           setStatus({ kind: 'error', message: res?.error ?? 'That code could not be verified.' });
         }
       })
-      .catch((e) => { if (!cancelled) setStatus({ kind: 'error', message: e.message }); });
+      .catch((e) => { if (!cancelled) { setCode(''); setStatus({ kind: 'error', message: e.message }); } });
     return () => { cancelled = true; };
   }, [issueKey, ctId, affirmed, code, evidenceHash, capturesBaseline]);
 
@@ -349,7 +379,12 @@ const Edit = () => {
 
   const onChange = useCallback((e) => {
     const next = (e?.target?.value ?? '').trim();
-    if (DIGITS_ONLY.test(next) && next.length <= CODE_LENGTH) setCode(next);
+    if (!DIGITS_ONLY.test(next) || next.length > CODE_LENGTH) return;
+    setCode(next);
+    // Typing a new code withdraws the previous attempt's refusal. Only an
+    // attempt error can be on screen while this box is enabled — every
+    // fail-closed reason also disables it — so nothing else is erased.
+    setStatus((current) => (current.kind === 'error' ? { kind: 'idle' } : current));
   }, []);
 
   const selected = options?.find((o) => o.ctId === ctId) ?? null;
@@ -444,7 +479,7 @@ const Edit = () => {
             <Detail label="Role:" value={selected.requiredRole ?? 'Any approver role'} />
             <Detail label="Authentication:" value={ASSURANCE_LABELS[selected.requiredAssurance] ?? ASSURANCE_LABELS.ESIGNATURE} />
             <Detail label="Baseline:" value={selected.capturesBaseline ? 'Captures a new baseline' : 'Does not capture a baseline'} />
-            <Detail label="Unapproved changes:" value={selected.blocksOnDrift ? 'Blocked while changes are unapproved' : 'Not blocked by unapproved changes'} />
+            <Detail label="Unapproved changes:" value="Blocked while changes are unapproved" />
           </Stack>
         )}
 
@@ -533,7 +568,7 @@ const Edit = () => {
             signature stays clean. This is the one line that answers "is the
             field even wired to the transition dialog?" without needing logs
             or admin access. */}
-        {status.kind !== 'ok' && (
+        {status.kind !== 'ok' && contextReady && (
           <Text size="small" color="color.text.subtlest">
             Forge Signature · rendered on: {renderContext ?? 'unknown'} · item: {issueKey ?? 'unresolved'}
           </Text>

@@ -11,6 +11,9 @@ import { activeBaseline } from '../db/baselineStore.js';
 import { baselinePolicy } from '../lib/baselinePolicy.js';
 import { isEligible } from '../lib/reviewer.js';
 import { baselineDecisionMeaning } from '../lib/approval/challenge.js';
+import { enqueueVault } from '../lib/vaultQueue.js';
+import { tryAppend } from '../db/store.js';
+import { EVENT } from '../lib/ledger.js';
 import api, { route } from '@forge/api';
 
 export async function getState(args) { return respond(async () => {
@@ -59,15 +62,19 @@ export async function prepareApproval({ issue, actor, decision, expectedEvidence
     required_role: immutable.requiredRole,
     required_assurance: immutable.requiredAssurance,
     meaning: baselineDecisionMeaning(decision, immutable.version),
-    capture_baseline: true,
-    block_on_drift: true
+    capture_baseline: true
   } : null;
   const prepared = await snapshot({ issue: fresh, actor, requireAuthority: true, expectedEvidenceHash,
     transition, authorityPolicy: approvalPolicy });
   if (immutable) {
     if (!prepared.baseline || !Buffer.from(prepared.baseline.baseline_id).equals(Buffer.from(immutable.baselineId))
         || Number(prepared.baseline.version) !== immutable.version) fail('STALE_EVIDENCE');
-    if (decision === 'APPROVE' && String(fresh.fields.status?.id ?? '') !== immutable.reviewStatusId) fail('STATUS_CHANGED');
+    // NO REVIEW-STATUS CHECK. Drift outlives review status — the item is
+    // wherever the workflow has since taken it, and approving its current
+    // content is a statement about that content, not about where it sits.
+    // See usecases/approval.js's drift branch for the whole reasoning; the
+    // guard that used to be here refused APPROVE on any item that had moved
+    // past the status its baseline was captured leaving.
     const eligible = await isEligible({ accountId: actor.accountId, projectId: prepared.projectId,
       issueTypeId: prepared.issueTypeId, role: immutable.requiredRole });
     if (!eligible) fail('NOT_ELIGIBLE');
@@ -111,6 +118,23 @@ export async function prepareApproval({ issue, actor, decision, expectedEvidence
   return prepared;
 }
 
+/**
+ * Hands the new baseline's attachments to the vault worker (jobs/vaultWorker.js)
+ * — queued, so the copying never spends this approval's time budget. Vaulting
+ * is defence in depth, not the record: the baseline row already is. A queue
+ * failure is audited and never fails the decision that captured the baseline.
+ */
+async function queueVaulting({ capture, checked, actor }) {
+  const baselineId = Buffer.isBuffer(capture.baselineId) ? capture.baselineId.toString('hex') : String(capture.baselineId ?? '');
+  try {
+    await enqueueVault({ baselineId, issueId: checked.issueId, issueKey: checked.issue.key, projectId: checked.projectId });
+  } catch (error) {
+    console.error('applyApproval: could not queue attachment vaulting', error);
+    await tryAppend({ actorAccountId: actor.accountId, issueId: checked.issueId, eventType: EVENT.VAULT_QUEUE_FAILED,
+      payload: { baselineId, error: String(error?.message ?? error) } }).catch(() => {});
+  }
+}
+
 export async function applyApproval({ issue, actor, approval, prepared, resuming = false, policy = null, workflowTransition = null }) {
   if (!approval?.approval_id || !actor?.accountId ||
       String(approval.actor_account_id ?? approval.account_id) !== actor.accountId ||
@@ -127,7 +151,7 @@ export async function applyApproval({ issue, actor, approval, prepared, resuming
     expectedEvidenceHash: resuming ? undefined : prepared?.evidenceHash, forTransition, transition, allowBusy: resuming });
   const assertPolicy = current => {
     const authoritative = current.approvalPolicy ?? current.gate;
-    if (policy && ['required_role', 'required_assurance', 'meaning', 'capture_baseline', 'block_on_drift']
+    if (policy && ['required_role', 'required_assurance', 'meaning', 'capture_baseline']
       .some(key => String(policy[key]) !== String(authoritative?.[key]))) fail('POLICY_CHANGED');
     if (Number(approval.baseline_version ?? current.baselineVersion) !== current.baselineVersion) fail('STALE_EVIDENCE');
     if (!meetsAssurance(approval.assurance_level, effectiveAssurance(authoritative?.required_assurance))) fail('INSUFFICIENT_ASSURANCE');
@@ -237,9 +261,12 @@ export async function applyApproval({ issue, actor, approval, prepared, resuming
           requiredRole: checked.gate?.required_role, reviewerFieldId: checked.config.reviewerFieldId });
       }
       if (!capture.captured) fail(capture.reason ?? 'CAPTURE_FAILED');
+      await queueVaulting({ capture, checked, actor });
     }
-    if (checked.baseline && capture.captured) await markDecided({ issueId: checked.issueId,
-      baselineVersion: checked.baseline.version, approvalId: approval.approval_id });
+    if (checked.baseline && capture.captured) {
+      await markDecided({ issueId: checked.issueId,
+        baselineVersion: checked.baseline.version, approvalId: approval.approval_id });
+    }
     if (locked && !capture.captured) await release({ issueId: checked.issueId,
       state: checked.diff?.changedFieldCount > 0 ? 'DRIFTED' : 'BASELINED', now: Date.now(),
       counters: undecidedCounters(checked.diff) });

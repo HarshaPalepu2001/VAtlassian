@@ -71,6 +71,7 @@ export function fixture(options = {}) {
     setConfigIfCurrent: async (key, value, actor, now) => { writes.push([key, value, actor, now]); return true; },
     verifyChain: async () => ({ ok: true, checked: 1 }),
     listGatedTransitions: async () => [],
+    provisionVault: async () => ({ space: { created: true }, lockdown: { schemeId: 'fixture' }, errors: [] }),
   };
   deps.tryAppend = event => deps.append(deps.auditStore, event);
   return deps;

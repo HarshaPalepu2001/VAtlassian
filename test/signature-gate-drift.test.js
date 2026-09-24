@@ -31,14 +31,16 @@ const permissionValidator = {
   parameters: { permissionKey: 'CREATE_ISSUES' }
 };
 
-/** AP's workflow: To Do (10004), In Progress (3), Done (10006). */
-function apWorkflow({ doneGate = sigGate(), signGate = sigGate(), extra = [] } = {}) {
+/** AP's workflow: To Do (10004), In Progress (3), Done (10006). The validator
+ *  sits on every transition — on the two global ones only as the drift hold. */
+function apWorkflow({ doneGate = sigGate(), signGate = sigGate(), anyGate = sigGate(), progressGate = sigGate(),
+  extra = [] } = {}) {
   return {
     id: '74043c15-3171-404f-9514-d05af2c12857',
     name: 'Software Simplified Workflow for Project AP',
     transitions: [
-      { id: '4', name: 'Any', type: 'GLOBAL', toStatusReference: '10004', links: [], validators: [] },
-      { id: '5', name: 'In Progress', type: 'GLOBAL', toStatusReference: '3', links: [], validators: [] },
+      { id: '4', name: 'Any', type: 'GLOBAL', toStatusReference: '10004', links: [], validators: anyGate ? [anyGate] : [] },
+      { id: '5', name: 'In Progress', type: 'GLOBAL', toStatusReference: '3', links: [], validators: progressGate ? [progressGate] : [] },
       { id: '1', name: 'Create', type: 'INITIAL', toStatusReference: '10004', links: [], validators: [permissionValidator] },
       {
         id: '2', name: 'Done', type: 'DIRECTED', toStatusReference: '10006',
@@ -148,12 +150,12 @@ test('an ungated GLOBAL transition into a controlled status is caught', () => {
   assert.ok(findings.every((f) => f.transitionId === '9'));
 });
 
-test('a second ungated DIRECTED route into a controlled status is a warning', () => {
+test('a second DIRECTED route into a controlled status is a warning', () => {
   const sideDoor = {
     id: '8', name: 'Shortcut', type: 'DIRECTED',
     toStatusReference: '10006',
     links: [{ fromStatusReference: '99999' }],
-    validators: []
+    validators: [sigGate()]
   };
   const findings = diff(bothRows, apWorkflow({ extra: [sideDoor] }));
 
@@ -162,34 +164,68 @@ test('a second ungated DIRECTED route into a controlled status is a warning', ()
   assert.equal(findings[0].severity, SEVERITY.WARNING);
 });
 
-// --- gates with nothing behind them --------------------------------------
+test('an ungated side door is both unsigned and does not hold drift', () => {
+  const sideDoor = {
+    id: '8', name: 'Shortcut', type: 'DIRECTED',
+    toStatusReference: '10006',
+    links: [{ fromStatusReference: '99999' }],
+    validators: []
+  };
+  const findings = diff(bothRows, apWorkflow({ extra: [sideDoor] }));
 
-test('a gate on an edge with no controlled row is GATE_ORPHANED', () => {
-  // Only the To Do -> Done edge is controlled, but Sign still carries a gate.
+  assert.deepEqual(findings.map((f) => f.type).sort(), [FINDING.GATE_BYPASS_PATH, FINDING.HOLD_ABSENT]);
+});
+
+// --- the drift hold: the validator on every transition -------------------
+
+test('a transition with no controlled row and no validator does not hold drift', () => {
+  const findings = diff(bothRows, apWorkflow({ progressGate: null }));
+
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].type, FINDING.HOLD_ABSENT);
+  assert.equal(findings[0].severity, SEVERITY.CRITICAL);
+  assert.equal(findings[0].transitionId, '5');
+  assert.match(findings[0].detail, /does not carry the VAtlassian validator/);
+});
+
+test('a disabled validator on an uncontrolled transition does not hold drift either', () => {
+  const findings = diff(bothRows, apWorkflow({ anyGate: sigGate({ disabled: 'true' }) }));
+
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].type, FINDING.HOLD_ABSENT);
+  assert.equal(findings[0].transitionId, '4');
+  assert.match(findings[0].detail, /attached but disabled/);
+});
+
+test('a validator on a transition with no controlled row is the drift hold, not an orphan', () => {
+  // Only To Do -> Done is controlled. Sign still carries the validator, which
+  // there holds drift and asks for no signature. It is still an unsigned route
+  // into a controlled status, which is what the admin needs to hear about.
   const findings = diff([row('10004', '10006')], apWorkflow());
 
   assert.equal(findings.length, 1);
-  assert.equal(findings[0].type, FINDING.GATE_ORPHANED);
+  assert.equal(findings[0].type, FINDING.GATE_BYPASS_PATH);
   assert.equal(findings[0].transitionId, '3');
 });
 
+test('an issue type with no controlled rows is not judged at all', () => {
+  assert.deepEqual(diff([], apWorkflow({ anyGate: null, progressGate: null })), []);
+});
+
+test('INITIAL transitions never need the drift hold', () => {
+  const findings = diff(bothRows, apWorkflow());
+  assert.ok(!findings.some((f) => f.transitionId === '1'));
+});
+
+// --- rows with nothing behind them ---------------------------------------
+
 test('a controlled row naming an edge the workflow no longer has is GATE_ORPHANED', () => {
-  // The row points at a status this workflow does not contain. That orphans
-  // the ROW (no transition can satisfy it, transitionId null) and, because it
-  // was the only ACTIVE row for this pair, it also orphans the two gates that
-  // are still attached to Done and Sign — both of which would now deny with
-  // NOT_CONFIGURED. All three are true and all three are worth telling the
-  // admin, so assert the shape rather than a bare count.
   const findings = diff([row('10004', '55555')], apWorkflow());
 
-  assert.ok(findings.every((f) => f.type === FINDING.GATE_ORPHANED));
-
-  const staleRow = findings.filter((f) => f.transitionId === null);
-  assert.equal(staleRow.length, 1, 'the unsatisfiable row itself');
-  assert.equal(staleRow[0].toStatusId, '55555');
-
-  const strandedGates = findings.filter((f) => f.transitionId !== null);
-  assert.deepEqual(strandedGates.map((f) => f.transitionId).sort(), ['2', '3']);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].type, FINDING.GATE_ORPHANED);
+  assert.equal(findings[0].transitionId, null);
+  assert.equal(findings[0].toStatusId, '55555');
 });
 
 // --- wildcards -----------------------------------------------------------

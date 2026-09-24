@@ -114,6 +114,30 @@ export async function listLedger(req, overrides) {
   }, overrides, 'evidence');
 }
 
+/**
+ * The highest sequence number in the ledger, site-wide or for one issue.
+ *
+ * Exists so an open Audit ledger page can tell that activity has been recorded
+ * since it loaded without re-reading the page, re-fetching the issue from Jira
+ * or recomputing the counts. Ledger sequence numbers only ever increase and
+ * rows are never deleted, so a head greater than the newest displayed entry
+ * means new activity and nothing else.
+ *
+ * The page shows this as a prompt rather than redrawing itself: rows must not
+ * shift under somebody reading an audit record.
+ */
+export async function ledgerHead(req, overrides) {
+  return runAdmin(req, async (deps) => {
+    const issueId = req.payload?.issueId;
+    const result = await deps.executeQuery(
+      `SELECT MAX(seq) AS max_seq FROM va_audit${issueId ? ' WHERE issue_id = ?' : ''}`,
+      issueId ? [issueId] : []
+    );
+    if (!result.result) return { success: false, error: 'Failed to read the audit ledger.' };
+    return { maxSeq: Number(result.data?.[0]?.max_seq ?? 0) };
+  }, overrides, 'evidence');
+}
+
 export async function verifyLedger(req, overrides) {
   return runAdmin(req, async (deps) => {
     const { verifyChain, auditStore } = deps;

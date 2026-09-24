@@ -7,7 +7,7 @@ import { normaliseField } from './content.js';
 import { controlledFields, projectConfig, reviewStatusIds } from '../db/configStore.js';
 import { scopeFromIssue } from './trackedFields.js';
 import { activeBaseline, readAllValues } from '../db/baselineStore.js';
-import { recordDrift, driftSummary, existingChangelogKeys } from '../db/driftStore.js';
+import { recordDrift, existingChangelogKeys } from '../db/driftStore.js';
 import { getReview, applyObservation, touch, refreshHeader } from '../db/itemStateStore.js';
 import { suppressedFields } from '../db/restoreStore.js';
 import { voidOthers } from '../db/approvalStore.js';
@@ -243,6 +243,9 @@ async function recordAll({
   const seen = await existingChangelogKeys(issueId, review.baseline_version);
 
   const materialities = [];
+  // The comparison's own answer, independent of how many rows it produced.
+  const driftedNow = [];
+  const derivedMaterialities = [];
   let inserted = 0;
 
   for (const fieldId of changed) {
@@ -251,11 +254,6 @@ async function recordAll({
 
     const attribution = touched[fieldId] ?? null;
     const changelogId = attribution?.changelogId ?? null;
-
-    // Already recorded by the other path. The UNIQUE index would reject it
-    // anyway; checking first saves a round trip on the reconcile pass, which
-    // re-walks entries the events already handled by design.
-    if (changelogId && seen.has(`${changelogId}:${fieldId}`)) continue;
 
     const isOurs = suppressed.has(fieldId);
 
@@ -267,6 +265,17 @@ async function recordAll({
       // history, but it is not drift and must never queue a review.
       ? MATERIALITY.COSMETIC
       : classify(fieldId, field.materiality, before, after);
+
+    // CLASSIFIED BEFORE THE DEDUPE SKIP, because this field HAS drifted whether
+    // or not a row gets written for it. The counters below are the comparison's
+    // answer; the rows are its evidence trail.
+    driftedNow.push(fieldId);
+    if (shouldQueue(materiality, config.queueThreshold)) derivedMaterialities.push(materiality);
+
+    // Already recorded by the other path. The UNIQUE index would reject it
+    // anyway; checking first saves a round trip on the reconcile pass, which
+    // re-walks entries the events already handled by design.
+    if (changelogId && seen.has(`${changelogId}:${fieldId}`)) continue;
 
     const { inserted: didInsert } = await recordDrift({
       issue_id: issueId,
@@ -295,8 +304,23 @@ async function recordAll({
   }
 
   // ── Update the queue row ─────────────────────────────────────────────────
-  const summary = await driftSummary(issueId, review.baseline_version);
-  const queueable = summary.total > 0;
+  //
+  // THE COUNTER IS THE COMPARISON'S ANSWER, NOT THE ROW COUNT.
+  //
+  // This read driftSummary(), which counts undecided va_drift ROWS — so any
+  // field whose row was skipped understated it. A row is skipped whenever the
+  // dedupe key (issue_id, changelog_id, field_id) already exists, and Jira does
+  // not give every change an attributable changelog entry: a link edit arrives
+  // as `"field":"Link"` with no fieldId at all. VJIRA-17 sat at drift_count 0
+  // with content that had plainly moved, and no sweep could ever fix it,
+  // because every later pass skipped the same row and recounted the same zero.
+  //
+  // `driftedNow` is what the digest comparison actually found. The rows remain
+  // the evidence — who changed what, when — but they no longer decide how much
+  // drift there is. lib/interception.js's driftedFields() is the one authority,
+  // and this makes the stored counter agree with it by construction, which is
+  // what the My approvals queue and the collector both read.
+  const queueable = driftedNow.length > 0;
 
   const nextReview = {
     ...result.review,
@@ -310,9 +334,9 @@ async function recordAll({
     expectedVersion: review.version,
     review: nextReview,
     counters: {
-      driftCount: summary.total,
-      driftedFieldCount: summary.fields,
-      maxMateriality: materialities.length > 0 ? maxMateriality(materialities) : null
+      driftCount: driftedNow.length,
+      driftedFieldCount: derivedMaterialities.length,
+      maxMateriality: derivedMaterialities.length > 0 ? maxMateriality(derivedMaterialities) : null
     }
   });
   if (!applied.updated) return { outcome: 'ERROR', error: 'CONCURRENT_OBSERVATION' };
@@ -349,7 +373,7 @@ async function recordAll({
     inserted,
     fields: changed,
     casApplied: applied.updated,
-    driftCount: summary.total,
+    driftCount: driftedNow.length,
     recall: null
   };
 }

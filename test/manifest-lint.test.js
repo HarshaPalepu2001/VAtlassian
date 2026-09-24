@@ -28,3 +28,12 @@ test('manifest.yml declares the restore queue consumer and six-minute worker', (
   assert.match(manifest, /key:\s*va-restore-consumer[\s\S]*queue:\s*va-restore-queue[\s\S]*function:\s*restore-worker/);
   assert.match(manifest, /key:\s*restore-worker[\s\S]*handler:\s*jobs\/restoreWorker\.handler[\s\S]*timeoutSeconds:\s*600/);
 });
+
+test('manifest.yml asks the Jira admin for one rule: the va-gate validator, and no workflow condition', () => {
+  // Drift is held by va-gate itself on every transition it is attached to. A
+  // second Jira rule for drift is exactly the setup burden this app removes.
+  const manifest = fs.readFileSync('manifest.yml', 'utf8');
+  assert.match(manifest, /jira:workflowValidator:\s*\n\s*-\s*key:\s*va-gate/);
+  assert.equal(/jira:workflowCondition:/.test(manifest), false, 'no workflow condition module');
+  assert.equal(manifest.includes('va-drift-lock'), false);
+});

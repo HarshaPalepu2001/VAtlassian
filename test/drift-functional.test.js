@@ -19,7 +19,8 @@ const modules = {
   'db/store.js': ['tryAppend','newId','throwing','isDuplicateKey'],
   'lib/reviewer.js': ['isEligible','assignReviewer'],
   'db/baselineTreeStore.js': ['readBaselineTree','beginTreeBaseline','writeTreeCapture','verifyTreeCapture','publishTreeBaseline','activeRootsForNode'],
-  'db/treeDriftStore.js': ['replaceTreeDrift']
+  'db/treeDriftStore.js': ['replaceTreeDrift'],
+  'lib/vaultQueue.js': ['enqueueVault']
 };
 const hooks = registerHooks({
   resolve(specifier, context, next) {
@@ -119,6 +120,8 @@ function fixture() {
     },
     readReplacements:async()=>clone(f.replacements),
     tryAppend:async(a)=>f.audits.push(a),
+    vaultCalls:[],
+    enqueueVault:async(body)=>{f.vaultCalls.push(body);return {jobId:'fixture-vault-job'};},
     readBaselineTree:async (...args)=>{
       assert.equal(args.length,1,'production must use the tree store row-decoding contract');
       return f.baselines.find(b=>b.baseline_id.equals(args[0]))?.tree ?? null;
@@ -251,19 +254,31 @@ test('aggregate tree evidence accepts the verified hash and rejects a stale hash
   }), error => error.reason === 'STALE_EVIDENCE');
 });
 
-for(const surface of ['panel','my approvals','Jira transition']){
-  test(`${surface}: signed drift creates v2, clears review, and the real validator allows the transition`,async()=>{
+for(const surface of ['panel','my approvals']){
+  test(`${surface}: signed drift creates v2, clears review, and leaves the work item where it is`,async()=>{
     const f=fixture();const candidate=clone(f.issue.fields);
-    const result=await f.sign({preauthorize:surface==='Jira transition'});
+    const result=await f.sign();
     assert.equal(result.success,true,JSON.stringify(result));
     assert.equal(f.baselines.at(-1).version,2);assert.equal(f.review.state,'BASELINED');
     assert.equal(f.saved.get(2).summary,candidate.summary);assert.deepEqual(f.saved.get(1),f.values);
     assert.equal(f.drift.filter(d=>!d.approval_id).length,0);
-    if(surface==='Jira transition')assert.equal((await f.gate()).result,true);
-    else assert.equal(result.transitioned,true,JSON.stringify(result));
+    assert.equal(result.transitioned,false,JSON.stringify(result));
+    assert.equal(f.issue.fields.status.id,'1','a drift decision moves nothing');
+    // Spent the moment it is recorded: it authorised a baseline, not an edge,
+    // so it leaves no capability behind and the gated transition still needs
+    // its own signature.
     assert.equal(f.rows[0].state,'CONSUMED');assert.equal((await f.gate()).result,false);
   });
 }
+test('Jira transition screen: a workflow signature leaves the capability the real validator consumes',async()=>{
+  const f=fixture();
+  const result=await f.sign({intent:'WORKFLOW',preauthorize:true});
+  assert.equal(result.success,true,JSON.stringify(result));
+  assert.equal(f.rows[0].state,'PENDING');
+  assert.equal((await f.gate()).result,true);
+  assert.equal(f.rows[0].state,'CONSUMED');
+  assert.equal((await f.gate()).result,false);
+});
 test('editing current policy cannot replace the baseline role, provider, meaning, or exact transition',async()=>{
   const f=fixture();
   const checkedRoles=[];
@@ -274,11 +289,15 @@ test('editing current policy cannot replace the baseline role, provider, meaning
   const result=await f.sign({transitionId:'999',requiredRole:'attacker',requiredAssurance:'BIOMETRIC'});
 
   assert.equal(result.success,true,JSON.stringify(result));
-  assert.equal(result.transitioned,true,JSON.stringify(result));
-  assert.deepEqual(f.transitionRequests,[{transitionId:'5'},{transitionId:'5'}]);
+  // The edited current policy names transition 999. A drift decision asks Jira
+  // for no transition at all, so there is nothing for an edited edge to hijack.
+  assert.deepEqual(f.transitionRequests,[]);
   assert.ok(checkedRoles.length>0);
   assert.deepEqual(new Set(checkedRoles),new Set(['reviewer']));
-  assert.equal(f.rows[0].transition_id,'5');
+  assert.equal(f.rows[0].transition_id,null,'a ratification is bound to content, not to an edge');
+  // The baseline it supersedes keeps its own edge, which is where the next
+  // review reads its authority from.
+  assert.equal(f.baselines.at(-1).transition_id,'5');
   assert.equal(f.rows[0].signer_role,'reviewer');
   assert.equal(f.rows[0].assurance_level,'ESIGNATURE');
   assert.equal(f.rows[0].meaning,'Approve changes against baseline v1');
@@ -377,7 +396,9 @@ test('baseline-owned drift approval retains its immutable policy for the next re
   assert.equal(rejected.restore.state,'COMPLETE');assert.equal(f.issue.fields.summary,'reviewed drift');
 });
 test('approval preparation preserves a pending transition against its unchanged tree baseline',async()=>{
-  const f=fixture();await f.sign({preauthorize:true});
+  // A WORKFLOW signature, because that is the only decision that now leaves a
+  // pending transition capability behind.
+  const f=fixture();await f.sign({intent:'WORKFLOW',preauthorize:true});
   const active=f.baselines.at(-1);
   const prepared=await prepareApproval({
     issue:{...f.issue,id:'10'},actor:{accountId:'trusted'},decision:'APPROVE',
@@ -431,28 +452,84 @@ test('a workflow transition out of a later status is not replayed against the ba
   assert.equal(f.rows[0].state,'PENDING');
   assert.equal(f.baselines.at(-1).version,2);
 });
-test('a drift approval outside the baseline review status reports STATUS_CHANGED',async()=>{
+// ─── Approving drift captures a baseline; it does not take a transition ──────
+//
+// Drift and a workflow action are two different intents. A workflow action runs
+// a gated edge and records a fresh signature for it. A drift decision answers
+// "is the current content approved", which is true wherever the item happens to
+// be sitting — so approving it captures a new baseline in place under the
+// policy the LATEST baseline recorded, and moves nothing.
+//
+// Replaying the baseline's original edge instead made drift undecidable the
+// moment the item moved past its review status: VJIRA-16 drifted in In Progress
+// with its baseline captured on Selected for Development → In Progress, and its
+// workflow offered no route back, so APPROVE was refused STATUS_CHANGED forever
+// and reject-and-restore was the only exit.
+
+test('drift is approvable wherever the item is sitting, not only at the baseline review status',async()=>{
   const f=fixture();
   f.issue.fields.status.id='2';
-  const result=await f.api.challenge(f.args);
-  assert.equal(result.success,false);
-  assert.equal(result.reason,'STATUS_CHANGED');
-  assert.notEqual(result.error,DENY.SERVICE_UNAVAILABLE);
+  const result=await f.sign();
+  assert.equal(result.success,true,JSON.stringify(result));
+  assert.equal(f.baselines.at(-1).version,2);
+  assert.equal(f.issue.fields.status.id,'2','approving drift must not move the work item');
 });
-test('a drift approval whose baseline transition Jira no longer offers reports TRANSITION_UNAVAILABLE',async()=>{
+
+test('approving drift never asks Jira for a transition, so a missing or redirected edge cannot refuse it',async()=>{
+  for(const mutate of [
+    f=>{f.unavailableTransitions=true;},
+    // Jira still offers transition 5, but it no longer lands on the baseline's destination.
+    f=>{f.baselines[f.baselines.length-1]={...f.baselines.at(-1),to_status_id:'9'};}
+  ]){
+    const f=fixture();
+    mutate(f);
+    const result=await f.sign();
+    assert.equal(result.success,true,JSON.stringify(result));
+    assert.equal(f.transitionRequests.length,0,'no transition is resolved on the drift path');
+  }
+});
+
+test('the captured baseline inherits the policy edge of the one it supersedes',async()=>{
+  // "Based on how we recorded the latest baseline": the new baseline carries the
+  // same transition, review status and destination as the one it replaces, so
+  // the next review can still resolve its authority. The item's own status is
+  // not silently promoted into a new policy edge.
+  const f=fixture();
+  f.issue.fields.status.id='2';
+  await f.sign();
+  const previous=f.baselines.find(b=>b.version===1);
+  const captured=f.baselines.at(-1);
+  assert.equal(captured.version,2);
+  assert.equal(captured.transition_id,previous.transition_id);
+  assert.equal(captured.from_status_id,previous.from_status_id);
+  assert.equal(captured.to_status_id,previous.to_status_id);
+});
+
+test('approving drift clears the drift, which is what lifts the hold on every transition',async()=>{
+  const f=fixture();
+  f.issue.fields.status.id='2';
+  await f.sign();
+  assert.equal(f.drift.filter(d=>!d.approval_id).length,0);
+  assert.equal(f.review.state,'BASELINED');
+});
+
+test('a workflow transition still resolves and runs its edge, with its own signature',async()=>{
+  // The other half of the split: intent WORKFLOW is unchanged, and the reasons
+  // that used to fire on the drift path still protect it.
+  const f=fixture();
+  const result=await f.sign({intent:'WORKFLOW'});
+  assert.equal(result.success,true,JSON.stringify(result));
+  assert.equal(result.transitioned,true,JSON.stringify(result));
+  assert.equal(f.issue.fields.status.id,'2');
+});
+
+test('a workflow transition Jira no longer offers still reports TRANSITION_UNAVAILABLE',async()=>{
   const f=fixture();
   f.unavailableTransitions=true;
-  const result=await f.api.challenge(f.args);
+  const result=await f.api.challenge({...f.args,payload:{...f.args.payload,intent:'WORKFLOW'}});
   assert.equal(result.success,false);
   assert.equal(result.reason,'TRANSITION_UNAVAILABLE');
-});
-test('a drift approval whose baseline edge now leads elsewhere reports TRANSITION_MISMATCH',async()=>{
-  const f=fixture();
-  // Jira still offers transition 5, but it no longer lands on the baseline's destination.
-  f.baselines[f.baselines.length-1]={...f.baselines.at(-1),to_status_id:'9'};
-  const result=await f.api.challenge(f.args);
-  assert.equal(result.success,false);
-  assert.equal(result.reason,'TRANSITION_MISMATCH');
+  assert.notEqual(result.error,DENY.SERVICE_UNAVAILABLE);
 });
 test('every reason a signing surface can return has its own message',()=>{
   for(const reason of ['POLICY_CHANGED','STATUS_CHANGED','TRANSITION_UNAVAILABLE','TRANSITION_MISMATCH',
@@ -460,4 +537,31 @@ test('every reason a signing surface can return has its own message',()=>{
     assert.equal(typeof DENY[reason],'string',reason);
     assert.notEqual(DENY[reason],DENY.SERVICE_UNAVAILABLE,reason);
   }
+});
+
+test('a captured baseline queues its attachments for the vault',async()=>{
+  const f=fixture();
+  const result=await f.sign();
+  assert.equal(result.success,true,JSON.stringify(result));
+  assert.equal(f.vaultCalls.length,1);
+  const [job]=f.vaultCalls;
+  assert.equal(job.issueKey,'T-10');
+  assert.equal(job.issueId,10);
+  assert.equal(job.projectId,1);
+  assert.match(job.baselineId,/^[0-9a-f]{32}$/,'the baseline id travels as hex');
+});
+
+test('a vault queue failure is audited and never fails the approval',async()=>{
+  const f=fixture();
+  f.enqueueVault=async()=>{throw new Error('queue down');};
+  const result=await f.sign();
+  assert.equal(result.success,true,JSON.stringify(result));
+  assert.ok(f.audits.some(a=>a.eventType==='VAULT_QUEUE_FAILED'));
+});
+
+test('a failed baseline capture queues nothing for the vault',async()=>{
+  const f=fixture();
+  f.captureFails=true;
+  await f.sign();
+  assert.equal(f.vaultCalls.length,0);
 });

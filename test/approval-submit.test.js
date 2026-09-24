@@ -255,12 +255,15 @@ for (const decision of ['APPROVE', 'REJECT']) {
     assert.equal(webauthnChecked, true);
     assert.equal(f.rows[0].assurance_level, 'BIOMETRIC');
     assert.equal(f.rows[0].provider_id, 'webauthn');
-    assert.equal(f.rows[0].transition_id, '5');
+    // REJECT carries the baseline edge, because the restore reads it to decide
+    // where the approved content belongs. APPROVE ratifies content in place and
+    // is bound to no edge at all.
+    assert.equal(f.rows[0].transition_id, decision === 'REJECT' ? '5' : null);
     assert.equal(f.rows[0].meaning, prepared.approvalPolicy.meaning);
   });
 }
 
-test('drift challenge ignores injected transition and policy facts and resolves the exact baseline edge', async () => {
+test('drift challenge ignores injected transition and policy facts and resolves no edge at all', async () => {
   const f = fixture();
   f.request.payload.intent = 'DRIFT';
   f.request.payload.transitionId = '999';
@@ -280,14 +283,18 @@ test('drift challenge ignores injected transition and policy facts and resolves 
   assert.equal(challenge.success, true, JSON.stringify(challenge));
   assert.equal(challenge.meaning, 'Approve changes against baseline v4');
   assert.equal(challenge.requiredAssurance, 'ESIGNATURE');
-  assert.deepEqual(requestedTransitions, [{ transitionId: '5' }]);
+  // The injected transitionId 999 is ignored, and so is the baseline's own edge:
+  // approving drift asks Jira for nothing, so there is no edge to hijack.
+  assert.deepEqual(requestedTransitions, []);
   assert.equal(f.challenges.get(challenge.challengeId).transition_id, null);
 });
 
-test('a refused Jira transition invalidates a baseline-owned approval and cannot be retried', async () => {
+// WORKFLOW intent, because that is now the only decision that calls Jira. The
+// property under test is unchanged: an approval on an item that already has a
+// baseline is voided when Jira refuses, never left behind as retryable.
+test('a refused Jira transition invalidates the approval of an item that has a baseline, and it cannot be retried', async () => {
   const f = fixture();
-  delete f.request.payload.transitionId;
-  delete f.request.payload.toStatusId;
+  f.request.payload.intent = 'WORKFLOW';
   f.request.payload.preauthorize = false;
   f.deps.prepare = async () => baselineDecisionPrepared();
   f.deps.transition = async (_issue, payload) => {
@@ -363,7 +370,9 @@ test('role membership is rechecked at drift submit against the role frozen in th
 
 test('baseline publication and capability audit finish before the exact Jira transition is called', async () => {
   const f = fixture();
-  delete f.request.payload.transitionId;
+  // WORKFLOW intent: approving drift no longer calls Jira, so the ordering this
+  // guards is now only reachable through a workflow action.
+  f.request.payload.intent = 'WORKFLOW';
   f.request.payload.preauthorize = false;
   f.deps.prepare = async () => baselineDecisionPrepared();
   const order = [];

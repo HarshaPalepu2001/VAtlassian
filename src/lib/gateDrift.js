@@ -41,16 +41,23 @@ export const FINDING = {
    *  different admin conversation — someone disabled it deliberately. */
   GATE_DISABLED: 'GATE_DISABLED',
 
-  /** A transition into a controlled status that no ACTIVE row covers and that
-   *  carries no gate — a second door into a status we are policing. Often
-   *  legitimate (the admin chose to control one edge only), so it is reported
-   *  as a warning to be reviewed, not as a failure. */
+  /** A transition into a controlled status that no ACTIVE row covers — a
+   *  second door into a status we are policing, crossed without a signature
+   *  whether or not it carries va-gate. Often legitimate (the admin chose to
+   *  control one edge only), so it is reported as a warning to be reviewed,
+   *  not as a failure. */
   GATE_BYPASS_PATH: 'GATE_BYPASS_PATH',
 
-  /** va-gate attached to an edge with no ACTIVE row behind it. Fails safe —
-   *  gate.js denies with NOT_CONFIGURED — but it is a dead end for whoever
-   *  hits it, and nobody is told why. */
-  GATE_ORPHANED: 'GATE_ORPHANED'
+  /** An ACTIVE row naming an edge the workflow no longer has. Nothing crosses
+   *  it, but the admin console shows a control over an edge that cannot be
+   *  taken. */
+  GATE_ORPHANED: 'GATE_ORPHANED',
+
+  /** A transition no controlled row covers that does not carry an enabled
+   *  va-gate. va-gate belongs on EVERY transition, because it is also what
+   *  holds a drifted work item still, so a work item with unreviewed changes
+   *  can change status across this one right now. */
+  HOLD_ABSENT: 'HOLD_ABSENT'
 };
 
 export const SEVERITY = {
@@ -64,7 +71,8 @@ const SEVERITY_OF = {
   [FINDING.GATE_ABSENT]: SEVERITY.CRITICAL,
   [FINDING.GATE_DISABLED]: SEVERITY.CRITICAL,
   [FINDING.GATE_BYPASS_PATH]: SEVERITY.WARNING,
-  [FINDING.GATE_ORPHANED]: SEVERITY.WARNING
+  [FINDING.GATE_ORPHANED]: SEVERITY.WARNING,
+  [FINDING.HOLD_ABSENT]: SEVERITY.CRITICAL
 };
 
 export const ANY_STATUS = '*';
@@ -139,10 +147,14 @@ function ctKey(row) {
  * workflow from the bulk-get response, with transitions expanded. Returns a
  * flat list of findings, each carrying a stable `key` so repeat runs update an
  * existing finding rather than piling up duplicates.
+ *
+ * Every non-initial transition is judged, not only the ones a row covers:
+ * va-gate is attached to all of them, because besides asking for a signature
+ * where a row says so, it is what holds a drifted work item still.
  */
 export function diffWorkflow({ rows = [], workflow, appId, moduleKey = 'va-gate' }) {
   const findings = [];
-  if (!workflow) return findings;
+  if (!workflow || rows.length === 0) return findings;
 
   const transitions = workflow.transitions ?? [];
   const workflowId = workflow.id;
@@ -187,37 +199,37 @@ export function diffWorkflow({ rows = [], workflow, appId, moduleKey = 'va-gate'
     }
   }
 
-  // --- Gates and doors nobody asked for ----------------------------------
+  // --- Transitions no controlled row covers -----------------------------
+  //
+  // They ask for no signature, but va-gate still belongs on them: it is what
+  // holds a drifted work item still, on every transition of the workflow.
   const covered = new Set();
   for (const row of rows) {
     for (const t of transitions) if (transitionCovers(t, row)) covered.add(t.id);
   }
   const controlledTargets = new Set(rows.map((r) => r.to_status_id));
-  const pair = rows[0];
+  const pair = { project_id: rows[0]?.project_id, issue_type_id: rows[0]?.issue_type_id };
 
   for (const transition of transitions) {
-    if (transition.type === 'INITIAL') continue;
+    if (transition.type === 'INITIAL' || covered.has(transition.id)) continue;
     const ours = (transition.validators ?? []).filter((v) => isOurGate(v, { appId, moduleKey }));
 
-    if (ours.length > 0 && !covered.has(transition.id)) {
-      findings.push(make(FINDING.GATE_ORPHANED, pair, {
+    if (ours.length === 0 || ours.every(isDisabled)) {
+      findings.push(make(FINDING.HOLD_ABSENT, pair, {
         workflowId,
         transitionId: transition.id,
-        detail: `Transition "${transition.name}" in "${workflow.name}" carries a signature gate with no controlled transition behind it. It will deny with NOT_CONFIGURED and give the signer no way forward.`
+        detail: ours.length === 0
+          ? `Transition "${transition.name}" in "${workflow.name}" does not carry the VAtlassian validator. A work item with unreviewed changes can still change status across it.`
+          : `The VAtlassian validator on "${transition.name}" in "${workflow.name}" is attached but disabled. A work item with unreviewed changes can still change status across it.`
       }));
-      continue;
     }
 
-    // A second, ungated route into a status we are policing.
-    if (
-      ours.length === 0 &&
-      !covered.has(transition.id) &&
-      controlledTargets.has(transition.toStatusReference)
-    ) {
+    // A second route into a status we are policing, crossed unsigned.
+    if (controlledTargets.has(transition.toStatusReference)) {
       findings.push(make(FINDING.GATE_BYPASS_PATH, pair, {
         workflowId,
         transitionId: transition.id,
-        detail: `Transition "${transition.name}" also reaches ${transition.toStatusReference}, which is a controlled status, but no controlled transition covers it and it carries no gate. Confirm this route is meant to be open.`
+        detail: `Transition "${transition.name}" also reaches ${transition.toStatusReference}, which is a controlled status, but no controlled transition covers it, so it asks for no signature. Confirm this route is meant to be open.`
       }));
     }
   }
@@ -232,7 +244,7 @@ function make(type, row, { workflowId, transitionId, detail }) {
   return {
     // Stable across runs so an unresolved finding keeps its first_seen_at and
     // an operator sees "open for 9 days" rather than a fresh row every hour.
-    key: `${type}:${scope}:${workflowId ?? '-'}:${transitionId ?? '-'}:${row ? `${row.from_status_id}>${row.to_status_id}` : '-'}`,
+    key: `${type}:${scope}:${workflowId ?? '-'}:${transitionId ?? '-'}:${row?.from_status_id != null ? `${row.from_status_id}>${row.to_status_id}` : '-'}`,
     type,
     severity: SEVERITY_OF[type],
     projectId: row?.project_id ?? null,

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { MaterialityBadge, When } from '../ui/feedback';
 import { Badge } from '../ui/primitives';
 import type { ReactNode } from 'react';
-import type { DiffField, DiffOp, DiffBlock, DiffItem, MarkChange } from './types';
+import type { DiffField, DiffOp, DiffBlock, DiffCell, DiffItem, MarkChange } from './types';
 const IconArrowRight = () => <span aria-hidden>→</span>;
 const IconRemove = () => <span aria-hidden>−</span>;
 const IconAdd = () => <span aria-hidden>+</span>;
@@ -147,18 +147,106 @@ function AdfDiff({ blocks }: {blocks?: DiffBlock[]}) {
   // words nobody touched to find the two that changed.
   const rendered: ReactNode[] = [];
   let equalRun = 0;
+  let i = 0;
 
-  blocks.forEach((block, i) => {
-    if (block.op === 'equal') { equalRun++; return; }
-    if (equalRun > 0) {
-      rendered.push(<Unchanged key={`eq-${i}`} count={equalRun} />);
-      equalRun = 0;
+  const flushEqual = (key: string | number) => {
+    if (equalRun === 0) return;
+    rendered.push(<Unchanged key={`eq-${key}`} count={equalRun} />);
+    equalRun = 0;
+  };
+
+  while (i < blocks.length) {
+    const block = blocks[i];
+
+    // A TABLE IS DRAWN AS A TABLE. The backend emits one block per row, tagged
+    // with the table it came from, so consecutive rows of the same table are
+    // collected here and rendered as one grid. Unchanged rows are kept inside
+    // it — a table missing the rows nobody touched is not a table any more,
+    // and the reviewer loses the column headings that make the rest legible.
+    const id = tableIdOf(block);
+    if (id != null) {
+      const run: DiffBlock[] = [];
+      while (i < blocks.length && tableIdOf(blocks[i]) === id) run.push(blocks[i++]);
+      if (run.every((r) => r.op === 'equal')) { equalRun += run.length; continue; }
+      flushEqual(i);
+      rendered.push(<TableDiff key={`table-${i}`} rows={run} />);
+      continue;
     }
+
+    if (block.op === 'equal') { equalRun++; i++; continue; }
+    flushEqual(i);
     rendered.push(<Block key={i} block={block} />);
-  });
-  if (equalRun > 0) rendered.push(<Unchanged key="eq-end" count={equalRun} />);
+    i++;
+  }
+  flushEqual('end');
 
   return <div className="va-diff-text">{rendered}</div>;
+}
+
+/** The table a row belongs to, or null when this block is not a table row. */
+function tableIdOf(block?: DiffBlock): string | null {
+  const side = block?.after ?? block?.before;
+  if (!side || side.type !== 'tableRow') return null;
+  return side.tableId ?? 'table';
+}
+
+/**
+ * One table, before and after.
+ *
+ * Row colour carries the whole story — a green row was added, a struck red one
+ * was removed, an amber one was edited and shows the change inside the cell
+ * that changed. That is the same vocabulary the rest of this diff already uses,
+ * applied to a grid, which is why this needed no new legend.
+ */
+function TableDiff({ rows }: {rows: DiffBlock[]}) {
+  const changed = rows.filter((r) => r.op !== 'equal');
+  const every = (op: string) => changed.length > 0 && changed.every((r) => r.op === op);
+  const caption = every('insert') ? 'Added' : every('delete') ? 'Removed' : 'Edited';
+
+  return (
+    <div className="va-block va-block-table">
+      <div className="va-subtlest va-table-caption">{caption}</div>
+      <table className="va-diff-table">
+        <tbody>
+          {rows.map((row, i) => <TableRowDiff key={i} row={row} />)}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function TableRowDiff({ row }: {row: DiffBlock}) {
+  const op = row.op === 'markOnly' || row.op === 'move' ? 'equal' : row.op;
+  const side = op === 'delete' ? row.before : (row.after ?? row.before);
+
+  // `cells` is only present on an edited row, where the backend paired the
+  // cells by position. Every other row shows its own cells as they stand.
+  const cells: DiffCell[] = row.cells ?? (side?.cells ?? []).map((c) => ({
+    op, before: c.text ?? '', after: c.text ?? '', header: c.header, ops: []
+  }));
+
+  return (
+    <tr className={`va-diff-table__row va-diff-table__row--${op}`}>
+      {cells.map((cell, i) => {
+        const Cell = cell.header ? 'th' : 'td';
+        return (
+          <Cell key={i} className={`va-diff-table__cell va-diff-table__cell--${cell.op}`}>
+            <CellBody cell={cell} rowOp={op} />
+          </Cell>
+        );
+      })}
+    </tr>
+  );
+}
+
+function CellBody({ cell, rowOp }: {cell: DiffCell; rowOp: string}) {
+  if (cell.op === 'modified' && (cell.ops ?? []).length > 0) return <InlineDiff ops={cell.ops} />;
+  // A cell a row gained or lost is named as such even when the row as a whole
+  // was only edited, so "the Type column is new" does not read as "this row was
+  // rewritten".
+  if (cell.op === 'insert' && rowOp === 'modified') return <ins className="va-ins">{cell.after}</ins>;
+  if (cell.op === 'delete' && rowOp === 'modified') return <del className="va-del">{cell.before}</del>;
+  return <>{cell.op === 'delete' ? cell.before : (cell.after ?? cell.before)}</>;
 }
 
 function Unchanged({ count }: {count:number}) {

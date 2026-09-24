@@ -33,8 +33,7 @@ function actorId(context) {
 const yes = value => [true, 1, '1'].includes(value);
 function checkPolicy(ct) {
   if (!ct || !isAssuranceLevel(ct.required_assurance) || !ct.required_role || !ct.meaning
-      || ![true, false, 0, 1, '0', '1'].includes(ct.capture_baseline)
-      || ![true, false, 0, 1, '0', '1'].includes(ct.block_on_drift)) fail('NOT_CONFIGURED');
+      || ![true, false, 0, 1, '0', '1'].includes(ct.capture_baseline)) fail('NOT_CONFIGURED');
 }
 function failure(error) {
   if (!error?.reason) console.error('approval: unhandled failure', {
@@ -93,13 +92,31 @@ export function createApprovalUsecases(deps) {
 
     if (prepared.baseline) {
       if (!ct) fail('BASELINE_POLICY_INCOMPLETE');
-      if (decision === 'APPROVE') {
-        if (String(issue.statusId) !== String(ct.from_status_id)) fail('STATUS_CHANGED');
-        transition = await deps.transition(issue, { transitionId: ct.transition_id });
-        if (!transition) fail('TRANSITION_UNAVAILABLE');
-        if (String(transition.id) !== String(ct.transition_id)
-            || String(transition.toStatusId) !== String(ct.to_status_id)) fail('TRANSITION_MISMATCH');
-      } else transition = { id: String(ct.transition_id), toStatusId: String(ct.to_status_id) };
+
+      // APPROVING DRIFT CAPTURES A BASELINE. IT DOES NOT TAKE A TRANSITION.
+      //
+      // This used to replay the baseline's original edge: require the item to
+      // be back at that edge's starting status, re-resolve the transition, and
+      // run it. That made drift undecidable as soon as the item moved on.
+      // VJIRA-16 drifted in In Progress against a baseline captured on
+      // Selected for Development -> In Progress, and its workflow offers no
+      // route back to Selected for Development, so APPROVE was refused
+      // STATUS_CHANGED with no way to ever satisfy it — leaving reject and
+      // restore as the only exit from an unreviewed change.
+      //
+      // The two intents are genuinely different. A WORKFLOW action runs a gated
+      // edge and records a fresh signature for it, above. A drift decision
+      // answers "is what is on this work item now the approved version", which
+      // is a question about CONTENT and carries no opinion about where the item
+      // should sit. Approving it therefore captures a new baseline in place,
+      // under the policy the latest baseline recorded — see drift.js's
+      // ratification branch, which preserves that baseline's own transition,
+      // review status and destination rather than promoting the item's current
+      // status into a new policy edge.
+      //
+      // REJECT still carries the baseline edge, because the restore reads it to
+      // decide where the approved content belongs. Only APPROVE changes here.
+      if (decision !== 'APPROVE') transition = { id: String(ct.transition_id), toStatusId: String(ct.to_status_id) };
     } else ct = await deps.edge(issue, transition, prepared);
 
     checkPolicy(ct);
