@@ -113,7 +113,11 @@ export async function getEvidence(args) { return respond(async () => {
     drift: {
       count: Number(prepared.driftCount ?? viewableReviewDiff?.changedFieldCount ?? prepared.diff?.changedFieldCount ?? 0),
       materialCount: Number(viewableReviewDiff?.materialFieldCount ?? prepared.diff?.materialFieldCount ?? 0),
-      fields: viewableReviewDiff?.fields ?? prepared.diff?.fields ?? [], ...groupedDrift
+      fields: viewableReviewDiff?.fields ?? prepared.diff?.fields ?? [],
+      // A tree parent's review, one section per issue (lib/tree/groupedReview.js),
+      // recomputed after the visibility filter. Absent for a single-issue diff.
+      ...(viewableReviewDiff?.groups ? { groups: viewableReviewDiff.groups } : {}),
+      ...groupedDrift
     },
     rejection: { deleteIssueKeys, recreateCount },
     restoreHistory: restores

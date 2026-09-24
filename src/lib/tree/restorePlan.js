@@ -46,7 +46,13 @@ function retainedFields(baselineTree, logicalNodeId, fieldIds) {
   return Object.fromEntries(fieldIds.map(fieldId => [fieldId, retained[fieldId]]));
 }
 
-export function planTreeRestore({ baselineTree, currentTree, controlledFields }) {
+/**
+ * `fieldsFor(node)` names each node's own tracked fields (./nodeFields.js).
+ * `baselineTree` is the tree the decision returns to: for a parent reject,
+ * each child that carries its own latest baseline already stands in it as that
+ * baseline (./childBaselines.js), so the child is restored to its own record.
+ */
+export function planTreeRestore({ baselineTree, currentTree, controlledFields, fieldsFor = () => controlledFields }) {
   const baselineNodes = Array.isArray(baselineTree?.nodes) ? baselineTree.nodes : [];
   const currentNodes = Array.isArray(currentTree?.nodes) ? currentTree.nodes : [];
   const baselineById = new Map(baselineNodes.map(node => [idOf(node), node]));
@@ -55,13 +61,13 @@ export function planTreeRestore({ baselineTree, currentTree, controlledFields })
   if (roots.some(root => !currentById.has(idOf(root)))) throw new FailClosed('BASELINE_ROOT_MISSING');
 
   const diff = diffTree({ baselineTree: { ...baselineTree, nodes: baselineNodes },
-    currentTree: { ...currentTree, nodes: currentNodes }, controlledFields });
+    currentTree: { ...currentTree, nodes: currentNodes }, controlledFields, scopeFor: fieldsFor });
   const removedIds = new Set(diff.changes.filter(change => change.kind === 'NODE_REMOVED').map(change => String(change.logicalNodeId)));
   const movedIds = new Set(diff.changes.filter(change => change.kind === 'NODE_MOVED').map(change => String(change.logicalNodeId)));
   const changedById = new Map(diff.changes.filter(change => change.kind === 'FIELD_CHANGED')
     .map(change => [String(change.logicalNodeId), [...change.fields].map(String).sort()]));
   const addedIds = new Set(diff.changes.filter(change => change.kind === 'NODE_ADDED').map(change => String(change.logicalNodeId)));
-  const linkFieldIds = new Set(controlledFields
+  const linkFieldIdsOf = node => new Set((fieldsFor(node) ?? [])
     .filter(field => field.field_kind === FIELD_KIND.LINKS || field.field_id === 'issuelinks')
     .map(field => String(field.field_id)));
 
@@ -81,8 +87,9 @@ export function planTreeRestore({ baselineTree, currentTree, controlledFields })
       // a correct plan into a request Jira refuses. ./structure.js has the full
       // reasoning; the filter is applied to both branches because a recreated
       // node takes the whole field set rather than a diff.
+      const linkFieldIds = linkFieldIdsOf(node);
       const fieldIds = removedIds.has(idOf(node))
-        ? contentFieldIds(controlledFields).sort()
+        ? contentFieldIds(fieldsFor(node) ?? []).sort()
         : (changedById.get(idOf(node)) ?? []).filter(fieldId => !isStructuralField(fieldId));
       const regularFieldIds = fieldIds.filter(fieldId => !linkFieldIds.has(fieldId));
       const steps = [];

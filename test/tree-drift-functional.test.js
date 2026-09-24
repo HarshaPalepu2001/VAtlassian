@@ -23,9 +23,9 @@ import { project } from '../src/lib/content.js';
 const modules = {
   'db/configStore.js': ['controlledFields', 'projectConfig', 'reviewStatusIds', 'recallTargetStatus',
     'declaredFieldRows', 'seedControlledFields', 'countControlledFields'],
-  'db/baselineStore.js': ['activeBaseline', 'readAllValues'],
+  'db/baselineStore.js': ['activeBaseline', 'activeBaselines', 'readAllValues'],
   'db/driftStore.js': ['recordDrift', 'driftSummary', 'existingChangelogKeys'],
-  'db/itemStateStore.js': ['getReview', 'applyObservation', 'touch', 'refreshHeader', 'dueTreeRoots', 'recoverStaleLocks'],
+  'db/itemStateStore.js': ['getReview', 'applyObservation', 'touch', 'refreshHeader', 'dueTreeRoots', 'recoverStaleLocks', 'moveScope'],
   'db/restoreStore.js': ['suppressedFields'],
   'db/approvalStore.js': ['voidOthers', 'expireStale'],
   // Keep the recall module stubbed as a tripwire: drift detection must not
@@ -62,7 +62,7 @@ const hooks = registerHooks({
     return next(url, context);
   }
 });
-const { collect, collectTree, discoverActiveRootsByAncestor } = await import('../src/lib/collect.js');
+const { collect, collectTree, collectAffectedTrees, discoverActiveRootsByAncestor } = await import('../src/lib/collect.js');
 const { sweep } = await import('../src/jobs/reconcile.js');
 const { planTreeCapture } = await import('../src/lib/tree/capturePlan.js');
 hooks.deregister();
@@ -112,6 +112,10 @@ function baseFixture({ baselineChildren = [{ id: '2', summary: 'story' }], liveC
     voidOthers: async () => 0,
     recallToReview: async (args) => { recallCalls.push(args); return { action: 'RECALL', applied: true }; },
     controlledFields: async () => FIELDS,
+    // Each child's own active baseline, by issue id (child baselines, 2026-09-24).
+    childBaselines: new Map(),
+    activeBaselines: async ids => new Map(ids.filter(id => f.childBaselines.has(Number(id)))
+      .map(id => [Number(id), f.childBaselines.get(Number(id))])),
     activeRootsForNode: async () => [],
     readBaselineTree: async () => f.baselineTree,
     replaceTreeDrift: async (baselineId, driftRows) => { replaceTreeDriftCalls.push({ baselineId, driftRows }); },
@@ -436,4 +440,132 @@ test('content that matches its baseline reports no drift, whatever rows exist', 
 
   assert.equal(result.outcome, 'NO_CHANGE');
   assert.notEqual(f.review.state, 'DRIFTED');
+});
+
+// ─── A baselined item moved to another project or issue type ────────────────
+//
+// Decided 2026-09-24: it follows the destination's configuration from then on,
+// and the move is recorded once in the audit trail.
+
+function movedFixture({ destinationFields = [] } = {}) {
+  const f = baseFixture();
+  const request = f.request;
+  f.moveScopeCalls = [];
+  f.moveScope = async (args) => {
+    f.moveScopeCalls.push(args);
+    if (Number(f.review.project_id) !== args.fromProjectId || String(f.review.issue_type_id) !== args.fromIssueTypeId) return false;
+    f.review = { ...f.review, project_id: args.toProjectId, issue_type_id: args.toIssueTypeId };
+    return true;
+  };
+  f.controlledFields = async ({ projectId }) => (Number(projectId) === 11 ? destinationFields : FIELDS);
+  f.request = async (identity, url, options = {}) => {
+    const res = await request(identity, url, options);
+    if (options.method === 'POST') return res;
+    const body = await res.json();
+    return { status: 200, json: async () => ({ ...body, fields: { ...body.fields, summary: 'edited after the move', project: { id: '11' } } }) };
+  };
+  return f;
+}
+
+test('an item moved to an untracked project is recorded once and then follows the destination', async () => {
+  const f = movedFixture();
+  const result = await collectTree({ rootIssueId: '1', rootIssueKey: 'FEAT-1', now: 5_000_000 });
+  assert.equal(result.outcome, 'NO_CHANGE', 'the destination tracks nothing, so the edit is not drift');
+  const moves = f.tryAppendCalls.filter(e => e.eventType === 'BASELINE_SCOPE_CHANGED');
+  assert.equal(moves.length, 1);
+  assert.deepEqual({ ...moves[0].payload }, { fromProjectId: 10, fromIssueTypeId: '20', toProjectId: 11, toIssueTypeId: '20',
+    baselineVersion: 1, destinationTrackedFields: 0 });
+
+  await collectTree({ rootIssueId: '1', rootIssueKey: 'FEAT-1', now: 5_000_001 });
+  assert.equal(f.tryAppendCalls.filter(e => e.eventType === 'BASELINE_SCOPE_CHANGED').length, 1, 'recorded once, not on every update');
+});
+
+test('an item moved to a project that tracks the same field still drifts on it', async () => {
+  const f = movedFixture({ destinationFields: FIELDS });
+  const result = await collectTree({ rootIssueId: '1', rootIssueKey: 'FEAT-1', now: 5_000_000 });
+  assert.equal(result.outcome, 'DRIFT_RECORDED');
+  assert.equal(f.tryAppendCalls.filter(e => e.eventType === 'BASELINE_SCOPE_CHANGED')[0].payload.destinationTrackedFields, 1);
+});
+
+test('a move another collector already recorded is not recorded twice', async () => {
+  const f = movedFixture();
+  f.moveScope = async () => false;                       // someone else won the conditional update
+  f.getReview = async () => f.review;
+  await collectTree({ rootIssueId: '1', rootIssueKey: 'FEAT-1', now: 5_000_000 });
+  assert.equal(f.tryAppendCalls.filter(e => e.eventType === 'BASELINE_SCOPE_CHANGED').length, 0);
+});
+
+// ── Child baselines (2026-09-24): a child's content is its own drift ─────────
+
+test('a child that carries its own baseline: its field change is not parent drift', async () => {
+  const f = baseFixture({ baselineChildren: [{ id: '2', summary: 'story' }], liveChildren: [{ id: '2', summary: 'edited' }] });
+  f.childBaselines.set(2, { issue_id: 2, version: 3, tree_hash: null, captured_by_baseline_id: f.review.baseline_id });
+  const result = await collectTree({ rootIssueId: 1, rootIssueKey: 'FEAT-1', detectedVia: 'EVENT', now: 1000 });
+  assert.equal(result.outcome, 'NO_CHANGE');
+  assert.equal(f.replaceTreeDriftCalls.length, 0);
+});
+
+test('a child baselined on its own after the parent capture also owns its content', async () => {
+  const f = baseFixture({ baselineChildren: [{ id: '2', summary: 'story' }], liveChildren: [{ id: '2', summary: 'edited' }] });
+  const parent = await f.activeBaseline();
+  f.activeBaseline = async () => ({ ...parent, captured_at: 500 });
+  f.childBaselines.set(2, { issue_id: 2, version: 5, tree_hash: null, captured_by_baseline_id: null, captured_at: 900 });
+  const result = await collectTree({ rootIssueId: 1, rootIssueKey: 'FEAT-1', detectedVia: 'EVENT', now: 1000 });
+  assert.equal(result.outcome, 'NO_CHANGE');
+});
+
+test('a child with no baseline of its own (a tree captured before child baselines) is still parent drift', async () => {
+  const f = baseFixture({ baselineChildren: [{ id: '2', summary: 'story' }], liveChildren: [{ id: '2', summary: 'edited' }] });
+  const result = await collectTree({ rootIssueId: 1, rootIssueKey: 'FEAT-1', detectedVia: 'EVENT', now: 1000 });
+  assert.equal(result.outcome, 'DRIFT_RECORDED');
+  assert.deepEqual(result.kinds, ['FIELD_CHANGED']);
+});
+
+test('a child added under a parent whose children own their content is still parent drift', async () => {
+  const f = baseFixture({ baselineChildren: [{ id: '2', summary: 'story' }],
+    liveChildren: [{ id: '2', summary: 'edited' }, { id: '3', summary: 'new' }] });
+  f.childBaselines.set(2, { issue_id: 2, version: 3, tree_hash: null, captured_by_baseline_id: f.review.baseline_id });
+  const result = await collectTree({ rootIssueId: 1, rootIssueKey: 'FEAT-1', detectedVia: 'EVENT', now: 1000 });
+  assert.equal(result.outcome, 'DRIFT_RECORDED');
+  assert.deepEqual(result.kinds, ['NODE_ADDED']);
+  assert.deepEqual(f.replaceTreeDriftCalls[0].driftRows.map(r => r.fieldId), ['NODE_ADDED']);
+});
+
+test('the root\'s own field change is parent drift, whatever its children carry', async () => {
+  const f = baseFixture();
+  f.childBaselines.set(2, { issue_id: 2, version: 3, tree_hash: null, captured_by_baseline_id: f.review.baseline_id });
+  const request = f.request;
+  f.request = async (identity, url, options = {}) => {
+    const res = await request(identity, url, options);
+    if (options.method === 'POST') return res;
+    const body = await res.json();
+    return { status: 200, json: async () => ({ ...body, fields: { ...body.fields, summary: 'root edited' } }) };
+  };
+  const result = await collectTree({ rootIssueId: 1, rootIssueKey: 'FEAT-1', detectedVia: 'EVENT', now: 1000 });
+  assert.equal(result.outcome, 'DRIFT_RECORDED');
+  assert.deepEqual(result.kinds, ['FIELD_CHANGED']);
+});
+
+test('an update to a child with its own single-issue baseline runs the single-issue collector too', async () => {
+  const calls = [];
+  const results = await collectAffectedTrees({ issue: { id: '2', key: 'FEAT-2', fields: { parent: { id: '1' } } }, eventId: 'e1' }, {
+    affectedTreeRoots: async () => [{ rootIssueId: 1, rootIssueKey: 'FEAT-1' }],
+    collectTree: async args => { calls.push(['tree', args.rootIssueKey]); return { outcome: 'NO_CHANGE' }; },
+    ownFlatBaseline: async id => { calls.push(['own?', id]); return true; },
+    collect: async args => { calls.push(['flat', args.issueId, args.issueKey]); return { outcome: 'DRIFT_RECORDED' }; }
+  });
+  assert.deepEqual(calls.filter(c => c[0] !== 'own?'), [['tree', 'FEAT-1'], ['flat', 2, 'FEAT-2']]);
+  assert.deepEqual(results.map(r => r.outcome), ['NO_CHANGE', 'DRIFT_RECORDED']);
+});
+
+test('an update to an issue with a tree baseline or none is left to the tree collectors', async () => {
+  let flat = 0;
+  const results = await collectAffectedTrees({ issue: { id: '1', key: 'FEAT-1', fields: {} } }, {
+    affectedTreeRoots: async () => [{ rootIssueId: 1, rootIssueKey: 'FEAT-1' }],
+    collectTree: async () => ({ outcome: 'NO_CHANGE' }),
+    ownFlatBaseline: async () => false,
+    collect: async () => { flat += 1; return { outcome: 'NO_CHANGE' }; }
+  });
+  assert.equal(flat, 0);
+  assert.equal(results.length, 1);
 });

@@ -15,8 +15,9 @@ import { tryAppend } from '../db/store.js';
 import { EVENT } from './ledger.js';
 import { recordObservation } from '../db/observationStore.js';
 import { DETECTED_VIA } from './detectedVia.js';
+import { recordScopeMove } from './scopeMove.js';
 export { DETECTED_VIA };
-export { discoverActiveRootsByAncestor, affectedTreeRoots, collectTree, collectAffectedTrees } from './treeCollect.js';
+export { discoverActiveRootsByAncestor, affectedTreeRoots, collectTree, collectAffectedTrees, ownFlatBaseline } from './treeCollect.js';
 
 /**
  * The drift collector.
@@ -106,6 +107,12 @@ async function run({ issueId, issueKey, detectedVia, actorAccountId, eventId, ev
   const { fields } = scopeFromIssue({
     declared, issueFields: issue.fields
   });
+
+  // Moved to another project or issue type: recorded once, then this item
+  // follows the destination's configuration — which is what `declared` above
+  // already is, since it was read for the issue's current scope.
+  await recordScopeMove({ issueId, review, projectId, issueTypeId, actorAccountId,
+    destinationFieldCount: fields.length });
 
   // DRIFT IS MEASURED OVER THE DECLARED SET, NOT OVER EVERY FIELD JIRA HAS.
   //

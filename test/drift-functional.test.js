@@ -11,7 +11,7 @@ import { totpFixture } from './helpers/approval-fixture.js';
 // diff, restoration and validator. Replace only Jira and persistence boundaries.
 const modules = {
   'db/configStore.js': ['controlledFields','projectConfig','gateActiveOutOf','gatedTransition','listGatedTransitions','declaredFieldRows','seedControlledFields','countControlledFields'],
-  'db/baselineStore.js': ['activeBaseline','readAllValues','baselineForApproval','currentVersion','writeBaseline'],
+  'db/baselineStore.js': ['activeBaseline','activeBaselines','valueBatches','readAllValues','baselineForApproval','currentVersion','writeBaseline'],
   'db/itemStateStore.js': ['getReview','acquire','release','upsertBaselined'],
   'db/driftStore.js': ['driftForIssue','markDecided'],
   'db/restoreStore.js': ['startRestore','finishRestore','declareWrite'],
@@ -76,7 +76,7 @@ function fixture() {
     controlledFields:async()=>fields, projectConfig:async()=>({enabled:true,restore:{queue:false}}),
     gateActiveOutOf:async()=>({gated:true,...f.policy}), gatedTransition:async()=>f.policy, listGatedTransitions:async()=>[f.policy],
     isEligible:async()=>true, assignReviewer:async()=>({accountId:'trusted',displayName:'Reviewer'}),
-    activeBaseline:async()=>f.baselines.at(-1), readAllValues:async(_id,v)=>clone(f.saved.get(v)),
+    activeBaseline:async()=>f.baselines.at(-1), readAllValues:async(_id,v)=>clone(f.saved.get(v)), activeBaselines:async()=>new Map(),
     baselineForApproval:async(_id,id)=>f.baselines.find(b=>b.approval_id.equals(id)),
     currentVersion:async()=>f.baselines.at(-1).version,
     writeBaseline:async({baseline,raw})=>{

@@ -23,7 +23,8 @@ const BASELINE_COLUMNS = `
   required_role, required_assurance, controlled_fields_hash,
   approved_by, approved_name, transition_at, captured_at,
   assurance_level, TO_BASE64(approval_id) AS approval_id,
-  fidelity, field_count, value_bytes, tree_hash, node_count, edge_count, total_field_count
+  fidelity, field_count, value_bytes, tree_hash, node_count, edge_count, total_field_count,
+  TO_BASE64(captured_by_baseline_id) AS captured_by_baseline_id
 `;
 
 function decode(row) {
@@ -31,7 +32,8 @@ function decode(row) {
   return {
     ...row,
     baseline_id: fromBinaryColumn(row.baseline_id),
-    approval_id: fromBinaryColumn(row.approval_id)
+    approval_id: fromBinaryColumn(row.approval_id),
+    captured_by_baseline_id: row.captured_by_baseline_id == null ? null : fromBinaryColumn(row.captured_by_baseline_id)
   };
 }
 

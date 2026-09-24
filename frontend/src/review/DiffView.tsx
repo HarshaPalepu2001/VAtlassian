@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { MaterialityBadge, When } from '../ui/feedback';
 import { Badge } from '../ui/primitives';
 import type { ReactNode } from 'react';
-import type { DiffField, DiffOp, DiffBlock, DiffCell, DiffItem, MarkChange } from './types';
+import type { DiffField, DiffOp, DiffBlock, DiffCell, DiffItem, MarkChange, ReviewGroup } from './types';
 const IconArrowRight = () => <span aria-hidden>→</span>;
 const IconRemove = () => <span aria-hidden>−</span>;
 const IconAdd = () => <span aria-hidden>+</span>;
@@ -22,9 +22,38 @@ const IconRefresh = () => <span aria-hidden>↻</span>;
  *      field whose contents were never retained says so.
  */
 
-export default function DiffView({ fields, focusDriftId }: {fields: DiffField[]; focusDriftId?: string}) {
+export default function DiffView({ fields, groups, focusDriftId }: {fields: DiffField[]; groups?: ReviewGroup[]; focusDriftId?: string}) {
   if (!fields || fields.length === 0) {
     return <div className="va-muted">No fields have changed since this work item was approved.</div>;
+  }
+  // A parent's review covers its children: one section per work item, each
+  // child compared with its own latest baseline. The groups hold the same
+  // fields as the flat list, so nothing is shown twice or left out.
+  if (groups && groups.length > 0) {
+    return (
+      <div className="va-stack">
+        {groups.map((group) => (
+          <section key={group.kind === 'STRUCTURE' ? 'structure' : `issue-${group.issueKey}`} className="va-diff-group"
+            aria-label={groupTitle(group)}>
+            <header className="va-diff-group__head">
+              <span className="va-diff-group__title">{groupTitle(group)}</span>
+              {group.kind === 'ISSUE' && group.baselineVersion != null && (
+                <span className="va-secondary">against version {group.baselineVersion}</span>
+              )}
+            </header>
+            <div className="va-ledger">
+              {group.fields.map((field) => (
+                <FieldDiff
+                  key={field.fieldId}
+                  field={{ ...field, fieldName: field.label ?? field.fieldName }}
+                  focused={!!focusDriftId && (field.driftIds ?? []).includes(focusDriftId)}
+                />
+              ))}
+            </div>
+          </section>
+        ))}
+      </div>
+    );
   }
 
   return (
@@ -38,6 +67,12 @@ export default function DiffView({ fields, focusDriftId }: {fields: DiffField[];
       ))}
     </div>
   );
+}
+
+/** "KEY · summary" for a work item's section; the structure has its own heading. */
+function groupTitle(group: ReviewGroup): string {
+  if (group.kind === 'STRUCTURE') return 'Structure: work items added, removed or moved';
+  return [group.issueKey, group.summary].filter(Boolean).join(' · ') || 'Work item';
 }
 
 function FieldDiff({ field, focused }: {field: DiffField;focused: boolean}) {

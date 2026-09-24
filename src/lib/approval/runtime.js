@@ -6,23 +6,28 @@ import { baselinePolicy } from '../baselinePolicy.js';
 import { baselineDecisionMeaning } from './challenge.js';
 import { availableTransitions, exactAvailableTransition, applyTransition } from '../transitions.js';
 import { readStableTree } from '../tree/stableRead.js';
+import { readTreeWithNodeFields } from '../tree/nodeFields.js';
 import { planTreeCapture } from '../tree/capturePlan.js';
 import { createTreeReader } from '../tree/jira.js';
 import { baselineDrift } from '../liveDrift.js';
 
-export async function approvalContentHash({ issue, declared, modifiedFields = {}, activeBaseline, readTree }) {
+export async function approvalContentHash({ issue, declared, modifiedFields = {}, activeBaseline, readTree,
+  loadFields = async () => [] }) {
   const { fields } = scopeFromIssue({ declared, issueFields: issue.fields, editmetaFields: {} });
   if (!activeBaseline?.tree_hash) {
     return { fields, contentHash: project({ ...issue.fields, ...modifiedFields }, fields).contentHash };
   }
   if (typeof readTree !== 'function') throw new FailClosed('SERVICE_UNAVAILABLE');
   const rootIssueId = issue.issueId ?? issue.id;
-  const stable = await readStableTree({ readTree, rootIssueKey: issue.issueKey ?? issue.key,
-    fieldIds: fields.map(field => field.field_id) });
+  // Each node over its own fields, as the panel's evidence and the capture
+  // compute it (lib/tree/nodeFields.js), or no signature would ever match.
+  const stable = await readTreeWithNodeFields({ readStableTree, readTree, rootIssueKey: issue.issueKey ?? issue.key,
+    rootFields: fields, loadFields });
   const nodes = stable.tree.nodes.map(node => String(node.id) === String(rootIssueId)
     ? { ...node, fields: { ...issue.fields, ...node.fields, ...modifiedFields } }
     : node);
-  return { fields, contentHash: planTreeCapture({ rootIssueId, nodes, controlledFields: fields }).treeHash };
+  return { fields, contentHash: planTreeCapture({ rootIssueId, nodes, controlledFields: fields,
+    fieldsFor: stable.fieldsFor }).treeHash };
 }
 
 async function shared() {
@@ -93,7 +98,8 @@ export async function approvalRuntime() {
  * Returns `edgeFailure` rather than throwing: the validator must still be able
  * to refuse a drifted item for its drift, whatever is wrong with the edge.
  */
-export async function resolveEdge({ gated, signedTransitionId, transitions }, { toStatusId, transitionId, approvalId }) {
+export async function resolveEdge({ gated, signedTransitionId, transitions },
+  { toStatusId, transitionId, approvalId, configuredTransitionId = null }) {
   let id = transitionId == null ? null : String(transitionId);
   if (!id && approvalId) {
     const signed = await signedTransitionId();
@@ -107,6 +113,17 @@ export async function resolveEdge({ gated, signedTransitionId, transitions }, { 
   const matches = available.filter(candidate => candidate.isAvailable !== false
     && String(candidate.toStatusId) === String(toStatusId));
   if (matches.length === 0) return { transitionId: null, ct: null, edgeFailure: 'NOT_CONFIGURED' };
+  // The id the validator's setup screen recorded for the transition it is
+  // attached to. Jira's payload never carries one, so this is what tells
+  // siblings into the same status apart. It is trusted only while it names one
+  // of the transitions actually available into this status right now; a stale
+  // id (a transition since replaced, or one saved before its workflow was
+  // published) falls through to the resolution below, exactly as before. The
+  // Health check reports a configured id that differs from its transition.
+  if (configuredTransitionId != null) {
+    const configured = matches.find(candidate => String(candidate.id) === String(configuredTransitionId));
+    if (configured) return { transitionId: String(configured.id), ct: await gated(String(configured.id)), edgeFailure: null };
+  }
   if (matches.length === 1) {
     id = String(matches[0].id);
     return { transitionId: id, ct: await gated(id), edgeFailure: null };
@@ -214,7 +231,7 @@ export async function gateRuntime() {
         capture_baseline: true
       };
     },
-    load: async ({ issueKey, fromStatusId, toStatusId, transitionId, approvalId, modifiedFields }) => {
+    load: async ({ issueKey, fromStatusId, toStatusId, transitionId, approvalId, modifiedFields, configuredTransitionId }) => {
       // As the user first; as the app only where Forge cannot act as this user
       // (see readAsUserOrApp). A 404 or 5xx still fails closed here.
       const issuePath = route`/rest/api/3/issue/${issueKey}?fields=*all`;
@@ -247,11 +264,12 @@ export async function gateRuntime() {
       const drift = await baselineDrift({ baseline: active, issueId: issue.issueId, issueFields: issue.fields,
         declared, readRootDigests: rootNodeDigests });
 
-      const edge = await resolve({ issue, fromStatusId, toStatusId, transitionId, approvalId });
+      const edge = await resolve({ issue, fromStatusId, toStatusId, transitionId, approvalId, configuredTransitionId });
       // The approval content hash reads the whole tree for a tree baseline, so
       // it is computed only when a signature is actually being checked.
       const contentHash = async () => (await approvalContentHash({ issue, declared, modifiedFields, activeBaseline: active,
-        readTree: active?.tree_hash ? createTreeReader({ api, route }).read : null })).contentHash;
+        readTree: active?.tree_hash ? createTreeReader({ api, route }).read : null,
+        loadFields: config.controlledFields })).contentHash;
       return { ...issue, ...edge, health, item, contentHash, driftCount: drift.changed.length };
     }
   };

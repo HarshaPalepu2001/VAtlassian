@@ -32,10 +32,20 @@ const permissionValidator = {
   parameters: { permissionKey: 'CREATE_ISSUES' }
 };
 
+/** A validator as saved by its setup screen: its configuration records the
+ *  transition it sits on. Leaves an explicitly supplied config alone. */
+const savedOn = (validator, transitionId) => {
+  if (!validator) return validator;
+  const config = JSON.parse(validator.parameters.config ?? '{}');
+  if (config.transitionId !== undefined) return validator;
+  return { ...validator, parameters: { ...validator.parameters, config: JSON.stringify({ ...config, transitionId }) } };
+};
+
 /** AP's workflow: To Do (10004), In Progress (3), Done (10006). The validator
  *  sits on every transition — on the two global ones only as the drift hold. */
 function apWorkflow({ doneGate = sigGate(), signGate = sigGate(), anyGate = sigGate(), progressGate = sigGate(),
   extra = [] } = {}) {
+  [doneGate, signGate, anyGate, progressGate] = [savedOn(doneGate, '2'), savedOn(signGate, '3'), savedOn(anyGate, '4'), savedOn(progressGate, '5')];
   return {
     id: '74043c15-3171-404f-9514-d05af2c12857',
     name: 'Software Simplified Workflow for Project AP',
@@ -382,4 +392,39 @@ test('pairsToCheck: a pair with both rows and baselines is read once, keeping it
 
 test('pairsToCheck: nothing controlled and nothing baselined means nothing to read', () => {
   assert.deepEqual(pairsToCheck({ rows: [], baselinePairs: [] }), []);
+});
+
+// --- the transition id saved by the validator's setup screen --------------
+
+test('a validator whose saved id names another transition is a critical mismatch', () => {
+  const findings = diff(bothRows, apWorkflow({ signGate: sigGate({ config: '{"transitionId":"2"}' }) }));
+  assert.deepEqual(findings.map((f) => [f.type, f.transitionId, f.severity]),
+    [[FINDING.GATE_CONFIG_MISMATCH, '3', SEVERITY.CRITICAL]]);
+});
+
+test('a missing saved id is reported only where a sibling shares start and destination', () => {
+  const sibling = { id: '6', name: 'Done (fast)', type: 'DIRECTED', toStatusReference: '10006',
+    links: [{ fromStatusReference: '10004' }], validators: [savedOn(sigGate(), '6')] };
+  const unsaved = sigGate({ config: '{"transitionId":null}' });   // attached before ids were saved
+  const findings = diff([...bothRows, row('10004', '10006')], apWorkflow({ doneGate: unsaved, extra: [sibling] }));
+  assert.deepEqual(findings.map((f) => [f.type, f.transitionId, f.severity]),
+    [[FINDING.GATE_CONFIG_MISSING, '2', SEVERITY.WARNING]]);
+  // Sign also ends in Done but starts elsewhere: an unsaved id there changes nothing.
+  assert.deepEqual(diff(bothRows, apWorkflow({ signGate: unsaved })), []);
+});
+
+test('a global transition is a sibling of every transition into the same status', () => {
+  const global = { id: '7', name: 'Force done', type: 'GLOBAL', toStatusReference: '10006', links: [],
+    validators: [sigGate({ config: '{}' })] };
+  const findings = diff(bothRows, apWorkflow({ extra: [global] }));
+  assert.ok(findings.some((f) => f.type === FINDING.GATE_CONFIG_MISSING && f.transitionId === '7'));
+});
+
+test('saved ids are read from the JSON Jira returns, and unreadable ones count as absent', async () => {
+  const { savedTransitionId } = await import('../src/lib/gateDrift.js');
+  assert.equal(savedTransitionId(sigGate({ config: '{"transitionId":"31"}' })), '31');
+  assert.equal(savedTransitionId(sigGate({ config: '{"transitionId":31}' })), '31');
+  for (const config of ['{}', 'not json', undefined, '{"transitionId":""}']) {
+    assert.equal(savedTransitionId(sigGate({ config })), null, String(config));
+  }
 });

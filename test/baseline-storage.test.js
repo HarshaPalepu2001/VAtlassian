@@ -165,3 +165,15 @@ test('100 small values use one write; large chunks respect the request byte limi
   assert.equal(batches.flat().length, 13);
   assert.ok(batches.every(batch => Buffer.byteLength(JSON.stringify(batch)) < 850000));
 });
+
+test('a baseline read carries the parent capture that produced it, decoded', async () => {
+  const parent = Buffer.alloc(16, 9);
+  const own = await baselineByVersion(1, 2, async sql => {
+    assert.match(sql, /TO_BASE64\(captured_by_baseline_id\) AS captured_by_baseline_id/);
+    return [{ baseline_id: Buffer.alloc(16, 1).toString('base64'), approval_id: null, captured_by_baseline_id: null }];
+  });
+  assert.equal(own.captured_by_baseline_id, null);
+  const child = await baselineByVersion(1, 2, async () =>
+    [{ baseline_id: Buffer.alloc(16, 1).toString('base64'), approval_id: null, captured_by_baseline_id: parent.toString('base64') }]);
+  assert.ok(Buffer.from(child.captured_by_baseline_id).equals(parent));
+});

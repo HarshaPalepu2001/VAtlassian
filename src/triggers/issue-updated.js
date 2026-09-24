@@ -1,4 +1,4 @@
-import { collectAffectedTrees, affectedTreeRoots, collectTree } from '../lib/collect.js';
+import { collectAffectedTrees, affectedTreeRoots, collectTree, collect, ownFlatBaseline } from '../lib/collect.js';
 import { executeQuery } from '../lib/db.js';
 import { retryEvent } from './retry.js';
 import { withRequestCache } from '../lib/cache.js';
@@ -33,7 +33,9 @@ async function runUncached(event, suppliedDeps) {
   // dependency bundle; treating it as one silently skipped every update.
   const deps = isDependencyBundle(suppliedDeps)
     ? { recordReceipt, ...suppliedDeps }
-    : { collectAffectedTrees, affectedTreeRoots, collectTree, recordReceipt };
+    // collect/ownFlatBaseline: a child baselined by its parent's capture has a
+    // single-issue baseline, measured by the single-issue collector.
+    : { collectAffectedTrees, affectedTreeRoots, collectTree, collect, ownFlatBaseline, recordReceipt };
   const issue = event?.issue;
   if (!issue?.id || !issue?.key) return;
 

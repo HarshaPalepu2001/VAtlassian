@@ -37,7 +37,7 @@ const modules = {
   'db/restoreStore.js': ['restoresForIssue'],
   'lib/reviewer.js': ['isEligible'],
   'lib/transitions.js': ['availableTransitions'],
-  'db/baselineTreeStore.js': ['activeRootsForNode', 'rootNodeDigests']
+  'db/baselineTreeStore.js': ['activeRootsForNode', 'rootNodeDigests', 'driftedDescendants', 'capturingParent']
 };
 
 const hooks = registerHooks({
@@ -99,6 +99,8 @@ function fixture(overrides = {}) {
     isEligible: async () => true,
     activeRootsForNode: async () => [],
     rootNodeDigests: async () => null,
+    driftedDescendants: async () => 0,
+    capturingParent: async () => null,
     availableTransitions: async () => [{ id: '31', name: 'Approve to next', toStatusId: '200', toStatusName: 'Done', isAvailable: true }],
     request: async (_identity, url) => {
       if (String(url).includes('editmeta')) throw new Error('FORBIDDEN: editmeta must not be requested by getSummary');
@@ -501,4 +503,45 @@ test('a tree baseline whose root cannot be read still over-reports rather than r
   });
   const summary = await getSummary(args);
   assert.equal(summary.drift.count, 1);
+});
+
+// ── Child baselines (2026-09-24) ──────────────────────────────────────────────
+
+const treeParent = { baseline_id: Buffer.alloc(16, 1), version: 3, transition_id: '31', from_status_id: '100',
+  to_status_id: '200', required_role: 'reviewer', required_assurance: 'ESIGNATURE', controlled_fields_hash: 'a'.repeat(64),
+  tree_hash: 'f'.repeat(64), field_digests: '{}', node_count: 3 };
+
+test('a parent whose children have drifted offers the decision without being drifted itself, reading no tree', async () => {
+  const asked = [];
+  fixture({
+    activeBaseline: async () => treeParent,
+    rootNodeDigests: async () => digestsFor('a signed item'),
+    driftedDescendants: async id => { asked.push(id); return 2; }
+  });
+  const summary = await getSummary(args);
+  assert.equal(summary.error, undefined, `getSummary must not fail: ${summary.error}`);
+  assert.ok(Buffer.from(asked[0]).equals(treeParent.baseline_id), 'counted from the parent\'s own baseline');
+  assert.equal(summary.drift.count, 0, 'the parent\'s own fields still match');
+  assert.equal(summary.drift.childrenAwaiting, 2);
+  assert.equal(summary.drift.canApprove, true);
+  assert.equal(summary.drift.canReject, true);
+  assert.equal(summary.state, '2 child work items have changes awaiting a decision');
+});
+
+test('a parent with nothing drifted anywhere offers no decision', async () => {
+  fixture({ activeBaseline: async () => treeParent, rootNodeDigests: async () => digestsFor('a signed item') });
+  const summary = await getSummary(args);
+  assert.equal(summary.drift.childrenAwaiting, 0);
+  assert.equal(summary.drift.canApprove, false);
+});
+
+test('a child baselined by its parent names the parent capture it came with', async () => {
+  fixture({
+    activeBaseline: async () => ({ ...treeParent, tree_hash: null, field_digests: digestsFor('a signed item'),
+      captured_by_baseline_id: Buffer.alloc(16, 9) }),
+    driftedDescendants: async () => assert.fail('a single-issue baseline has no descendants to count'),
+    capturingParent: async id => (Buffer.from(id).equals(Buffer.alloc(16, 9)) ? { issueId: 1, issueKey: 'PARENT-1', version: 3 } : null)
+  });
+  const summary = await getSummary(args);
+  assert.deepEqual(summary.baseline.capturedBy, { issueKey: 'PARENT-1', version: 3 });
 });

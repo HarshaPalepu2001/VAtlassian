@@ -21,8 +21,8 @@ import { logicalNodeId } from '../src/lib/tree/model.js';
 const modules = {
   'db/configStore.js': ['controlledFields', 'projectConfig', 'gateActiveOutOf', 'gatedTransition',
     'listGatedTransitions', 'declaredFieldRows', 'seedControlledFields', 'countControlledFields'],
-  'db/baselineStore.js': ['activeBaseline', 'readAllValues', 'baselineHistory'],
-  'db/baselineTreeStore.js': ['readBaselineTree', 'activeRootsForNode', 'rootNodeDigests'],
+  'db/baselineStore.js': ['activeBaseline', 'activeBaselines', 'readAllValues', 'baselineHistory'],
+  'db/baselineTreeStore.js': ['readBaselineTree', 'activeRootsForNode', 'rootNodeDigests', 'driftedDescendants', 'capturingParent'],
   'db/itemStateStore.js': ['getReview'],
   'db/driftStore.js': ['driftForIssue'],
   'db/approvalStore.js': ['approvalById', 'pendingApprovalForActor', 'latestApproval'],
@@ -87,6 +87,8 @@ function fixture(overrides = {}) {
     listGatedTransitions: async () => [policy],
     activeBaseline: async () => baseline,
     readAllValues: async () => clone(approvedValues),
+    // No child carries a baseline of its own unless a test says so.
+    activeBaselines: async () => new Map(),
     baselineHistory: async () => [],
     getReview: async () => ({ state: 'BASELINED', version: 1, baseline_version: 1 }),
     driftForIssue: async () => [],
@@ -587,4 +589,90 @@ test('evidence and panel state hide a hidden descendant\'s changed-field content
     'a hidden descendant\'s changed field must not reach panel:getState either');
   assert.ok(!JSON.stringify(state).includes('secret'),
     'the hidden descendant\'s key and retained content must never reach panel state');
+});
+
+// ── Child baselines (2026-09-24): the parent's review, grouped by issue ───────
+
+function familyFixture({ liveChild, liveRoot = 'approved text', childOwn = { version: 6, summary: 'child own v6', after: true } } = {}) {
+  const fields = [{ field_id: 'summary', field_name: 'Summary', field_kind: 'TEXT', store_values: true, writable: true, materiality: 'MAJOR' }];
+  const digests = value => project({ summary: value }, fields).digests;
+  const rootId = logicalNodeId('10');
+  const childId = logicalNodeId('100');
+  const parentBaseline = { baseline_id: Buffer.alloc(16, 1), issue_id: 10, version: 3, tree_hash: 'abc', node_count: 2,
+    edge_count: 1, total_field_count: 2, from_status_id: '100', to_status_id: '200', transition_id: '31',
+    required_role: 'reviewer', required_assurance: 'ESIGNATURE', captured_at: NOW - 5000 };
+  const childBaseline = childOwn && { baseline_id: Buffer.alloc(16, 7), issue_id: 100, version: childOwn.version, tree_hash: null,
+    field_digests: JSON.stringify(digests(childOwn.summary)), captured_by_baseline_id: null,
+    captured_at: childOwn.after ? NOW - 1000 : NOW - 9000 };
+  const node = (id, key, parent, value) => {
+    const n = { logicalNodeId: id, issueKey: key, parentLogicalNodeId: parent, currentIssueId: Number(key === 'T-10' ? 10 : 100),
+      originalIssueId: Number(key === 'T-10' ? 10 : 100), projectId: 1, issueTypeId: '1', fieldDigests: JSON.stringify(digests(value)) };
+    Object.defineProperties(n, { parentLogicalId: { value: parent, enumerable: false }, digests: { value: digests(value), enumerable: false } });
+    return n;
+  };
+  const f = fixture({
+    fields,
+    controlledFields: async () => fields,
+    activeBaseline: async () => parentBaseline,
+    activeBaselines: async ids => new Map(childBaseline && ids.map(Number).includes(100) ? [[100, childBaseline]] : []),
+    readAllValues: async (issueId, version) => (Number(issueId) === 100
+      ? (assert.equal(Number(version), childOwn.version), { summary: childOwn.summary })
+      : { summary: 'approved text' }),
+    readBaselineTree: async () => ({
+      nodes: [node(rootId, 'T-10', null, 'approved text'), node(childId, 'NEW-10', rootId, 'captured by parent')],
+      values: { [rootId]: { summary: 'approved text' }, [childId]: { summary: 'captured by parent' } }
+    }),
+    request: async (_identity, url, options = {}) => {
+      const response = body => ({ ok: true, status: 200, json: async () => structuredClone(body) });
+      if (String(url).includes('/editmeta')) return response({ fields: {} });
+      if (String(url).includes('/changelog')) return response({ values: [], total: 0, isLast: true });
+      if (options.method === 'POST' && String(url).includes('/permissions/check')) {
+        const body = JSON.parse(options.body);
+        return response({ projectPermissions: [{ permission: 'BROWSE_PROJECTS', issues: body.projectPermissions[0].issues }] });
+      }
+      if (options.method === 'POST' && String(url).includes('/search/jql')) {
+        return response({ issues: String(options.body).includes('T-10') ? [{ id: '100', key: 'NEW-10',
+          fields: { summary: liveChild, parent: { id: '10' }, project: { id: '1' }, issuetype: { id: '1' }, status: { id: '100' } } }] : [] });
+      }
+      return response({ id: '10', key: 'T-10', fields: { summary: liveRoot, parent: null, project: { id: '1' }, issuetype: { id: '1' }, status: { id: '100' } } });
+    }
+  });
+  return { f, rootId, childId };
+}
+
+test('a parent\'s review shows a drifted child against the child\'s OWN latest baseline, in its own section', async () => {
+  const { childId } = familyFixture({ liveChild: 'live edit' });
+  const evidence = await getEvidence(args);
+  assert.equal(evidence.error, undefined, JSON.stringify(evidence));
+  assert.equal(evidence.drift.count, 1);
+  assert.deepEqual(evidence.drift.groups.map(g => [g.kind, g.issueKey, g.isRoot, g.baselineVersion, g.fields.length]),
+    [['ISSUE', 'NEW-10', false, 6, 1]]);
+  const [field] = evidence.drift.groups[0].fields;
+  assert.equal(field.fieldId, `${childId}:summary`);
+  assert.equal(field.label, 'Summary');
+  assert.equal(field.before, 'child own v6', 'compared with the child\'s own v6, not the parent\'s stored node');
+  assert.equal(field.after, 'live edit');
+  const state = await getState(args);
+  assert.deepEqual(state.drift.groups.map(g => g.issueKey), ['NEW-10']);
+});
+
+test('a child matching its own newer baseline is not a change in the parent\'s review', async () => {
+  familyFixture({ liveChild: 'child own v6' });
+  const evidence = await getEvidence(args);
+  assert.equal(evidence.drift.count, 0);
+  assert.deepEqual(evidence.drift.groups, []);
+});
+
+test('the parent\'s own change comes first, then each child, each in its own section', async () => {
+  familyFixture({ liveChild: 'live edit', liveRoot: 'root edited' });
+  const evidence = await getEvidence(args);
+  assert.deepEqual(evidence.drift.groups.map(g => [g.issueKey, g.isRoot, g.baselineVersion]),
+    [['T-10', true, 3], ['NEW-10', false, 6]]);
+  assert.equal(evidence.drift.count, 2);
+});
+
+test('a child baselined only before its parent\'s capture is compared with the parent\'s stored node, as before', async () => {
+  familyFixture({ liveChild: 'captured by parent', childOwn: { version: 2, summary: 'older own', after: false } });
+  const evidence = await getEvidence(args);
+  assert.equal(evidence.drift.count, 0, 'matches what the parent captured; the older own baseline does not win');
 });

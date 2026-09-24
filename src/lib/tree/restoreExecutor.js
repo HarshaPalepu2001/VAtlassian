@@ -60,11 +60,11 @@ export function isSystemicFailure(error) {
 }
 
 export async function executeTreeRestore({
-  restoreId, rootIssueKey, baselineTree, currentTree, controlledFields, adapters,
+  restoreId, rootIssueKey, baselineTree, currentTree, controlledFields, fieldsFor, adapters,
   maxActions = 25, plan: persistedPlan = null
 }) {
   if (!Number.isSafeInteger(maxActions) || maxActions <= 0) throw new TypeError('maxActions must be a positive safe integer');
-  const plan = persistedPlan ?? planTreeRestore({ baselineTree, currentTree, controlledFields });
+  const plan = persistedPlan ?? planTreeRestore({ baselineTree, currentTree, controlledFields, fieldsFor });
 
   let preflightOk = false;
   try {

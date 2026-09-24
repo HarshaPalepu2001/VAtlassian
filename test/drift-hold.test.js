@@ -220,3 +220,13 @@ test('a restore genuinely running still holds an uncontrolled transition', async
     assert.equal((await f.gate(f.payload)).result, false, JSON.stringify(item));
   }
 });
+
+test('the saved transition id is read from the validator configuration, however it arrives', async () => {
+  const { configuredTransitionId } = await import('../src/gate.js');
+  assert.equal(configuredTransitionId({ configuredIn: 'admin', transitionId: '31' }), '31');
+  assert.equal(configuredTransitionId({ transitionId: 31 }), '31');
+  assert.equal(configuredTransitionId('{"transitionId":"33"}'), '33');
+  for (const none of [undefined, null, {}, { configuredIn: 'admin' }, '', 'not json', { transitionId: '' }]) {
+    assert.equal(configuredTransitionId(none), null, JSON.stringify(none));
+  }
+});

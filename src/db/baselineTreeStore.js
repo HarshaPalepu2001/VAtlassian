@@ -316,3 +316,36 @@ export async function activeRootsForNode(issueId, query = store.throwing) {
     nodeContentHash: r.nodeContentHash ?? null
   }));
 }
+
+/**
+ * How many descendants of this tree baseline are DRIFTED in their own right —
+ * children that carry a baseline of their own (db/childBaselineStore.js) and
+ * whose content no longer matches it. A parent decision covers them, so the
+ * parent's panel offers one while any is waiting. One indexed read, no values:
+ * panel:getSummary may call this.
+ */
+export async function driftedDescendants(baselineId, query = store.throwing) {
+  const rows = await query(
+    `SELECT COUNT(*) AS n FROM va_baseline_node n
+      JOIN va_item_state s ON s.issue_id = n.current_issue_id
+     WHERE n.baseline_id = FROM_BASE64(?) AND n.parent_logical_node_id IS NOT NULL AND s.state = 'DRIFTED'`,
+    [toBinaryParam(baselineId)]
+  );
+  return Number(rows?.[0]?.n ?? 0);
+}
+
+/**
+ * The parent capture that produced a child's baseline: its root's issue id,
+ * key and version, for "Baselined with PARENT-1 v3". One indexed read.
+ */
+export async function capturingParent(parentBaselineId, query = store.throwing) {
+  const rows = await query(
+    `SELECT b.issue_id AS issueId, b.version AS version, n.issue_key AS issueKey
+       FROM va_baseline b
+       JOIN va_baseline_node n ON n.baseline_id = b.baseline_id AND n.parent_logical_node_id IS NULL
+      WHERE b.baseline_id = FROM_BASE64(?) LIMIT 1`,
+    [toBinaryParam(parentBaselineId)]
+  );
+  const row = rows?.[0];
+  return row ? { issueId: Number(row.issueId), issueKey: row.issueKey ?? null, version: Number(row.version) } : null;
+}

@@ -34,7 +34,7 @@ export async function queueRestore({ prepared, actor, approval, stores = restore
     throw error;
   }
   const plan = planTreeRestore({ baselineTree: prepared.baselineTree, currentTree: prepared.currentTree,
-    controlledFields: prepared.fields });
+    controlledFields: prepared.fields, fieldsFor: prepared.fieldsFor });
   const restoreId = await stores.startRestore({
     approvalId: approval.approval_id, issueId: prepared.issueId, projectId: prepared.projectId,
     baselineId: prepared.baseline.baseline_id, baselineVersion: prepared.baseline.version,
@@ -111,6 +111,7 @@ export async function performRestore({ prepared, actor, approval }) {
         baselineTree,
         currentTree,
         controlledFields: fields,
+        fieldsFor: prepared.fieldsFor,
         adapters,
         maxActions: Number(config?.restore?.maxActions ?? 25)
       });
@@ -123,6 +124,7 @@ export async function performRestore({ prepared, actor, approval }) {
           rootIssueKey: issue.key,
           baselineTree,
           controlledFields: fields,
+          fieldsFor: prepared.fieldsFor,
           replacements,
           expectedRootStatusId: null
         });

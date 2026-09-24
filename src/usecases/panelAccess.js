@@ -1,6 +1,6 @@
 import api, { route } from '@forge/api';
 import { controlledFields, projectConfig, gateActiveOutOf, gatedTransition, listGatedTransitions } from '../db/configStore.js';
-import { activeBaseline, readAllValues } from '../db/baselineStore.js';
+import { activeBaseline, activeBaselines, readAllValues } from '../db/baselineStore.js';
 import { getReview } from '../db/itemStateStore.js';
 import { driftForIssue } from '../db/driftStore.js';
 import { isEligible } from '../lib/reviewer.js';
@@ -14,6 +14,9 @@ import { planTreeCapture } from '../lib/tree/capturePlan.js';
 import { logicalNodeId } from '../lib/tree/model.js';
 import { diffTree } from '../lib/tree/diff.js';
 import { treeReviewDiff } from '../lib/tree/reviewDiff.js';
+import { groupReview } from '../lib/tree/groupedReview.js';
+import { readTreeWithNodeFields } from '../lib/tree/nodeFields.js';
+import { withChildBaselines } from '../lib/tree/childBaselines.js';
 import { readBaselineTree, activeRootsForNode } from '../db/baselineTreeStore.js';
 import { maxMateriality } from '../lib/materiality.js';
 import { fail, actorFrom, serialise, respond } from './access.js';
@@ -106,19 +109,27 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
   })();
 
   let tree = null, currentTree = null, baselineTree = null, treeDiff = null, treeHash = null;
+  // Which fields each node tracks: its own project and issue type's
+  // (lib/tree/nodeFields.js). Capture, the validator's signature check and
+  // this evidence hash must all agree on it, or no signature would match.
+  let fieldsFor = () => fields;
   const useTree = gate?.capture_baseline || baseline?.tree_hash;
   if (useTree) {
-    const stable = await readStableTree({
+    const stable = await readTreeWithNodeFields({
+      readStableTree,
       readTree: createTreeReader({ api, route }).read,
       rootIssueKey: issue.key,
-      fieldIds: fields.map(f => f.field_id)
+      rootFields: fields,
+      loadFields: controlledFields
     });
+    fieldsFor = stable.fieldsFor;
     tree = stable.tree;
     
     const plan = planTreeCapture({
       rootIssueId: issue.id,
       nodes: tree.nodes,
-      controlledFields: fields
+      controlledFields: fields,
+      fieldsFor
     });
     currentTree = { nodes: plan.nodes, values: plan.values };
     tree = {
@@ -128,17 +139,25 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
     treeHash = plan.treeHash;
     
     if (baseline?.tree_hash) {
-      baselineTree = await readBaselineTree(baseline.baseline_id);
+      // Each child that carries its own latest baseline is compared against
+      // THAT, not the parent's stored node: it is what a parent reject
+      // restores it to, and what the review shows for it (spec §4.5, §4.7).
+      baselineTree = await withChildBaselines({ parentBaseline: baseline,
+        baselineTree: await readBaselineTree(baseline.baseline_id),
+        activeBaselines, readAllValues, readBaselineTree });
       treeDiff = diffTree({
         baselineTree,
         currentTree,
-        controlledFields: fields
+        controlledFields: fields,
+        scopeFor: fieldsFor
       });
     }
   }
+  const summaries = new Map((tree?.nodes ?? []).map(n => [n.logicalNodeId, n.fields?.summary ?? null]));
   
   const reviewDiff = treeDiff
     ? treeReviewDiff({ baseline, baselineTree, currentTree, treeDiff, controlledFields: fields,
+      fieldsFor, summaryOf: id => summaries.get(id) ?? null,
       changelogEntries: changelog.entries, changelogUnavailable: changelog.failed === true,
       changelogTruncated: changelog.truncated === true })
     : diff;
@@ -150,7 +169,7 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
     coveredBy, eligible, fields, editmeta, restoreEditmeta, baselineValues, driftRows, diff,
     contentHash: useTree ? treeHash : projection.contentHash, digests: projection.digests,
     evidenceHash: useTree ? treeHash : evidenceHash, baselineVersion: baseline?.version ?? 0,
-    tree, currentTree, baselineTree, treeDiff, treeHash,
+    tree, currentTree, baselineTree, treeDiff, treeHash, fieldsFor,
     reviewDiff, driftCount: useTree ? reviewDriftCount : Math.max(driftRows.length, diff?.changedFieldCount ?? 0), reportHash: null };
 }
 /** null, never {}, so the caller can tell "nothing extra" from "could not ask"
@@ -245,6 +264,7 @@ export function filterViewableReviewDiff(reviewDiff, visibleTree) {
   return {
     ...reviewDiff,
     fields,
+    ...(reviewDiff.groups ? { groups: groupReview(fields) } : {}),
     changedFieldCount: fields.length,
     materialFieldCount: materialFields.length,
     maxMateriality: materialFields.length ? maxMateriality(materialFields.map(f => f.materiality)) : null

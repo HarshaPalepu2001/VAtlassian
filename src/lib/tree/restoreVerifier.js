@@ -2,6 +2,7 @@ import { project } from '../content.js';
 import { diffTree } from './diff.js';
 import { logicalNodeId } from './model.js';
 import { harnessLog } from '../harnessLogger.js';
+import { unionFieldIds } from './nodeFields.js';
 
 const parentOf = node => node?.parentLogicalNodeId ?? node?.parentLogicalId ?? node?.parent ?? null;
 
@@ -52,11 +53,14 @@ function describeChange(change, { nodeKeys, fieldNames, baselineDigestsById, obs
 }
 
 export async function verifyTreeRestore({
-  readStableTree, readTree, rootIssueKey, baselineTree, controlledFields,
+  readStableTree, readTree, rootIssueKey, baselineTree, controlledFields, fieldsFor = () => controlledFields,
   replacements = [], expectedRootStatusId = null
 }) {
+  // Each node is verified over its OWN fields (./nodeFields.js), so the read
+  // fetches every field any node of the approved tree tracks.
   const fieldIds = [...new Set([
     ...controlledFields.map(field => String(field.field_id)),
+    ...unionFieldIds(baselineTree?.nodes, fieldsFor),
     'parent',
     'status'
   ])];
@@ -98,11 +102,13 @@ export async function verifyTreeRestore({
     return {
       logicalNodeId: currentLogicalNodeId,
       parentLogicalId,
-      digests: project(node.fields ?? {}, controlledFields).digests
+      projectId: Number(node.fields?.project?.id),
+      issueTypeId: String(node.fields?.issuetype?.id ?? ''),
+      digests: project(node.fields ?? {}, fieldsFor(node) ?? []).digests
     };
   });
 
-  const diff = diffTree({ baselineTree, currentTree: { nodes: currentNodes }, controlledFields });
+  const diff = diffTree({ baselineTree, currentTree: { nodes: currentNodes }, controlledFields, scopeFor: fieldsFor });
   const baselineRoot = (baselineTree?.nodes ?? []).find(node => parentOf(node) == null);
   const liveRoot = baselineRoot
     ? liveTree.nodes.find(node => realToLogical.get(String(node.id)) === String(baselineRoot.logicalNodeId)
@@ -121,8 +127,8 @@ export async function verifyTreeRestore({
   for (const replacement of replacements) {
     nodeKeys.set(String(replacement.logicalNodeId), replacement.newIssueKey ?? replacement.newIssueId ?? null);
   }
-  const fieldNames = new Map(controlledFields.map(field =>
-    [String(field.field_id), field.field_name ?? String(field.field_id)]));
+  const fieldNames = new Map([...controlledFields, ...(baselineTree?.nodes ?? []).flatMap(node => fieldsFor(node) ?? [])]
+    .map(field => [String(field.field_id), field.field_name ?? String(field.field_id)]));
   const baselineDigestsById = new Map((baselineTree?.nodes ?? []).map(node =>
     [String(node.logicalNodeId), node.digests ?? {}]));
   const observedDigestsById = new Map(currentNodes.map(node =>

@@ -151,7 +151,8 @@ export async function getState(args) { return respond(async () => {
     eligibility: { eligible: true, reason: null },
     drift: {
       ...base.drift,
-      fields: viewableReviewDiff?.fields ?? state.diff?.fields ?? []
+      fields: viewableReviewDiff?.fields ?? state.diff?.fields ?? [],
+      ...(viewableReviewDiff?.groups ? { groups: viewableReviewDiff.groups } : {})
     },
     transitions: actions,
     credentialEnrolled: credential,

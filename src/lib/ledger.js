@@ -250,6 +250,11 @@ export const EVENT = {
   BASELINE_CAPTURED: 'BASELINE_CAPTURED',
   BASELINE_DISARMED: 'BASELINE_DISARMED',
   BASELINE_DEGRADED: 'BASELINE_DEGRADED',
+  // A baselined work item was moved to another project or issue type in Jira.
+  // From then on it follows the destination's configuration (its tracked
+  // fields, or none); this entry is the record that it left the scope it was
+  // signed in. See lib/scopeMove.js.
+  BASELINE_SCOPE_CHANGED: 'BASELINE_SCOPE_CHANGED',
   DRIFT_DETECTED: 'DRIFT_DETECTED',
   DRIFT_RECONCILED: 'DRIFT_RECONCILED',
   DRIFT_SELF_REVERTED: 'DRIFT_SELF_REVERTED',

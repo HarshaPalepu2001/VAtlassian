@@ -60,6 +60,10 @@ export default function DriftSection({ drift, evidence, evidenceReady = true, is
   const removedCount = evidence?.drift?.removedNodes?.length ?? 0;
   const movedCount = evidence?.drift?.movedNodes?.length ?? 0;
   const hasBreakdown = !!(fieldCount || addedCount || removedCount || movedCount);
+  // A parent's review covers its children, each against its own baseline, and
+  // one decision here approves or rejects them all. Say so before the reviewer
+  // opens the list, since the parent itself may have no change of its own.
+  const childrenChanged = (evidence?.drift?.groups ?? []).filter(g => g.kind === 'ISSUE' && !g.isRoot).length;
 
   return (
     <section className="va-stack">
@@ -89,6 +93,12 @@ export default function DriftSection({ drift, evidence, evidenceReady = true, is
         }}>
           {open ? 'Hide changes' : 'Review changes'}
         </Button>
+        {childrenChanged > 0 && (
+          <span className="va-review-head__detail" style={{ flexBasis: '100%' }}>
+            {childrenChanged === 1 ? '1 child work item has' : `${childrenChanged} child work items have`} changes.
+            {' '}A decision here covers {childrenChanged === 1 ? 'it' : 'all of them'}; each can also be decided on its own.
+          </span>
+        )}
 
       </div>
       {open && (

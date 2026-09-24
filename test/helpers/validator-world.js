@@ -21,7 +21,7 @@ const mocked = {
   'db/configStore.js': ['gatedTransition', 'controlledFields', 'projectConfig', 'declaredFieldRows',
     'seedControlledFields', 'countControlledFields', 'listGatedTransitions', 'gateActiveOutOf'],
   'db/baselineStore.js': ['activeBaseline', 'baselineByVersion'],
-  'db/baselineTreeStore.js': ['rootNodeDigests', 'activeRootsForNode'],
+  'db/baselineTreeStore.js': ['rootNodeDigests', 'activeRootsForNode', 'driftedDescendants', 'capturingParent'],
   'db/itemStateStore.js': ['getReview'],
   'db/incidentStore.js': ['adminIncidentCount'],
   'db/credentialStore.js': ['credentialState'],
@@ -140,12 +140,16 @@ export function world({ workflow = WORKFLOW, tracked = TRACKED } = {}) {
   };
 
   // ── Issues ─────────────────────────────────────────────────────────────
-  w.createIssue = ({ key = 'T-1', id = String(1000 + w.issues.size), status = '1', projectId = '1', issueTypeId = '1', fields = {} } = {}) => {
+  /** `childOf`: the key of this issue's parent (Jira's `parent` link). */
+  w.createIssue = ({ key = 'T-1', id = String(1000 + w.issues.size), status = '1', projectId = '1', issueTypeId = '1', fields = {},
+    childOf = null } = {}) => {
+    const parent = childOf ? w.issue(childOf) : null;
     const issue = { id, key, fields: {
       summary: `Summary of ${key}`, description: doc(`Description of ${key}`), labels: ['alpha'],
       priority: { id: '3', name: 'Medium' }, customfield_100: 'x', customfield_200: 'untracked',
       issuelinks: [], subtasks: [],
-      status: { id: status }, project: { id: projectId }, issuetype: { id: issueTypeId }, ...fields } };
+      status: { id: status }, project: { id: projectId }, issuetype: { id: issueTypeId },
+      parent: parent ? { id: parent.id, key: parent.key } : null, ...fields } };
     w.issues.set(key, issue);
     return issue;
   };
@@ -175,8 +179,9 @@ export function world({ workflow = WORKFLOW, tracked = TRACKED } = {}) {
   w.enableProject = (projectId = 1) => w.projectConfig.set(projectId, { enabled: true });
 
   // ── Baselines (what a signed controlled transition leaves behind) ──────
+  /** `capturedBy`: the parent baseline whose tree capture wrote this one (child baselines). */
   w.baseline = (key, { transitionId = '31', from = '3', to = '4', role = 'reviewer', assurance = 'ESIGNATURE',
-    tree = false, approvedBy = 'reviewer' } = {}) => {
+    tree = false, approvedBy = 'reviewer', capturedBy = null } = {}) => {
     const issue = w.issue(key);
     const { projectId, issueTypeId } = scopeOf(issue);
     const p = project(issue.fields, trackedFor(projectId, issueTypeId));
@@ -187,18 +192,49 @@ export function world({ workflow = WORKFLOW, tracked = TRACKED } = {}) {
       field_digests: tree ? '{}' : JSON.stringify(p.digests), tree_hash: tree ? 'tree-' + version : null,
       transition_id: String(transitionId), from_status_id: from, to_status_id: to,
       required_role: role, required_assurance: assurance, controlled_fields_hash: 'c'.repeat(64),
-      transition_at: w.now, captured_at: w.now, approved_by: approvedBy, approval_id: newId() };
+      transition_at: w.now, captured_at: w.now, approved_by: approvedBy, approval_id: newId(),
+      captured_by_baseline_id: capturedBy?.baseline_id ?? null };
     w.baselines.push(b);
     if (tree) w.rootDigests.set(hex(b.baseline_id), JSON.stringify(p.digests));
     w.itemState.set(Number(issue.id), { state: 'BASELINED', baseline_version: version, lock_token: null, version: 1 });
     return b;
   };
   w.activeBaseline = key => w.baselines.find(b => b.issue_id === Number(w.issue(key).id) && b.state === 'ACTIVE') ?? null;
+  /** Every descendant through Jira's `parent` link, recursively. */
+  w.descendants = key => {
+    const id = w.issue(key).id;
+    const children = [...w.issues.values()].filter(i => String(i.fields.parent?.id ?? '') === String(id));
+    return children.flatMap(c => [c, ...w.descendants(c.key)]);
+  };
+  /**
+   * A parent's controlled-transition capture, as lib/capture.js does it: the
+   * parent's tree baseline, then a baseline for every descendant whose own
+   * project and issue type track fields, over those fields, signed by the
+   * parent's approval (captured_by_baseline_id).
+   */
+  w.captureTree = (key, opts = {}) => {
+    const parent = w.baseline(key, { ...opts, tree: true });
+    const children = w.descendants(key)
+      .filter(child => trackedFor(...Object.values(scopeOf(child))).length > 0)
+      .map(child => w.baseline(child.key, { transitionId: parent.transition_id, from: parent.from_status_id,
+        to: parent.to_status_id, role: parent.required_role, assurance: parent.required_assurance, capturedBy: parent }));
+    return { parent, children };
+  };
   /** A drift APPROVE: the current content becomes the new baseline, in place. */
   w.approveDrift = key => {
     const old = w.activeBaseline(key);
-    return w.baseline(key, { transitionId: old.transition_id, from: old.from_status_id, to: old.to_status_id,
-      role: old.required_role, assurance: old.required_assurance, tree: Boolean(old.tree_hash) });
+    const again = { transitionId: old.transition_id, from: old.from_status_id, to: old.to_status_id,
+      role: old.required_role, assurance: old.required_assurance };
+    // A parent's approval is a tree capture: it re-baselines every child too.
+    return old.tree_hash ? w.captureTree(key, again).parent : w.baseline(key, { ...again, tree: false });
+  };
+  /** Whether an issue's live tracked content differs from its active baseline (what the collector records). */
+  w.driftedNow = issue => {
+    const b = w.baselines.find(x => x.issue_id === Number(issue.id) && x.state === 'ACTIVE');
+    if (!b) return false;
+    const digests = b.tree_hash ? JSON.parse(w.rootDigests.get(hex(b.baseline_id)) ?? '{}') : JSON.parse(b.field_digests);
+    const now = project(issue.fields, trackedFor(...Object.values(scopeOf(issue)))).digests;
+    return Object.keys(digests).some(f => digests[f] !== now[f]);
   };
   /** A drift REJECT that restores completely: the tracked content goes back. */
   w.restoreDrift = (key, values) => w.edit(key, values);
@@ -225,13 +261,21 @@ export function world({ workflow = WORKFLOW, tracked = TRACKED } = {}) {
   };
 
   // ── The validator, called the way Jira calls it ────────────────────────
-  w.transition = async (key, transitionId, { omitId = false, modifiedFields = {}, fromOverride, toOverride, dry = false } = {}) => {
+  /**
+   * `configured`: the validator on this transition was set up through its
+   * setup screen, which saved the transition's id into its configuration (true), or a
+   * specific (possibly stale or copied) id to have saved instead.
+   */
+  w.transition = async (key, transitionId, { omitId = false, modifiedFields = {}, fromOverride, toOverride, dry = false,
+    configured = false } = {}) => {
     const issue = w.issue(key);
     const t = w.workflowFor(issue).find(x => x.id === String(transitionId));
     if (!t) throw new Error(`no transition ${transitionId}`);
     const payload = { issue: { key }, transition: {
       ...(omitId ? {} : { id: Number(transitionId) }),
-      from: { id: Number(fromOverride ?? issue.fields.status.id) }, to: { id: Number(toOverride ?? t.to) }, modifiedFields } };
+      from: { id: Number(fromOverride ?? issue.fields.status.id) }, to: { id: Number(toOverride ?? t.to) }, modifiedFields },
+      configuration: configured === false ? { configuredIn: 'admin' }
+        : { configuredIn: 'admin', transitionId: configured === true ? String(transitionId) : String(configured) } };
     const runtime = await gateRuntime();
     const result = await createGate({ ...runtime, now: () => w.now, log: () => {} })(payload);
     if (result.result && !dry) {
@@ -312,6 +356,16 @@ export function world({ workflow = WORKFLOW, tracked = TRACKED } = {}) {
     baselineByVersion: async (issueId, version) => clone(w.baselines.find(b => b.issue_id === Number(issueId) && b.version === Number(version)) ?? null),
     rootNodeDigests: async baselineId => { fault('db:rootDigests'); return w.rootDigests.get(hex(baselineId)) ?? null; },
     activeRootsForNode: async () => [],
+    driftedDescendants: async baselineId => {
+      const parent = w.baselines.find(b => hex(b.baseline_id) === hex(baselineId));
+      const root = [...w.issues.values()].find(i => Number(i.id) === parent?.issue_id);
+      return root ? w.descendants(root.key).filter(w.driftedNow).length : 0;
+    },
+    capturingParent: async baselineId => {
+      const parent = w.baselines.find(b => hex(b.baseline_id) === hex(baselineId));
+      const root = parent && [...w.issues.values()].find(i => Number(i.id) === parent.issue_id);
+      return root ? { issueId: Number(root.id), issueKey: root.key, version: parent.version } : null;
+    },
     getReview: async issueId => clone(w.itemState.get(Number(issueId)) ?? null),
     adminIncidentCount: async () => 0, credentialState: async () => ({ state: 'ACTIVE' }), isActiveAdmin: async () => false,
     restoresForIssue: async () => [],

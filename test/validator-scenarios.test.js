@@ -280,11 +280,17 @@ test('S29 a field no longer tracked is no longer drift', async () => {
   await agree(w, 'T-1');
 });
 
-test('S30 reclassifying a tracked field\'s kind alone is not a content change', { todo: 'DECISION NEEDED: a field\'s kind is part of its drift fingerprint, so reclassifying it in admin marks every baselined item in scope as drifted (decidable, but noisy)' }, async () => {
+test('S30 [decided] reclassifying a tracked field\'s kind reads as drift: the signed value is what counts', async () => {
+  // Decided 2026-09-24: the signer approved a value. A change of data type can
+  // alter or corrupt what the field holds, so it is surfaced as drift like any
+  // other change to the signed content, and decided like any other drift.
   const w = await approvedItem();
   w.controlledFields.get('1:1').find(f => f.field_id === 'customfield_100').field_kind = 'TEXT';
+  await heldEverywhere(w, 'T-1');
+  const { panel } = await agree(w, 'T-1');
+  assert.equal(panel.drift.canApprove, true);
+  w.approveDrift('T-1');
   await freeEverywhere(w, 'T-1');
-  await agree(w, 'T-1');
 });
 
 test('S31 changing a field\'s materiality is not drift', async () => {
@@ -464,21 +470,27 @@ test('S55 the status moved under the request: refused', async () => {
   assert.equal((await w.transition('T-1', '41', { fromOverride: '2' })).result, false);
 });
 
-test('S56 the issue moved to a project with no VAtlassian tracking: the baseline still guards its content', { todo: 'DECISION NEEDED: drift is judged with the CURRENT project\'s tracked fields; moving the item out of a governed project drops the hold (validator and panel agree, so no deadlock)' }, async () => {
+test('S56 [decided] an item moved to a project with no VAtlassian tracking follows the destination: nothing is held', async () => {
+  // Decided 2026-09-24: a moved item follows the configuration where it now
+  // lives (as a codebeamer tracker item does after a move). The move itself is
+  // recorded once in the audit trail by the collector (lib/scopeMove.js).
   const w = await approvedItem();
   w.edit('T-1', { project: { id: '2' } });
   w.workflows.set('2:1', WORKFLOW);
   w.edit('T-1', { summary: 'edited after the move' });
-  await heldEverywhere(w, 'T-1');
+  await freeEverywhere(w, 'T-1');
   await agree(w, 'T-1');
 });
 
-test('S57 the issue type changed to one with no tracking: the baseline still guards its content', { todo: 'DECISION NEEDED: same as S56, for an issue type change' }, async () => {
+test('S57 [decided] an item moved to a project that tracks the same fields is still held on them', async () => {
   const w = await approvedItem();
-  w.edit('T-1', { issuetype: { id: '2' } });
-  w.workflows.set('1:2', WORKFLOW);
-  w.edit('T-1', { summary: 'edited after the type change' });
+  w.edit('T-1', { project: { id: '2' } });
+  w.workflows.set('2:1', WORKFLOW);
+  w.controlledFields.set('2:1', w.controlledFields.get('1:1'));
+  w.projectConfig.set(2, { enabled: true });
+  w.edit('T-1', { summary: 'edited after the move' });
   await heldEverywhere(w, 'T-1');
+  await agree(w, 'T-1');
 });
 
 test('S58 a tracked field removed from the issue (value gone) is drift', async () => {
@@ -704,7 +716,9 @@ for (let seed = 1; seed <= 12; seed++) {
 const APP = '1d49ae3f-e976-438c-893c-806c8b249351';
 const gate = (extra = {}) => ({ ruleKey: 'forge:expression-validator',
   parameters: { key: `ari:cloud:ecosystem::extension/${APP}/env/static/va-gate`, ...extra } });
-const jiraWorkflow = (validatorsFor = () => [gate()]) => ({ id: 'wf', name: 'WF', transitions: [
+/** A validator saved through its setup screen, which recorded its transition id. */
+const savedGate = (transitionId, extra = {}) => gate({ config: JSON.stringify({ configuredIn: 'admin', transitionId }), ...extra });
+const jiraWorkflow = (validatorsFor = id => [savedGate(id)]) => ({ id: 'wf', name: 'WF', transitions: [
   { id: '1', name: 'Create', type: 'INITIAL', toStatusReference: '1', links: [], validators: [] },
   ...WORKFLOW.map(t => ({ id: t.id, name: t.name, type: t.from === '*' ? 'GLOBAL' : 'DIRECTED', toStatusReference: t.to,
     links: t.from === '*' ? [] : t.from.map(f => ({ fromStatusReference: f })), validators: validatorsFor(t.id) }))
@@ -716,19 +730,19 @@ test('S95 validator everywhere, one controlled edge: clean', () => {
 });
 
 test('S96 validator removed from an uncontrolled transition: critical drift-hold finding', () => {
-  const f = diffWorkflow({ rows: [ctRow], workflow: jiraWorkflow(id => id === '41' ? [] : [gate()]), appId: APP });
+  const f = diffWorkflow({ rows: [ctRow], workflow: jiraWorkflow(id => id === '41' ? [] : [savedGate(id)]), appId: APP });
   assert.equal(f.length, 1);
   assert.equal(f[0].type, FINDING.HOLD_ABSENT);
   assert.equal(f[0].severity, SEVERITY.CRITICAL);
 });
 
 test('S97 validator disabled on a global transition: critical drift-hold finding', () => {
-  const f = diffWorkflow({ rows: [ctRow], workflow: jiraWorkflow(id => id === '91' ? [gate({ disabled: 'true' })] : [gate()]), appId: APP });
+  const f = diffWorkflow({ rows: [ctRow], workflow: jiraWorkflow(id => id === '91' ? [savedGate(id, { disabled: 'true' })] : [savedGate(id)]), appId: APP });
   assert.deepEqual(f.map(x => [x.type, x.transitionId]), [[FINDING.HOLD_ABSENT, '91']]);
 });
 
 test('S98 validator removed from the controlled transition: signature finding, not a duplicate hold finding', () => {
-  const f = diffWorkflow({ rows: [ctRow], workflow: jiraWorkflow(id => id === '31' ? [] : [gate()]), appId: APP });
+  const f = diffWorkflow({ rows: [ctRow], workflow: jiraWorkflow(id => id === '31' ? [] : [savedGate(id)]), appId: APP });
   assert.deepEqual(f.map(x => x.type), [FINDING.GATE_ABSENT]);
 });
 
@@ -745,7 +759,7 @@ test('S100 [asked] every controlled transition deleted while baselines remain: t
   assert.equal(typeof pairsToCheck, 'function', 'gatecheck must derive its pairs from rows AND baselines');
   const pairs = pairsToCheck({ rows: [], baselinePairs: [{ project_id: 1, issue_type_id: '1' }] });
   assert.equal(pairs.length, 1);
-  const f = diffWorkflow({ rows: pairs[0].rows, scope: pairs[0], workflow: jiraWorkflow(id => id === '41' ? [] : [gate()]), appId: APP });
+  const f = diffWorkflow({ rows: pairs[0].rows, scope: pairs[0], workflow: jiraWorkflow(id => id === '41' ? [] : [savedGate(id)]), appId: APP });
   assert.deepEqual(f.map(x => x.type), [FINDING.HOLD_ABSENT]);
 });
 
@@ -846,4 +860,266 @@ test('S112 no app consent, nothing controlled is hidden: the uncontrolled route 
   w.hiddenFromApp = new Set(['32']);
   w.faults.add('jira:noConsent');
   assert.equal((await w.transition('T-1', '92', { omitId: true })).result, true);
+});
+
+test('S113 a field tracked after v1 is not drift against v1, and is drift once a baseline that carries it exists', async () => {
+  const w = await approvedItem();                                   // v1: customfield_200 not tracked
+  w.controlledFields.get('1:1').push({ field_id: 'customfield_200', field_kind: 'TEXT', store_values: true, materiality: 'MINOR' });
+
+  w.edit('T-1', { customfield_200: 'changed while v1 stands' });
+  await freeEverywhere(w, 'T-1');                                   // v1 never carried it: no drift
+  assert.equal((await agree(w, 'T-1')).panel.drift.count, 0);
+
+  w.edit('T-1', { status: { id: '3' } });                           // next controlled transition captures v2
+  await w.sign('T-1', '31');
+  assert.equal(await w.moves('T-1', '31'), true);
+  w.baseline('T-1');
+  assert.equal(w.activeBaseline('T-1').version, 2);
+  assert.ok(JSON.parse(w.activeBaseline('T-1').field_digests).customfield_200, 'v2 carries the new field');
+
+  w.edit('T-1', { customfield_200: 'changed after v2' });           // back to business
+  await heldEverywhere(w, 'T-1');
+  await agree(w, 'T-1');
+});
+
+test('S114 a field tracked after v1, alongside a real drift on an old field: only the old field counts', async () => {
+  const w = await approvedItem();
+  w.controlledFields.get('1:1').push({ field_id: 'customfield_200', field_kind: 'TEXT', store_values: true, materiality: 'MINOR' });
+  w.edit('T-1', { customfield_200: 'new field changed', summary: 'old field changed' });
+  const { panel } = await agree(w, 'T-1');
+  assert.equal(panel.drift.count, 1, 'summary only');
+  w.approveDrift('T-1');                                            // approving drift also captures v2 with the new field
+  w.edit('T-1', { customfield_200: 'changed after v2' });
+  await heldEverywhere(w, 'T-1');
+});
+
+// ─── J. The validator told which transition it is on (its setup screen) ─────
+//
+// Jira's payload never carries the transition id. The validator's setup screen
+// knows it and saves it into the validator's configuration, which Jira passes
+// back on every call. These scenarios all send NO transition id, as Jira does.
+
+function siblings() {
+  const w = world(); w.createIssue({ key: 'T-1', status: '3' });
+  w.workflows.get('1:1').push({ id: '33', name: 'Approve (fast track)', from: ['3'], to: '4' });
+  w.control({ transitionId: '33' });                                  // 31 and 33 both go Review -> Done; only 33 is controlled
+  return w;
+}
+
+test('S115 siblings into one status, the UNCONTROLLED one taken: its saved id lets it pass', async () => {
+  const w = siblings();
+  assert.equal((await w.transition('T-1', '31', { omitId: true, configured: true })).result, true);
+});
+
+test('S116 siblings, the CONTROLLED one taken without a signature: refused as unsigned, not as unknown', async () => {
+  const w = siblings();
+  const r = await w.transition('T-1', '33', { omitId: true, configured: true });
+  assert.equal(r.result, false);
+  assert.match(r.errorMessage, /approv|sign/i);
+});
+
+test('S117 siblings, the controlled one taken with a valid signature: passes and spends it', async () => {
+  const w = siblings();
+  const row = await w.sign('T-1', '33');
+  assert.equal((await w.transition('T-1', '33', { omitId: true, configured: true })).result, true);
+  assert.equal(row.state, 'CONSUMED');
+});
+
+test('S118 a signature for the controlled sibling cannot be spent through the uncontrolled one', async () => {
+  const w = siblings();
+  const row = await w.sign('T-1', '33');
+  assert.equal((await w.transition('T-1', '31', { omitId: true, configured: true })).result, true);
+  assert.equal(row.state, 'PENDING', 'moving through the uncontrolled sibling must not consume it');
+});
+
+test('S119 a stale saved id (no such transition any more) falls back to the old resolution', async () => {
+  const w = siblings();
+  assert.equal((await w.transition('T-1', '31', { omitId: true, configured: '999' })).result, false, 'siblings with a controlled one still fail closed');
+  const single = await approvedItem();
+  assert.equal((await single.transition('T-1', '41', { omitId: true, configured: '999' })).result, true);
+});
+
+test('S120 a saved id naming a transition into a DIFFERENT status is ignored', async () => {
+  const w = siblings();
+  assert.equal((await w.transition('T-1', '31', { omitId: true, configured: '32' })).result, false);
+});
+
+test('S121 validators never re-saved (no id in their configuration) behave exactly as before', async () => {
+  const w = siblings();
+  assert.equal((await w.transition('T-1', '31', { omitId: true })).result, false);
+});
+
+test('S122 drift still comes first when the validator knows its transition', async () => {
+  const w = await approvedItem();
+  w.edit('T-1', { summary: 'edited' });
+  assert.ok(heldFor(await w.transition('T-1', '41', { omitId: true, configured: true })));
+});
+
+test('S123 no app consent, the controlled sibling hidden from the app, saved id present: still refused', async () => {
+  const w = siblings();
+  w.hiddenFromApp = new Set(['33']);
+  w.faults.add('jira:noConsent');
+  assert.equal((await w.transition('T-1', '33', { omitId: true, configured: true })).result, false);
+});
+
+test('S124 Health check: a validator copied onto another transition (wrong saved id) is critical', () => {
+  const f = diffWorkflow({ rows: [ctRow], workflow: jiraWorkflow(id => [savedGate(id === '92' ? '21' : id)]), appId: APP });
+  assert.deepEqual(f.map(x => [x.type, x.transitionId, x.severity]), [[FINDING.GATE_CONFIG_MISMATCH, '92', SEVERITY.CRITICAL]]);
+});
+
+test('S125 Health check: validators never re-saved are flagged only where siblings make the id matter', () => {
+  const f = diffWorkflow({ rows: [ctRow], workflow: jiraWorkflow(() => [gate()]), appId: APP });
+  // 21 (In Progress -> Review) and the global 92 (-> Review) are siblings; 91 -> To Do is too, with nobody else.
+  assert.deepEqual(f.map(x => [x.type, x.transitionId]).sort(),
+    [[FINDING.GATE_CONFIG_MISSING, '21'], [FINDING.GATE_CONFIG_MISSING, '92']]);
+  assert.ok(f.every(x => x.severity === SEVERITY.WARNING));
+});
+
+// ─── H. Child baselines (2026-09-24) ────────────────────────────────────────
+//
+// When a parent is baselined, every child (through `parent`, recursively)
+// gets a baseline of its own, over its own project and issue type's fields,
+// signed by the parent's approval. A child's drift is held and decided in the
+// child; the parent is held only by its own fields. A parent decision covers
+// the children, so the parent's panel offers one while any child is waiting.
+
+const SUBTASK_TRACKED = [
+  { field_id: 'summary', field_kind: 'TEXT', store_values: true, materiality: 'MAJOR' },
+  { field_id: 'labels', field_kind: 'MULTI', store_values: true, materiality: 'MINOR' }
+];
+
+/** Parent P-1 (type 1) with subtasks P-2 and P-3 (type 2, their own workflow and fields), captured together. */
+function familyWorld({ subtaskTracked = SUBTASK_TRACKED, grandchild = false } = {}) {
+  const w = world();
+  w.workflows.set('1:2', structuredClone(WORKFLOW));
+  w.controlledFields.set('1:2', structuredClone(subtaskTracked));
+  w.createIssue({ key: 'P-1', status: '4' });
+  w.createIssue({ key: 'P-2', status: '2', issueTypeId: '2', childOf: 'P-1' });
+  w.createIssue({ key: 'P-3', status: '2', issueTypeId: '2', childOf: 'P-1' });
+  if (grandchild) w.createIssue({ key: 'P-4', status: '2', issueTypeId: '2', childOf: 'P-2' });
+  w.control({ transitionId: '31' });
+  const captured = w.captureTree('P-1');
+  return { w, ...captured };
+}
+
+test('S126 a parent capture gives every child its own baseline, over the child\'s own fields', () => {
+  const { w, parent, children } = familyWorld();
+  assert.deepEqual(children.map(c => c.issue_id), [Number(w.issue('P-2').id), Number(w.issue('P-3').id)]);
+  for (const child of children) {
+    assert.ok(Buffer.from(child.captured_by_baseline_id).equals(Buffer.from(parent.baseline_id)));
+    assert.equal(child.tree_hash, null, 'an ordinary single-issue baseline');
+    assert.deepEqual(Object.keys(JSON.parse(child.field_digests)).sort(), ['labels', 'summary']);
+  }
+});
+
+test('S127 editing a child holds the child only, and the child\'s own panel can decide it', async () => {
+  const { w } = familyWorld();
+  w.edit('P-2', { summary: 'child edited' });
+  await heldEverywhere(w, 'P-2');
+  await freeEverywhere(w, 'P-3');
+  const { panel } = await agree(w, 'P-2');
+  assert.equal(panel.drift.count, 1);
+  assert.deepEqual(panel.baseline.capturedBy, { issueKey: 'P-1', version: 1 });
+});
+
+test('S128 the parent is not held while a child is drifted, and its panel offers the decision covering it', async () => {
+  const { w } = familyWorld();
+  w.edit('P-2', { summary: 'child edited' });
+  await freeEverywhere(w, 'P-1');
+  const { panel } = await agree(w, 'P-1');
+  assert.equal(panel.drift.count, 0, 'the parent\'s own fields are unchanged');
+  assert.equal(panel.drift.childrenAwaiting, 1);
+  assert.equal(panel.drift.canApprove, true);
+  assert.equal(panel.drift.canReject, true);
+  assert.match(panel.state, /1 child work item has changes awaiting a decision/);
+});
+
+test('S129 a field the child\'s type does not track is not the child\'s drift', async () => {
+  const { w } = familyWorld();
+  w.edit('P-2', { priority: { id: '1', name: 'Highest' } });   // tracked for the parent's type only
+  await freeEverywhere(w, 'P-2');
+  assert.equal((await w.panel('P-1')).drift.childrenAwaiting, 0);
+});
+
+test('S130 the parent\'s own edit holds the parent, not its children', async () => {
+  const { w } = familyWorld();
+  w.edit('P-1', { summary: 'parent edited' });
+  await heldEverywhere(w, 'P-1');
+  await freeEverywhere(w, 'P-2');
+  await agree(w, 'P-1');
+});
+
+test('S131 approving the child in its own panel releases it and clears the parent\'s waiting count', async () => {
+  const { w } = familyWorld();
+  w.edit('P-2', { summary: 'child edited' });
+  const v = w.approveDrift('P-2');
+  assert.equal(v.version, 2);
+  await freeEverywhere(w, 'P-2');
+  assert.equal((await w.panel('P-1')).drift.childrenAwaiting, 0);
+});
+
+test('S132 approving the parent re-baselines every drifted child with it', async () => {
+  const { w } = familyWorld();
+  w.edit('P-2', { summary: 'child edited' });
+  w.edit('P-3', { labels: ['beta'] });
+  w.approveDrift('P-1');
+  await freeEverywhere(w, 'P-2');
+  await freeEverywhere(w, 'P-3');
+  assert.equal(w.activeBaseline('P-2').version, 2);
+  assert.equal((await w.panel('P-1')).drift.childrenAwaiting, 0);
+});
+
+test('S133 independent versions: a child at v5 of its own, then its parent\'s capture at v1 of the parent, is not drift', async () => {
+  const w = world();
+  w.createIssue({ key: 'P-1', status: '4' });
+  w.createIssue({ key: 'P-2', status: '2', childOf: 'P-1' });
+  w.control({ transitionId: '31' });
+  for (let i = 1; i <= 5; i += 1) { w.edit('P-2', { summary: `own ${i}` }); w.baseline('P-2'); }
+  assert.equal(w.activeBaseline('P-2').version, 5);
+  w.edit('P-2', { summary: 'changed before the parent was signed' });
+  const { parent, children } = w.captureTree('P-1');
+  assert.equal(parent.version, 1);
+  assert.equal(children[0].version, 6, 'the child\'s next version in its own lineage');
+  await freeEverywhere(w, 'P-2');
+  assert.equal((await w.panel('P-2')).drift.count, 0);
+});
+
+test('S134 a child rejected in its own panel returns to ITS latest baseline, not the parent\'s older capture', async () => {
+  const { w } = familyWorld();
+  w.edit('P-2', { summary: 'B' });
+  w.approveDrift('P-2');                       // the child's own v2, after the parent's v1 capture
+  w.edit('P-2', { summary: 'C' });
+  await heldEverywhere(w, 'P-2');
+  w.restoreDrift('P-2', { summary: 'Summary of P-2' });   // the parent capture's value: still not the child's record
+  await heldEverywhere(w, 'P-2');
+  w.restoreDrift('P-2', { summary: 'B' });
+  await freeEverywhere(w, 'P-2');
+});
+
+test('S135 a child whose type tracks no fields gets no baseline, and its edits hold nothing', async () => {
+  const { w, children } = familyWorld({ subtaskTracked: [] });
+  assert.deepEqual(children, []);
+  w.edit('P-2', { summary: 'edited' });
+  await freeEverywhere(w, 'P-2');
+  await freeEverywhere(w, 'P-1');
+});
+
+test('S136 grandchildren get their own baselines too, and are held on their own', async () => {
+  const { w, children } = familyWorld({ grandchild: true });
+  assert.ok(children.some(c => c.issue_id === Number(w.issue('P-4').id)));
+  w.edit('P-4', { labels: ['gamma'] });
+  await heldEverywhere(w, 'P-4');
+  await freeEverywhere(w, 'P-2');
+  await freeEverywhere(w, 'P-1');
+  assert.equal((await w.panel('P-1')).drift.childrenAwaiting, 1);
+});
+
+test('S137 a linked issue is not a child: editing it holds nothing, whatever the parent captured', async () => {
+  const { w } = familyWorld();
+  w.createIssue({ key: 'L-9', status: '2' });
+  w.edit('P-1', { issuelinks: [] });
+  w.edit('L-9', { summary: 'linked issue edited' });
+  await freeEverywhere(w, 'L-9');
+  await freeEverywhere(w, 'P-1');
+  assert.equal((await w.panel('P-1')).drift.childrenAwaiting, 0);
 });

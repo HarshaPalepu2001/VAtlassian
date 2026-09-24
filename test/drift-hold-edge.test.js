@@ -162,3 +162,26 @@ test('unreadable root digests fail towards drift, never towards clean', async ()
     readRootDigests: async () => { throw new Error('db down'); } });
   assert.ok(result.changed.length > 0);
 });
+
+// ─── The transition id saved by the validator's setup screen ────────────────
+
+test('a saved transition id picks the right sibling', async () => {
+  const deps = edgeDeps({ transitions: [{ id: 31, toStatusId: '4' }, { id: 33, toStatusId: '4' }], controlled: ['33'] });
+  assert.deepEqual(await resolveEdge(deps, { toStatusId: '4', transitionId: null, configuredTransitionId: '31' }),
+    { transitionId: '31', ct: null, edgeFailure: null });
+  assert.deepEqual(await resolveEdge(deps, { toStatusId: '4', transitionId: null, configuredTransitionId: '33' }),
+    { transitionId: '33', ct: rule, edgeFailure: null });
+});
+
+test('a saved id that is not an available transition into this status is ignored', async () => {
+  const deps = edgeDeps({ transitions: [{ id: 31, toStatusId: '4' }, { id: 33, toStatusId: '4' }, { id: 32, toStatusId: '2' }], controlled: ['33'] });
+  for (const stale of ['999', '32']) {
+    assert.equal((await resolveEdge(deps, { toStatusId: '4', transitionId: null, configuredTransitionId: stale })).edgeFailure,
+      'SERVICE_UNAVAILABLE', stale);
+  }
+});
+
+test('an id in the payload still wins over a saved one', async () => {
+  const deps = edgeDeps({ transitions: [{ id: 31, toStatusId: '4' }, { id: 33, toStatusId: '4' }] });
+  assert.equal((await resolveEdge(deps, { toStatusId: '4', transitionId: '33', configuredTransitionId: '31' })).transitionId, '33');
+});

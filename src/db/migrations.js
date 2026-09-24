@@ -654,5 +654,11 @@ export const MIGRATIONS = [
     created_by VARCHAR(128) NOT NULL,
     PRIMARY KEY (id)
   )` },
-  { id: 'v060_vault_project_page', sql: `ALTER TABLE va_vault_space ADD COLUMN project_page_id VARCHAR(64) NULL` }
+  { id: 'v060_vault_project_page', sql: `ALTER TABLE va_vault_space ADD COLUMN project_page_id VARCHAR(64) NULL` },
+  // A child's baseline captured by its parent's tree capture points at that
+  // parent baseline: the child's approval IS the parent's. Null for a baseline
+  // captured on the item's own controlled transition.
+  { id: 'v061_baseline_captured_by', sql: `ALTER TABLE va_baseline ADD COLUMN captured_by_baseline_id BINARY(16) NULL` },
+  // Publication and repair select a parent capture's child rows by this link.
+  { id: 'v062_baseline_captured_by_index', sql: `ALTER TABLE va_baseline ADD INDEX idx_baseline_captured_by (captured_by_baseline_id)` }
 ];

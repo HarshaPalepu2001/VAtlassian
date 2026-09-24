@@ -330,6 +330,22 @@ export async function staleDrift(olderThanMs, limit = 200) {
   return rows.map(decode);
 }
 
+/**
+ * Record that a work item now lives in another project or issue type.
+ *
+ * Conditional on the scope it was last seen in, so when several collectors
+ * notice the same move at once exactly one of them wins — and only the winner
+ * writes the audit entry (lib/scopeMove.js).
+ */
+export async function moveScope({ issueId, fromProjectId, fromIssueTypeId, toProjectId, toIssueTypeId }) {
+  const result = await executeQuery(
+    `UPDATE va_item_state SET project_id = ?, issue_type_id = ?, version = version + 1
+     WHERE issue_id = ? AND project_id = ? AND issue_type_id = ?`,
+    [toProjectId, String(toIssueTypeId), issueId, fromProjectId, String(fromIssueTypeId)]
+  );
+  return (affectedRows(result) ?? 0) === 1;
+}
+
 /** Keep the denormalised header fresh. Cheap, and never worth failing over. */
 export async function refreshHeader({ issueId, issueKey, summary, reviewerAccountId, reviewerName }) {
   await executeQuery(

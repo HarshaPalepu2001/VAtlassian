@@ -6,7 +6,7 @@ someone approves or rejects the change, and asks for a signature only on
 transitions VAtlassian controls. This run checks that behaviour against changes
 made in the app and in Jira.
 
-- **How:** `test/validator-scenarios.test.js` (112 scenarios) runs the **real**
+- **How:** `test/validator-scenarios.test.js` (137 scenarios) runs the **real**
   validator runtime (`gateRuntime` + `gate.js`) and the **real** panel summary
   (`getSummary`) against a simulated Jira site and database
   (`test/helpers/validator-world.js`). Only Jira REST, SQL and the ledger are
@@ -16,8 +16,8 @@ made in the app and in Jira.
   happened to the controlled transitions since; (2) whatever the validator
   holds, the panel can decide; (3) the signature half is unchanged; (4) a
   disabled project holds nothing for drift.
-- **Result:** 1256 backend tests pass, 0 fail, 3 open decisions (marked `todo`).
-  183 UI tests, smoke test and UI build all pass.
+- **Result:** 1339 backend tests pass, 0 fail, no open decisions. 187 UI tests,
+  smoke test and UI build all pass (`npm run verify`).
 
 ## Coverage
 
@@ -32,6 +32,9 @@ made in the app and in Jira.
 | Health check | S95–S100 | validator removed or disabled, controlled vs uncontrolled, creation, all rules deleted |
 | Restore in ERROR | S101–S104 | failed restore with clean content or with drift, controlled edge, restore genuinely running |
 | No app consent | S105–S112 | user never opened VAtlassian, automation, hidden controlled transition |
+| Fields added later, moves | S113–S114 | a field tracked after v1 |
+| Sibling transitions (C) | S115–S125 | the saved transition id, stale or copied ids, Health check |
+| Child baselines (D) | S126–S137 | a parent capture gives each child its own baseline over its own fields; a child edit holds the child only and is decided on its panel; the parent is not held but its panel offers the covering decision; approve or reject from either side; independent versions (child v5, parent v1); a child type with no tracked fields; grandchildren; linked issues |
 
 The scenario asked for (baseline captured, then its controlled transition
 deleted) is S18–S21 plus the decision scenarios in `drift-functional.test.js`.
@@ -54,18 +57,21 @@ Earlier the same day: a disabled project refused drift decisions on the panel
 while the validator held the drift, so items froze. The validator no longer
 holds drift in a disabled project.
 
-## Open decisions
+## Decisions
 
 | # | Behaviour today | Scenario |
 |---|---|---|
-| A | A field's kind is part of its drift fingerprint. **Reclassifying a tracked field** in admin (for example SCALAR to TEXT) makes every baselined item in that scope show as drifted and held. It can be decided, but it creates noise. | S30 |
-| B | Drift is judged with the **current** project/issue type's tracked fields. **Moving a baselined item** to a project or type with no tracking stops its hold. The validator and the panel agree (S110), so nothing deadlocks, but the move drops governance. | S56, S57 |
-| C | Known limitation, not a bug: Jira's validator payload has no transition id. When two transitions go from the same status to the same status and one is controlled, a move without a signature on the screen is refused on both (fail closed). | S50 |
-| D | Known gap: changes only to **child** issues of a tree baseline are recorded, but the panel offers no decision for them, so the validator does not hold on them. | — |
+| A | **Decided: keep.** A field's kind is part of its drift fingerprint, so reclassifying a tracked field shows as drift on every baselined item in scope. The signer approved a value, and a type change can alter what the field holds, so it is decided like any other drift. | S30 |
+| B | **Decided: follow the destination.** A baselined item moved to another project or issue type is judged by the destination's tracked fields, as a codebeamer item follows its new tracker. The move is recorded once in the audit trail (`BASELINE_SCOPE_CHANGED`, `lib/scopeMove.js`). | S56, S57 |
+| C | **Fixed.** The validator's setup screen now saves the transition's id into its configuration, and the validator uses it to tell sibling transitions apart. The Health page flags a saved id that doesn't match its transition (critical), and a missing one where siblings make it matter (warning). | S115–S125 |
+| D | **Built.** When a parent is baselined, every child (through `parent`, recursively) gets its own baseline over its own project and issue type's fields, signed by the parent's approval (`captured_by_baseline_id`). A child's drift holds and is decided in the child; the parent is held only by its own fields. The parent's review groups changes by issue, each child against its own latest baseline, and one parent decision re-baselines or restores every child to its own latest baseline. Existing trees get child baselines at their next capture. (`docs/specs/2026-09-24-child-baselines-design.md`) | S126–S137, plus `child-baseline-capture`, `child-baseline-decisions`, `tree-node-fields`, `tree-drift-functional` and `panel-state` tests |
 
 ## Cost per transition
 
 1–2 Jira reads (issue, plus the transition list when Jira sends no id), or
 up to 4 without user consent, plus about six indexed SQL reads. The approval
 content hash, which reads the whole tree for tree baselines, is only computed
-on a signature check.
+on a signature check. Child baselines add nothing here: a child's hold reads
+its own single-issue baseline, like any item. The panel summary adds one
+indexed read for a tree parent (children waiting) or a parent-captured child
+(which capture it came with).

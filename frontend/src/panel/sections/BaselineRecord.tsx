@@ -86,6 +86,12 @@ export default function BaselineRecord({ baseline, latestApproval, record, evide
             </Badge>
           )}
         </div>
+        {baseline.capturedBy && (
+          <p className="va-secondary">
+            Baselined with {baseline.capturedBy.issueKey ?? 'its parent'} version {baseline.capturedBy.version}, signed by
+            {' '}{baseline.approvedName ?? 'the parent\'s reviewer'}.
+          </p>
+        )}
         {baseline.policyIncomplete && (
           <p className="va-warning-text">
             This baseline predates recorded role/method policy. An administrator has been notified;

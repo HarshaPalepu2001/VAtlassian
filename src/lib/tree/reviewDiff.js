@@ -1,5 +1,6 @@
 import { diffIssue } from '../diff/index.js';
 import { timeline } from '../changelog.js';
+import { groupReview } from './groupedReview.js';
 
 /**
  * Adapt the aggregate tree comparison to the review workspace's field diff
@@ -8,7 +9,15 @@ import { timeline } from '../changelog.js';
  * optional report. Keeping it separate means the approval path never treats a
  * display projection as authority.
  */
+/**
+ * `fieldsFor(node)` names each node's own tracked fields (./nodeFields.js);
+ * `summaryOf(logicalNodeId)` its current summary, for the group heading. A
+ * child node whose baseline tree entry carries `ownBaseline` (see
+ * ./childBaselines.js) is compared against that child's own latest baseline,
+ * and its group says which version that is.
+ */
 export function treeReviewDiff({ baseline, baselineTree, currentTree, treeDiff, controlledFields,
+  fieldsFor = () => controlledFields, summaryOf = () => null,
   changelogEntries = [], changelogUnavailable = false, changelogTruncated = false }) {
   const fields = [];
   const baselineById = new Map((baselineTree?.nodes ?? []).map(node => [node.logicalNodeId, node]));
@@ -22,14 +31,19 @@ export function treeReviewDiff({ baseline, baselineTree, currentTree, treeDiff, 
     if (change.kind === 'FIELD_CHANGED') {
       const isRoot = String(base?.originalIssueId ?? base?.currentIssueId ?? base?.id ?? '')
         === String(baseline?.issue_id ?? '');
+      const issueId = Number(current?.currentIssueId ?? base?.currentIssueId ?? base?.originalIssueId);
+      const group = { kind: 'ISSUE', logicalNodeId: change.logicalNodeId, issueId: Number.isFinite(issueId) ? issueId : null,
+        issueKey: nodeName, summary: summaryOf(change.logicalNodeId) ?? null, isRoot,
+        baselineVersion: Number(base?.ownBaseline?.version ?? baseline?.version ?? 0) || null };
       const nodeDiff = diffIssue({
         baseline: {
           ...baseline,
+          ...(base?.ownBaseline ? { version: base.ownBaseline.version } : {}),
           field_digests: JSON.stringify(base?.digests ?? {})
         },
         baselineValues: baselineTree?.values?.[change.logicalNodeId] ?? {},
         currentFields: currentTree?.values?.[change.logicalNodeId] ?? {},
-        controlledFields,
+        controlledFields: fieldsFor(current ?? base) ?? [],
         driftRows: [],
         // This resolver reads the root issue's changelog. Do not apply those
         // authors to a descendant that changed the same field.
@@ -41,6 +55,10 @@ export function treeReviewDiff({ baseline, baselineTree, currentTree, treeDiff, 
           ...field,
           fieldId: `${change.logicalNodeId}:${field.fieldId}`,
           fieldName: `${nodeName} · ${field.fieldName}`,
+          // The field's own name, for a view already headed by its issue.
+          label: field.fieldName,
+          issueKey: nodeName,
+          group,
           driftIds: [],
           attributionStatus: isRoot
             ? (changelogUnavailable ? 'UNAVAILABLE' : 'AVAILABLE')
@@ -67,6 +85,9 @@ export function treeReviewDiff({ baseline, baselineTree, currentTree, treeDiff, 
     fields.push({
       fieldId: `tree:${change.kind}:${change.logicalNodeId}`,
       fieldName: `${label} · ${nodeName}`,
+      label: `${label} · ${nodeName}`,
+      issueKey: nodeName,
+      group: { kind: 'STRUCTURE' },
       kind: 'scalar',
       materiality: 'MAJOR',
       retained: true,
@@ -98,6 +119,7 @@ export function treeReviewDiff({ baseline, baselineTree, currentTree, treeDiff, 
     approvedName: baseline?.approved_name ?? null,
     fidelity: baseline?.fidelity ?? null,
     fields,
+    groups: groupReview(fields),
     changedFieldCount: fields.length,
     materialFieldCount: fields.filter(field => field.semanticChange && field.materiality !== 'COSMETIC').length,
     maxMateriality: fields.length ? 'MAJOR' : null,

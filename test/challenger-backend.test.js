@@ -25,7 +25,7 @@ const mockedModules = {
     'controlledFields', 'projectConfig', 'gatedTransition',
     'declaredFieldRows', 'seedControlledFields', 'countControlledFields'
   ],
-  'db/baselineStore.js': ['writeBaseline', 'currentVersion', 'baselineForApproval'],
+  'db/baselineStore.js': ['writeBaseline', 'currentVersion', 'baselineForApproval', 'valueBatches'],
   'db/itemStateStore.js': ['upsertBaselined', 'getReview']
 };
 
@@ -117,6 +117,7 @@ const hooks = registerHooks({
           };
           export const currentVersion = async (issueId) => globalThis.vaChallenger.baselineVersion;
           export const baselineForApproval = async (issueId, approvalId) => globalThis.vaChallenger.existingBaseline || null;
+          export const valueBatches = rows => (rows.length ? [rows] : []);
         `
       };
     }

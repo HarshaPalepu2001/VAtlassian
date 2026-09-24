@@ -40,7 +40,7 @@ function App() {
     case 'va-admin': screen = <AdminConsole />; break;
     case 'va-admin-configure': screen = <AdminConsole configure />; break;
     case 'va-authenticator': screen = <TotpEnrollment />; break;
-    case 'va-gate': screen = <GateConfig readOnly={context.extension.entryPoint === 'view'} />; break;
+    case 'va-gate': screen = <GateConfig readOnly={context.extension.entryPoint === 'view'} transitionContext={context.extension.transitionContext} />; break;
     case 'confluence-byline':
     case 'confluence-banner': screen = <ConfluencePageStatus view={context.moduleKey} />; break;
     case 'confluence-action': screen = <ConfluenceProtectAction />; break;

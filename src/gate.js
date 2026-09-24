@@ -10,6 +10,15 @@ export function submittedApprovalToken(fields) {
   if (!fields || typeof fields !== 'object') return null;
   return Object.values(fields).find(value => typeof value === 'string' && /^[a-f0-9]{32}$/.test(value)) ?? null;
 }
+/** The transition id the validator's setup screen saved into its configuration
+ *  (GateConfig.tsx), or null. Jira passes the configuration as an object; a
+ *  string is parsed defensively, and anything unreadable is simply absent. */
+export function configuredTransitionId(configuration) {
+  let config = configuration;
+  if (typeof config === 'string') { try { config = JSON.parse(config); } catch { return null; } }
+  const id = config && typeof config === 'object' ? config.transitionId : null;
+  return id == null || String(id) === '' ? null : String(id);
+}
 export function rawCodeSubmitted(fields) {
   return fields && typeof fields === 'object'
     ? Object.values(fields).some(value => typeof value === 'string' && /^\d{6}$/.test(normalizeCode(value))) : false;
@@ -62,7 +71,8 @@ export function createGate(deps) {
     if (!issueKey || !fromStatusId || !toStatusId) return deny('SERVICE_UNAVAILABLE', 'MALFORMED_PAYLOAD');
     try {
       const snapshot = await deps.load({ issueKey, fromStatusId, toStatusId, transitionId,
-        approvalId: token, modifiedFields: payload?.transition?.modifiedFields });
+        approvalId: token, modifiedFields: payload?.transition?.modifiedFields,
+        configuredTransitionId: configuredTransitionId(payload?.configuration) });
       const { ct, item, issueId, projectId, issueTypeId, driftCount } = snapshot;
 
       // ── The item: held on every transition this validator is attached to ──

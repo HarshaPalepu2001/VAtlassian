@@ -13,6 +13,16 @@ export type DiffField = {
  before?: unknown; after?: unknown; churned?: boolean; attribution?: {at: number; authorName?: string; authorId?: string; source?: string; detected?:boolean; fromString?:string|null; toString?:string|null}[];
  /** { storedIdentifier: displayName } for values the comparison reduced to ids. */
  valueLabels?: Record<string, string>;
+ /** The field's own name, for a view already headed by its work item (a tree review). */
+ label?: string;
+ /** The work item this change belongs to, in a tree review. */
+ issueKey?: string;
+};
+/** One section of a parent's review: the parent, the structure, or one drifted child
+ *  (compared with that child's own latest baseline, `baselineVersion`). */
+export type ReviewGroup = {
+ kind: 'ISSUE' | 'STRUCTURE'; issueKey?: string | null; summary?: string | null; isRoot?: boolean;
+ baselineVersion?: number | null; fields: DiffField[];
 };
 export type ReportGroup = {title:string; risk?:string; whoAndWhen?:string;whatChanged:string;whyItMatters?:string;driftIds?:string[];ungrounded?:boolean};
 export type ScopeImpact = { estimateChanged?:boolean;acceptanceCriteriaChanged?:boolean;dueDateChanged?:boolean;note?:string };

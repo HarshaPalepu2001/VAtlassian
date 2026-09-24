@@ -77,6 +77,21 @@
    The ledger
    --------------------------------------------------------------------------- */
 
+/* A parent's review, one section per work item: "in this issue, these changed". */
+.va-diff-group__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.va-diff-group__title {
+  font-weight: 600;
+  color: var(--va-text);
+  overflow-wrap: anywhere;
+}
+
 .va-ledger {
   border: 1px solid var(--va-border);
   border-radius: var(--va-radius-lg);

@@ -67,6 +67,8 @@ const {default:ApprovalField}=await import('../src/field/ApprovalField.tsx');
 const {default:QueueList}=await import('../src/queue/QueueList.tsx');
 const {default:TransitionsPage}=await import('../src/admin/pages/TransitionsPage.tsx');
 const {default:DiffView}=await import('../src/review/DiffView.tsx');
+const {default:DriftSection}=await import('../src/panel/sections/DriftSection.tsx');
+const {default:BaselineRecord}=await import('../src/panel/sections/BaselineRecord.tsx');
 await import('../../src/ui-kit/edit.jsx');
 const UiKitEdit=globalThis.uiKitEdit;
 const deviceAuth=await import('../src/panel/deviceAuth.ts');
@@ -2022,4 +2024,57 @@ test('the diff reloads when the content changes, not only when a row is written'
  await act(()=>listeners0().get('JIRA_ISSUE_CHANGED')());
  await flush();await flush();
  assert.ok(evidenceReads.length>1,'new content must produce a fresh evidence read');
+});
+
+// ── A parent's review, grouped by issue (child baselines, 2026-09-24) ─────────
+
+const scalarField=(fieldId,label,issueKey)=>({fieldId,fieldName:`${issueKey} · ${label}`,label,issueKey,kind:'scalar',
+ retained:true,semanticChange:true,materiality:'MAJOR',before:'was',after:'now',attribution:[]});
+
+async function renderInto(element){
+ container=document.createElement('div');document.body.append(container);root=createRoot(container);
+ await act(()=>{root.render(element);});
+ return container;
+}
+
+test('a parent review renders one section per work item, headed by its key and summary',async()=>{
+ const parentField=scalarField('root:summary','Summary','P-1');
+ const childField=scalarField('child:summary','Summary','P-2');
+ const moved={...scalarField('tree:NODE_ADDED:x','Added node · P-4','P-4')};
+ const groups=[
+  {kind:'ISSUE',issueKey:'P-1',summary:'The parent',isRoot:true,baselineVersion:3,fields:[parentField]},
+  {kind:'STRUCTURE',fields:[moved]},
+  {kind:'ISSUE',issueKey:'P-2',summary:'A subtask',isRoot:false,baselineVersion:6,fields:[childField]}
+ ];
+ const html=(await renderInto(React.createElement(DiffView,{fields:[parentField,moved,childField],groups}))).textContent;
+ const sections=[...container.querySelectorAll('section.va-diff-group')];
+ assert.equal(sections.length,3);
+ assert.deepEqual(sections.map(s=>s.getAttribute('aria-label')),['P-1 · The parent','Structure: work items added, removed or moved','P-2 · A subtask']);
+ assert.match(sections[2].textContent,/against version 6/,'each child says which of its own baselines it is compared with');
+ assert.equal(sections[2].querySelector('.va-ledger__name').textContent,'Summary','inside its section a field is named plainly');
+ assert.ok(html.includes('now'));
+});
+
+test('without groups the diff stays one flat list, exactly as before',async()=>{
+ const field=scalarField('summary','Summary','T-1');
+ await renderInto(React.createElement(DiffView,{fields:[field]}));
+ assert.equal(container.querySelectorAll('section.va-diff-group').length,0);
+ assert.equal(container.querySelector('.va-ledger__name').textContent,'T-1 · Summary');
+});
+
+test('a parent whose children changed says a decision here covers them',async()=>{
+ const drift={count:2,materialCount:2,decidesDrift:true,policyIncomplete:false,canApprove:true,canReject:true,childrenAwaiting:2};
+ const evidence={baselineId:'b',baselineVersion:3,record:null,rejection:{deleteIssueKeys:[],recreateCount:0},restoreHistory:[],
+  drift:{count:2,materialCount:2,fields:[],groups:[
+   {kind:'ISSUE',issueKey:'P-2',isRoot:false,fields:[]},{kind:'ISSUE',issueKey:'P-3',isRoot:false,fields:[]}]}};
+ const text=(await renderInto(React.createElement(DriftSection,{drift,evidence,issueKey:'P-1'}))).textContent;
+ assert.match(text,/2 child work items have changes\. A decision here covers all of them; each can also be decided on its own\./);
+});
+
+test('a child baselined by its parent names the parent capture it came with',async()=>{
+ const baseline={baselineId:'c',version:6,approvedName:'Signer',nodeCount:1,edgeCount:0,totalFieldCount:2,treeHash:null,
+  capturedBy:{issueKey:'P-1',version:3}};
+ const text=(await renderInto(React.createElement(BaselineRecord,{baseline,latestApproval:null,record:null,
+  evidenceLoading:false,evidenceError:null,onOpen:()=>{},onRetryEvidence:()=>{}}))).textContent;
+ assert.match(text,/Baselined with P-1 version 3, signed by Signer\./);
 });

@@ -1,5 +1,5 @@
 import type { AssuranceLevel } from '../lib/assurance';
-import type { DiffField } from '../review/types';
+import type { DiffField, ReviewGroup } from '../review/types';
 
 /** One controlled, gated transition described the same way for every viewer —
  *  eligible or not. `canApprove` is the only field that varies by viewer;
@@ -33,6 +33,8 @@ export type PanelBaseline = {
   totalFieldCount: number;
   treeHash: string | null;
   policyIncomplete?: boolean;
+  /** Set when this baseline was written by its parent's capture: "Baselined with PARENT-1 v3". */
+  capturedBy?: { issueKey: string | null; version: number } | null;
 };
 
 export type PanelLatestApproval = {
@@ -76,7 +78,9 @@ export type PanelSummary = {
   latestApproval: PanelLatestApproval | null;
   /** `eligible` is this viewer's standing on the baseline, answered independently
    *  of any drift count, so the client can pair it with the count it displays. */
-  drift: { count: number; materialCount: number; decidesDrift: boolean; policyIncomplete: boolean; canApprove: boolean; canReject: boolean; eligible?: boolean };
+  drift: { count: number; materialCount: number; decidesDrift: boolean; policyIncomplete: boolean; canApprove: boolean; canReject: boolean; eligible?: boolean;
+    /** Descendants drifted against their own baselines. A parent decision covers them; they do not hold the parent. */
+    childrenAwaiting?: number };
   /** Hash of the tracked content right now; moves on every edit. */
   contentHash?: string | null;
   restore: PanelRestore | null;
@@ -106,7 +110,7 @@ export type PanelEvidence = {
   assignee?: unknown;
   reporter?: unknown;
   record: BaselineRecordData | null;
-  drift: { count: number; materialCount: number; fields: DiffField[]; addedNodes?: any[]; removedNodes?: any[]; movedNodes?: any[]; changedFields?: any[] };
+  drift: { count: number; materialCount: number; fields: DiffField[]; groups?: ReviewGroup[]; addedNodes?: any[]; removedNodes?: any[]; movedNodes?: any[]; changedFields?: any[] };
   rejection: { deleteIssueKeys: string[]; recreateCount: number };
   restoreHistory: any[];
 };

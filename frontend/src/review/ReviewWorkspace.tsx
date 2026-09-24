@@ -5,7 +5,7 @@ import { Loading } from '../ui/primitives';
 import { Notice } from '../ui/feedback';
 import { assertResult, errorMessage } from '../lib/result';
 import type { Result } from '../lib/result';
-import type { DiffField, ReportMeta, ReviewReport } from './types';
+import type { DiffField, ReportMeta, ReviewReport, ReviewGroup } from './types';
 import type { PanelEvidence } from '../panel/types';
 import DiffView from './DiffView';
 import ReportView from './ReportView';
@@ -38,6 +38,12 @@ export default function ReviewWorkspace({issueKey,evidenceHash,evidence}:{issueK
   {fields&&fields.length===0&&<p className="va-muted">Current tracked values match the baseline. Any outstanding review still requires a decision.</p>}
   {historyLimited&&<Notice>Some Jira history could not be loaded. The value comparison is current; the list of who changed it and when may be incomplete.</Notice>}
   {report&&<ReportView report={report.body} meta={report} fallback="No summary has been generated." onCite={cite}/>}
-  {!fields&&!error?<Loading label="Comparing approved and current values…"/>:fields&&<DiffView fields={fields} focusDriftId={focus}/>}
+  {!fields&&!error?<Loading label="Comparing approved and current values…"/>:fields&&<DiffView fields={fields} groups={groupsFor(evidence,fields)} focusDriftId={focus}/>}
  </div>;
+}
+/** The evidence's per-issue sections, only while they describe the fields on screen. */
+function groupsFor(evidence:PanelEvidence|null|undefined,fields:DiffField[]):ReviewGroup[]|undefined{
+ const groups=evidence?.drift?.groups;
+ if(!groups||evidence?.drift?.fields!==fields)return undefined;
+ return groups;
 }

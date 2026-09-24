@@ -67,3 +67,11 @@ test('vault attachment is unique per baseline and jira attachment', () => {
   assert.match(sql, /UNIQUE KEY uq_vault_attachment_baseline \(baseline_id, jira_attachment_id\)/);
   assert.match(sql, /content_hash CHAR\(64\) NOT NULL/);
 });
+
+test('v061 adds the parent-capture link to va_baseline', () => {
+  const sql = sqlFor('v061_baseline_captured_by');
+  assert.match(sql, /ALTER TABLE va_baseline\s+ADD COLUMN captured_by_baseline_id BINARY\(16\) NULL/);
+  assert.match(sqlFor('v062_baseline_captured_by_index'),
+    /ALTER TABLE va_baseline ADD INDEX idx_baseline_captured_by \(captured_by_baseline_id\)/);
+  assert.equal(MIGRATIONS.at(-1).id, 'v062_baseline_captured_by_index');
+});

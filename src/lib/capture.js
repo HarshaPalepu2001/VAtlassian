@@ -11,6 +11,8 @@ import { EVENT } from './ledger.js';
 import { scopeFromIssue } from './trackedFields.js';
 import { meetsAssurance } from './approval/levels.js';
 import { controlledFieldsHash, requireBaselineProvenance } from './baselinePolicy.js';
+import { readTreeWithNodeFields } from './tree/nodeFields.js';
+import { planChildBaselines, nextVersions, writeChildBaselines, publishChildBaselines } from '../db/childBaselineStore.js';
 import {
   beginTreeBaseline,
   publishTreeBaseline,
@@ -19,6 +21,9 @@ import {
 } from '../db/baselineTreeStore.js';
 
 const MAX_VERSION_ATTEMPTS = 3;
+// writeCapturedTreeBaseline's `controlledFields` parameter shadows the store
+// lookup; this is the lookup, by scope, for a child's own fields.
+const controlledFieldsForScope = controlledFields;
 
 /**
  * Two DIFFERENT approvals racing the same issue can both read the same
@@ -202,6 +207,11 @@ export async function writeCapturedTreeBaseline({
     publishTreeBaseline,
     upsertBaselined,
     tryAppend,
+    controlledFieldsFor: controlledFieldsForScope,
+    nextVersions,
+    writeChildBaselines,
+    publishChildBaselines,
+    getReview,
     ...deps
   };
 
@@ -247,6 +257,18 @@ export async function writeCapturedTreeBaseline({
         lastChangelogId: null,
         now: existing.captured_at ?? transitionAt ?? Date.now()
       });
+      // Children publish after their parent. A retry after a failure between
+      // the two finishes the job; publication is idempotent.
+      if (Number(existing.node_count) > 1) {
+        const { children } = await services.publishChildBaselines({ parentBaselineId: existing.baseline_id });
+        for (const child of children) {
+          const review = await services.getReview(child.issue_id);
+          await publishChildItemState(services,
+            { ...child, issue_key: child.issue_key ?? review?.issue_key ?? String(child.issue_id) },
+            { summary: review?.summary ?? '', approval,
+            now: existing.captured_at ?? Date.now() });
+        }
+      }
     }
     return {
       captured: true,
@@ -276,15 +298,17 @@ export async function writeCapturedTreeBaseline({
     throw error;
   }
 
-  const fieldIds = [...new Set([
-    ...controlledFields.map(field => field.field_id),
-    'project', 'issuetype', 'status', 'parent'
-  ])];
-  const stable = await services.readStableTree({
-    readTree: services.readTree, rootIssueKey: rootIssue.key, fieldIds
+  // Every node with its OWN project and issue type's fields: the parent's
+  // signature authenticates each child's content over exactly what that child
+  // tracks, which is what the child's own baseline below records.
+  const stable = await readTreeWithNodeFields({
+    readStableTree: services.readStableTree, readTree: services.readTree,
+    rootIssueKey: rootIssue.key, rootFields: controlledFields,
+    loadFields: services.controlledFieldsFor, extraFieldIds: ['status', 'parent']
   });
+  const { fieldsFor } = stable;
   const treePlan = services.planTreeCapture({
-    rootIssueId: rootIssue.id, nodes: stable.tree.nodes, controlledFields
+    rootIssueId: rootIssue.id, nodes: stable.tree.nodes, controlledFields, fieldsFor
   });
   if (treePlan.treeHash !== approval.content_hash) {
     return { captured: false, reason: 'CONTENT_CHANGED' };
@@ -341,11 +365,29 @@ export async function writeCapturedTreeBaseline({
     expectedFieldCount: treePlan.totalFieldCount,
     expectedTreeHash: treePlan.treeHash
   });
+
+  // EVERY CHILD GETS ITS OWN BASELINE (db/childBaselineStore.js), at its own
+  // next version, over its own fields, authenticated by this approval. Written
+  // before the parent publishes and published after it, so a child never has a
+  // standing baseline from a parent capture that did not complete.
+  const childRows = planChildBaselines({ treePlan, rootIssueId: rootIssue.id, fieldsFor,
+    nodeOf: issueId => stable.tree.nodes.find(node => Number(node.id) === Number(issueId)),
+    parent: { baselineId: reserved.baselineId, approvalId: approval.approvalId, accountId: approval.accountId,
+      displayName: approval.displayName, assuranceLevel: approval.assuranceLevel, policy,
+      transitionAt, capturedAt },
+    nextVersion: childRowsNeeded(treePlan, rootIssue.id)
+      ? await services.nextVersions(treePlan.nodes.map(node => node.currentIssueId ?? node.originalIssueId))
+      : () => 1 });
+  const children = childRows.length
+    ? await services.writeChildBaselines({ rows: childRows, parentBaselineId: reserved.baselineId })
+    : [];
+
   await services.publishTreeBaseline({
     baselineId: reserved.baselineId,
     issueId: Number(rootIssue.id),
     version: Number(version)
   });
+  if (children.length) await services.publishChildBaselines({ parentBaselineId: reserved.baselineId });
 
   await services.upsertBaselined({
     issueId: Number(rootIssue.id),
@@ -377,13 +419,34 @@ export async function writeCapturedTreeBaseline({
         fieldCount: treePlan.totalFieldCount,
         assuranceLevel: approval.assuranceLevel,
         fromStatusId: policy?.from_status_id ?? null,
-        toStatusId: policy?.to_status_id ?? null
+        toStatusId: policy?.to_status_id ?? null,
+        childBaselines: children.length
       }
     });
+  }
+  for (const child of children) {
+    await publishChildItemState(services, child, { summary: child.summary, approval, now: capturedAt });
+    if (services.tryAppend) {
+      await services.tryAppend({
+        actorAccountId: approval.accountId,
+        eventType: EVENT.BASELINE_CAPTURED,
+        issueId: Number(child.issue_id),
+        approvalId: approval.approvalId,
+        payload: {
+          version: Number(child.version),
+          fidelity: FIDELITY.EXACT,
+          fieldCount: child.field_count,
+          assuranceLevel: approval.assuranceLevel,
+          capturedBy: { issueId: Number(rootIssue.id), issueKey: rootIssue.key, version: Number(version) }
+        }
+      });
+    }
   }
 
   return {
     captured: true,
+    children: children.map(child => ({ issueId: Number(child.issue_id), version: Number(child.version),
+      baselineId: child.baseline_id })),
     nodeCount: treePlan.nodeCount,
     fieldCount: treePlan.totalFieldCount,
     baselineId: reserved.baselineId,
@@ -391,4 +454,28 @@ export async function writeCapturedTreeBaseline({
     valueBytes: stored.valueBytes,
     treeHash: treePlan.treeHash
   };
+}
+
+/** Whether any non-root node was captured at all: only then are versions read. */
+function childRowsNeeded(treePlan, rootIssueId) {
+  return (treePlan?.nodes ?? []).some(node => Number(node.originalIssueId) !== Number(rootIssueId));
+}
+
+/** A child baselined by its parent's capture joins the queue index as BASELINED. */
+async function publishChildItemState(services, child, { summary, approval, now }) {
+  await services.upsertBaselined({
+    issueId: Number(child.issue_id),
+    issueKey: child.issue_key,
+    projectId: Number(child.project_id),
+    issueTypeId: String(child.issue_type_id),
+    summary: summary ?? '',
+    reviewerAccountId: approval.accountId,
+    reviewerName: approval.displayName,
+    baselineId: child.baseline_id,
+    baselineVersion: Number(child.version),
+    contentHash: child.content_hash,
+    fieldDigests: typeof child.field_digests === 'string' ? child.field_digests : JSON.stringify(child.field_digests ?? {}),
+    lastChangelogId: null,
+    now
+  });
 }

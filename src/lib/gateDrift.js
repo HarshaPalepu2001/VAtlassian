@@ -58,7 +58,20 @@ export const FINDING = {
    *  va-gate. va-gate belongs on EVERY transition, because it is also what
    *  holds a drifted work item still, so a work item with unreviewed changes
    *  can change status across this one right now. */
-  HOLD_ABSENT: 'HOLD_ABSENT'
+  HOLD_ABSENT: 'HOLD_ABSENT',
+
+  /** va-gate's configuration names a different transition from the one it is
+   *  attached to — typically a transition copied in the workflow editor. The
+   *  validator trusts that saved id to tell sibling transitions apart, so it
+   *  could treat this transition as the one the id names. */
+  GATE_CONFIG_MISMATCH: 'GATE_CONFIG_MISMATCH',
+
+  /** va-gate on a transition that shares its start and destination with a
+   *  sibling, and whose configuration has no saved transition id (attached
+   *  before the setup screen recorded one). Jira's payload cannot tell the
+   *  siblings apart, so a move without a signature on the screen fails closed on
+   *  both. Opening and saving the validator once fixes it. */
+  GATE_CONFIG_MISSING: 'GATE_CONFIG_MISSING'
 };
 
 export const SEVERITY = {
@@ -73,7 +86,9 @@ const SEVERITY_OF = {
   [FINDING.GATE_DISABLED]: SEVERITY.CRITICAL,
   [FINDING.GATE_BYPASS_PATH]: SEVERITY.WARNING,
   [FINDING.GATE_ORPHANED]: SEVERITY.WARNING,
-  [FINDING.HOLD_ABSENT]: SEVERITY.CRITICAL
+  [FINDING.HOLD_ABSENT]: SEVERITY.CRITICAL,
+  [FINDING.GATE_CONFIG_MISMATCH]: SEVERITY.CRITICAL,
+  [FINDING.GATE_CONFIG_MISSING]: SEVERITY.WARNING
 };
 
 export const ANY_STATUS = '*';
@@ -181,6 +196,7 @@ export function diffWorkflow({ rows = [], workflow, appId, moduleKey = 'va-gate'
       const hold = holdAbsent(transition, workflow, pair, { appId, moduleKey });
       if (hold) findings.push(hold);
     }
+    findings.push(...savedIdFindings(workflow, pair, { appId, moduleKey }));
     return findings;
   }
 
@@ -250,6 +266,63 @@ export function diffWorkflow({ rows = [], workflow, appId, moduleKey = 'va-gate'
     }
   }
 
+  findings.push(...savedIdFindings(workflow, pair, { appId, moduleKey }));
+  return findings;
+}
+
+/** The transition id va-gate's setup screen saved into its configuration, or
+ *  null. Jira returns the configuration as a JSON string under `parameters.config`. */
+export function savedTransitionId(validator) {
+  let config = validator?.parameters?.config;
+  if (typeof config === 'string') { try { config = JSON.parse(config); } catch { return null; } }
+  const id = config && typeof config === 'object' ? config.transitionId : null;
+  return id == null || String(id) === '' ? null : String(id);
+}
+
+/** Can these two transitions start from the same status? A GLOBAL transition
+ *  starts from any status. */
+function shareStart(a, b) {
+  if (a.type === 'GLOBAL' || b.type === 'GLOBAL') return true;
+  const from = new Set((a.links ?? []).map((l) => l.fromStatusReference));
+  return (b.links ?? []).some((l) => from.has(l.fromStatusReference));
+}
+
+/**
+ * Is each enabled va-gate's saved transition id right, and present where it matters?
+ *
+ * The validator uses the saved id to tell apart transitions Jira's payload
+ * cannot (it carries statuses, never a transition id). A saved id naming
+ * another transition is CRITICAL: the validator could treat this transition as
+ * that one. A missing id is only worth reporting where a sibling shares this
+ * transition's start and destination, because nowhere else does it change
+ * anything.
+ */
+function savedIdFindings(workflow, pair, { appId, moduleKey }) {
+  const findings = [];
+  const transitions = (workflow.transitions ?? []).filter((t) => t.type !== 'INITIAL');
+  for (const transition of transitions) {
+    const ours = (transition.validators ?? []).filter((v) => isOurGate(v, { appId, moduleKey }) && !isDisabled(v));
+    if (ours.length === 0) continue;
+    const saved = ours.map(savedTransitionId);
+    const wrong = saved.find((id) => id != null && id !== String(transition.id));
+    if (wrong != null) {
+      findings.push(make(FINDING.GATE_CONFIG_MISMATCH, pair, {
+        workflowId: workflow.id,
+        transitionId: transition.id,
+        detail: `The VAtlassian validator on "${transition.name}" in "${workflow.name}" was set up for transition ${wrong}, not ${transition.id} — usually because the transition was copied. Open the validator on this transition and save it again.`
+      }));
+      continue;
+    }
+    const hasSibling = transitions.some((other) => other.id !== transition.id
+      && other.toStatusReference === transition.toStatusReference && shareStart(transition, other));
+    if (hasSibling && saved.every((id) => id == null)) {
+      findings.push(make(FINDING.GATE_CONFIG_MISSING, pair, {
+        workflowId: workflow.id,
+        transitionId: transition.id,
+        detail: `"${transition.name}" in "${workflow.name}" shares its start and destination with another transition, and its VAtlassian validator has not recorded which transition it is on. Until it does, a move without a signature on the screen is refused on both. Open the validator on this transition and save it once.`
+      }));
+    }
+  }
   return findings;
 }
 

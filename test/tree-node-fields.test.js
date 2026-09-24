@@ -1,0 +1,77 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { planTreeCapture } from '../src/lib/tree/capturePlan.js';
+import { diffTree } from '../src/lib/tree/diff.js';
+import { readTreeWithNodeFields, scopeKey, nodeScope } from '../src/lib/tree/nodeFields.js';
+
+const F = id => ({ field_id: id, field_kind: 'TEXT', store_values: true });
+const story = [F('summary'), F('customfield_1')];
+const subtask = [F('summary')];
+const node = (id, type, parent, fields) => ({ id, key: `K-${id}`, fields: { ...fields,
+  project: { id: '1' }, issuetype: { id: type }, parent: parent ? { id: parent } : null } });
+const nodes = [node('1', 'S', null, { summary: 'root', customfield_1: 'a' }), node('2', 'T', '1', { summary: 'child', customfield_1: 'ignored' })];
+const fieldsFor = n => (nodeScope(n).issueTypeId === 'S' ? story : subtask);
+
+test('each node is projected with its own issue type\'s fields', () => {
+  const plan = planTreeCapture({ rootIssueId: '1', nodes, controlledFields: story, fieldsFor });
+  const child = plan.nodes.find(n => n.originalIssueId === 2);
+  assert.deepEqual(Object.keys(JSON.parse(child.fieldDigests)), ['summary']);
+  assert.deepEqual(Object.keys(plan.values[child.logicalNodeId]), ['summary']);
+  assert.equal(plan.totalFieldCount, 3);
+});
+
+test('without fieldsFor every node uses the given list, exactly as before', () => {
+  const plan = planTreeCapture({ rootIssueId: '1', nodes, controlledFields: story });
+  assert.equal(plan.totalFieldCount, 4);
+});
+
+test('a child whose type tracks nothing is still a node, with no fields', () => {
+  const plan = planTreeCapture({ rootIssueId: '1', nodes, controlledFields: story,
+    fieldsFor: n => (nodeScope(n).issueTypeId === 'S' ? story : []) });
+  assert.equal(plan.nodeCount, 2);
+  assert.equal(plan.totalFieldCount, 2);
+});
+
+test('a change to a field the child does not track is not a child change', () => {
+  const base = planTreeCapture({ rootIssueId: '1', nodes, controlledFields: story, fieldsFor });
+  const edited = [nodes[0], node('2', 'T', '1', { summary: 'child', customfield_1: 'changed' })];
+  const now = planTreeCapture({ rootIssueId: '1', nodes: edited, controlledFields: story, fieldsFor });
+  assert.deepEqual(diffTree({ baselineTree: base, currentTree: now, controlledFields: story, scopeFor: fieldsFor }).changes, []);
+});
+
+test('a change to a field only the child tracks is found with per-node scope', () => {
+  const extra = [F('summary'), F('customfield_9')];
+  const own = n => (nodeScope(n).issueTypeId === 'S' ? story : extra);
+  const base = planTreeCapture({ rootIssueId: '1', nodes: [nodes[0], node('2', 'T', '1', { summary: 'c', customfield_9: 'a' })],
+    controlledFields: story, fieldsFor: own });
+  const now = planTreeCapture({ rootIssueId: '1', nodes: [nodes[0], node('2', 'T', '1', { summary: 'c', customfield_9: 'b' })],
+    controlledFields: story, fieldsFor: own });
+  const { changes } = diffTree({ baselineTree: base, currentTree: now, controlledFields: story, scopeFor: own });
+  assert.deepEqual(changes.map(c => [c.kind, c.fields]), [['FIELD_CHANGED', ['customfield_9']]]);
+});
+
+test('readTreeWithNodeFields re-reads once with the union when a child needs another field', async () => {
+  const reads = [];
+  const loaded = [];
+  const tree = { nodes: [node('1', 'S', null, { summary: 'r', customfield_1: 'a' }), node('2', 'X', '1', { summary: 'c' })] };
+  const extra = [F('summary'), F('customfield_9')];
+  const result = await readTreeWithNodeFields({
+    readStableTree: async ({ fieldIds }) => { reads.push([...fieldIds].sort()); return { tree }; },
+    readTree: null, rootIssueKey: 'K-1', rootFields: story,
+    loadFields: async ({ issueTypeId }) => { loaded.push(issueTypeId); return issueTypeId === 'S' ? story : extra; }
+  });
+  assert.equal(reads.length, 2);
+  assert.ok(reads[1].includes('customfield_9'));
+  assert.deepEqual(loaded, ['X'], 'the root scope is never looked up again');
+  assert.deepEqual(result.fieldsFor(tree.nodes[1]).map(f => f.field_id), ['summary', 'customfield_9']);
+  assert.deepEqual(result.fieldsFor({ projectId: 1, issueTypeId: 'S' }), story, 'planned nodes resolve too');
+  assert.equal(scopeKey(1, 'S'), '1:S');
+});
+
+test('readTreeWithNodeFields reads once when every node shares the root\'s scope', async () => {
+  let reads = 0;
+  const tree = { nodes: [node('1', 'S', null, { summary: 'r' }), node('2', 'S', '1', { summary: 'c' })] };
+  await readTreeWithNodeFields({ readStableTree: async () => { reads += 1; return { tree }; },
+    readTree: null, rootIssueKey: 'K-1', rootFields: story, loadFields: async () => assert.fail('no lookup') });
+  assert.equal(reads, 1);
+});

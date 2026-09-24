@@ -93,16 +93,19 @@ export async function prepareApproval({ issue, actor, decision, expectedEvidence
     const plan = decision === 'REJECT'
       ? prepared.baselineTree && prepared.currentTree
         ? planTreeRestore({ baselineTree: prepared.baselineTree, currentTree: prepared.currentTree,
-            controlledFields: prepared.fields })
+            controlledFields: prepared.fields, fieldsFor: prepared.fieldsFor })
         : planRestore({ diff: prepared.diff, baselineValues: prepared.baselineValues,
             controlledFields: prepared.fields, editmeta: prepared.restoreEditmeta ?? prepared.editmeta })
       : null;
     // Tree approvals and rejections use the same aggregate evidence domain.
     // Their restore plan is structural and never falls back to the legacy
-    // field-only planner.
+    // field-only planner. The count is the grouped review's: the parent's own
+    // fields, its structure, and every child that drifted against its own
+    // baseline, which is everything this decision covers.
     const decisionDiff = prepared.treeHash
       ? {
-          changedFieldCount: prepared.treeDiff?.changes?.length ?? prepared.diff?.changedFieldCount ?? 0,
+          changedFieldCount: prepared.reviewDiff?.changedFieldCount ?? prepared.treeDiff?.changes?.length
+            ?? prepared.diff?.changedFieldCount ?? 0,
           evidenceHash: prepared.treeHash
         }
       : prepared.diff;

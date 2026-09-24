@@ -11,8 +11,13 @@ import { createTreeReader } from './tree/jira.js';
 import { readStableTree } from './tree/stableRead.js';
 import { planTreeCapture } from './tree/capturePlan.js';
 import { diffTree } from './tree/diff.js';
+import { readTreeWithNodeFields } from './tree/nodeFields.js';
+import { logicalNodeId } from './tree/model.js';
+import { ownedChildBaselines } from './tree/childBaselines.js';
+import { activeBaseline, activeBaselines } from '../db/baselineStore.js';
 import { eventTime } from '../triggers/retry.js';
 import { DETECTED_VIA } from './detectedVia.js';
+import { recordScopeMove } from './scopeMove.js';
 
 /**
  * Aggregate tree drift.
@@ -99,7 +104,7 @@ function eventIdentity(event) {
  * evidence, not reporting it.
  */
 export async function collectTree({ rootIssueId, rootIssueKey, detectedVia = DETECTED_VIA.EVENT,
-  actorAccountId = null, eventId = null, eventAt = null, now = Date.now() }) {
+  actorAccountId = null, eventId = null, eventAt = null, now = Date.now(), scopeFollowed = false }) {
   const review = await getReview(rootIssueId);
   if (!review || review.baseline_id == null) {
     return { outcome: OUTCOME.NO_BASELINE };
@@ -117,21 +122,51 @@ export async function collectTree({ rootIssueId, rootIssueKey, detectedVia = DET
     projectId: Number(review.project_id),
     issueTypeId: String(review.issue_type_id)
   });
-  const fieldIds = cFields.map(f => f.field_id);
-
   const reader = createTreeReader({ api, route });
-  let currentTree;
+  let currentTree, fieldsFor;
   try {
-    const res = await readStableTree({ readTree: reader.read.bind(reader), rootIssueKey, fieldIds });
-    currentTree = res.tree;
+    ({ tree: currentTree, fieldsFor } = await readTreeWithNodeFields({ readStableTree,
+      readTree: reader.read.bind(reader), rootIssueKey, rootFields: cFields, loadFields: controlledFields }));
   } catch (e) {
     return { outcome: 'ERROR', error: e.message };
   }
 
-  const baselineTree = await readBaselineTree(review.baseline_id);
-  const plannedCurrentTree = planTreeCapture({ rootIssueId, nodes: currentTree.nodes, controlledFields: cFields });
+  // MOVED TO ANOTHER PROJECT OR ISSUE TYPE. The item now follows the
+  // destination's configuration (lib/scopeMove.js). The tree was just read with
+  // the OLD scope's fields, so once the move is recorded, measure again under
+  // the new scope. Once only: scopeFollowed stops a second hop.
+  const rootNow = currentTree.nodes.find(node => String(node.id) === String(rootIssueId));
+  const toProjectId = Number(rootNow?.fields?.project?.id);
+  const toIssueTypeId = rootNow?.fields?.issuetype?.id == null ? null : String(rootNow.fields.issuetype.id);
+  if (!scopeFollowed && toProjectId && toIssueTypeId
+      && (toProjectId !== Number(review.project_id) || toIssueTypeId !== String(review.issue_type_id))) {
+    const destination = await controlledFields({ projectId: toProjectId, issueTypeId: toIssueTypeId });
+    if (await recordScopeMove({ issueId: rootIssueId, review, projectId: toProjectId, issueTypeId: toIssueTypeId,
+      actorAccountId, destinationFieldCount: destination.length })) {
+      return collectTree({ rootIssueId, rootIssueKey, detectedVia, actorAccountId, eventId, eventAt, now, scopeFollowed: true });
+    }
+  }
 
-  const { changes } = diffTree({ baselineTree, currentTree: plannedCurrentTree, controlledFields: cFields });
+  const baselineTree = await readBaselineTree(review.baseline_id);
+  const plannedCurrentTree = planTreeCapture({ rootIssueId, nodes: currentTree.nodes, controlledFields: cFields, fieldsFor });
+
+  const measured = diffTree({ baselineTree, currentTree: plannedCurrentTree, controlledFields: cFields,
+    scopeFor: fieldsFor }).changes;
+
+  // A CHILD'S CONTENT IS THE CHILD'S DRIFT, NOT ITS PARENT'S. A child that
+  // carries its own latest baseline is held and decided in the child
+  // (lib/collect.js, the validator, its own panel), so a change to its fields
+  // is not parent drift. Otherwise the child's own approved change would leave
+  // the parent drifted, forever, against the child content it once captured.
+  // The parent keeps its own fields and its structure: nodes added, removed or
+  // moved. A child with no baseline of its own (a tree captured before child
+  // baselines existed) is measured against the parent's node, as before.
+  const rootLogicalNodeId = logicalNodeId(rootIssueId);
+  const owned = measured.some(c => c.kind === 'FIELD_CHANGED' && c.logicalNodeId !== rootLogicalNodeId)
+    ? await ownedChildBaselines({ parentBaseline: await activeBaseline(Number(rootIssueId)), baselineTree, activeBaselines })
+    : new Map();
+  const changes = measured.filter(c => c.kind !== 'FIELD_CHANGED' || c.logicalNodeId === rootLogicalNodeId
+    || !owned.has(c.logicalNodeId));
 
   if (changes.length === 0) return { outcome: OUTCOME.NO_CHANGE };
 
@@ -215,8 +250,9 @@ export async function collectTree({ rootIssueId, rootIssueKey, detectedVia = DET
  * the aggregate collector once per root.
  */
 export async function collectAffectedTrees(event, deps = { affectedTreeRoots, collectTree }) {
-  const roots = await deps.affectedTreeRoots(eventIdentity(event));
-  return Promise.all(roots.map(root => deps.collectTree({
+  const identity = eventIdentity(event);
+  const roots = await deps.affectedTreeRoots(identity);
+  const trees = Promise.all(roots.map(root => deps.collectTree({
     rootIssueId: root.rootIssueId,
     rootIssueKey: root.rootIssueKey,
     detectedVia: DETECTED_VIA.EVENT,
@@ -224,4 +260,22 @@ export async function collectAffectedTrees(event, deps = { affectedTreeRoots, co
     eventAt: eventTime(event),
     now: Date.now()
   })));
+  // THE ISSUE ITSELF, WHEN IT HAS A SINGLE-ISSUE BASELINE OF ITS OWN. A child
+  // baselined by its parent's capture carries exactly that, and the tree
+  // collectors above measure only parents: its own content is its own drift,
+  // measured by the single-issue collector like any flat baseline.
+  const own = deps.collect && deps.ownFlatBaseline && identity.issueId != null
+    && await deps.ownFlatBaseline(Number(identity.issueId))
+    ? deps.collect({ issueId: Number(identity.issueId), issueKey: identity.issueKey,
+      detectedVia: DETECTED_VIA.EVENT, eventId: event?.eventId ?? event?.id ?? '', eventAt: eventTime(event),
+      now: Date.now() })
+    : null;
+  const results = await trees;
+  return own ? [...results, await own] : results;
+}
+
+/** Whether this issue's standing baseline is a single-issue (flat) one. */
+export async function ownFlatBaseline(issueId, read = activeBaseline) {
+  const baseline = await read(issueId);
+  return Boolean(baseline && !baseline.tree_hash);
 }

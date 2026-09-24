@@ -13,18 +13,25 @@ function withPlanningAliases(node, digests) {
   return node;
 }
 
-export function planTreeCapture({ rootIssueId, nodes, controlledFields }) {
+/**
+ * `fieldsFor(node)` names the fields that node tracks: its own project and
+ * issue type's Controlled Fields (./nodeFields.js). Without it every node uses
+ * `controlledFields`, exactly as before per-node tracking.
+ */
+export function planTreeCapture({ rootIssueId, nodes, controlledFields, fieldsFor = () => controlledFields }) {
   if (!Array.isArray(nodes) || nodes.length === 0) throw new FailClosed('MISSING_ROOT');
   if (nodes.length > TREE_LIMIT) throw new FailClosed('TREE_LIMIT_EXCEEDED');
 
   const planned = nodes.map(node => {
     if (node?.id == null || !node.fields) throw new FailClosed('MISSING_ROOT');
-    const projection = project(node.fields, controlledFields);
-    if (Object.keys(projection.raw).length !== controlledFields.length) {
+    const own = fieldsFor(node) ?? [];
+    const projection = project(node.fields, own);
+    if (Object.keys(projection.raw).length !== own.length) {
       throw new FailClosed('BASELINE_VALUES_REQUIRED');
     }
     return {
       source: node,
+      ownCount: own.length,
       logicalNodeId: logicalNodeId(node.id),
       parentLogicalNodeId: node.fields.parent?.id == null ? null : logicalNodeId(node.fields.parent.id),
       ...projection
@@ -83,7 +90,7 @@ export function planTreeCapture({ rootIssueId, nodes, controlledFields }) {
     treeHash,
     nodeCount: durableNodes.length,
     edgeCount,
-    totalFieldCount: durableNodes.length * controlledFields.length,
+    totalFieldCount: planned.reduce((count, node) => count + node.ownCount, 0),
     nodes: durableNodes,
     values
   };

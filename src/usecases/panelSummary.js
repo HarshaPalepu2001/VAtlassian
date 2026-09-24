@@ -9,7 +9,7 @@ import { adminIncidentCount } from '../db/incidentStore.js';
 import { credentialState } from '../db/credentialStore.js';
 import { isActiveAdmin } from '../db/adminStore.js';
 import { restoresForIssue } from '../db/restoreStore.js';
-import { activeRootsForNode, rootNodeDigests } from '../db/baselineTreeStore.js';
+import { activeRootsForNode, rootNodeDigests, driftedDescendants, capturingParent } from '../db/baselineTreeStore.js';
 import { isEligible } from '../lib/reviewer.js';
 import { baselinePolicy } from '../lib/baselinePolicy.js';
 import { baselineDecisionMeaning } from '../lib/approval/challenge.js';
@@ -178,7 +178,16 @@ export async function getSummary(args) { return respond(async () => {
   // those is exactly what panel:getSummary must not do.
   const materialityOf = new Map((declared ?? []).map(f => [f.field_id, f.materiality]));
   const materialCount = drifted.filter(id => (materialityOf.get(id) ?? MATERIALITY.MAJOR) !== MATERIALITY.COSMETIC).length;
-  const pendingDrift = Boolean(baseline) && driftCount > 0;
+  // CHILDREN WAITING. Each child a parent's capture reached carries its own
+  // baseline and is held and decided in its own right; a parent decision
+  // covers them all (re-baselines or restores every child), so it is offered
+  // here too while any is drifted. The parent itself is not held by them:
+  // `driftCount` stays its own fields. Both reads are single indexed rows.
+  const [childrenAwaiting, capturedBy] = await Promise.all([
+    baseline?.tree_hash ? driftedDescendants(baseline.baseline_id).catch(() => 0) : 0,
+    baseline?.captured_by_baseline_id ? capturingParent(baseline.captured_by_baseline_id).catch(() => null) : null
+  ]);
+  const pendingDrift = Boolean(baseline) && (driftCount > 0 || childrenAwaiting > 0);
   const policyIncomplete = pendingDrift && !policy;
 
   // ELIGIBILITY IS A FACT ABOUT THE VIEWER, NOT ABOUT THE COUNTER.
@@ -204,7 +213,9 @@ export async function getSummary(args) { return respond(async () => {
   const tier = (anyEligible || decidesDrift) ? 'actor' : 'observer';
 
   let livingState = 'Waiting on signature';
-  if (decidesDrift) {
+  if (decidesDrift && driftCount === 0) {
+    livingState = `${childrenAwaiting === 1 ? '1 child work item has' : `${childrenAwaiting} child work items have`} changes awaiting a decision`;
+  } else if (decidesDrift) {
     livingState = 'Changes since approval need a decision';
   } else if (policyIncomplete) {
     livingState = 'A change needs a decision, but the rule that signed this content is incomplete. An administrator has been notified.';
@@ -259,7 +270,8 @@ export async function getSummary(args) { return respond(async () => {
       edgeCount: Number(baseline.edge_count ?? 0),
       totalFieldCount: Number(baseline.total_field_count ?? baseline.field_count ?? 0),
       treeHash: baseline.tree_hash ?? null,
-      policyIncomplete: !policy
+      policyIncomplete: !policy,
+      capturedBy: capturedBy ? { issueKey: capturedBy.issueKey, version: capturedBy.version } : null
     } : null,
     // The approval that governs this work item when it has no baseline of its
     // own: it is a node inside a parent's tree baseline. Named here so an
@@ -283,7 +295,7 @@ export async function getSummary(args) { return respond(async () => {
       decidedAt: approval.decided_at != null ? Number(approval.decided_at) : null,
       transitionId: approval.transition_id ?? null
     } : null,
-    drift: { count: driftCount, materialCount, decidesDrift, policyIncomplete,
+    drift: { count: driftCount, materialCount, childrenAwaiting, decidesDrift, policyIncomplete,
       // Whether this viewer COULD decide drift on this baseline, independent of
       // whether the stored counter currently shows any. The client needs both.
       eligible: baselineEligible,

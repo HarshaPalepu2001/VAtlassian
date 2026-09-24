@@ -1,7 +1,7 @@
 import api, { route } from '@forge/api';
 import { restoreById, claimRestore, heartbeatRestore, beginRestoreVerification,
   finishQueuedRestore, markRestoreQueued, markRestoreQueueFailure, failRestore } from '../db/restoreStore.js';
-import { activeBaseline } from '../db/baselineStore.js';
+import { activeBaseline, activeBaselines, readAllValues } from '../db/baselineStore.js';
 import { approvalById } from '../db/approvalStore.js';
 import { markDecided } from '../db/driftStore.js';
 import { release } from '../db/itemStateStore.js';
@@ -14,6 +14,8 @@ import { scopeFromIssue } from '../lib/trackedFields.js';
 import { createTreeReader } from '../lib/tree/jira.js';
 import { readStableTree } from '../lib/tree/stableRead.js';
 import { planTreeCapture } from '../lib/tree/capturePlan.js';
+import { readTreeWithNodeFields } from '../lib/tree/nodeFields.js';
+import { withChildBaselines } from '../lib/tree/childBaselines.js';
 import { executeTreeRestore } from '../lib/tree/restoreExecutor.js';
 import { verifyTreeRestore } from '../lib/tree/restoreVerifier.js';
 import { claimRestoreAction, finishRestoreAction, recordReplacement,
@@ -82,12 +84,17 @@ async function defaultPrepare({ restore, baseline }) {
   const editmeta = editResponse.ok ? (await editResponse.json()).fields ?? {} : {};
   const { fields } = scopeFromIssue({ declared, issueFields: issue.fields, editmetaFields: editmeta });
   const reader = createTreeReader({ api: forgeApi, route });
-  const stable = await readStableTree({ readTree: reader.read.bind(reader), rootIssueKey: issue.key,
-    fieldIds: fields.map(field => field.field_id) });
-  const captured = planTreeCapture({ rootIssueId: issue.id, nodes: stable.tree.nodes, controlledFields: fields });
+  const stable = await readTreeWithNodeFields({ readStableTree, readTree: reader.read.bind(reader),
+    rootIssueKey: issue.key, rootFields: fields, loadFields: controlledFields });
+  const { fieldsFor } = stable;
+  const captured = planTreeCapture({ rootIssueId: issue.id, nodes: stable.tree.nodes, controlledFields: fields, fieldsFor });
   return {
-    issue, issueId: Number(issue.id), projectId, config, fields,
-    baseline, baselineTree: await readBaselineTree(baseline.baseline_id),
+    issue, issueId: Number(issue.id), projectId, config, fields, fieldsFor,
+    // The same tree the reviewer rejected against (usecases/panelAccess.js):
+    // each child that carries its own latest baseline stands as that baseline,
+    // so verification checks each issue against its own record.
+    baseline, baselineTree: await withChildBaselines({ parentBaseline: baseline,
+      baselineTree: await readBaselineTree(baseline.baseline_id), activeBaselines, readAllValues, readBaselineTree }),
     currentTree: { nodes: captured.nodes, values: captured.values },
     reader, forgeApi
   };
@@ -112,14 +119,14 @@ async function defaultExecute({ restoreId, restore, prepared, plan, maxActions }
   };
   return executeTreeRestore({ restoreId, rootIssueKey: prepared.issue.key,
     baselineTree: prepared.baselineTree, currentTree: prepared.currentTree,
-    controlledFields: prepared.fields, adapters, plan, maxActions });
+    controlledFields: prepared.fields, fieldsFor: prepared.fieldsFor, adapters, plan, maxActions });
 }
 
 async function defaultVerify({ prepared, restoreId }) {
   const replacements = await readReplacements(restoreId);
   return verifyTreeRestore({ readStableTree, readTree: prepared.reader.read.bind(prepared.reader),
     rootIssueKey: prepared.issue.key, baselineTree: prepared.baselineTree,
-    controlledFields: prepared.fields, replacements,
+    controlledFields: prepared.fields, fieldsFor: prepared.fieldsFor, replacements,
     expectedRootStatusId: null });
 }
 
