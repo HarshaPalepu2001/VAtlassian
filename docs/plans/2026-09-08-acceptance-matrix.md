@@ -11,8 +11,11 @@ rendering a module, or accepting a REST parameter is marked `Needs live` and is
 listed in "Live acceptance still required" below. No row here asserts 21 CFR
 Part 11 compliance; that is a validation exercise, not a test result.
 
-Verification run for this matrix: 545 backend tests passing, 129/129 modules
-import cleanly, frontend build succeeds, `forge lint` reports no issues.
+Verification run for this matrix: 570 backend tests passing, 10 frontend tests
+passing, 130/130 modules import cleanly, frontend build succeeds, `forge lint`
+reports no issues. Forge development deployment succeeded as version 2.24.0, and
+the development Jira install on the nominated non-production Jira site is up to date.
+Interactive Jira acceptance remains open.
 
 ## 1. A controlled transition must be declared on both sides
 
@@ -76,6 +79,7 @@ import cleanly, frontend build succeeds, `forge lint` reports no issues.
 | Parent and issue links revert | Met | `restoreLinks()` reconciles links by type, direction and identity, validating both complete lists before any mutation. `test/restore-correctness.test.js` |
 | Restore is confirmed by reading Jira back | Met | `src/lib/restore/verifier.js` — a field is `succeeded` only after a fresh read matches the approved digest; a field Jira omits from the read is never counted as verified |
 | A restore cannot silently report success | Met | `tally()` derives state from verification, not from HTTP status. `test/restore-verification.test.js` |
+| Abandoned approve/reject operation locks recover instead of blocking forever | Met (local) | `DECIDING`/`RESTORING` use a 60-second lease, challenge and submit share stale-lock behavior, and reconcile sweeps stale locks. Durable `LOCKED` records still block. `src/lib/decision.js`, `src/usecases/approval.js`, `src/db/itemStateStore.js`, `test/lock-lease.test.js`, `test/approval-submit.test.js` |
 
 ## 7. Signature integrity
 
