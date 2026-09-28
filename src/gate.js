@@ -96,7 +96,11 @@ export function createGate(deps) {
       if (['RESTORING', 'DECIDING'].includes(item?.state) || item?.lock_token) return deny('RESTORE_IN_PROGRESS', 'ITEM_BUSY');
       if (item?.state === 'LOCKED') return deny('RECORD_LOCKED', 'ITEM_LOCKED');
       if (!projectDisabled && !Number.isSafeInteger(driftCount)) return deny('UNDECIDED_DRIFT', 'DRIFT_UNREADABLE');
-      if (!projectDisabled && driftCount > 0) return deny('UNDECIDED_DRIFT', 'DRIFT_OUTSTANDING');
+      // A link approved on the other end and not yet recorded here is still
+      // drift until it is (jobs/linkWorker.js); the refusal says it is coming.
+      if (!projectDisabled && driftCount > 0) {
+        return deny(snapshot.linkPending ? 'LINK_DECISION_PENDING' : 'UNDECIDED_DRIFT', 'DRIFT_OUTSTANDING');
+      }
 
       // ── The edge: a signature only where VAtlassian controls it ──────────
       //

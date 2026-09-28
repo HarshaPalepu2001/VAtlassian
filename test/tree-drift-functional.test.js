@@ -166,6 +166,8 @@ function flatFixture() {
     getReview: async () => f.review,
     activeBaseline: async () => f.baseline,
     controlledFields: async () => fields,
+    // A flat item: no approved tree covers it, so it tracks its own fields.
+    activeRootsForNode: async () => [],
     projectConfig: async () => ({ enabled: true }),
     reviewStatusIds: async () => ['20'],
     recordObservation: async () => {},

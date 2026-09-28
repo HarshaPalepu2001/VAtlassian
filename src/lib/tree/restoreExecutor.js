@@ -205,7 +205,11 @@ export async function executeTreeRestore({
         const regularFields = { ...(step.fields ?? {}) };
         delete regularFields.issuelinks;
         if (Object.keys(regularFields).length > 0) {
-          await adapters.editIssue(target, regularFields);
+          // Rich text points at the files the item has now: the originals where
+          // they survive, the restored copies where they did not.
+          const liveIssueId = replacementsByLogical.get(step.logicalNodeId)?.newIssueId ?? identity.issueId;
+          await adapters.editIssue(target, typeof adapters.pointAtLiveFiles === 'function'
+            ? await adapters.pointAtLiveFiles(liveIssueId, regularFields) : regularFields);
         }
         if (legacyLinks !== undefined) {
           if (typeof adapters.restoreLinks !== 'function') throw new Error('Link restore adapter is unavailable');
@@ -214,6 +218,17 @@ export async function executeTreeRestore({
       } else if (step.kind === 'RESTORE_LINKS') {
         if (target == null) throw new Error('Link restore target is unavailable');
         await adapters.restoreLinks(target, step.links ?? []);
+      } else if (step.kind === 'RESTORE_ATTACHMENTS') {
+        if (target == null) throw new Error('Attachment restore target is unavailable');
+        if (typeof adapters.restoreAttachments !== 'function') throw new Error('Attachment restore adapter is unavailable');
+        // A recreated work item has a new id, and its restored files are
+        // recorded against it; the vaulted copies are still filed under the
+        // original item.
+        const replacement = replacementsByLogical.get(step.logicalNodeId);
+        await adapters.restoreAttachments({ issueKey: String(target),
+          issueId: replacement?.newIssueId ?? identity.issueId,
+          sourceIssueId: baselineNode?.originalIssueId ?? baselineNode?.currentIssueId ?? identity.issueId,
+          target: step.attachments ?? [] });
       } else if (step.kind === 'DELETE_ADDED_NODE') {
         if (target == null) throw new Error('Delete target is unavailable');
         // ── EVIDENCE BEFORE DESTRUCTION ────────────────────────────────────

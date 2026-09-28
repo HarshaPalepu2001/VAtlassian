@@ -4,15 +4,17 @@ import { view } from '@forge/bridge';
 import '@atlaskit/css-reset';
 import './ui/tokens.css';
 import './ui/product.css';
+import './ui/surfaces.css';
 import { Loading,Page } from './ui/primitives';
 import { Notice } from './ui/feedback';
 import IssueContext from './context/IssueContext';
+import { isReviewContext } from './review/openReview';
 const AdminConsole=lazy(()=>import('./admin/AdminConsole'));
 const IssuePanel=lazy(()=>import('./panel/IssuePanel'));
 const QueueList=lazy(()=>import('./queue/QueueList'));
 const TotpEnrollment=lazy(()=>import('./totp/TotpEnrollment'));
 const GateConfig=lazy(()=>import('./gate/GateConfig'));
-const DiffModal=lazy(()=>import('./review/DiffModal'));
+const ReviewWindow=lazy(()=>import('./review/ReviewWindow'));
 const WebAuthnPopup=lazy(()=>import('./panel/WebAuthnPopup'));
 const ApprovalField=lazy(()=>import('./field/ApprovalField'));
 const ConfluenceSpaceSetup = lazy(() => import('./confluence/ConfluenceSpaceSetup'));
@@ -31,7 +33,7 @@ function App() {
   if (error) return <Page title="Could not start"><Notice danger>Context could not be read. Reload this page.</Notice></Page>;
   if (!context) return <Loading />;
   let screen: React.ReactNode;
-  if (context.extension.modal?.fields) screen = <DiffModal />;
+  if (isReviewContext(context.extension.modal)) screen = <ReviewWindow issueKey={context.extension.modal.issueKey} tab={context.extension.modal.tab} />;
   else switch (context.moduleKey) {
     case 'va-device-approval-field': screen = <ApprovalField context={context as any} />; break;
     case 'va-panel': screen = <IssuePanel />; break;

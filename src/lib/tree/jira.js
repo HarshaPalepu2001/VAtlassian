@@ -1,7 +1,14 @@
 import { FailClosed } from '../errors.js';
 import { TREE_LIMIT } from './model.js';
+import { canonicaliseItems } from '../attachmentIdentity.js';
 
-export function createTreeReader({ api, route }) {
+/**
+ * `canonicalise` reads each node's attachments under the ids they stand for
+ * (../attachmentIdentity.js), so every tree comparison — capture, drift, the
+ * approval hash, restore and its verification — sees a restored file as the
+ * approved one. One lookup per read, none when no node has an attachment.
+ */
+export function createTreeReader({ api, route, canonicalise = canonicaliseItems }) {
   return {
     async read(rootIssueKey, fieldIds) {
       const nodes = [];
@@ -96,6 +103,7 @@ export function createTreeReader({ api, route }) {
         }
       }
 
+      await canonicalise(nodes);
       return { nodes, edges };
     }
   };

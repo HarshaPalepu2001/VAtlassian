@@ -3,6 +3,7 @@ import { baselineHistory } from '../db/baselineStore.js';
 import { restoresForIssue } from '../db/restoreStore.js';
 import { approvalById } from '../db/approvalStore.js';
 import { buildRecord } from '../lib/record.js';
+import { attachmentRejection, removedNodeFiles } from '../lib/restore/attachmentPreflight.js';
 
 /**
  * THE HEAVY READ — recursive tree, retained values, changelog attribution,
@@ -10,9 +11,10 @@ import { buildRecord } from '../lib/record.js';
  *
  * Loaded after the summary, or when the evidence section opens. Uses
  * panelAccess.js's snapshot() mechanics unchanged: this module adds no new
- * Jira or SQL reads of its own beyond the two narrow history lists, it only
- * shapes what snapshot() already produces into the evidence half of the panel
- * model. Every approval challenge/submit/retry still performs its own fresh
+ * Jira or SQL reads of its own beyond the two narrow history lists and, when a
+ * rejection would re-upload files, one indexed lookup of their vaulted copies.
+ * It only shapes what snapshot() already produces into the evidence half of
+ * the panel model. Every approval challenge/submit/retry still performs its own fresh
  * authoritative read — this is presentation, not authorization.
  */
 
@@ -102,6 +104,12 @@ export async function getEvidence(args) { return respond(async () => {
   const viewableTreeDiff = filterViewableTreeDiff(prepared.treeDiff, viewableTree);
   const viewableReviewDiff = filterViewableReviewDiff(prepared.reviewDiff, viewableTree);
   const { groupedDrift, deleteIssueKeys, recreateCount } = buildTreeRejection({ tree: viewableTree, treeDiff: viewableTreeDiff });
+  // Files a rejection deletes, re-uploads from the vault, or cannot restore.
+  const attachments = baseline ? await attachmentRejection({
+    reviewFields: viewableReviewDiff?.fields ?? prepared.diff?.fields ?? [],
+    issue: { issueId: prepared.issueId, issueKey: issue.key },
+    removedNodes: removedNodeFiles({ treeDiff: viewableTreeDiff, baselineTree: prepared.baselineTree })
+  }) : null;
 
   return {
     baselineId: baseline?.baseline_id ? Buffer.from(baseline.baseline_id).toString('hex') : null,
@@ -119,7 +127,7 @@ export async function getEvidence(args) { return respond(async () => {
       ...(viewableReviewDiff?.groups ? { groups: viewableReviewDiff.groups } : {}),
       ...groupedDrift
     },
-    rejection: { deleteIssueKeys, recreateCount },
+    rejection: { deleteIssueKeys, recreateCount, attachments },
     restoreHistory: restores
   };
 }); }

@@ -17,6 +17,9 @@ modules:
     - key: va-vault-consumer
       queue: va-vault-queue
       function: vault-worker
+    - key: va-link-consumer
+      queue: va-link-queue
+      function: link-worker
   sql:
     - key: main
       engine: mysql
@@ -29,13 +32,13 @@ modules:
       resource: main-ui
       resolver:
         function: panel-resolver
-      title: Approval & Baseline
+      title: VAtlassian
   jira:issueContext:
     - key: va-context
       resource: main-ui
       resolver:
         function: panel-resolver
-      title: Approval & Baseline
+      title: VAtlassian
       label: Baseline status
       dynamicProperties:
         function: issue-status
@@ -91,7 +94,7 @@ modules:
         experience: [ issue-view ]
         formatter:
           expression: "value == null || value == '' ? 'Not approved' : 'Approval recorded
-            — see Approval & Baseline'"
+            — see the VAtlassian panel'"
           export: true
       edit:
         resource: ui-kit-approval-edit
@@ -124,7 +127,7 @@ modules:
         experience: [ issue-view ]
         formatter:
           expression: "value == null || value == '' ? 'Not approved' : 'Approval recorded
-            — see Approval & Baseline'"
+            — see the VAtlassian panel'"
           export: true
       edit:
         resource: main-ui
@@ -204,6 +207,11 @@ modules:
         - avi:confluence:created:attachment
         - avi:confluence:updated:attachment
         - avi:confluence:deleted:attachment
+  # TEMPORARY live probe for the attachment design (src/jobs/probe.js).
+  # Read-only, guarded by the encrypted PROBE_SECRET variable. Remove when done.
+  webtrigger:
+    - key: va-probe
+      function: probe
   scheduledTrigger:
     - key: trigger-five-minute
       function: runner-five-minute
@@ -255,11 +263,16 @@ modules:
         - path: value
           type: string
   function:
+    - key: probe
+      handler: jobs/probe.handler
     - key: restore-worker
       handler: jobs/restoreWorker.handler
       timeoutSeconds: 600
     - key: vault-worker
       handler: jobs/vaultWorker.handler
+      timeoutSeconds: 600
+    - key: link-worker
+      handler: jobs/linkWorker.handler
       timeoutSeconds: 600
     - key: confl-reconcile-wrk
       handler: jobs/confluenceReconcile.handler
@@ -345,5 +358,10 @@ permissions:
     - read:content-details:confluence
     - write:attachment:confluence
     - write:confluence-file
+    # A rejection puts a removed file back by downloading its vaulted copy
+    # (lib/vaultConfluence.js downloadVaultAttachment). The v1 download
+    # endpoint needs this with read:content-details:confluence (above). Forge
+    # does not accept the classic read:confluence-file.
+    - read:attachment:confluence
   content:
     styles: [ unsafe-inline ]

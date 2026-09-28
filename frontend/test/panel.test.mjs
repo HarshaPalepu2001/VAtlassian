@@ -27,7 +27,8 @@ const hooks=registerHooks({
   if(url==='panel:bridge')return {format:'module',shortCircuit:true,source:`
    export const invoke=(...args)=>globalThis.panelTransport.invoke(...args);
    export const events={on:async(name,cb)=>globalThis.panelTransport.on(name,cb),emit:async(...args)=>{globalThis.panelTransport.emitted.push(args);globalThis.panelTransport.deliver?.(...args);}};
-   export const view={refresh:async()=>{globalThis.panelTransport.redraws=(globalThis.panelTransport.redraws??0)+1;},submit:v=>{globalThis.panelTransport.submitted.push(v);},getContext:async()=>globalThis.panelTransport.contextPromise??globalThis.panelTransport.context};export const router={open:async()=>{}};`};
+   export const view={refresh:async()=>{globalThis.panelTransport.redraws=(globalThis.panelTransport.redraws??0)+1;},close:async p=>{(globalThis.panelTransport.closed??=[]).push(p);},submit:v=>{globalThis.panelTransport.submitted.push(v);},getContext:async()=>globalThis.panelTransport.contextPromise??globalThis.panelTransport.context};export const router={open:async()=>{}};
+   export class Modal{constructor(o){this.options=o;}open(){(globalThis.panelTransport.modals??=[]).push(this.options);return Promise.resolve();}}`};
   if(url==='panel:button')return {format:'module',shortCircuit:true,source:`
    import React from '${frontendReact('react')}';
    export default function Button({children,onClick,isDisabled}){return React.createElement('button',{onClick,disabled:isDisabled},children);}`};
@@ -67,7 +68,8 @@ const {default:ApprovalField}=await import('../src/field/ApprovalField.tsx');
 const {default:QueueList}=await import('../src/queue/QueueList.tsx');
 const {default:TransitionsPage}=await import('../src/admin/pages/TransitionsPage.tsx');
 const {default:DiffView}=await import('../src/review/DiffView.tsx');
-const {default:DriftSection}=await import('../src/panel/sections/DriftSection.tsx');
+const {default:BaselineSection}=await import('../src/panel/sections/BaselineSection.tsx');
+const {default:ReviewWindow}=await import('../src/review/ReviewWindow.tsx');
 const {default:BaselineRecord}=await import('../src/panel/sections/BaselineRecord.tsx');
 await import('../../src/ui-kit/edit.jsx');
 const UiKitEdit=globalThis.uiKitEdit;
@@ -387,12 +389,12 @@ test('zero applicable actions renders the controlled facts with no enabled appro
  assert.equal(fieldSelect('Approval transition'),undefined);
 });
 
-test('exactly one applicable action is shown directly, without a selector, labelled "Approve -> destination"',async()=>{
+test('exactly one applicable action is shown directly, without a selector, labelled "Approve to destination"',async()=>{
  setup(async key=>key==='panel:getSummary'?actor([transition(),transition({transitionId:'8',canApprove:false,toStatusName:'Rejected',label:'Sign to move to Rejected'})]):{restores:[]});
  await act(()=>root.render(h(IssuePanel,{issueKey:'T-1'})));await flush();
  assert.equal(fieldSelect('Approval transition'),undefined,'a single applicable action must never show a selector');
- assert.ok(clickButton('Approve -> Done'));
- assert.equal(clickButton('Approve -> Rejected'),undefined,'an action the viewer cannot perform is a fact, not a control');
+ assert.ok(clickButton('Approve to Done'));
+ assert.equal(clickButton('Approve to Rejected'),undefined,'an action the viewer cannot perform is a fact, not a control');
 });
 
 test('two or more applicable actions show a selector, and every eligible control is visible without a disclosure',async()=>{
@@ -406,21 +408,31 @@ test('two or more applicable actions show a selector, and every eligible control
  assert.equal(retry.closest('details'),null,'no eligible control may sit behind a disclosure');
  assert.equal(select.closest('details'),null);
  await act(()=>selectValue(select,'6'));
- const approve=clickButton('Approve -> Blocked');
+ const approve=clickButton('Approve to Blocked');
  assert.ok(approve);assert.equal(approve.closest('details'),null);
 });
 
-test('My Approvals embeds the same panel, including the selector for two applicable actions',async()=>{
+test('My Approvals opens the review window for a work item instead of embedding a panel in the row',async()=>{
+ const reads=[];
  setup(async key=>{
-  if(key==='queue:list')return {success:true,items:[{issueId:'1',issueKey:'T-1',summary:'Current record',status:'In Progress',state:'x',baselineVersion:0,driftCount:0,materialCount:0}]};
-  if(key==='panel:getSummary')return actor([transition(),blocked()]);
+  if(key==='queue:list'){reads.push(key);return {success:true,items:[
+   {issueId:'1',issueKey:'T-1',summary:'Current record',status:'In Progress',state:'x',baselineVersion:3,driftCount:2,materialCount:1,lastDriftAt:Date.now()-2*86_400_000},
+   {issueId:'2',issueKey:'T-2',summary:'Another',status:'Ready',state:'x',baselineVersion:0,driftCount:0,materialCount:0,transitionCount:1,transitionName:'Approve'}]};}
   return {restores:[]};
  });
  await act(()=>root.render(h(QueueList)));await flush();
+ assert.match(text(),/Waiting on you\s*2/);
+ assert.match(text(),/Changes to decide\s*1/);
+ assert.match(text(),/Transitions to sign\s*1/);
  await act(()=>clickButton('Review').click());await flush();
- assert.ok(fieldSelect('Approval transition'),'My Approvals must render the shared selector');
- await act(()=>selectValue(fieldSelect('Approval transition'),'5'));
- assert.ok(clickButton('Approve -> Done'));
+ const modals=globalThis.panelTransport.modals??[];
+ assert.equal(modals.length,1,'Review opens one review window');
+ assert.deepEqual(modals[0].context,{view:'review',issueKey:'T-1',tab:'changes'});
+ assert.equal(fieldSelect('Approval transition'),undefined,'nothing is embedded in the row any more');
+ await act(()=>container.querySelector('[aria-label="AI summary for T-1"]').click());
+ assert.equal(modals[1].context.tab,'summary');
+ await act(async()=>{modals[0].onClose({decided:true});});await flush();
+ assert.equal(reads.length,2,'closing the window re-reads the list');
 });
 
 test('wildcard and directed controls landing on the same destination display different exact scope labels',async()=>{
@@ -445,9 +457,9 @@ test('two sibling transitions into the same status stay distinguishable and sign
  const options=[...select.querySelectorAll('option')].filter(o=>o.value);
  assert.deepEqual(options.map(o=>o.value),['5','7']);
  assert.equal(new Set(options.map(o=>o.textContent)).size,2,'identical destinations must not collapse into identical labels');
- assert.equal(clickButton('Approve -> Done'),undefined,'with two siblings nothing is chosen on the reviewer\'s behalf');
+ assert.equal(clickButton('Approve to Done'),undefined,'with two siblings nothing is chosen on the reviewer\'s behalf');
  await act(()=>selectValue(select,'7'));
- await act(()=>clickButton('Approve -> Done').click());await flush();
+ await act(()=>clickButton('Approve to Done').click());await flush();
  const challenge=calls.find(([k])=>k==='signature:challenge');
  assert.equal(challenge[1].transitionId,'7');
 });
@@ -499,7 +511,7 @@ test('a reviewer eligible for the offered edge can approve independently of the 
  setup(async()=>challengeOk({meaning:'Approve this edge'}));
  const data=summary({eligibility:{eligible:false},transitions:[transition({meaning:'Approve this edge'})]});
  await act(()=>root.render(h(ApprovalControls,{summary:data,onDone:async()=>{}})));
- const approve=clickButton('Approve -> Done');
+ const approve=clickButton('Approve to Done');
  assert.ok(approve);assert.equal(approve.disabled,false);
  assert.equal(clickButton('Reject and restore'),undefined);
  await act(()=>approve.click());await flush();
@@ -510,7 +522,7 @@ test('a clean controlled transition is signed for the named move, not generic ap
  setup(async()=>({}));
  const data=actor([transition({name:'Selected for Development',toStatusName:'Selected for Development',label:'Sign to move to Selected for Development',meaning:'Ready for development'})]);
  await act(()=>root.render(h(ApprovalControls,{summary:data,onDone:async()=>{}})));await flush();
- assert.ok(clickButton('Approve -> Selected for Development'));
+ assert.ok(clickButton('Approve to Selected for Development'));
  assert.match(text(),/Sign the configured transition to Selected for Development/);
  assert.ok(!clickButton('Approve'),'the button must say what transition is being signed');
 });
@@ -528,7 +540,7 @@ test('non-capturing approval never promises a baseline',async()=>{
  setup(async key=>key==='signature:challenge'?challengeOk({meaning:'Approve for release'}):{});
  const data=actor([transition({meaning:'Approve for release',capturesBaseline:false})]);
  await act(()=>root.render(h(ApprovalControls,{summary:data,onDone:async()=>{}})));
- await act(()=>clickButton('Approve -> Done').click());await settle();
+ await act(()=>clickButton('Approve to Done').click());await settle();
  assert.doesNotMatch(text(),/baseline will be captured/i);
 });
 
@@ -567,7 +579,7 @@ test('biometric assurance is an available signing mode, not an unavailable provi
  const data=actor([transition({requiredAssurance:'BIOMETRIC',meaning:'Confirm on this device'})]);
  await act(()=>root.render(h(ApprovalControls,{summary:data,onDone:async()=>{}})));await flush();
  assert.doesNotMatch(text(),/provider is not configured/i);
- assert.ok(clickButton('Approve -> Done'));
+ assert.ok(clickButton('Approve to Done'));
 });
 
 const biometricSummary=()=>actor([transition({requiredAssurance:'BIOMETRIC'})]);
@@ -581,7 +593,7 @@ test('biometric signing runs the device ceremony and submits that assertion, nev
   if(key==='signature:submit')return {success:true,approvalId:'a-1',transitioned:true};
   return {};});
  await act(()=>root.render(h(ApprovalControls,{summary:biometricSummary(),onDone:async()=>{}})));await settle();
- await act(()=>clickButton('Approve -> Done').click());await settle();
+ await act(()=>clickButton('Approve to Done').click());await settle();
  await act(()=>affirm().click());await settle();
  await act(()=>clickButton('Sign and approve').click());await settle();
  assert.equal(ceremony.action,'confirm','the reviewer must be asked to confirm on their device');
@@ -601,7 +613,7 @@ test('a cancelled WebAuthn ceremony reports the refusal, records nothing, emits 
   if(key==='webauthn:assertStart')return {ok:true,challengeId:'wa-1',options:{challenge:'abc'}};
   return {};});
  await act(()=>root.render(h(ApprovalControls,{summary:biometricSummary(),onDone:async()=>{}})));await settle();
- await act(()=>clickButton('Approve -> Done').click());await settle();
+ await act(()=>clickButton('Approve to Done').click());await settle();
  await act(()=>affirm().click());await settle();
  await act(()=>clickButton('Sign and approve').click());await settle();
  assert.ok(!calls.some(([k])=>k==='signature:submit'),'a failed device check must not record an approval');
@@ -632,7 +644,7 @@ test('a JSM-configured transition is signable rather than a dead end',async()=>{
  const data=actor([transition({toStatusName:null,name:null,label:'Sign to move to 2',requiredAssurance:'JSM_APPROVAL'})],{approval:{requiredAssurance:'JSM_APPROVAL',pending:null}});
  await act(()=>root.render(h(ApprovalControls,{summary:data,onDone:async()=>{}})));await settle();
  assert.doesNotMatch(text(),/provider is not configured/i);
- assert.ok(clickButton('Approve -> 2'),'the reviewer must be able to start the signature');
+ assert.ok(clickButton('Approve to 2'),'the reviewer must be able to start the signature');
 });
 
 // ── Drift payloads carry no server-owned facts ────────────────────────────
@@ -707,9 +719,8 @@ test('switching between "In Progress -> Done" and "Any status -> Done" clears co
  await act(()=>root.render(h(IssuePanel,{issueKey:'T-1'})));await flush();
  const optionFor=scope=>[...fieldSelect('Approval transition').querySelectorAll('option')].find(o=>o.textContent.startsWith(scope)).value;
  await act(()=>selectValue(fieldSelect('Approval transition'),optionFor('In Progress -> Done')));await flush();
- await act(()=>disclosure().click());await flush();
- assert.match(text(),/Evidence field/);
- await act(()=>clickButton('Approve -> Done').click());await flush();
+  assert.match(text(),/Evidence field/);
+ await act(()=>clickButton('Approve to Done').click());await flush();
  assert.match(text(),/Statement for edge 5/);
  await signWithCode();await flush();
  assert.match(text(),/That code was not accepted/);
@@ -724,7 +735,7 @@ test('switching between "In Progress -> Done" and "Any status -> Done" clears co
  assert.match(text(),/Evidence field/,'the current baseline evidence remains shared across workflow actions');
  await flush();
  assert.equal(calls.filter(([k])=>k==='panel:getEvidence').length,1,'action selection does not create a competing evidence read');
- await act(()=>clickButton('Approve -> Done').click());await flush();
+ await act(()=>clickButton('Approve to Done').click());await flush();
  assert.match(text(),/Statement for edge 6/);
  assert.equal(affirm().checked,false,'confirmation must not carry to the new edge');
  assert.equal(codeBox(),null);
@@ -735,11 +746,11 @@ test('switching the selected action clears in-flight progress and a late challen
  setup(key=>key==='signature:challenge'?pending.promise:Promise.resolve({}));
  await act(()=>root.render(h(ApprovalControls,{summary:actor([transition(),blocked()]),onDone:async()=>{}})));
  await act(()=>selectValue(fieldSelect('Approval transition'),'5'));
- await act(()=>clickButton('Approve -> Done').click());
+ await act(()=>clickButton('Approve to Done').click());
  assert.match(liveStatus().textContent,/Preparing signature/);
  await act(()=>selectValue(fieldSelect('Approval transition'),'6'));
  assert.doesNotMatch(text(),/Preparing signature/,'progress for the old action must not survive');
- assert.equal(clickButton('Approve -> Blocked').disabled,false,'the new action is immediately usable');
+ assert.equal(clickButton('Approve to Blocked').disabled,false,'the new action is immediately usable');
  await act(()=>pending.resolve(challengeOk({meaning:'Old edge statement'})));await flush();
  assert.doesNotMatch(text(),/Old edge statement/);
  assert.equal(clickButton('Sign and approve'),undefined);
@@ -749,7 +760,7 @@ test('a success message for one action does not survive choosing another',async(
  setup(async key=>key==='signature:challenge'?challengeOk():key==='signature:submit'?{success:true,approvalId:'a',transitioned:true}:{});
  await act(()=>root.render(h(ApprovalControls,{summary:actor([transition(),blocked()]),onDone:async()=>{}})));
  await act(()=>selectValue(fieldSelect('Approval transition'),'5'));
- await act(()=>clickButton('Approve -> Done').click());await flush();
+ await act(()=>clickButton('Approve to Done').click());await flush();
  await signWithCode();await flush();
  assert.match(text(),/Approval recorded/);
  await act(()=>selectValue(fieldSelect('Approval transition'),'6'));
@@ -769,13 +780,13 @@ test('a selected action that disappears or loses eligibility during refresh fail
  });
  await act(()=>root.render(h(IssuePanel,{issueKey:'T-1'})));await flush();
  await act(()=>selectValue(fieldSelect('Approval transition'),'6'));
- await act(()=>clickButton('Approve -> Blocked').click());await flush();
+ await act(()=>clickButton('Approve to Blocked').click());await flush();
  assert.match(text(),/Blocked statement/);
  await act(()=>affirm().click());
  await act(()=>listeners.get('JIRA_ISSUE_CHANGED')());await flush();
  assert.doesNotMatch(text(),/Blocked statement/,'a challenge for an action that lost eligibility is withdrawn');
  assert.equal(clickButton('Sign and approve'),undefined);
- assert.equal(clickButton('Approve -> Blocked'),undefined);
+ assert.equal(clickButton('Approve to Blocked'),undefined);
  assert.match(text(),/no longer available/,'the reviewer is told why the action vanished');
  await act(()=>listeners.get('JIRA_ISSUE_CHANGED')());await flush();
  assert.equal(clickButton(/^Approve/),undefined,'no action remains once none is authorized');
@@ -785,7 +796,7 @@ test('duplicate clicks on the primary action are disabled synchronously, before 
  let calls=0;const pending=deferred();
  setup(key=>{if(key!=='signature:challenge')return Promise.resolve({});calls++;return pending.promise;});
  await act(()=>root.render(h(ApprovalControls,{summary:actor([transition()]),onDone:async()=>{}})));
- const button=clickButton('Approve -> Done');
+ const button=clickButton('Approve to Done');
  await act(()=>{button.click();button.click();button.click();});
  assert.equal(calls,1,'only the first click may reach the resolver');
  assert.equal(clickButton('Preparing signature').disabled,true);
@@ -796,7 +807,7 @@ test('duplicate clicks on Sign are disabled synchronously',async()=>{
  let submits=0;const pending=deferred();
  setup(key=>{if(key==='signature:challenge')return Promise.resolve(challengeOk());if(key==='signature:submit'){submits++;return pending.promise;}return Promise.resolve({});});
  await act(()=>root.render(h(ApprovalControls,{summary:actor([transition()]),onDone:async()=>{}})));
- await act(()=>clickButton('Approve -> Done').click());await flush();
+ await act(()=>clickButton('Approve to Done').click());await flush();
  await act(()=>affirm().click());
  await act(()=>typeInto(codeBox(),'123456'));
  const sign=clickButton('Sign and approve');
@@ -811,7 +822,7 @@ test('"Preparing signature" then "Publishing baseline" appear synchronously for 
  const challenge=deferred();const submit=deferred();
  setup(key=>key==='signature:challenge'?challenge.promise:key==='signature:submit'?submit.promise:Promise.resolve({}));
  await act(()=>root.render(h(ApprovalControls,{summary:actor([transition({capturesBaseline:true})]),onDone:async()=>{}})));
- await act(()=>clickButton('Approve -> Done').click());
+ await act(()=>clickButton('Approve to Done').click());
  assert.match(liveStatus().textContent,/Preparing signature/);
  await act(()=>challenge.resolve(challengeOk()));await flush();
  await act(()=>affirm().click());
@@ -825,7 +836,7 @@ test('a non-capturing transition announces "Moving to Done", not "Publishing bas
  const submit=deferred();
  setup(key=>key==='signature:challenge'?Promise.resolve(challengeOk()):key==='signature:submit'?submit.promise:Promise.resolve({}));
  await act(()=>root.render(h(ApprovalControls,{summary:actor([transition({capturesBaseline:false})]),onDone:async()=>{}})));
- await act(()=>clickButton('Approve -> Done').click());await flush();
+ await act(()=>clickButton('Approve to Done').click());await flush();
  await act(()=>affirm().click());
  await act(()=>typeInto(codeBox(),'123456'));
  await act(()=>clickButton('Sign and approve').click());
@@ -843,7 +854,7 @@ test('a biometric edge announces "Checking biometric" while the device check run
   return Promise.resolve({});
  });
  await act(()=>root.render(h(ApprovalControls,{summary:biometricSummary(),onDone:async()=>{}})));await flush();
- await act(()=>clickButton('Approve -> Done').click());await flush();
+ await act(()=>clickButton('Approve to Done').click());await flush();
  await act(()=>affirm().click());
  await act(()=>clickButton('Sign and approve').click());
  assert.match(liveStatus().textContent,/Checking biometric/);
@@ -918,6 +929,77 @@ test('restore completion refreshes the panel even when the issue content is unch
  assert.doesNotMatch(text(),/Restoration in progress/);
 });
 
+test('a finished restore leaves its card and is recorded as one line on the Baseline card',async()=>{
+ let restoreState='RESTORING';
+ const finishedAt=Date.UTC(2026,8,26,16,29);
+ const listeners=setup(async key=>{
+  if(key==='panel:getSummary')return summary({baseline:baseline({version:3}),restore:{restoreId:'r1',state:restoreState,attempted:1,succeeded:0,failed:0,skipped:0,
+   finishedAt:restoreState==='COMPLETE'?finishedAt:null,baselineVersion:3}});
+  if(key==='restore:getState')return {restores:[{restore_id:'r1',state:restoreState,actorName:'Priya Raman',baselineVersion:3,
+   finishedAt:restoreState==='COMPLETE'?finishedAt:null}]};
+  return {};
+ });
+ await act(()=>root.render(h(IssuePanel,{issueKey:'T-1'})));await flush();
+ assert.match(text(),/Restoration results/,'a running restore has a card of its own');
+ assert.equal(container.querySelector('.va-base .va-base__restore'),null);
+
+ restoreState='COMPLETE';
+ await act(()=>listeners.get('VA_ISSUE_CHANGED')());await flush();await flush();
+ assert.doesNotMatch(text(),/Restoration results/,'the card goes once the restore has finished');
+ const line=container.querySelector('.va-base .va-base__restore');
+ assert.ok(line,'the outcome is part of the Baseline card');
+ assert.match(line.textContent,/Restored and verified/);
+ assert.match(line.textContent,/Back to version 3 · by Priya Raman/);
+ assert.equal(clickButton('Retry restore'),undefined,'nothing to retry after a verified restore');
+});
+
+test('a restore to an earlier version is not shown on a newer baseline',async()=>{
+ // Restored to version 2 at 15:56, then version 3 was signed at 15:57. The
+ // restore is version 2's history; on version 3's card it read as if version
+ // 3 had been restored to version 2. The review window's record keeps it.
+ const restoredAt=Date.UTC(2026,8,28,10,26);
+ const signedAt=Date.UTC(2026,8,28,10,27);
+ setup(async key=>{
+  if(key==='panel:getSummary')return summary({baseline:baseline({version:3,transitionAt:signedAt,capturedAt:signedAt}),
+   restore:{restoreId:'r1',state:'COMPLETE',attempted:1,succeeded:1,failed:0,skipped:0,finishedAt:restoredAt,baselineVersion:2}});
+  if(key==='restore:getState')return {restores:[{restore_id:'r1',state:'COMPLETE',actorName:'Priya Raman',baselineVersion:2,finishedAt:restoredAt}]};
+  return {};
+ });
+ await act(()=>root.render(h(IssuePanel,{issueKey:'T-1'})));await flush();await flush();
+ assert.match(text(),/Version 3/);
+ assert.equal(Boolean(container.querySelector('.va-base__restore')),false,'a superseded restore is not a fact about the current baseline');
+ assert.doesNotMatch(text(),/Back to version 2/);
+});
+
+test('a restore with no recorded version is shown only if it finished after the baseline was signed',async()=>{
+ const signedAt=Date.UTC(2026,8,28,10,27);
+ for(const [finishedAt,shown] of [[signedAt-60_000,false],[signedAt+60_000,true]]){
+  setup(async key=>{
+   if(key==='panel:getSummary')return summary({baseline:baseline({version:3,transitionAt:signedAt,capturedAt:signedAt}),
+    restore:{restoreId:'r1',state:'COMPLETE',attempted:1,succeeded:1,failed:0,skipped:0,finishedAt,baselineVersion:null}});
+   if(key==='restore:getState')return {restores:[{restore_id:'r1',state:'COMPLETE',finishedAt}]};
+   return {};
+  });
+  await act(()=>root.render(h(IssuePanel,{issueKey:'T-1'})));await flush();await flush();
+  assert.equal(Boolean(container.querySelector('.va-base__restore')),shown);
+  await act(()=>root.unmount());root=null;
+ }
+});
+
+test('a failed restore is recorded with Retry, and what did not match stays behind a closed Details',async()=>{
+ setup(key=>key==='restore:getState'?Promise.resolve({restores:[{restore_id:'r1',state:'FAILED',actorName:'Sam Ortiz',baselineVersion:2,
+  detail:[{unmatched:[{fieldName:'Due date',issueKey:'T-2',reason:'Jira kept 2026-10-28'}]}]}]}):Promise.resolve({}));
+ await act(()=>root.render(h(RestoreStatus,{issueKey:'T-1',restore:{restoreId:'r1',state:'FAILED',attempted:1,succeeded:0,failed:1,skipped:0,baselineVersion:2}})));await flush();
+ const line=container.querySelector('.va-restore-line');
+ assert.match(line.textContent,/Restore failed/);
+ assert.match(line.textContent,/Restoring version 2 · by Sam Ortiz/);
+ assert.ok(clickButton('Retry restore'));
+ const details=line.querySelector('details');
+ assert.equal(details.open,false,'details are there on request, not in the way');
+ assert.match(details.textContent,/Due date on T-2 — Jira kept 2026-10-28/);
+ assert.doesNotMatch(text(),/Restoration results/);
+});
+
 // ── Accessibility ─────────────────────────────────────────────────────────
 
 test('the selector is labelled, progress is a live status, and Enter in the code box signs',async()=>{
@@ -927,7 +1009,7 @@ test('the selector is labelled, progress is a live status, and Enter in the code
  const select=fieldSelect('Approval transition');
  assert.equal(select.closest('label')?.querySelector('.va-label')?.textContent,'Approval transition','the selector must carry its label');
  await act(()=>selectValue(select,'5'));
- await act(()=>clickButton('Approve -> Done').click());await flush();
+ await act(()=>clickButton('Approve to Done').click());await flush();
  await act(()=>affirm().click());
  await act(()=>typeInto(codeBox(),'123456'));
  await act(()=>codeBox().dispatchEvent(new window.KeyboardEvent('keydown',{key:'Enter',bubbles:true})));
@@ -955,11 +1037,10 @@ test('controls stay visible but disabled while authoritative evidence loads',asy
  });
  await act(()=>root.render(h(IssuePanel,{issueKey:'T-1'})));await flush();
  assert.ok(calls.includes('panel:getEvidence'));
- await act(()=>disclosure().click());await flush();
- assert.ok(calls.includes('panel:getEvidence'));
+  assert.ok(calls.includes('panel:getEvidence'));
  assert.match(text(),/Loading tracked fields/);
- assert.ok(clickButton('Approve -> Done'),'the primary control remains visible while evidence is loading');
- assert.equal(clickButton('Approve -> Done').disabled,true,'the primary control stays disabled until current evidence arrives');
+ assert.ok(clickButton('Approve to Done'),'the primary control remains visible while evidence is loading');
+ assert.equal(clickButton('Approve to Done').disabled,true,'the primary control stays disabled until current evidence arrives');
  await act(()=>evidenceRead.resolve(evidence()));await flush();
  assert.match(text(),/Summary/);
 });
@@ -985,11 +1066,10 @@ test('a failed evidence load keeps the summary and controls visible, with a scop
   return {restores:[]};
  });
  await act(()=>root.render(h(IssuePanel,{issueKey:'T-1'})));await flush();
- await act(()=>disclosure().click());await flush();
- assert.match(text(),/could not be loaded/);
+  assert.match(text(),/could not be loaded/);
  assert.doesNotMatch(text(),/Checking the current record/,'an evidence failure must replace the loading state');
- assert.ok(clickButton('Approve -> Done'),'controls remain visible after an evidence failure');
- assert.equal(clickButton('Approve -> Done').disabled,true,'controls stay disabled until a current evidence retry succeeds');
+ assert.ok(clickButton('Approve to Done'),'controls remain visible after an evidence failure');
+ assert.equal(clickButton('Approve to Done').disabled,true,'controls stay disabled until a current evidence retry succeeds');
  await act(()=>clickButton('Retry').click());await flush();
  assert.equal(evidenceCalls,2);
  assert.equal(summaryCalls,1,'an evidence retry must not reset the whole panel');
@@ -1005,8 +1085,7 @@ test('one authoritative evidence read is shared when the selected workflow actio
  });
  await act(()=>root.render(h(IssuePanel,{issueKey:'T-1'})));await flush();
  await act(()=>selectValue(fieldSelect('Approval transition'),'5'));
- await act(()=>disclosure().click());await flush();
- assert.equal(requests.length,1);
+  assert.equal(requests.length,1);
  await act(()=>selectValue(fieldSelect('Approval transition'),'6'));await flush();
  assert.equal(requests.length,1,'action selection does not create a second competing evidence read');
  await act(()=>requests[0].resolve(evidenceWithField('Old action field')));await flush();
@@ -1070,8 +1149,7 @@ test('a same-baseline Jira refresh reloads evidence when the review version adva
   return {restores:[]};
  });
  await act(()=>root.render(h(IssuePanel,{issueKey:'T-1'})));await flush();await flush();
- await act(()=>disclosure().click());await flush();
- assert.match(text(),/Before event/);
+  assert.match(text(),/Before event/);
  await act(()=>listeners.get('JIRA_ISSUE_CHANGED')());await flush();await flush();
  assert.equal(summaryReads,2);
  assert.equal(evidenceReads,2,'same baseline, newer review version must invalidate current-record evidence');
@@ -1088,8 +1166,7 @@ test('a background refresh keeps the change list on screen while evidence reload
  });
  await act(()=>root.render(h(IssuePanel,{issueKey:'T-1'})));await flush();await flush();
  await act(()=>evidenceReads[0].resolve(evidenceWithField('Before event')));await flush();
- await act(()=>disclosure().click());await flush();
- assert.match(text(),/Before event/);
+  assert.match(text(),/Before event/);
  await act(()=>listeners.get('JIRA_ISSUE_CHANGED')());await flush();await flush();
  assert.equal(evidenceReads.length,2,'the newer review version is re-read');
  assert.doesNotMatch(text(),/Checking the current record/,'a refresh must not blank the panel');
@@ -1138,7 +1215,7 @@ test('the context lozenge keeps its last state when a later refresh fails',async
  await act(()=>root.render(h(IssueContext)));await flush();
  await act(()=>listeners.get('JIRA_ISSUE_CHANGED')());await flush();
  assert.equal(reads,2);
- assert.match(text(),/BASELINED/);
+ assert.match(text(),/Signed/);
  assert.doesNotMatch(text(),/Tunnel could not be reached/);
 });
 
@@ -1177,6 +1254,33 @@ test('a running restore is checked quietly until it ends, and Jira is redrawn on
  assert.equal(reads,settled,'no more polling once the restore has ended');
 });
 
+// A link approved on the other issue is recorded here by a queued job a few
+// seconds later (jobs/linkWorker.js). Until then the panel says so, and checks
+// quietly until it lands, then stops.
+const pendingDrift=(pending)=>({count:1,materialCount:1,decidesDrift:true,policyIncomplete:false,canApprove:true,canReject:true,eligible:true,
+ linkPending:pending?[{decidedOnKey:'VAT-30',queuedAt:1}]:[]});
+test('a link approved on the other issue is checked quietly until it is recorded here, then no more',async()=>{
+ let reads=0;
+ setup(async key=>{
+  if(key==='panel:getSummary'){reads++;return summary({drift:reads<3?pendingDrift(true):pendingDrift(false)});}
+  return {restores:[]};
+ });
+ await act(()=>root.render(h(IssuePanel,{issueKey:'T-1'})));await flush();
+ for(let i=0;i<3;i++){await act(async()=>{await new Promise(r=>setTimeout(r,2700));});await flush();}
+ assert.ok(reads>=3,`the panel keeps checking while the link is on its way (reads: ${reads})`);
+ const settled=reads;
+ await act(async()=>{await new Promise(r=>setTimeout(r,2800));});await flush();
+ assert.equal(reads,settled,'no more checking once it has been recorded');
+});
+
+test('the baseline card says which issue the pending link was approved on',async()=>{
+ const evidence={baselineId:'b',baselineVersion:3,record:null,rejection:{deleteIssueKeys:[],recreateCount:0},restoreHistory:[],
+  drift:{count:1,materialCount:1,fields:[]}};
+ const text=(await renderInto(React.createElement(BaselineSection,{summary:summary({baseline:baseline({version:3}),drift:pendingDrift(true)}),
+  drift:pendingDrift(true),evidence,evidenceReady:true,onOpenReview:()=>{}}))).textContent;
+ assert.match(text,/The link approved on VAT-30 is being recorded here; this updates on its own\./);
+});
+
 test('opening a panel on an old, finished restore does not redraw Jira',async()=>{
  setup(async key=>key==='panel:getSummary'?summary({restore:restoring('COMPLETE')}):{restores:[]});
  await act(()=>root.render(h(IssuePanel,{issueKey:'T-1'})));await flush();
@@ -1189,7 +1293,7 @@ test('opening a panel on an old, finished restore does not redraw Jira',async()=
 test('a successful durable mutation emits VA_ISSUE_CHANGED exactly once',async()=>{
  setup(async key=>key==='signature:challenge'?challengeOk():key==='signature:submit'?{success:true,approvalId:'a',transitioned:true}:{});
  await act(()=>root.render(h(ApprovalControls,{summary:actor([transition()]),onDone:async()=>{}})));
- await act(()=>clickButton('Approve -> Done').click());await settle();
+ await act(()=>clickButton('Approve to Done').click());await settle();
  await signWithCode();await settle();
  assert.equal(globalThis.panelTransport.emitted.length,1,'no component may emit a duplicate event alongside the centralised bridge emission');
  assert.deepEqual(globalThis.panelTransport.emitted[0],['VA_ISSUE_CHANGED',{issueKey:'T-1'}]);
@@ -1212,7 +1316,7 @@ test('a post-action refresh does not become a storm when the app event echoes ba
  },{loopback:true});
  await act(()=>root.render(h(IssuePanel,{issueKey:'T-1'})));await flush();
  const before=reads;
- await act(()=>clickButton('Approve -> Done').click());await flush();
+ await act(()=>clickButton('Approve to Done').click());await flush();
  await signWithCode();
  for(let i=0;i<4;i++)await flush();
  assert.equal(globalThis.panelTransport.emitted.length,1);
@@ -1223,7 +1327,7 @@ test('a post-action refresh does not become a storm when the app event echoes ba
 test('a resolver-denied submit does not emit VA_ISSUE_CHANGED',async()=>{
  setup(async key=>key==='signature:challenge'?challengeOk():key==='signature:submit'?{success:false,error:'CONTENT_CHANGED'}:{});
  await act(()=>root.render(h(ApprovalControls,{summary:actor([transition()]),onDone:async()=>{}})));
- await act(()=>clickButton('Approve -> Done').click());await settle();
+ await act(()=>clickButton('Approve to Done').click());await settle();
  await signWithCode();await settle();
  assert.equal(globalThis.panelTransport.emitted.length,0,'a denied mutation is not durable and must not notify other surfaces');
 });
@@ -1231,13 +1335,13 @@ test('a resolver-denied submit does not emit VA_ISSUE_CHANGED',async()=>{
 test('a persisted approval followed by a Jira refusal is reported, refreshes views, and cannot reuse the spent signature',async()=>{
  setup(async key=>key==='signature:challenge'?challengeOk():key==='signature:submit'?{success:true,approvalId:'a',transitioned:false,state:'CONSUMED',transitionError:'Jira refused the transition: a required field is empty.'}:{});
  await act(()=>root.render(h(ApprovalControls,{summary:actor([transition()]),onDone:async()=>{}})));
- await act(()=>clickButton('Approve -> Done').click());await settle();
+ await act(()=>clickButton('Approve to Done').click());await settle();
  await signWithCode();await settle();
  assert.match(text(),/Jira refused the transition: a required field is empty/);
  assert.match(text(),/A fresh signature may be required/);
  assert.equal(clickButton('Retry transition'),undefined,'a spent approval is never offered for reuse');
  assert.deepEqual(globalThis.panelTransport.emitted,[['VA_ISSUE_CHANGED',{issueKey:'T-1'}]],'the persisted approval must be visible in every open view even though Jira refused the move');
- assert.equal(clickButton('Approve -> Done').disabled,false,'the reviewer can start again without reloading');
+ assert.equal(clickButton('Approve to Done').disabled,false,'the reviewer can start again without reloading');
 });
 
 test('approval and restore resolver outcomes notify other open app views',async()=>{
@@ -1293,9 +1397,9 @@ test('the issue status display updates to v2 after a decision event',async()=>{
  let version=1;
  const listeners=setup(async()=>({state:'BASELINED',baselineVersion:version}));
  await act(()=>root.render(h(IssueContext)));await flush();
- assert.match(text(),/Version 1/);version=2;
+ assert.match(text(),/version 1/);version=2;
  await act(()=>listeners.get('VA_ISSUE_CHANGED')());await flush();
- assert.match(text(),/Version 2/);
+ assert.match(text(),/version 2/);
 });
 
 // ── The Custom UI transition-screen field: exact, read-only, fail-closed ─
@@ -1316,6 +1420,21 @@ test('the transition screen shows the exact action as read-only facts, never a s
  assert.match(t,/Captures a new baseline/,'capture policy');
  assert.match(t,/Blocked while changes are unapproved/,'drift behaviour');
  assert.equal(container.querySelector('select'),null);
+});
+
+test('the transition screen shows unresolved drift instead of biometric or signing controls',async()=>{
+ const calls=[];
+ setup(async(key,payload)=>{calls.push([key,payload]);return key==='signing:context'
+  ?fieldState('BIOMETRIC',{actions:[],blocker:'UNDECIDED_DRIFT',drift:{count:2,blocked:true,evidenceHash:'hash'}})
+  :{};},{context:fieldContext});
+ await act(()=>root.render(h(ApprovalField,{context:fieldContext})));await settle();
+ assert.match(text(),/transition blocked/i);
+ assert.match(text(),/issue panel or My approvals/i);
+ assert.equal(affirm(),null);
+ assert.equal(codeBox(),null);
+ assert.equal(clickButton(/Confirm with your device/i),undefined);
+ assert.ok(!calls.some(([key])=>key==='webauthn:status'||key==='approval:challenge'||key==='approval:submit'));
+ assert.equal(globalThis.panelTransport.submitted.at(-1),'','a stale transition receipt must be withdrawn');
 });
 
 test('the transition screen asks for a device check on a biometric edge, not an authenticator code',async()=>{
@@ -1509,6 +1628,20 @@ test('the UI Kit field shows the exact action as read-only facts, asks for it by
  assert.match(t,/Captures a new baseline/);assert.match(t,/Blocked while changes are unapproved/);
  assert.equal(container.querySelector('select'),null);
  assert.ok(uiKitAffirm());
+});
+
+test('the UI Kit transition field shows unresolved drift and cannot collect a signature',async()=>{
+ const calls=[];
+ setup(async(key,payload)=>{calls.push([key,payload]);return key==='signing:context'
+  ?fieldState('ESIGNATURE',{actions:[],blocker:'UNDECIDED_DRIFT',drift:{count:1,blocked:true,evidenceHash:'hash'}})
+  :{};},{context:fieldContext});
+ await act(()=>root.render(UiKitEdit));await settle();
+ assert.match(text(),/transition blocked/i);
+ assert.match(text(),/issue panel or My approvals/i);
+ assert.equal(uiKitAffirm(),null);
+ assert.equal(uiKitCode(),null);
+ assert.ok(!calls.some(([key])=>key==='approval:challenge'||key==='approval:submit'));
+ assert.equal(globalThis.panelTransport.submitted.at(-1),'','a stale transition receipt must be withdrawn');
 });
 
 test('the UI Kit field fails closed for two matches, a sibling transition, or a missing transition identity',async()=>{
@@ -2047,19 +2180,76 @@ test('a parent review renders one section per work item, headed by its key and s
   {kind:'ISSUE',issueKey:'P-2',summary:'A subtask',isRoot:false,baselineVersion:6,fields:[childField]}
  ];
  const html=(await renderInto(React.createElement(DiffView,{fields:[parentField,moved,childField],groups}))).textContent;
- const sections=[...container.querySelectorAll('section.va-diff-group')];
+ const list=container.querySelector('.va-review__list[role="listbox"]');
+ const sections=[...list.querySelectorAll('[role="group"].va-diff-group')];
  assert.equal(sections.length,3);
  assert.deepEqual(sections.map(s=>s.getAttribute('aria-label')),['P-1 · The parent','Structure: work items added, removed or moved','P-2 · A subtask']);
  assert.match(sections[2].textContent,/against version 6/,'each child says which of its own baselines it is compared with');
- assert.equal(sections[2].querySelector('.va-ledger__name').textContent,'Summary','inside its section a field is named plainly');
+ assert.equal(sections[2].querySelector('.va-review__row-name').textContent,'Summary','inside its section a field is named plainly');
  assert.ok(html.includes('now'));
 });
 
-test('without groups the diff stays one flat list, exactly as before',async()=>{
+const selectedRow=()=>container.querySelector('[role="option"][aria-selected="true"]');
+const detailName=()=>container.querySelector('.va-review__detail .va-review__field-name').textContent;
+const rowNamed=name=>[...container.querySelectorAll('[role="option"]')].find(r=>r.querySelector('.va-review__row-name').textContent===name);
+
+test('the review opens on the most severe change, and a picked row fills the detail pane',async()=>{
+ const parentField={...scalarField('root:summary','Summary','P-1'),materiality:'MINOR',before:'old title',after:'new title'};
+ const due={...scalarField('child:duedate','Due date','P-2'),materiality:'CRITICAL',before:null,after:'2026-10-28'};
+ const moved=scalarField('tree:NODE_ADDED:x','Added node · P-4','P-4');
+ const groups=[
+  {kind:'ISSUE',issueKey:'P-1',summary:'The parent',isRoot:true,baselineVersion:3,fields:[parentField]},
+  {kind:'STRUCTURE',fields:[moved]},
+  {kind:'ISSUE',issueKey:'P-2',summary:'A subtask',isRoot:false,baselineVersion:4,fields:[due]}
+ ];
+ await renderInto(React.createElement(DiffView,{fields:[parentField,moved,due],groups}));
+ assert.equal(detailName(),'P-2 · Due date','the critical change is shown first, not the first in the list');
+ assert.equal(selectedRow().querySelector('.va-review__row-name').textContent,'Due date');
+ assert.match(container.querySelector('.va-review__detail').textContent,/2026-10-28/);
+ assert.equal(container.querySelectorAll('.va-review__detail .va-review__field').length,1,'one change at a time');
+
+ await act(()=>rowNamed('Summary').click());
+ assert.equal(detailName(),'P-1 · Summary');
+ assert.match(container.querySelector('.va-review__detail').textContent,/new title/);
+ assert.equal(selectedRow(),rowNamed('Summary'));
+
+ await act(()=>rowNamed('Added node · P-4').click());
+ assert.equal(detailName(),'P-4 · Added node · P-4','a structural change is a change like any other');
+});
+
+test('arrow keys walk the list in order, across work items',async()=>{
+ const a=scalarField('root:a','A','P-1'),b=scalarField('root:b','B','P-1'),c=scalarField('child:c','C','P-2');
+ const groups=[{kind:'ISSUE',issueKey:'P-1',isRoot:true,fields:[a,b]},{kind:'ISSUE',issueKey:'P-2',isRoot:false,fields:[c]}];
+ await renderInto(React.createElement(DiffView,{fields:[a,b,c],groups}));
+ const list=container.querySelector('[role="listbox"]');
+ const key=k=>act(()=>list.dispatchEvent(new window.KeyboardEvent('keydown',{key:k,bubbles:true})));
+ assert.equal(detailName(),'P-1 · A');
+ await key('ArrowDown');assert.equal(detailName(),'P-1 · B');
+ await key('ArrowDown');assert.equal(detailName(),'P-2 · C');
+ await key('ArrowDown');assert.equal(detailName(),'P-2 · C','the list does not wrap');
+ await key('Home');assert.equal(detailName(),'P-1 · A');
+ assert.equal(selectedRow().getAttribute('tabindex'),'0');
+ assert.ok([...container.querySelectorAll('[role="option"][aria-selected="false"]')].every(r=>r.getAttribute('tabindex')==='-1'));
+});
+
+test('a citation selects the change it points at, even the second time',async()=>{
+ const a={...scalarField('a','A','T-1'),materiality:'CRITICAL'},b={...scalarField('b','B','T-1'),driftIds:['d-2']};
+ const render=(focusKey)=>act(()=>root.render(React.createElement(DiffView,{fields:[a,b],focusDriftId:'d-2',focusKey})));
+ container=document.createElement('div');document.body.append(container);root=createRoot(container);
+ await render(1);
+ assert.equal(detailName(),'T-1 · B');
+ assert.ok(container.querySelector('.va-review__field').classList.contains('va-highlight'));
+ await act(()=>rowNamed('T-1 · A').click());
+ assert.equal(detailName(),'T-1 · A');
+ await render(2);
+ assert.equal(detailName(),'T-1 · B');
+});
+
+test('without groups the list is one flat list of fields, named in full',async()=>{
  const field=scalarField('summary','Summary','T-1');
  await renderInto(React.createElement(DiffView,{fields:[field]}));
- assert.equal(container.querySelectorAll('section.va-diff-group').length,0);
- assert.equal(container.querySelector('.va-ledger__name').textContent,'T-1 · Summary');
+ assert.equal(container.querySelectorAll('.va-diff-group__head').length,0);
+ assert.equal(container.querySelector('.va-review__row-name').textContent,'T-1 · Summary');
 });
 
 test('a parent whose children changed says a decision here covers them',async()=>{
@@ -2067,7 +2257,7 @@ test('a parent whose children changed says a decision here covers them',async()=
  const evidence={baselineId:'b',baselineVersion:3,record:null,rejection:{deleteIssueKeys:[],recreateCount:0},restoreHistory:[],
   drift:{count:2,materialCount:2,fields:[],groups:[
    {kind:'ISSUE',issueKey:'P-2',isRoot:false,fields:[]},{kind:'ISSUE',issueKey:'P-3',isRoot:false,fields:[]}]}};
- const text=(await renderInto(React.createElement(DriftSection,{drift,evidence,issueKey:'P-1'}))).textContent;
+ const text=(await renderInto(React.createElement(BaselineSection,{summary:summary({baseline:baseline({version:3})}),drift,evidence,evidenceReady:true,onOpenReview:()=>{}}))).textContent;
  assert.match(text,/2 child work items have changes\. A decision here covers all of them; each can also be decided on its own\./);
 });
 
@@ -2077,4 +2267,224 @@ test('a child baselined by its parent names the parent capture it came with',asy
  const text=(await renderInto(React.createElement(BaselineRecord,{baseline,latestApproval:null,record:null,
   evidenceLoading:false,evidenceError:null,onOpen:()=>{},onRetryEvidence:()=>{}}))).textContent;
  assert.match(text,/Baselined with P-1 version 3, signed by Signer\./);
+});
+
+// ── The redesigned panel: two sections, drift flagged on the baseline ────────
+
+const drifted=(over={})=>({fieldId:'customfield_10016',fieldName:'Story points',kind:'scalar',retained:true,semanticChange:true,materiality:'MAJOR',
+ before:'5',after:'13',driftIds:['d-1'],occurrences:1,lastChangedAt:Date.now()-2*86_400_000,lastChangedBy:'Sam Ortiz',
+ attribution:[{at:Date.now()-2*86_400_000,authorName:'Sam Ortiz',source:'USER',fromString:'5',toString:'13'}],...over});
+
+test('drift is flagged on the Baseline card, one line per change, and Approvals says it is held',async()=>{
+ setup(async key=>key==='panel:getSummary'?actor([transition()],{baseline:baseline({version:3}),drift:driftOn({count:1})})
+  :key==='panel:getEvidence'?evidence({baselineVersion:3,drift:{count:1,materialCount:1,fields:[drifted()]}}):{restores:[]});
+ await act(()=>root.render(h(IssuePanel,{issueKey:'T-1'})));await flush();await flush();
+ const sections=[...container.querySelectorAll('section.va-panel-section')].map(s=>s.getAttribute('aria-label'));
+ assert.deepEqual(sections,['Approvals','Baseline'],'the panel is exactly two sections');
+ const card=container.querySelector('.va-base--drifted');
+ assert.ok(card,'the baseline card itself carries the drift');
+ assert.match(card.textContent,/1 change since approval/);
+ assert.match(card.textContent,/Drifted/i);
+ const row=card.querySelector('.va-change-row');
+ assert.match(row.textContent,/Story points/);assert.match(row.textContent,/5 → 13/);assert.match(row.textContent,/Sam Ortiz · 2 days ago/);
+ assert.ok(card.contains(clickButton('Approve changes')),'the drift decision sits on the baseline card');
+ assert.match(text(),/Held until the changes are decided/);
+ assert.equal(clickButton('Approve to Done'),undefined,'a held transition is a fact, not a button');
+ assert.equal(container.querySelector('details, .va-collapse'),null,'nothing in the panel expands');
+});
+
+test('See changes, AI summary and View record open the review window on their own tab',async()=>{
+ let summaryReads=0;
+ setup(async key=>{if(key==='panel:getSummary'){summaryReads++;return actor([],{baseline:baseline(),drift:driftOn()});}
+  return key==='panel:getEvidence'?evidence({drift:{count:1,materialCount:1,fields:[drifted()]}}):{restores:[]};});
+ await act(()=>root.render(h(IssuePanel,{issueKey:'T-1'})));await flush();await flush();
+ for(const [label,tab] of [['See changes','changes'],['AI summary','summary'],['View record','record']])await act(()=>clickButton(label).click());
+ const modals=globalThis.panelTransport.modals;
+ assert.deepEqual(modals.map(m=>m.context),[{view:'review',issueKey:'T-1',tab:'changes'},{view:'review',issueKey:'T-1',tab:'summary'},{view:'review',issueKey:'T-1',tab:'record'}]);
+ assert.equal(modals[0].size,'max');
+ const before=summaryReads;
+ await act(async()=>{modals[0].onClose({decided:true});});await flush();
+ assert.ok(summaryReads>before,'closing the window re-reads the panel');
+});
+
+test('a clean baseline says it matches, lists what it tracks on one line, and counts the quiet days',async()=>{
+ setup(async key=>key==='panel:getSummary'?summary({baseline:baseline({version:2,transitionAt:Date.now()-8*86_400_000})})
+  :key==='panel:getEvidence'?evidenceWithField('Priority',{baselineVersion:2}):{restores:[]});
+ await act(()=>root.render(h(IssuePanel,{issueKey:'T-1'})));await flush();await flush();
+ const card=container.querySelector('.va-base--clean');
+ assert.ok(card);
+ assert.match(card.textContent,/Matches baseline version 2/);
+ assert.match(card.textContent,/Tracks Priority/);
+ assert.match(card.textContent,/Steady for 8 days/);
+ assert.ok(card.querySelector('svg.va-seal'),'the baseline carries its seal');
+});
+
+test('the reason is given while signing, and travels with the signature',async()=>{
+ const calls=[];
+ setup(async(key,payload)=>{calls.push([key,payload]);
+  if(key==='signature:challenge')return challengeOk({meaning:'I approve these changes'});
+  if(key==='signature:submit')return {success:true,approvalId:'a1',transitioned:false};
+  return {};});
+ const data=actor([],{actorName:'Priya Raman',baseline:baseline(),approval:{requiredRole:'QA Lead',requiredAssurance:'ESIGNATURE',meaning:'x',pending:null},drift:driftOn()});
+ await act(()=>root.render(h(ApprovalControls,{summary:data,evidence:evidence({drift:{fields:[drifted()]}}),onDone:async()=>{}})));await settle();
+ assert.equal(container.querySelector('textarea'),null,'no note box on the browsing screen');
+ await act(()=>clickButton('Approve changes').click());await settle();
+ assert.match(text(),/What your signature means/);
+ assert.match(text(),/Signing as Priya Raman, QA Lead/);
+ assert.match(text(),/Independent review — you made none of these edits/);
+ await act(()=>clickButton('Re-planned with the team').click());
+ const note=container.querySelector('textarea');
+ assert.equal(note.value,'Re-planned with the team.');
+ await signWithCode();await settle();
+ const submit=calls.find(([k])=>k==='signature:submit');
+ assert.equal(submit[1].note,'Re-planned with the team.');
+});
+
+test('a signer who made some of the edits is told so before signing',async()=>{
+ setup(async key=>key==='signature:challenge'?challengeOk():{});
+ const data=actor([],{actorName:'Sam Ortiz',baseline:baseline(),drift:driftOn()});
+ await act(()=>root.render(h(ApprovalControls,{summary:data,evidence:evidence({drift:{fields:[drifted()]}}),onDone:async()=>{}})));await settle();
+ await act(()=>clickButton('Approve changes').click());await settle();
+ assert.match(text(),/Some of these edits are yours/);
+ assert.doesNotMatch(text(),/you made none of these edits/);
+});
+
+// ── The diff answers what, who, when ─────────────────────────────────────────
+
+test('a row names the last editor, how long ago, and how many edits it took',async()=>{
+ const now=Date.UTC(2026,8,26,12);
+ const field=drifted({materiality:'COSMETIC',semanticChange:false,occurrences:2,lastChangedAt:now-2*86_400_000,
+  attribution:[{at:now-5*86_400_000,authorName:'Automation for Jira',source:'AUTOMATION',fromString:'30 Sep',toString:'7 Oct'},
+   {at:now-2*86_400_000,authorName:'Sam Ortiz',source:'USER',fromString:'7 Oct',toString:'14 Oct'}]});
+ await renderInto(React.createElement(DiffView,{fields:[field],now,baselineAt:now-8*86_400_000}));
+ const row=container.querySelector('[role="option"]');
+ assert.match(row.textContent,/5 → 13/);
+ assert.match(row.textContent,/Sam Ortiz · 2 days ago · 2 edits/);
+ const steps=[...container.querySelectorAll('.va-step')];
+ assert.equal(steps.length,2,'every edit is its own step');
+ assert.match(steps[0].textContent,/\+3 days/);assert.match(steps[0].textContent,/automation/);assert.match(steps[0].textContent,/30 Sep→7 Oct/);
+ assert.match(steps[1].textContent,/\+6 days/);assert.match(steps[1].textContent,/7 Oct→14 Oct/);
+});
+
+test('rich-text steps say edited, and a change seen without Jira history says so',async()=>{
+ const field={...adfField([{op:'modified',ops:[{op:'delete',text:'5'},{op:'insert',text:'3'}]},{op:'insert',after:{type:'paragraph',text:'New rule.'}}]),
+  attribution:[{at:2000,authorName:'Jordan Lee',fromString:'a flattened copy of the whole document',toString:'another flattened copy'},
+   {at:3000,authorName:null,detected:true}]};
+ await renderInto(React.createElement(DiffView,{fields:[field],baselineAt:1000}));
+ assert.match(container.querySelector('[role="option"]').textContent,/1 paragraph edited, 1 added/);
+ const steps=[...container.querySelectorAll('.va-step')];
+ assert.match(steps[0].textContent,/Edited/);
+ assert.doesNotMatch(steps[0].textContent,/flattened copy/,'Jira\'s flattened document is noise, not a diff');
+ assert.match(steps[1].textContent,/Seen changed by VAtlassian/);
+});
+
+// ── The review window ────────────────────────────────────────────────────────
+
+function windowSetup(over={},handler){
+ const calls=[];
+ setup(async(key,payload)=>{calls.push([key,payload]);
+  const custom=handler?.(key,payload);if(custom!==undefined)return custom;
+  if(key==='panel:getSummary')return actor([],{actorName:'Priya Raman',baseline:baseline({version:3,approvedName:'Priya Raman'}),
+   approval:{requiredRole:'QA Lead',requiredAssurance:'ESIGNATURE',meaning:'x',pending:null},drift:driftOn(),...over});
+  if(key==='panel:getEvidence')return evidence({baselineVersion:3,drift:{count:1,materialCount:1,fields:[drifted()]}});
+  if(key==='report:get')return {success:true,report:{model:'m',body:{verdictHint:'scope_change',headline:'The scope you signed has grown.',narrative:'Story points more than doubled.',
+   changeGroups:[{title:'The estimate went from 5 to 13',risk:'high',whoAndWhen:'Sam Ortiz',whatChanged:'One edit.',whyItMatters:'You approved 5.',driftIds:['d-1']}],questionsForReviewer:['Was 13 agreed?'],groundingIssues:0}}};
+  return {restores:[]};});
+ return calls;
+}
+
+test('the review window says what it compares against, with tabs and the decision in its footer',async()=>{
+ windowSetup();
+ await act(()=>root.render(h(ReviewWindow,{issueKey:'T-1',tab:'changes'})));await flush();await flush();
+ assert.match(text(),/Review changes to baseline version 3/);
+ assert.match(text(),/Compared with version 3, signed by Priya Raman/);
+ assert.deepEqual([...container.querySelectorAll('[role="tab"]')].map(t=>t.textContent.replace(/\d+$/,'')),['Changes','AI summary','Baseline record']);
+ assert.ok(container.querySelector('.va-timeline__dot'),'the timeline marks each edit');
+ const foot=container.querySelector('.va-window__foot');
+ assert.ok(foot.contains(clickButton('Approve changes')));assert.ok(foot.contains(clickButton('Reject and restore')));
+});
+
+test('the AI summary is written for the reader, and its citations jump to the change',async()=>{
+ windowSetup();
+ await act(()=>root.render(h(ReviewWindow,{issueKey:'T-1',tab:'summary'})));await flush();await flush();
+ assert.match(text(),/For Priya Raman/);
+ assert.match(text(),/you signed version 3/);
+ assert.match(text(),/you decide as QA Lead/);
+ assert.match(text(),/Your signature covers the recorded changes, not this text/);
+ assert.match(text(),/Some of these edits are yours|You made none of these edits/);
+ await act(()=>clickButton(/Story points/).click());await flush();
+ assert.equal(container.querySelector('[role="tab"][aria-selected="true"]').textContent.replace(/\d+$/,''),'Changes');
+ assert.ok(container.querySelector('.va-review__detail #field-customfield_10016'),'the cited change is the one shown');
+ assert.ok(container.querySelector('.va-window__body--split'),'the changes fill the window as two panes');
+});
+
+test('the Baseline record lists every restore, newest first, with no retry of its own',async()=>{
+ windowSetup({restore:{restoreId:'r2',state:'COMPLETE',attempted:1,succeeded:1,failed:0,skipped:0}},key=>key==='restore:getState'?{restores:[
+  {restore_id:'r2',state:'COMPLETE',actorName:'Priya Raman',baselineVersion:3,finishedAt:Date.UTC(2026,8,26,16,29)},
+  {restore_id:'r1',state:'FAILED',actorName:'Sam Ortiz',baselineVersion:3,finishedAt:Date.UTC(2026,8,26,16,11),error:'Jira refused the due date'}]}:undefined);
+ await act(()=>root.render(h(ReviewWindow,{issueKey:'T-1',tab:'record'})));await flush();await flush();
+ const lines=[...container.querySelectorAll('[aria-label="Restores"] .va-restore-line')];
+ assert.equal(lines.length,2);
+ assert.match(lines[0].textContent,/Restored and verified.*Back to version 3 · by Priya Raman/);
+ assert.match(lines[1].textContent,/Restore failed.*Restoring version 3 · by Sam Ortiz/);
+ assert.match(lines[1].querySelector('details').textContent,/Jira refused the due date/);
+ assert.equal(clickButton('Retry restore'),undefined,'the log is a record; retrying happens on the panel');
+});
+
+test('signing in the window ends on a receipt, and Done closes the window as decided',async()=>{
+ windowSetup({},key=>key==='signature:challenge'?challengeOk({meaning:'I approve these changes'}):key==='signature:submit'?{success:true,approvalId:'ap-9',transitioned:false}:undefined);
+ await act(()=>root.render(h(ReviewWindow,{issueKey:'T-1'})));await flush();await flush();
+ await act(()=>clickButton('Approve changes').click());await settle();
+ assert.ok(container.querySelector('.va-sheet .va-attest'),'signing happens in a sheet over the window');
+ await signWithCode();await settle();
+ const receipt=container.querySelector('.va-receipt');
+ assert.ok(receipt,'the window ends on the signed record');
+ assert.match(receipt.textContent,/Signed by\s*Priya Raman · QA Lead/);
+ assert.match(receipt.textContent,/UTC/);
+ assert.match(receipt.textContent,/I approve these changes/);
+ assert.match(receipt.textContent,/ap-9/);
+ await act(()=>clickButton('Done').click());
+ assert.deepEqual(globalThis.panelTransport.closed,[{decided:true}]);
+});
+
+test('frontend harness supports rich categories, active trace propagation, filtering, and stats', async () => {
+ const {
+  recordHarnessEvent,
+  getHarnessEvents,
+  getHarnessStats,
+  createTraceId,
+  withTrace
+ } = await import('../src/lib/harness.ts');
+
+ const traceId = createTraceId();
+ assert.match(traceId, /^tr-/);
+
+ withTrace(traceId, () => {
+  recordHarnessEvent('GATE', 'gate:deny', { issueKey: 'ENG-5', reason: 'UNDECIDED_DRIFT' }, new Error('Transition blocked'));
+  recordHarnessEvent('VAULT', 'vault:copied', { issueKey: 'ENG-5', filename: 'arch.pdf', durationMs: 15 });
+  recordHarnessEvent('RESTORE', 'restore:step', { issueKey: 'ENG-5', durationMs: 25 });
+ });
+
+ const filteredByCat = getHarnessEvents({ category: 'VAULT' });
+ assert.ok(filteredByCat.length >= 1);
+ assert.equal(filteredByCat[0].category, 'VAULT');
+ assert.equal(filteredByCat[0].traceId, traceId);
+ assert.equal(filteredByCat[0].durationMs, 15);
+
+ const filteredByError = getHarnessEvents({ errorOnly: true });
+ assert.ok(filteredByError.some(e => e.action === 'gate:deny'));
+
+ const filteredBySearch = getHarnessEvents({ search: 'arch.pdf' });
+ assert.equal(filteredBySearch.length, 1);
+ assert.equal(filteredBySearch[0].action, 'vault:copied');
+
+ const stats = getHarnessStats();
+ assert.ok(stats.total >= 3);
+ assert.ok(stats.byCategory.GATE >= 1);
+ assert.ok(stats.byCategory.VAULT >= 1);
+ assert.ok(stats.errorCount >= 1);
+
+ assert.ok(typeof window.__VA_HARNESS__.getStats === 'function');
+ assert.ok(typeof window.__VA_HARNESS__.createTrace === 'function');
+ assert.ok(typeof window.__VA_HARNESS__.export === 'function');
 });

@@ -19,7 +19,11 @@ export function ownsItsContent(childBaseline, parentBaseline) {
   if (!childBaseline || !parentBaseline) return false;
   const by = childBaseline.captured_by_baseline_id;
   if (by && parentBaseline.baseline_id && Buffer.from(by).equals(Buffer.from(parentBaseline.baseline_id))) return true;
-  return Number(childBaseline.captured_at ?? 0) >= Number(parentBaseline.captured_at ?? Infinity);
+  // A parent version that re-recorded only its own link (jobs/linkWorker.js)
+  // copied its child nodes from the version before; they are as old as that
+  // capture, so the children own their content exactly as they did then.
+  const nodesCapturedAt = parentBaseline.nodes_captured_at ?? parentBaseline.captured_at;
+  return Number(childBaseline.captured_at ?? 0) >= Number(nodesCapturedAt ?? Infinity);
 }
 
 const nodeIssueId = node => Number(node.currentIssueId ?? node.originalIssueId);

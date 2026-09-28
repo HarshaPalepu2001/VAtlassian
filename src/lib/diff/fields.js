@@ -30,7 +30,7 @@ export const RESTORABLE = {
   YES: 'YES',
   /** Needs a dedicated handler — links, sprint, parent, status. */
   SPECIAL: 'SPECIAL',
-  /** Jira cannot undo it: deleted attachments, other people's comments. */
+  /** Jira cannot undo it: other people's comments, their work logs. */
   NO: 'NO',
   /** We never stored the value, so there is nothing to write back. */
   NOT_RETAINED: 'NOT_RETAINED'
@@ -45,13 +45,20 @@ export const RESTORABLE = {
  * promises to put things back has to be exact about what it cannot put back.
  */
 const IRREVERSIBLE = {
-  attachment: 'Deleted attachments cannot be re-uploaded by an app. Ask whoever removed them to add them back.',
   comment: 'Comments are append-only. Baseline never deletes or rewrites what somebody wrote.',
   worklog: 'Work logs belong to the person who recorded them and are not restored.'
 };
 
-/** Fields that need their own API call rather than a field write. */
+/**
+ * Fields that need their own API call rather than a field write.
+ *
+ * `attachment` is here, not in IRREVERSIBLE, because the vault keeps a hashed
+ * copy of every baselined file: a removed file is uploaded again from it and
+ * an added one deleted (lib/restore/attachments.js). A file the vault never
+ * received still cannot come back, and the reject dialog names it.
+ */
 const SPECIAL_HANDLERS = {
+  attachment: 'attachments',
   issuelinks: 'links',
   parent: 'parent',
   status: 'transition',
@@ -237,19 +244,16 @@ function diffAttachmentsField(base, before, after) {
   const added = [...a.values()].filter((x) => !b.has(x.id));
   const removed = [...b.values()].filter((x) => !a.has(x.id));
 
-  // Same id, different bytes. content.js hashes attachments by content for
-  // exactly this case: a file swapped under the same name is the change most
-  // worth catching and the one a filename comparison misses entirely.
-  const replaced = [...a.values()].filter((x) => {
-    const prior = b.get(x.id);
-    return prior && prior.contentHash && x.contentHash && prior.contentHash !== x.contentHash;
-  });
+  // No "replaced in place": Jira never changes a file under its id, so a
+  // file swapped for different bytes under the same name is an add and a
+  // remove, and is shown as exactly that.
+  const replaced = [];
 
-  const changed = added.length > 0 || removed.length > 0 || replaced.length > 0;
+  const changed = added.length > 0 || removed.length > 0;
+  const names = (list) => list.map((x) => x.filename || x.id).join(', ');
   const parts = [];
-  if (added.length) parts.push(`${added.length} added`);
-  if (removed.length) parts.push(`${removed.length} removed`);
-  if (replaced.length) parts.push(`${replaced.length} replaced in place`);
+  if (added.length) parts.push(`added ${names(added)}`);
+  if (removed.length) parts.push(`removed ${names(removed)}`);
 
   return {
     ...base,
@@ -266,7 +270,7 @@ function diffAttachmentsField(base, before, after) {
       ...removed.map((x) => ({ op: 'removed', item: x.filename })),
       ...added.map((x) => ({ op: 'added', item: x.filename }))
     ],
-    summary: changed ? parts.join(', ') : 'unchanged',
+    summary: changed ? parts.join('; ') : 'unchanged',
     magnitude: changed ? 1 : 0
   };
 }
@@ -317,6 +321,9 @@ export function restorabilityReason(field, retained) {
   }
   if (field.writable === false) {
     return 'Jira does not allow this field to be edited on this project\'s screens, so it cannot be written back.';
+  }
+  if (field.field_id === 'attachment') {
+    return 'Removed files are uploaded again from the vault, checked against the hash taken when they were vaulted. Added files are deleted.';
   }
   if (SPECIAL_HANDLERS[field.field_id]) {
     return 'Restored through a dedicated Jira API rather than a field update.';

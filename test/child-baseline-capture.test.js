@@ -122,12 +122,11 @@ test('publishing activates this capture\'s child rows and retires each child\'s 
 function captureFixture() {
   const calls = [];
   const rootFields = [F('summary'), F('description')];
-  const own = n => (nodeScope(n).issueTypeId === 'S' ? rootFields : [F('summary')]);
   const tree = [
     { id: '1', key: 'P-1', fields: { summary: 'parent', description: 'd', project: { id: '1' }, issuetype: { id: 'S' }, status: { id: '3' }, parent: null } },
     { id: '2', key: 'P-2', fields: { summary: 'sub', description: 'not tracked here', project: { id: '1' }, issuetype: { id: 'T' }, status: { id: '1' }, parent: { id: '1' } } }
   ];
-  const treeHash = planTreeCapture({ rootIssueId: '1', nodes: tree, controlledFields: rootFields, fieldsFor: own }).treeHash;
+  const treeHash = planTreeCapture({ rootIssueId: '1', nodes: tree, controlledFields: rootFields }).treeHash;
   const itemStates = [];
   const ledger = [];
   return {
@@ -142,12 +141,11 @@ function captureFixture() {
         readStableTree: async () => ({ tree: { nodes: structuredClone(tree) } }),
         readTree: null,
         planTreeCapture,
-        controlledFieldsFor: async ({ issueTypeId }) => (issueTypeId === 'T' ? [F('summary')] : rootFields),
         baselineForApproval: async () => null,
         currentVersion: async () => 2,
-        beginTreeBaseline: async ({ baseline }) => { calls.push('begin'); assert.equal(baseline.total_field_count, 3); return { baselineId: parent.baselineId, version: 3 }; },
+        beginTreeBaseline: async ({ baseline }) => { calls.push('begin'); assert.equal(baseline.total_field_count, 4); return { baselineId: parent.baselineId, version: 3 }; },
         writeTreeCapture: async () => { calls.push('write-tree'); return { valueBytes: 1 }; },
-        verifyTreeCapture: async ({ expectedFieldCount }) => { calls.push('verify-tree'); assert.equal(expectedFieldCount, 3); },
+        verifyTreeCapture: async ({ expectedFieldCount }) => { calls.push('verify-tree'); assert.equal(expectedFieldCount, 4); },
         nextVersions: async ids => { calls.push(['next-versions', ids.map(Number).sort()]); return id => (Number(id) === 2 ? 5 : 1); },
         writeChildBaselines: async ({ rows }) => { calls.push(['write-children', rows.map(r => [r.issue_id, r.version])]);
           return rows.map(r => ({ ...r, baseline_id: Buffer.alloc(16, 4) })); },
@@ -166,12 +164,18 @@ test('a parent capture writes each child\'s baseline before it publishes and pub
   assert.equal(result.captured, true);
   assert.deepEqual(f.calls, ['begin', 'write-tree', 'verify-tree', ['next-versions', [1, 2]], ['write-children', [[2, 5]]],
     'publish-tree', 'publish-children', ['item-state', 1], ['item-state', 2]]);
-  assert.deepEqual(result.children, [{ issueId: 2, version: 5, baselineId: Buffer.alloc(16, 4) }]);
+  // The child's key and project let the vault copy its files too; `attachments`
+  // is null because the child tracks no attachment field.
+  assert.deepEqual(result.children, [{ issueId: 2, version: 5, baselineId: Buffer.alloc(16, 4),
+    issueKey: 'P-2', projectId: 1, attachments: null }]);
   const child = f.itemStates.find(s => s.issueId === 2);
   assert.equal(child.baselineVersion, 5);
   assert.equal(child.issueKey, 'P-2');
   assert.equal(child.summary, 'sub');
-  assert.deepEqual(Object.keys(JSON.parse(child.fieldDigests)), ['summary'], 'the child is tracked with its own fields only');
+  // The child is a Task-like type the root's page never configured; it is held
+  // to the root's fields all the same (tree/nodeFields.js, decided 2026-09-25).
+  assert.deepEqual(Object.keys(JSON.parse(child.fieldDigests)).sort(), ['description', 'summary'],
+    'the child is tracked with the root\'s fields');
   const entry = f.ledger.find(e => e.issueId === 2);
   assert.equal(entry.eventType, 'BASELINE_CAPTURED');
   assert.deepEqual(entry.payload.capturedBy, { issueId: 1, issueKey: 'P-1', version: 3 });

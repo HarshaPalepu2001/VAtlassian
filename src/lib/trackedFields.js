@@ -54,8 +54,9 @@ import { EVENT } from './ledger.js';
  *      Writing rows down makes the tracked set a recorded decision with an
  *      author and a timestamp, which is what the ledger needs it to be.
  *
- * So new fields are adopted by an explicit sync — on gate save, on the hourly
- * backfill, or on the admin's button — and never by surprise mid-baseline.
+ * So new fields are adopted by an explicit act — on gate save, on the admin's
+ * Sync button, or one at a time from the field search — and never on a
+ * schedule or by surprise mid-baseline.
  */
 
 /**
@@ -251,9 +252,8 @@ export function scopeFromIssue({ declared, issueFields, editmetaFields = null })
  * THE LAST CLAUSE IS THE LOAD-BEARING ONE. `declared` must be every row
  * including EXCLUDED, not just the ACTIVE ones. Given only the ACTIVE rows this
  * function would propose re-adopting every field an administrator had
- * deliberately turned off, and the hourly job would undo their decision on the
- * hour, every hour, with an audit entry each time claiming the system had
- * widened the tracked set.
+ * deliberately turned off, and every sync would undo their decision, with an
+ * audit entry each time claiming the system had widened the tracked set.
  */
 export function fieldsToAdopt(jiraFields, declared) {
   const known = new Set((declared ?? []).map((f) => f.field_id));

@@ -161,26 +161,31 @@ test('a read-only field is marked unrestorable at diff time, not at rejection ti
   assert.match(result.restorableReason, /does not allow this field to be edited/);
 });
 
-test('deleted attachments are named as irreversible', () => {
+test('removed attachments are restorable from the vault, through their own handler', () => {
   const result = diffField({
     field: { field_id: 'attachment', field_name: 'Attachment', field_kind: FIELD_KIND.ATTACHMENTS, store_values: true },
     before: [{ id: '1', filename: 'spec.pdf' }],
     after: [],
     retained: true
   });
-  assert.equal(result.restorable, RESTORABLE.NO);
-  assert.match(result.restorableReason, /cannot be re-uploaded/);
+  assert.equal(result.restorable, RESTORABLE.SPECIAL);
+  assert.match(result.restorableReason, /uploaded again from the vault/);
+  assert.deepEqual(result.removed.map(a => a.filename), ['spec.pdf']);
+  assert.match(result.summary, /removed spec\.pdf/);
 });
 
-test('an attachment swapped for different bytes under the same name is detected', () => {
+test('a file swapped under the same name is an add and a remove, never a change in place', () => {
+  // Jira never changes a file under its id: different bytes arrive as a new id.
   const result = diffField({
     field: { field_id: 'attachment', field_name: 'Attachment', field_kind: FIELD_KIND.ATTACHMENTS, store_values: true },
-    before: [{ id: '1', filename: 'spec.pdf', contentHash: 'aaa' }],
-    after: [{ id: '1', filename: 'spec.pdf', contentHash: 'bbb' }],
+    before: [{ id: '1', filename: 'spec.pdf' }],
+    after: [{ id: '2', filename: 'spec.pdf' }],
     retained: true
   });
   assert.equal(result.changed, true);
-  assert.equal(result.replaced.length, 1);
+  assert.deepEqual(result.added.map(a => a.id), ['2']);
+  assert.deepEqual(result.removed.map(a => a.id), ['1']);
+  assert.deepEqual(result.replaced, []);
 });
 
 test('labels diff as a set, reported as added and removed', () => {

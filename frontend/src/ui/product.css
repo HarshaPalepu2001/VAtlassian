@@ -77,13 +77,45 @@
    The ledger
    --------------------------------------------------------------------------- */
 
+/* THE REVIEW: every change on the left, the selected change on the right.
+   Each pane scrolls on its own, so the list stays in view beside a long
+   description diff. */
+.va-review {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+  border: 1px solid var(--va-border);
+  border-radius: var(--va-radius-lg);
+  background: var(--va-surface);
+  overflow: hidden;
+}
+
+.va-review__detail {
+  min-width: 0;
+  overflow: auto;
+  padding: 16px 20px 20px;
+}
+
+.va-review__list {
+  overflow: auto;
+  border-right: 1px solid var(--va-border);
+  background: var(--va-surface-sunken);
+  padding: 8px 0;
+}
+
 /* A parent's review, one section per work item: "in this issue, these changed". */
+.va-diff-group + .va-diff-group {
+  margin-top: 8px;
+}
+
 .va-diff-group__head {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: 4px 8px;
   flex-wrap: wrap;
-  margin-bottom: 6px;
+  padding: 8px 16px 4px;
+  font-size: var(--va-size-dense);
 }
 
 .va-diff-group__title {
@@ -92,72 +124,99 @@
   overflow-wrap: anywhere;
 }
 
-.va-ledger {
-  border: 1px solid var(--va-border);
-  border-radius: var(--va-radius-lg);
-  background: var(--va-surface);
-  overflow: hidden;
-}
-
-.va-ledger__row + .va-ledger__row {
-  border-top: 1px solid var(--va-border);
-}
-
 /* THE SPINE. Colour and presence encode materiality — an ordinal property, on
-   an ordinal channel. It is set as a border rather than a pseudo-element so it
-   survives the row being collapsed to a single line. */
-.va-ledger__row {
-  border-left: 3px solid var(--va-mat-cosmetic);
-}
-
-.va-ledger__row--CRITICAL {
-  border-left-color: var(--va-mat-critical);
-}
-.va-ledger__row--MAJOR {
-  border-left-color: var(--va-mat-major);
-}
-.va-ledger__row--MINOR {
-  border-left-color: var(--va-mat-minor);
-}
-
-.va-ledger__head {
+   an ordinal channel. */
+.va-review__row {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  box-sizing: border-box;
-  padding: 14px 16px;
-  background: none;
-  border: none;
-  font: inherit;
-  color: inherit;
-  text-align: left;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 16px 8px 13px;
+  border-left: 3px solid var(--va-mat-cosmetic);
   cursor: pointer;
 }
 
-.va-ledger__head:hover {
+.va-review__row--CRITICAL {
+  border-left-color: var(--va-mat-critical);
+}
+.va-review__row--MAJOR {
+  border-left-color: var(--va-mat-major);
+}
+.va-review__row--MINOR {
+  border-left-color: var(--va-mat-minor);
+}
+
+.va-review__row:hover {
   background: var(--va-surface-hover);
 }
 
-.va-ledger__head:focus-visible {
+.va-review__row[aria-selected="true"] {
+  background: var(--va-brand-bg);
+  box-shadow: inset -3px 0 0 var(--va-brand);
+}
+
+.va-review__row:focus-visible {
   outline: 2px solid var(--va-focus);
   outline-offset: -2px;
 }
 
-.va-ledger__name {
+.va-review__row-name {
   font-size: var(--va-size-body);
   font-weight: 600;
   color: var(--va-text);
+  overflow-wrap: anywhere;
 }
 
-/* The one-line summary beside a collapsed field. Truncates rather than wraps:
-   a collapsed row is an index entry, and an index entry is one line. */
-.va-ledger__meta {
+/* The change in a line. Truncates rather than wraps: a row is an index
+   entry, and an index entry is one line. */
+.va-review__row-what {
   font-size: var(--va-size-meta);
   color: var(--va-text-subtle);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.va-review__row-who {
+  font-size: var(--va-size-meta);
+  color: var(--va-text-subtlest);
+}
+
+.va-review__field-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.va-review__field-name {
+  margin: 0;
+  flex: 1 1 auto;
+  font-size: var(--va-size-lead);
+  font-weight: 600;
+  color: var(--va-text);
+  overflow-wrap: anywhere;
+}
+
+.va-review__field .va-review__row-who {
+  margin-bottom: 12px;
+}
+
+/* Too narrow for two panes: the list on top, the change below, one scroll. */
+@media (max-width: 720px) {
+  .va-review {
+    display: flex;
+    flex-direction: column;
+    overflow: visible;
+  }
+  .va-review__list {
+    border-right: none;
+    border-bottom: 1px solid var(--va-border);
+  }
+  .va-review__detail,
+  .va-review__list {
+    overflow: visible;
+  }
 }
 
 /* Drawn rather than typed: a "▾" glyph renders at wildly different weights
@@ -188,18 +247,10 @@
   transform: none;
 }
 
-.va-ledger__head:hover .va-ledger__toggle {
-  color: var(--va-text);
-}
-
 @media (prefers-reduced-motion: reduce) {
   .va-ledger__toggle {
     transition: none;
   }
-}
-
-.va-ledger__body {
-  padding: 2px 16px 16px;
 }
 
 /* ---------------------------------------------------------------------------

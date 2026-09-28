@@ -75,13 +75,13 @@ test('isAttachmentVaulted is true when a row matches', async () => {
 test('insertVaultAttachment generates and returns a fresh id', async () => {
   let captured;
   const id = await insertVaultAttachment(
-    { baselineId: 'b1', issueId: 42, jiraAttachmentId: 'a1', filename: 'x.png', contentHash: 'h'.repeat(64), confluenceAttachmentId: 'c1', now: 400 },
+    { baselineId: 'b1', issueId: 42, jiraAttachmentId: 'a1', filename: 'x.png', contentHash: 'h'.repeat(64), confluenceAttachmentId: 'c1', mediaId: 'm1', now: 400 },
     async (sql, params) => { captured = { sql, params }; return { result: true }; }
   );
   assert.match(id, /^[0-9a-f]{32}$/);
   assert.match(captured.sql, /INSERT INTO va_vault_attachment/);
   assert.equal(captured.params[0], id);
-  assert.deepEqual(captured.params.slice(1), ['b1', 42, 'a1', 'x.png', 'h'.repeat(64), 'c1', 400]);
+  assert.deepEqual(captured.params.slice(1), ['b1', 42, 'a1', 'x.png', 'h'.repeat(64), 'c1', 'm1', 400]);
 });
 
 test('markPermissionLocked fails when vault space row does not exist', async () => {
@@ -132,6 +132,7 @@ test('projectsNeedingVault lists ACTIVE baseline-capturing projects not yet full
   assert.match(captured.sql, /capture_baseline/);
   assert.match(captured.sql, /project_page_id IS NOT NULL/);
   assert.match(captured.sql, /permission_locked_at IS NOT NULL/);
+  assert.match(captured.sql, /app_delete_granted_at IS NOT NULL/, 'a project locked before the app kept its grant is picked up');
   // Forge SQL refuses `LIMIT ?` (ERROR 1210) — the limit is inlined as a checked integer.
   assert.doesNotMatch(captured.sql, /LIMIT \?/);
   assert.match(captured.sql, /LIMIT 10\b/);

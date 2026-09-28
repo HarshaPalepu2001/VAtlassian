@@ -13,7 +13,7 @@
 import { registerHooks } from 'node:module';
 
 const mocked = {
-  'lib/db.js': ['executeQuery'],
+  'lib/db.js': ['executeQuery', 'limitClause'],
   'lib/ledger.js': ['append'],
   'db/store.js': ['tryAppend', 'newId', 'throwing', 'isDuplicateKey'],
   'db/approvalStore.js': ['pendingApprovalFor', 'pendingApprovalByToken', 'casConsume', 'voidOthers',
@@ -27,7 +27,8 @@ const mocked = {
   'db/credentialStore.js': ['credentialState'],
   'db/adminStore.js': ['isActiveAdmin'],
   'db/restoreStore.js': ['restoresForIssue'],
-  'lib/reviewer.js': ['isEligible']
+  'lib/reviewer.js': ['isEligible'],
+  'db/linkPendingStore.js': ['linkDecisionsPending']
 };
 const extra = {
   'lib/ledger.js': "export const EVENT = new Proxy({}, { get: (_, k) => String(k) });",
@@ -103,7 +104,9 @@ export function world({ workflow = WORKFLOW, tracked = TRACKED } = {}) {
     approvals: [],
     eligibility: [{ account_id: 'reviewer', role: 'reviewer', project_id: null, issue_type_id: '*', state: 'ACTIVE' }],
     audit: [],
-    faults: new Set(),                                        // e.g. 'jira:issue', 'jira:transitions', 'db:config', 'db:baseline', 'db:item', 'db:rootDigests'
+    attachmentAliases: [],
+    linkPending: [],                                          // { issue_id, decided_on_issue_id, decided_on_key, queued_at }                                    // { issue_id, attachment_id, stands_for_id } a restore recorded
+    faults: new Set(),                                        // e.g. 'jira:issue', 'jira:transitions', 'db:config', 'db:baseline', 'db:item', 'db:rootDigests', 'db:alias'
     calls: []
   };
 
@@ -193,7 +196,9 @@ export function world({ workflow = WORKFLOW, tracked = TRACKED } = {}) {
       transition_id: String(transitionId), from_status_id: from, to_status_id: to,
       required_role: role, required_assurance: assurance, controlled_fields_hash: 'c'.repeat(64),
       transition_at: w.now, captured_at: w.now, approved_by: approvedBy, approval_id: newId(),
-      captured_by_baseline_id: capturedBy?.baseline_id ?? null };
+      captured_by_baseline_id: capturedBy?.baseline_id ?? null,
+      // What va_baseline_value retains: the link worker reads it (jobs/linkWorker.js).
+      values: clone(p.raw) };
     w.baselines.push(b);
     if (tree) w.rootDigests.set(hex(b.baseline_id), JSON.stringify(p.digests));
     w.itemState.set(Number(issue.id), { state: 'BASELINED', baseline_version: version, lock_token: null, version: 1 });
@@ -319,12 +324,17 @@ export function world({ workflow = WORKFLOW, tracked = TRACKED } = {}) {
         return { result: true, data: row ? [clone(row)] : [] };
       }
       if (/UPDATE va_item_state/.test(sql)) return { result: true, data: [] };
+      if (/FROM va_attachment_alias/.test(sql)) {
+        if (w.faults.has('db:alias')) return { result: false, error: 'down' };
+        const ids = params.map(Number);
+        return { result: true, data: clone(w.attachmentAliases.filter(a => ids.includes(Number(a.issue_id)))) };
+      }
       if (/va_eligibility/.test(sql)) return { result: true, data: w.eligible(params) ? [{ ok: 1 }] : [] };
       return { result: true, data: [] };
     },
     append: async (_store, event) => { w.audit.push(event); return { seq: w.audit.length }; },
     tryAppend: async event => { w.audit.push(event); },
-    newId, throwing: async () => [], isDuplicateKey: () => false,
+    newId, throwing: async () => [], isDuplicateKey: () => false, limitClause: n => String(n),
     pendingApprovalFor: async ({ issueId, fromStatusId, toStatusId, transitionId, now, approvalId }) =>
       [...w.approvals].reverse().find(a => String(a.issue_id) === String(issueId) && a.state === 'PENDING'
         && a.from_status_id === fromStatusId && a.to_status_id === toStatusId && String(a.transition_id) === String(transitionId)
@@ -367,6 +377,9 @@ export function world({ workflow = WORKFLOW, tracked = TRACKED } = {}) {
       return root ? { issueId: Number(root.id), issueKey: root.key, version: parent.version } : null;
     },
     getReview: async issueId => clone(w.itemState.get(Number(issueId)) ?? null),
+    linkDecisionsPending: async (issueId, now = w.now) => w.linkPending
+      .filter(p => p.issue_id === Number(issueId) && p.queued_at >= now - 120_000)
+      .map(p => ({ decidedOnKey: p.decided_on_key, queuedAt: p.queued_at })),
     adminIncidentCount: async () => 0, credentialState: async () => ({ state: 'ACTIVE' }), isActiveAdmin: async () => false,
     restoresForIssue: async () => [],
     isEligible: async ({ accountId, projectId, issueTypeId, role }) =>

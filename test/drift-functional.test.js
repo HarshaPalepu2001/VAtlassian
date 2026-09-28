@@ -20,7 +20,7 @@ const modules = {
   'lib/reviewer.js': ['isEligible','assignReviewer'],
   'db/baselineTreeStore.js': ['readBaselineTree','beginTreeBaseline','writeTreeCapture','verifyTreeCapture','publishTreeBaseline','activeRootsForNode'],
   'db/treeDriftStore.js': ['replaceTreeDrift'],
-  'lib/vaultQueue.js': ['enqueueVault']
+  'lib/vaultQueue.js': ['enqueueVaultJobs']
 };
 const hooks = registerHooks({
   resolve(specifier, context, next) {
@@ -73,7 +73,7 @@ function fixture() {
     transitionRequests:[], statusTransitions:[{id:'21',name:'In-Review',toStatusId:'1',hasScreen:false,isAvailable:true}],
     restoreActions:[], replacements:[],
     policy:{transition_id:'5',from_status_id:'1',to_status_id:'2',required_assurance:'ESIGNATURE',required_role:'reviewer',meaning:'Reviewed and approved',capture_baseline:true,block_on_drift:true},
-    controlledFields:async()=>fields, projectConfig:async()=>({enabled:true,restore:{queue:false}}),
+    controlledFields:async()=>fields, activeRootsForNode:async()=>[], projectConfig:async()=>({enabled:true,restore:{queue:false}}),
     gateActiveOutOf:async()=>({gated:true,...f.policy}), gatedTransition:async()=>f.policy, listGatedTransitions:async()=>[f.policy],
     isEligible:async()=>true, assignReviewer:async()=>({accountId:'trusted',displayName:'Reviewer'}),
     activeBaseline:async()=>f.baselines.at(-1), readAllValues:async(_id,v)=>clone(f.saved.get(v)), activeBaselines:async()=>new Map(),
@@ -122,6 +122,11 @@ function fixture() {
     tryAppend:async(a)=>f.audits.push(a),
     vaultCalls:[],
     enqueueVault:async(body)=>{f.vaultCalls.push(body);return {jobId:'fixture-vault-job'};},
+    enqueueVaultJobs:async(bodies)=>{
+      const failed=[];
+      for(const body of bodies){try{await f.enqueueVault(body);}catch(error){failed.push({body,error});}}
+      return {failed};
+    },
     readBaselineTree:async (...args)=>{
       assert.equal(args.length,1,'production must use the tree store row-decoding contract');
       return f.baselines.find(b=>b.baseline_id.equals(args[0]))?.tree ?? null;
@@ -618,4 +623,14 @@ test('a signer with no reviewer role cannot decide drift, even with the row dele
   f.isEligible = async () => false;
   const c = await f.api.challenge(f.args);
   assert.equal(c.success, false);
+});
+
+test('a captured baseline that tracks files tells the vault exactly which files it recorded',async()=>{
+  const f=fixture();
+  f.fields.push({field_id:'attachment',field_name:'Attachment',field_kind:'ATTACHMENTS',store_values:true});
+  f.issue.fields.attachment=[{id:'100',filename:'spec.pdf',size:3,mimeType:'application/pdf',content:'https://x/100'}];
+  const result=await f.sign();
+  assert.equal(result.success,true,JSON.stringify(result));
+  assert.equal(f.vaultCalls.length,1);
+  assert.deepEqual(f.vaultCalls[0].attachments,[{id:'100',jiraId:'100',filename:'spec.pdf'}]);
 });

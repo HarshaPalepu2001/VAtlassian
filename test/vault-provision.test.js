@@ -21,6 +21,10 @@ function baseDeps(overrides = {}) {
     attachmentDeleteGrantIds: () => [],
     removeAttachmentDeleteGrants: async () => {},
     markPermissionLocked: async () => {},
+    appJiraAccountId: async () => 'app-jira-1',
+    hasAppDeleteGrant: () => true,
+    grantAppAttachmentDelete: async () => ({}),
+    markAppDeleteGranted: async () => {},
     tryAppend: async () => {},
     now: () => 1000,
     actorAccountId: 'system',
@@ -164,10 +168,10 @@ test('provisionVault records the lockdown failure independently of the space res
   assert.equal(result.errors[0].step, 'lockAttachmentDeletion');
 });
 
-test('lockAttachmentDeletion does nothing once the project is already locked', async () => {
+test('lockAttachmentDeletion does nothing once the project is locked and the app holds its grant', async () => {
   let schemeRead = false;
   const deps = baseDeps({
-    getVaultSpace: async () => ({ space_id: 's1', permission_locked_at: 123 }),
+    getVaultSpace: async () => ({ space_id: 's1', permission_locked_at: 123, app_delete_granted_at: 124 }),
     getProjectPermissionScheme: async () => { schemeRead = true; return { id: 1, permissions: [] }; }
   });
   const result = await lockAttachmentDeletion(7, deps);
@@ -187,4 +191,60 @@ test('lockdown audit payload includes otherProjectKeys sharing the scheme', asyn
   await lockAttachmentDeletion(7, deps);
   assert.ok(auditEvent, 'audit event must be recorded');
   assert.deepEqual(auditEvent.payload.otherProjectKeys, ['ENG', 'SEC']);
+});
+
+test('the app keeps its own right to delete: its grant is added first and never removed', async () => {
+  const calls = [];
+  const deps = baseDeps({
+    getVaultSpace: async () => ({ space_id: 's1' }),
+    getProjectPermissionScheme: async () => ({ id: 10000, name: 'Default', permissions: [
+      { id: 1, permission: 'DELETE_ALL_ATTACHMENTS', holder: { type: 'projectRole', value: '10002' } }] }),
+    hasAppDeleteGrant: () => false,
+    grantAppAttachmentDelete: async (args) => calls.push(['grant', args]),
+    markAppDeleteGranted: async () => calls.push(['granted']),
+    attachmentDeleteGrantIds: (scheme, options) => { calls.push(['select', options]); return [1]; },
+    removeAttachmentDeleteGrants: async (args) => calls.push(['remove', args.grantIds]),
+    markPermissionLocked: async () => calls.push(['locked']),
+    tryAppend: async (event) => calls.push(['audit', event.eventType])
+  });
+  const result = await lockAttachmentDeletion(7, deps);
+  assert.deepEqual(calls.map(c => c[0]), ['grant', 'granted', 'audit', 'select', 'remove', 'locked', 'audit']);
+  assert.deepEqual(calls[0][1], { schemeId: 10000, accountId: 'app-jira-1' });
+  assert.deepEqual(calls[3][1], { keepAccountId: 'app-jira-1' }, 'the app grant is excluded from removal');
+  assert.equal(calls[2][1], 'ATTACHMENT_DELETE_GRANTED_TO_APP');
+  assert.equal(result.appGrantAdded, true);
+});
+
+test('a project recorded as locked before grants were read is finished: app grant added, the rest removed', async () => {
+  const calls = [];
+  const deps = baseDeps({
+    getVaultSpace: async () => ({ space_id: 's1', permission_locked_at: 123, permission_scheme_id: '10000' }),
+    getProjectPermissionScheme: async () => ({ id: 10000, name: 'Default', permissions: [{ id: 5, permission: 'DELETE_ALL_ATTACHMENTS' }] }),
+    hasAppDeleteGrant: () => false,
+    grantAppAttachmentDelete: async () => calls.push('grant'),
+    markAppDeleteGranted: async () => calls.push('granted'),
+    attachmentDeleteGrantIds: (scheme) => scheme.permissions.map(p => p.id),
+    removeAttachmentDeleteGrants: async ({ grantIds }) => calls.push(['remove', grantIds]),
+    markPermissionLocked: async () => calls.push('locked-again'),
+    tryAppend: async (event) => calls.push([event.eventType, event.payload.repaired ?? null])
+  });
+  const result = await lockAttachmentDeletion(7, deps);
+  assert.deepEqual(calls, ['grant', 'granted', ['ATTACHMENT_DELETE_GRANTED_TO_APP', null], ['remove', [5]],
+    ['ATTACHMENT_DELETE_LOCKED', true]]);
+  assert.equal(result.repaired, true);
+  assert.equal(result.grantsRemoved, 1);
+});
+
+test('a refused app grant is audited and leaves the project unmarked, so the backfill retries', async () => {
+  const calls = [];
+  const deps = baseDeps({
+    getVaultSpace: async () => ({ space_id: 's1' }),
+    hasAppDeleteGrant: () => false,
+    grantAppAttachmentDelete: async () => { throw new Error('403'); },
+    markAppDeleteGranted: async () => calls.push('granted'),
+    removeAttachmentDeleteGrants: async () => calls.push('remove'),
+    tryAppend: async (event) => calls.push(event.eventType)
+  });
+  await assert.rejects(() => lockAttachmentDeletion(7, deps), /403/);
+  assert.deepEqual(calls, ['ATTACHMENT_DELETE_GRANT_FAILED'], 'nothing is removed while the app would lose its own right to delete');
 });

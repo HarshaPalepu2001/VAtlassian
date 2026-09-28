@@ -32,6 +32,8 @@ test('activeRootsForNode returns only complete active baselines', async (t) => {
         assuranceLevel: 'BIOMETRIC',
         requiredRole: 'QA',
         treeHash: 't'.repeat(64),
+        projectId: 11851,
+        issueTypeId: '10000',
         nodeContentHash: 'c'.repeat(64)
       }
     ];
@@ -52,6 +54,9 @@ test('activeRootsForNode returns only complete active baselines', async (t) => {
     transitionAt: 1699999999000,
     assuranceLevel: 'BIOMETRIC',
     requiredRole: 'QA',
+    // The root's scope travels too: it is what the child tracks (tree/nodeFields.js).
+    projectId: 11851,
+    issueTypeId: '10000',
     treeHash: 't'.repeat(64),
     nodeContentHash: 'c'.repeat(64)
   }]);

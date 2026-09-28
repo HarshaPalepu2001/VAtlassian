@@ -69,9 +69,14 @@ export const ALWAYS_CONTROLLED_FIELDS = [
  *
  * TWO KINDS, AND THE SECOND KIND IS NEW.
  *
- * The original ten are fields whose CONTENT is not part of the reviewed record:
- * comments, worklogs, watchers, attachments. A reviewer approves the work item,
- * not the conversation around it.
+ * The first are fields whose CONTENT is not part of the reviewed record:
+ * comments, worklogs, watchers. A reviewer approves the work item, not the
+ * conversation around it.
+ *
+ * `attachment` used to be here. It is not any more: the files on a work item
+ * are part of what a reviewer approves, and since the vault keeps a hashed copy
+ * of every baselined file (jobs/vaultWorker.js) a rejection can put a removed
+ * file back and take an added one away (lib/restore/attachments.js).
  *
  * The rest are DERIVED OR VOLATILE: Jira recomputes them, and no human edited
  * anything when they change. `lastViewed` moves when somebody merely opens the
@@ -89,7 +94,7 @@ export const ALWAYS_CONTROLLED_FIELDS = [
 export const IGNORED_FIELDS = new Set([
   // Not part of the reviewed record.
   'comment', 'worklog', 'watches', 'votes',
-  'timetracking', 'progress', 'aggregateprogress', 'attachment',
+  'timetracking', 'progress', 'aggregateprogress',
   'thumbnail', 'environment',
 
   // Immutable — cannot drift. `reporter` is deliberately NOT here: it is
@@ -261,8 +266,14 @@ export function normaliseMulti(v) {
 }
 
 /**
- * Attachments are identified by content, not by filename or id: a file swapped
- * for different bytes under the same name must register as a change.
+ * Attachments are compared by Jira id, which is exact: Jira never changes a
+ * file in place, so different bytes always arrive under a new id, and a file
+ * swapped under the same name is an add and a remove.
+ *
+ * The id is the CANONICAL one (lib/attachmentIdentity.js): a file the app
+ * re-uploaded from the vault stands for the original it restored. Only what
+ * that copy shares with its original is hashed — not `created`, `author` or
+ * `mimeType`, which a re-upload changes and which say nothing about content.
  */
 export function normaliseAttachments(list) {
   if (!Array.isArray(list)) return [];
@@ -270,9 +281,7 @@ export function normaliseAttachments(list) {
     .map((a) => ({
       id: String(a.id ?? ''),
       filename: a.filename ?? '',
-      size: a.size ?? null,
-      created: a.created ?? null,
-      contentHash: a.contentHash ?? null
+      size: a.size ?? null
     }))
     .sort((x, y) => (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
 }

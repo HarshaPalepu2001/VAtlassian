@@ -144,6 +144,49 @@ export function fieldLabel(fieldId: string, resolvedName?: string | null): strin
   return fieldId.charAt(0).toUpperCase() + fieldId.slice(1);
 }
 
+/**
+ * "2 days ago", for a change on a worklist or a diff row — never for a
+ * signature, which formatTimestamp() spells out in full. Callers put the
+ * absolute time on hover so the exact instant is always one step away.
+ */
+export function relativeTime(ms: number | null | undefined, now: number = Date.now()): string | null {
+  if (ms == null || !Number.isFinite(Number(ms)) || Number(ms) <= 0) return null;
+  const elapsed = now - Number(ms);
+  if (elapsed < 60_000) return 'just now';
+  const minutes = Math.floor(elapsed / 60_000);
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'} ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 31) return days === 1 ? 'yesterday' : `${days} days ago`;
+  return formatDate(Number(ms));
+}
+
+/**
+ * How long after approval something happened: "+3 days", "+5 hours".
+ *
+ * The distance from the signature is what a reviewer is actually weighing —
+ * an edit an hour after approval reads differently from one three weeks on —
+ * so the diff prints it beside every step rather than leaving the arithmetic
+ * to the reader.
+ */
+export function sinceLabel(fromMs: number | null | undefined, toMs: number | null | undefined): string | null {
+  if (fromMs == null || toMs == null) return null;
+  const from = Number(fromMs); const to = Number(toMs);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from <= 0 || to < from) return null;
+  const hours = Math.floor((to - from) / 3_600_000);
+  if (hours < 1) return 'within the hour';
+  if (hours < 24) return `+${hours} hour${hours === 1 ? '' : 's'}`;
+  const days = Math.floor(hours / 24);
+  return `+${days} day${days === 1 ? '' : 's'}`;
+}
+
+/** Whole days between two instants, never negative. */
+export function daysBetween(fromMs: number | null | undefined, toMs: number = Date.now()): number | null {
+  if (fromMs == null || !Number.isFinite(Number(fromMs)) || Number(fromMs) <= 0) return null;
+  return Math.max(0, Math.floor((toMs - Number(fromMs)) / 86_400_000));
+}
+
 /** "1 item" / "3 items", so call sites stop hand-rolling the plural. */
 export function plural(count: number, singular: string, plural?: string): string {
   return `${count} ${count === 1 ? singular : (plural ?? `${singular}s`)}`;

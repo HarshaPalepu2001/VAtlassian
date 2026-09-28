@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { view } from '@forge/bridge';
 import Button from '@atlaskit/button';
 import { invoke } from '../../lib/bridge';
 import { Badge, Card } from '../../ui/primitives';
 import { Notice } from '../../ui/feedback';
+import { formatTimestamp } from '../../ui/format';
 import { assertResult, errorMessage } from '../../lib/result';
 import type { Result } from '../../lib/result';
 import type { PanelRestore } from '../types';
@@ -11,12 +13,45 @@ import { PROGRESS, restoreStateLabel } from '../approvalModel';
 import { recordHarnessEvent } from '../../lib/harness';
 
 
-type Restore = { restore_id: string; state: string; field_name?: string; error?: string; last_error?: string; report?: unknown; detail?: any };
+/** One restore as `restore:getState` reports it. */
+export type RestoreRow = {
+  restore_id: string; state: string; field_name?: string; error?: string | null; last_error?: string | null; report?: unknown; detail?: any;
+  actorName?: string | null; startedAt?: number | null; finishedAt?: number | null; baselineVersion?: number | null;
+  progress?: { totalSteps: number; completedSteps: number; remainingSteps: number };
+};
 
 type Unmatched = { issueKey?: string | null; fieldName?: string | null; kind?: string; reason?: string };
 type Refused = { kind?: string; issueKey?: string | null; error?: { detail?: string } };
 
+const SUCCEEDED = ['COMPLETE', 'COMPLETE_WITH_REPLACEMENTS'];
+const UNSUCCESSFUL = ['PARTIAL', 'FAILED', 'QUEUING_FAILED', 'ERROR'];
+
+/** A restore is finished once it has succeeded or stopped trying. Only then
+ *  does it leave the progress card and become a line on the Baseline card. */
+export const restoreFinished = (state?: string | null) => !!state && (SUCCEEDED.includes(state) || UNSUCCESSFUL.includes(state));
+
+/**
+ * Whether a restore is a fact about this baseline. A restore to version 2 is
+ * version 2's history: once version 3 is signed, showing "Back to version 2"
+ * on version 3's card reads as if version 3 had been undone. The review
+ * window's record keeps every restore, each with its own version, and the
+ * server refuses to retry one against a newer baseline (STALE_BASELINE).
+ * A restore with no recorded version counts only if it ended after this
+ * baseline was signed; one that cannot be placed is not claimed for it.
+ */
+export function restoreBelongsTo(restore: PanelRestore | null | undefined,
+  baseline: { version: number; transitionAt?: number | null; capturedAt?: number | null } | null | undefined): boolean {
+  if (!restore || !baseline) return false;
+  if (restore.baselineVersion != null) return restore.baselineVersion === baseline.version;
+  const signedAt = baseline.transitionAt ?? baseline.capturedAt ?? null;
+  const at = restore.finishedAt ?? restore.queuedAt ?? null;
+  return signedAt != null && at != null && at >= signedAt;
+}
+
 const summaryOf = (detail: any) => Array.isArray(detail) ? detail.find((entry: any) => entry && typeof entry === 'object') : null;
+const unmatchedOf = (detail: any): Unmatched[] => summaryOf(detail)?.unmatched ?? summaryOf(detail)?.verification?.unmatched ?? [];
+const refusedOf = (detail: any): Refused[] => summaryOf(detail)?.refused ?? [];
+const replacementsOf = (detail: any): any[] => detail?.find?.((d: any) => d.replacements)?.replacements ?? [];
 
 /**
  * What stopped this restore being complete, in the reviewer's own terms.
@@ -28,12 +63,11 @@ const summaryOf = (detail: any) => Array.isArray(detail) ? detail.find((entry: a
  * finally reaches the person who has to decide what to do about it.
  */
 function Outstanding({ detail }: { detail: any }) {
-  const summary = summaryOf(detail);
-  const unmatched: Unmatched[] = summary?.unmatched ?? summary?.verification?.unmatched ?? [];
-  const refused: Refused[] = summary?.refused ?? [];
+  const unmatched = unmatchedOf(detail);
+  const refused = refusedOf(detail);
   if (!unmatched.length && !refused.length) return null;
 
-  return <div style={{ marginLeft: 12 }}>
+  return <div>
     {!!unmatched.length && <>
       <p className="va-muted">Still not matching the approved values:</p>
       <ul style={{ marginTop: 4 }}>
@@ -47,7 +81,9 @@ function Outstanding({ detail }: { detail: any }) {
       </ul>
     </>}
     {!!refused.length && <>
-      <p className="va-muted">Jira refused these changes:</p>
+      {/* Jira's refusals and the app's own (a link another item's approval
+          still holds, lib/restore/linkConflicts.js); each line says which. */}
+      <p className="va-muted">Not restored:</p>
       <ul style={{ marginTop: 4 }}>
         {refused.map((entry, idx) => (
           <li key={`r${idx}`}>
@@ -60,17 +96,69 @@ function Outstanding({ detail }: { detail: any }) {
   </div>;
 }
 
+const hasDetails = (r: RestoreRow) => Boolean(r.error || r.last_error || unmatchedOf(r.detail).length || refusedOf(r.detail).length
+  || replacementsOf(r.detail).length || r.report != null);
+
+/** Everything a finished restore can say about itself, behind a closed Details toggle. */
+function RestoreDetails({ restore: r }: { restore: RestoreRow }) {
+  const replacements = replacementsOf(r.detail);
+  return <details className="va-details">
+    <summary>Details</summary>
+    <div className="va-stack va-stack--tight" style={{ marginTop: 8 }}>
+      {(r.error || r.last_error) && <p className="va-muted" style={{ margin: 0 }}>{r.error || r.last_error}</p>}
+      <Outstanding detail={r.detail} />
+      {!!replacements.length && <div>
+        <p className="va-muted">Recreated nodes:</p>
+        <ul style={{ marginTop: 4 }}>
+          {replacements.map((rep: any, idx: number) => (
+            <li key={idx}>Replaced logical node {rep.logicalNodeId} with {rep.newIssueKey || rep.newIssueId}</li>
+          ))}
+        </ul>
+      </div>}
+      {r.report != null && <details className="va-details"><summary>Per-field result</summary><pre className="va-json">{JSON.stringify(r.report, null, 2)}</pre></details>}
+    </div>
+  </details>;
+}
+
 const tone = (state: string) => state.startsWith('COMPLETE') ? 'success' : state === 'PARTIAL' ? 'warning' : ['FAILED', 'QUEUING_FAILED', 'ERROR'].includes(state) ? 'danger' : 'neutral';
 
 /**
- * Restoration detail, read only once the summary reports a restoration and
+ * One restore, as a line on the record: the outcome, which version it put the
+ * work item back to, who asked for it and when it finished. The Baseline card
+ * shows the latest; the review window's Baseline record lists them all.
+ */
+export function RestoreLine({ restore: r, action }: { restore: RestoreRow; action?: ReactNode }) {
+  const version = r.baselineVersion != null ? `version ${r.baselineVersion}` : 'the baseline';
+  const at = r.finishedAt ?? r.startedAt ?? null;
+  const meta = [
+    SUCCEEDED.includes(r.state) ? `Back to ${version}` : `Restoring ${version}`,
+    r.actorName ? `by ${r.actorName}` : '',
+    formatTimestamp(at) ?? ''
+  ].filter(Boolean).join(' · ');
+  return <div className="va-restore-line va-stack va-stack--tight">
+    <div className="va-row">
+      <Badge tone={tone(r.state)}>{restoreStateLabel(r.state)}</Badge>
+      <span className="va-grow va-secondary">{meta}</span>
+      {action}
+    </div>
+    {hasDetails(r) && <RestoreDetails restore={r} />}
+  </div>;
+}
+
+/**
+ * The latest restore. While it runs it has a card of its own, beside the
+ * Baseline card; once it has finished — restored or not — the card goes and
+ * the outcome is one line on the Baseline card (IssuePanel places it), with
+ * Retry when it did not restore everything.
+ *
+ * Restoration detail is read only once the summary reports a restoration and
  * re-read whenever that summary fact changes. The panel's own refresh
  * triggers drive it, so this section never subscribes to events separately.
  * The centralised bridge emits VA_ISSUE_CHANGED after a durable
  * 'restore:retry' (see lib/bridge.ts); this component never emits.
  */
 export default function RestoreStatus({ issueKey, restore, onDone }: { issueKey?: string; restore: PanelRestore | null; onDone?: () => void | Promise<void> }) {
-  const [rows, setRows] = useState<Restore[]>([]);
+  const [rows, setRows] = useState<RestoreRow[]>([]);
   const [error, setError] = useState('');
   const [retrying, setRetrying] = useState('');
   const lock = useRef(false);
@@ -79,7 +167,7 @@ export default function RestoreStatus({ issueKey, restore, onDone }: { issueKey?
   useEffect(() => {
     if (!revision) return;
     let active = true;
-    invoke<Result & { restores: Restore[] }>('restore:getState', { issueKey })
+    invoke<Result & { restores: RestoreRow[] }>('restore:getState', { issueKey })
       .then(result => { if (active) { setRows(assertResult(result).restores ?? []); setError(''); } })
       .catch(e => { if (active) setError(errorMessage(e)); });
     return () => { active = false; };
@@ -93,7 +181,7 @@ export default function RestoreStatus({ issueKey, restore, onDone }: { issueKey?
     try {
       assertResult(await invoke<Result>('restore:retry', { issueKey, restoreId }));
       recordHarnessEvent('RESTORE', 'retryRestore:dispatched', { restoreId, issueKey });
-      const result = assertResult(await invoke<Result & { restores: Restore[] }>('restore:getState', { issueKey }));
+      const result = assertResult(await invoke<Result & { restores: RestoreRow[] }>('restore:getState', { issueKey }));
       setRows(result.restores ?? []);
       view.refresh().catch(() => {});
       await onDone?.();
@@ -108,37 +196,39 @@ export default function RestoreStatus({ issueKey, restore, onDone }: { issueKey?
 
 
   if (!restore) return null;
-  const shown: Restore[] = rows.length ? rows : [{ restore_id: restore.restoreId, state: restore.state }];
+  // Newest first, the same order the summary took its restore from.
+  const latest: RestoreRow = rows[0] ?? { restore_id: restore.restoreId, state: restore.state,
+    finishedAt: restore.finishedAt ?? null, baselineVersion: restore.baselineVersion ?? null };
+  const retryButton = (
+    <Button isDisabled={!!retrying} onClick={() => void retry(latest.restore_id)}>
+      {retrying === latest.restore_id ? PROGRESS.restoreRunning : 'Retry restore'}
+    </Button>
+  );
+
+  if (restoreFinished(restore.state)) {
+    return <div className="va-base__restore va-stack va-stack--tight">
+      {error && <Notice danger>{error}</Notice>}
+      <RestoreLine restore={latest} action={UNSUCCESSFUL.includes(latest.state) ? retryButton : undefined} />
+    </div>;
+  }
 
   // A restore is only "complete" once every tracked field has been read back and
   // matched, so the state is the headline rather than an afterthought appended
   // to the field name with a middle dot.
+  const steps = latest.progress
+    ?? (restore.totalSteps ? { totalSteps: restore.totalSteps, completedSteps: restore.completedSteps ?? 0, remainingSteps: 0 } : undefined);
   return <Card title="Restoration results" subtitle="A field counts as restored only after Jira has been read back and its value matched.">
     {error && <Notice danger>{error}</Notice>}
-    {shown.map(r => {
-      const replacements = r.detail?.find?.((d: any) => d.replacements)?.replacements;
-      return <div key={r.restore_id} className="va-record-field va-stack">
-        <div className="va-row">
-          <Badge tone={tone(r.state)}>{restoreStateLabel(r.state)}</Badge>
-          <span className="va-grow va-truncate">{r.field_name ?? 'All tracked fields'}</span>
-          {['FAILED', 'PARTIAL', 'PENDING', 'QUEUING_FAILED', 'ERROR'].includes(r.state) && (
-            <Button isDisabled={!!retrying} onClick={() => void retry(r.restore_id)}>{retrying === r.restore_id ? PROGRESS.restoreRunning : 'Retry restore'}</Button>
-          )}
-        </div>
-        {(r.error || r.last_error) && <p className="va-muted">{r.error || r.last_error}</p>}
-        <Outstanding detail={r.detail} />
-        {!!replacements?.length && (
-          <div style={{ marginLeft: 12 }}>
-            <p className="va-muted">Recreated nodes:</p>
-            <ul style={{ marginTop: 4 }}>
-              {replacements.map((rep: any, idx: number) => (
-                <li key={idx}>Replaced logical node {rep.logicalNodeId} with {rep.newIssueKey || rep.newIssueId}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-        {r.report != null && <details className="va-details"><summary>Per-field result</summary><pre className="va-json">{JSON.stringify(r.report, null, 2)}</pre></details>}
-      </div>;
-    })}
+    <div className="va-record-field va-stack">
+      <div className="va-row">
+        <Badge tone={tone(latest.state)}>{restoreStateLabel(latest.state)}</Badge>
+        <span className="va-grow va-truncate">
+          {latest.field_name ?? 'All tracked fields'}
+          {steps?.totalSteps ? <span className="va-secondary"> · {steps.completedSteps} of {steps.totalSteps} steps</span> : null}
+        </span>
+        {latest.state === 'PENDING' && retryButton}
+      </div>
+      {(latest.error || latest.last_error) && <p className="va-muted">{latest.error || latest.last_error}</p>}
+    </div>
   </Card>;
 }

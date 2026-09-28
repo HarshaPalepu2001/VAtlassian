@@ -1,6 +1,8 @@
+import { findLinkConflicts, describeLinkConflicts } from './linkConflicts.js';
 import { route } from '@forge/api';
 import { declareWrite } from '../../db/restoreStore.js';
 import { OUTCOME, RESTORE_STATE, digestOf, tally } from './outcome.js';
+import { restoreAttachments, pointAtLiveFiles, explainRichTextRefusal } from './attachments.js';
 
 // Re-exported so callers keep importing the executor as one thing. The pure
 // definitions live in ./outcome.js because this file imports @forge/api and is
@@ -32,6 +34,9 @@ export { OUTCOME, RESTORE_STATE, digestOf, tally };
  * @param actAs        'app' | 'user'
  * @param notifyUsers
  * @param perFieldRetries
+ * @param actorAccountId, approvalId  the signed rejection, for the audit
+ *                     entries an attachment restore writes
+ * @param attachmentDeps  I/O for ./attachments.js; built from `api` if absent
  *
  * @returns { state, counters, detail }
  *
@@ -48,7 +53,13 @@ export async function executeRestore({
   actAs = 'app',
   notifyUsers = false,
   perFieldRetries = 2,
-  now = Date.now()
+  now = Date.now(),
+  actorAccountId = 'system',
+  approvalId = null,
+  attachmentDeps = null,
+  // The other end's approved links, so a link restore never contradicts it
+  // (./linkConflicts.js). Absent: no end is checked, as before.
+  approvedLinksOf = null
 }) {
   const byId = new Map(controlledFields.map((f) => [f.field_id, f]));
   const detail = new Map();
@@ -98,6 +109,31 @@ export async function executeRestore({
 
   const client = actAs === 'user' ? api.asUser() : api.asApp();
   const write = { notifyUsers, override: actAs !== 'user' };
+
+  // ── Phase 0: files, before any rich text ──────────────────────────────────
+  //
+  // A description that shows a file can only be written while Jira has that
+  // file. So removed files are uploaded again first, and then every rich-text
+  // value about to be written points at the files that are there: unchanged
+  // where the original survives (byte for byte), the restored copy where it
+  // did not. The digests declared above are of the approved values, which is
+  // what a canonical read of the result compares against.
+  const attachments = async () => attachmentDeps
+    ?? (await import('./attachmentAdapters.js')).createAttachmentRestoreDeps({ api, route, actorAccountId, approvalId });
+  const fileStep = plan.steps.find((s) => s.strategy === 'attachments');
+  if (fileStep) {
+    const result = await runHandler(client, { strategy: 'attachments', issueKey, issueId, step: fileStep, write, attachments });
+    detail.set(fileStep.fieldId, { fieldId: fileStep.fieldId, fieldName: fileStep.fieldName,
+      outcome: result.ok ? OUTCOME.SUCCEEDED : OUTCOME.FAILED, reason: result.reason ?? null, verified: false });
+  }
+  if (writeIds.length > 0 && (fileStep || Object.values(writes).some(v => v && typeof v === 'object' && v.type === 'doc'))) {
+    try {
+      const deps = await attachments();
+      Object.assign(writes, pointAtLiveFiles(writes, deps.identity ? await deps.identity(issueId) : null));
+    } catch (e) {
+      console.error('restore: could not read restored copies; rich text is written as approved', e);
+    }
+  }
 
   // ── Phase 1: one bulk PUT ─────────────────────────────────────────────────
   //
@@ -167,16 +203,16 @@ export async function executeRestore({
         fieldId,
         fieldName: nameOf(byId, fieldId),
         outcome: ok ? OUTCOME.SUCCEEDED : OUTCOME.FAILED,
-        reason: ok ? null : String(lastError),
+        reason: ok ? null : String(explainRichTextRefusal(String(lastError))),
         verified: false
       });
     }
   }
 
   // ── Phase 2b: special handlers ────────────────────────────────────────────
-  for (const step of plan.steps.filter((s) => s.strategy !== 'field' && s.strategy !== 'none')) {
+  for (const step of plan.steps.filter((s) => s.strategy !== 'field' && s.strategy !== 'none' && s.strategy !== 'attachments')) {
     const result = await runHandler(client, {
-      strategy: step.strategy, issueKey, step, write
+      strategy: step.strategy, issueKey, issueId, step, write, attachments, approvedLinksOf
     });
     detail.set(step.fieldId, {
       fieldId: step.fieldId,
@@ -254,8 +290,18 @@ async function put(client, issueKey, { notifyUsers, override }, body) {
  * which is why the planner marks them SPECIAL and the dialog says so, rather
  * than letting a reviewer believe issue links restore as cleanly as a summary.
  */
-async function runHandler(client, { strategy, issueKey, step, write }) {
+async function runHandler(client, { strategy, issueKey, issueId, step, write, attachments, approvedLinksOf = null }) {
   switch (strategy) {
+    case 'attachments':
+      // Always as the app: the vault is private to it, and on a project whose
+      // attachment deletion is locked only the app's own account may delete.
+      try {
+        await restoreAttachments({ issueKey, issueId, target: step.targetValue, deps: await attachments() });
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, reason: String(error?.detail ?? error?.message ?? error) };
+      }
+
     case 'parent': {
       const value = step.targetValue;
       let parent = null;
@@ -271,7 +317,7 @@ async function runHandler(client, { strategy, issueKey, step, write }) {
     }
 
     case 'links':
-      return restoreLinks(client, issueKey, step.targetValue);
+      return restoreLinks(client, issueKey, step.targetValue, { issueId, approvedLinksOf });
 
     case 'transition':
       // Status is restored by moving the item, not by writing a field, and the
@@ -318,19 +364,27 @@ function nameOf(byId, fieldId) {
  * API: https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-links/
  * Link IDs are ephemeral; recreated relationships acquire a new ID.
  */
-async function restoreLinks(client, issueKey, target) {
+async function restoreLinks(client, issueKey, target, { issueId = null, approvedLinksOf = null } = {}) {
   try {
     if (!Array.isArray(target)) return { ok: false, reason: 'The stored issue links are not a complete raw link list.' };
     const read = await client.requestJira(route`/rest/api/3/issue/${issueKey}?fields=issuelinks`);
     if (!read.ok) return { ok: false, reason: `Issue links could not be read (HTTP ${read.status}).` };
-    const current = (await read.json())?.fields?.issuelinks;
+    const body = await read.json();
+    const current = body?.fields?.issuelinks;
     if (!Array.isArray(current)) return { ok: false, reason: 'Jira omitted the current issue links; no links were changed.' };
     // Validate both complete lists before any mutation. A malformed stored
     // entry must never become permission to delete a real relationship.
     const desired = new Map(target.map(link => [linkIdentity(link), link]));
     const existing = new Map(current.map(link => [linkIdentity(link), link]));
-    const additions = [...desired].filter(([key]) => !existing.has(key));
-    const removals = [...existing].filter(([key]) => !desired.has(key));
+    // A link belongs to both ends: a change the other end's approved state
+    // forbids is left exactly as it is, and the outcome says so.
+    const conflicts = await findLinkConflicts({ selfIssueId: body?.id ?? issueId ?? issueKey,
+      additions: [...desired].filter(([key]) => !existing.has(key)).map(([, link]) => link),
+      removals: [...existing].filter(([key]) => !desired.has(key)).map(([, link]) => link),
+      approvedLinksOf });
+    const held = new Set(conflicts.map(c => linkIdentity(c.link)));
+    const additions = [...desired].filter(([key]) => !existing.has(key) && !held.has(key));
+    const removals = [...existing].filter(([key]) => !desired.has(key) && !held.has(key));
     if (removals.some(([, link]) => !link.id)) return { ok: false, reason: 'A current issue link has no deletion id; the link set cannot be restored exactly.' };
     // Add first: a refused missing relationship leaves existing links intact.
     for (const [, link] of additions) {
@@ -349,6 +403,7 @@ async function restoreLinks(client, issueKey, target) {
       const res = await client.requestJira(route`/rest/api/3/issueLink/${link.id}`, { method: 'DELETE' });
       if (!res.ok && res.status !== 404) return { ok: false, reason: `An added issue link could not be removed (HTTP ${res.status}).` };
     }
+    if (conflicts.length) return { ok: false, reason: describeLinkConflicts(conflicts) };
     return { ok: true };
   } catch (error) {
     return { ok: false, reason: `Issue links could not be restored: ${error.message ?? error}` };

@@ -1,6 +1,6 @@
 import ForgeResolver from '@forge/resolver';
 import * as admin from '../usecases/admin.js';
-import { withRequestCache } from '../lib/cache.js';
+import { wrapWithHarness } from '../lib/harnessLogger.js';
 const resolver = new (ForgeResolver.default ?? ForgeResolver)();
 
 resolver.define('admin:check', req => admin.check(req));
@@ -59,4 +59,4 @@ resolver.define('admin:listCredentials', req => admin.listCredentials(req));
 resolver.define('admin:reconcileDirectory', req => admin.reconcileDirectory(req));
 
 const definitions = resolver.getDefinitions();
-export const handler = (...args) => withRequestCache(() => definitions(...args));
+export const handler = wrapWithHarness(definitions, { resolverName: 'admin' });

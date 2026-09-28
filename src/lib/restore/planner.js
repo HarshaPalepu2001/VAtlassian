@@ -57,6 +57,11 @@ export function planRestore({ diff, baselineValues = {}, controlledFields = [], 
   const needsHandler = [];
   const cannotRestore = [];
   const formattingOnly = [];
+  // Files, named: a rejection DELETES every file added since approval, which a
+  // reviewer must see before signing, and re-uploads every removed one from
+  // the vault. Whether the vault holds each one is asked separately
+  // (lib/restore/attachmentPreflight.js), since this module does no I/O.
+  const attachments = { willDelete: [], willRestore: [] };
 
   for (const fieldDiff of diff.fields) {
     // EVERY entry in diff.fields is integrity drift: lib/diff/index.js only
@@ -109,6 +114,11 @@ export function planRestore({ diff, baselineValues = {}, controlledFields = [], 
       continue;
     }
 
+    if (handler === 'attachments') {
+      const file = x => ({ id: String(x?.id ?? ''), filename: x?.filename ?? '' });
+      attachments.willDelete.push(...(fieldDiff.added ?? []).map(file));
+      attachments.willRestore.push(...(fieldDiff.removed ?? []).map(file));
+    }
     if (handler) {
       if (formattingOnlyChange) formattingOnly.push(fieldDiff.fieldName);
       steps.push({
@@ -150,7 +160,7 @@ export function planRestore({ diff, baselineValues = {}, controlledFields = [], 
     adapterVersion: ADAPTER_VERSION,
     steps,
     fieldWrites,
-    preflight: { willRestore, needsHandler, cannotRestore, formattingOnly },
+    preflight: { willRestore, needsHandler, cannotRestore, formattingOnly, attachments },
     summary: describePlan(willRestore, needsHandler, cannotRestore, formattingOnly)
   };
 }

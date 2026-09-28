@@ -255,6 +255,10 @@ export const EVENT = {
   // fields, or none); this entry is the record that it left the scope it was
   // signed in. See lib/scopeMove.js.
   BASELINE_SCOPE_CHANGED: 'BASELINE_SCOPE_CHANGED',
+  // An approval decided a link this work item shares, and its record could not
+  // take the decision: its links were not retained, or it stayed busy with its
+  // own decision past every retry. See jobs/linkWorker.js.
+  LINK_DECISION_NOT_RECORDED: 'LINK_DECISION_NOT_RECORDED',
   DRIFT_DETECTED: 'DRIFT_DETECTED',
   DRIFT_RECONCILED: 'DRIFT_RECONCILED',
   DRIFT_SELF_REVERTED: 'DRIFT_SELF_REVERTED',
@@ -304,5 +308,15 @@ export const EVENT = {
   ATTACHMENT_DELETE_LOCK_FAILED: 'ATTACHMENT_DELETE_LOCK_FAILED',
   VAULT_QUEUE_FAILED: 'VAULT_QUEUE_FAILED',
   ATTACHMENT_VAULTED: 'ATTACHMENT_VAULTED',
-  ATTACHMENT_VAULT_FAILED: 'ATTACHMENT_VAULT_FAILED'
+  ATTACHMENT_VAULT_FAILED: 'ATTACHMENT_VAULT_FAILED',
+  // A rejection re-uploaded a vaulted file: the original id, the new id that
+  // now stands for it, and the hash both carry. See lib/restore/attachments.js.
+  ATTACHMENT_RESTORED: 'ATTACHMENT_RESTORED',
+  // What a rejection deleted, with the hash of its bytes, written BEFORE the
+  // delete; like TREE_RESTORE_NODE_DESTROYED, this entry is the record.
+  ATTACHMENT_REMOVED_BY_RESTORE: 'ATTACHMENT_REMOVED_BY_RESTORE',
+  // The app's own account was granted Delete all attachments on a locked
+  // project's scheme, so a rejection can remove a file added after approval.
+  ATTACHMENT_DELETE_GRANTED_TO_APP: 'ATTACHMENT_DELETE_GRANTED_TO_APP',
+  ATTACHMENT_DELETE_GRANT_FAILED: 'ATTACHMENT_DELETE_GRANT_FAILED'
 };

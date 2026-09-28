@@ -1,165 +1,247 @@
-import type { ReportGroup, ReviewReport, ReportMeta, ScopeImpact as ScopeImpactData } from './types';
+import { useState } from 'react';
+import type { DiffField, ReportGroup, ReviewReport, ReportMeta, ScopeImpact as ScopeImpactData } from './types';
 import { Badge } from '../ui/primitives';
-const IconWarning = () => <span aria-hidden>⚠</span>;
+import { Avatar, Icon } from '../ui/brand';
 
 /**
- * The AI report.
+ * The AI summary, written for the person reading it.
  *
  * THE CITATION CHIPS ARE THE POINT. Every claim the model makes carries the
  * drift ids it was based on, validated server-side against the evidence
  * actually sent — anything fabricated is stripped before it reaches here. Each
- * chip scrolls to and flashes the exact field it came from, so a reviewer goes
- * from "the estimate more than doubled after approval" to the precise change in
- * one click.
+ * chip names the field it came from and jumps to the exact change, so a
+ * reviewer goes from "the estimate more than doubled after approval" to the
+ * precise edit in one click.
  *
- * That is the difference between a summary you skim and evidence you can act
- * on, and it is why this component is mostly wiring rather than prose.
+ * PERSONAL, NOT CHATTY. The page opens with who the reader is to this work
+ * item — whether they signed the baseline, whether the decision is theirs —
+ * because that is what changes how they should read it. The side column is
+ * computed from the recorded changes, not written by the model, so the facts a
+ * reviewer leans on most are the ones that cannot be hallucinated.
  */
 
 const VERDICT = {
   no_material_change: { tone: 'success', label: 'Nothing material changed' },
   review_recommended: { tone: 'info', label: 'Worth a look' },
-  material_change: { tone: 'warn', label: 'Material change' },
+  material_change: { tone: 'warning', label: 'Material change' },
   scope_change: { tone: 'danger', label: 'Scope changed after approval' }
+} as const;
+
+export type Viewer = {
+  name?: string | null;
+  /** The viewer signed the baseline these changes are measured against. */
+  signedIt?: boolean;
+  /** The role that decides this drift, and whether the viewer holds it. */
+  decides?: boolean;
+  role?: string | null;
+  version?: number | null;
 };
 
-export default function ReportView({ report, meta, fallback, onCite }: {report?:ReviewReport|null;meta?:ReportMeta;fallback?:string;onCite?:(id:string)=>void}) {
+type Props = {
+  report?: ReviewReport | null;
+  meta?: ReportMeta;
+  fields?: DiffField[];
+  viewer?: Viewer;
+  onCite?: (id: string) => void;
+  onGenerate?: () => void;
+  busy?: boolean;
+  fallback?: string;
+};
+
+const DETAIL_KEY = 'va.ai.detail';
+function readDetail(): 'brief' | 'full' {
+  try { return window.localStorage.getItem(DETAIL_KEY) === 'brief' ? 'brief' : 'full'; } catch { return 'full'; }
+}
+
+export default function ReportView({ report, meta, fields = [], viewer, onCite, onGenerate, busy = false, fallback }: Props) {
+  const [detail, setDetail] = useState<'brief' | 'full'>(readDetail);
+  const choose = (next: 'brief' | 'full') => {
+    setDetail(next);
+    try { window.localStorage.setItem(DETAIL_KEY, next); } catch { /* a preference, never required */ }
+  };
+
   if (!report) {
     return (
-      <div className="va-card">
-        <div className="va-muted">{fallback}</div>
+      <div className="va-ai-empty">
+        <Icon name="sparkle" size={28} />
+        <h3 className="va-ai-empty__title">{viewer?.name ? `${firstName(viewer.name)}, get these changes explained` : 'Get these changes explained'}</h3>
+        <p className="va-secondary">{fallback ?? 'A short summary of what changed since approval, why it may matter, and what to ask before you decide. Every point links to the change it is based on.'}</p>
+        {onGenerate && <button type="button" className="va-btn va-btn--discovery" disabled={busy} onClick={onGenerate}>{busy ? 'Preparing summary…' : 'Summarise with AI'}</button>}
       </div>
     );
   }
 
   const verdict = VERDICT[report.verdictHint as keyof typeof VERDICT] ?? VERDICT.review_recommended;
+  const citeLabel = labelsFor(fields);
 
   return (
-    <div className={`va-banner va-banner-${verdict.tone}`}>
-      <div className="va-spread" style={{ marginBottom: 6 }}>
-        <strong>{verdict.label}</strong>
-        <ProvenanceNote meta={meta} groundingIssues={report.groundingIssues} />
-      </div>
+    <div className="va-ai">
+      <div className="va-ai__main">
+        {viewer?.name && (
+          <div className="va-ai__for">
+            <Avatar name={viewer.name} />
+            <strong>For {viewer.name}</strong>
+            <span className="va-secondary">{relation(viewer)}</span>
+          </div>
+        )}
+        <h3 className="va-ai__headline">{report.headline}</h3>
+        {detail === 'full' && report.narrative && <p className="va-ai__narrative">{report.narrative}</p>}
 
-      <div style={{ fontSize: 15, fontWeight: 500, marginBottom: 6 }}>{report.headline}</div>
-      <div style={{ marginBottom: 10 }}>{report.narrative}</div>
-
-      {(report.changeGroups ?? []).map((group, i) => (
-        <Group key={i} group={group} onCite={onCite} />
-      ))}
-
-      {(report.questionsForReviewer ?? []).length > 0 && (
-        <div style={{ marginTop: 12 }}>
-          <div className="va-h3" style={{ marginBottom: 4 }}>Before you decide</div>
-          <ul style={{ margin: 0, paddingLeft: 20 }}>
-            {(report.questionsForReviewer ?? []).map((q, i) => <li key={i}>{q}</li>)}
-          </ul>
-        </div>
-      )}
-
-      <ScopeImpact impact={report.scopeImpact} />
-    </div>
-  );
-}
-
-function Group({ group, onCite }: {group:ReportGroup;onCite?:(id:string)=>void}) {
-  return (
-    <div
-      style={{
-        marginTop: 10,
-        paddingLeft: 10,
-        borderLeft: '2px solid var(--va-border)',
-        opacity: group.ungrounded ? 0.65 : 1
-      }}
-    >
-      <div className="va-row">
-        <strong style={{ fontSize: 13 }}>{group.title}</strong>
-        {group.risk === 'high' && <Badge tone="danger">high risk</Badge>}
-        {group.risk === 'medium' && <Badge tone="warning">medium risk</Badge>}
-      </div>
-
-      <div className="va-subtlest">{group.whoAndWhen}</div>
-      <div style={{ marginTop: 4 }}>{group.whatChanged}</div>
-      <div className="va-muted" style={{ marginTop: 2 }}>{group.whyItMatters}</div>
-
-      <div className="va-row" style={{ marginTop: 6 }}>
-        {(group.driftIds ?? []).map((id, i) => (
-          <button
-            key={id}
-            type="button"
-            className="va-cite"
-            onClick={() => onCite?.(id)}
-            title="Jump to the exact change this is based on"
-          >
-            evidence {i + 1}
-          </button>
-        ))}
-        {group.ungrounded && (
-          // NEVER HIDDEN. A group the model could not ground is shown, greyed,
-          // with a warning — concealing it would hide the fact that the tool
-          // produced an unsupported claim, which is precisely what a reviewer
-          // needs to know about the tool they are trusting.
-          <span className="va-subtlest" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-            <IconWarning /> this point could not be tied to a recorded change — treat it with caution
+        <div className="va-ai__controls" role="group" aria-label="Summary detail">
+          <span className="va-subtlest">Detail</span>
+          <span className="va-segmented">
+            <button type="button" aria-pressed={detail === 'brief'} onClick={() => choose('brief')}>Brief</button>
+            <button type="button" aria-pressed={detail === 'full'} onClick={() => choose('full')}>Full</button>
           </span>
+        </div>
+
+        <div className={`va-ai__verdict va-ai__verdict--${verdict.tone}`}>
+          <Icon name={verdict.tone === 'success' ? 'check' : verdict.tone === 'info' ? 'info' : 'warning'} />
+          <strong>{verdict.label}</strong>
+        </div>
+
+        <ol className="va-ai__findings">
+          {(report.changeGroups ?? []).map((group, i) => (
+            <Finding key={i} index={i + 1} group={group} detail={detail} onCite={onCite} citeLabel={citeLabel} />
+          ))}
+        </ol>
+
+        {(report.questionsForReviewer ?? []).length > 0 && (
+          <section className="va-ai__questions">
+            <h4 className="va-h3">Before you decide</h4>
+            <ul>
+              {(report.questionsForReviewer ?? []).map((q, i) => <li key={i}>{q}</li>)}
+            </ul>
+          </section>
         )}
       </div>
+
+      <aside className="va-ai__side" aria-label="At a glance">
+        <ScopeImpact impact={report.scopeImpact} />
+        <People fields={fields} viewer={viewer} />
+        <Provenance meta={meta} groundingIssues={report.groundingIssues} onGenerate={onGenerate} busy={busy} />
+      </aside>
     </div>
   );
 }
 
-function ScopeImpact({ impact }: {impact?:ScopeImpactData}) {
-  if (!impact) return null;
-  const flags = [
-    impact.estimateChanged && 'estimate',
-    impact.acceptanceCriteriaChanged && 'acceptance criteria',
-    impact.dueDateChanged && 'due date'
-  ].filter((value): value is string => typeof value === 'string');
+function firstName(name: string) { return name.trim().split(/\s+/)[0]; }
 
-  if (flags.length === 0 && !impact.note) return null;
+/** "you signed v3 · you decide as QA Lead" — who the reader is to this work item. */
+function relation(viewer: Viewer): string {
+  const parts: string[] = [];
+  if (viewer.signedIt) parts.push(viewer.version != null ? `you signed version ${viewer.version}` : 'you signed this baseline');
+  if (viewer.decides) parts.push(viewer.role ? `you decide as ${viewer.role}` : 'the decision is yours');
+  else if (viewer.role) parts.push(`${viewer.role} decides`);
+  return parts.length ? `· ${parts.join(' · ')}` : '';
+}
 
+/** drift id → the field it belongs to, so a chip can say "Story points" not "evidence 1". */
+function labelsFor(fields: DiffField[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const f of fields) for (const id of f.driftIds ?? []) map.set(id, [f.issueKey, f.label ?? f.fieldName].filter(Boolean).join(' · '));
+  return map;
+}
+
+function Finding({ index, group, detail, onCite, citeLabel }: { index: number; group: ReportGroup; detail: 'brief' | 'full'; onCite?: (id: string) => void; citeLabel: Map<string, string> }) {
   return (
-    <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--va-border)' }}>
-      {flags.length > 0 && (
-        <div className="va-row">
-          <span className="va-h3">Scope</span>
-          {flags.map((f) => <Badge key={f} tone="warning">{f} changed</Badge>)}
+    <li className={group.ungrounded ? 'va-finding va-finding--ungrounded' : 'va-finding'}>
+      <span className="va-finding__index">{index}</span>
+      <div className="va-finding__body">
+        <div className="va-finding__head">
+          <strong>{group.title}</strong>
+          {group.risk === 'high' && <Badge tone="danger">high risk</Badge>}
+          {group.risk === 'medium' && <Badge tone="warning">medium risk</Badge>}
+          <span className="va-grow" />
+          {group.whoAndWhen && <span className="va-subtlest">{group.whoAndWhen}</span>}
         </div>
-      )}
-      {impact.note && <div className="va-muted" style={{ marginTop: 4 }}>{impact.note}</div>}
-    </div>
+        <div>{group.whatChanged}</div>
+        {detail === 'full' && group.whyItMatters && <div className="va-secondary">{group.whyItMatters}</div>}
+        <div className="va-row">
+          {/* One chip per change: a field edited twice is still one place to look. */}
+          {[...new Map((group.driftIds ?? []).map((id, i) => [citeLabel.get(id) ?? `evidence ${i + 1}`, id])).entries()].map(([label, id]) => (
+            <button key={id} type="button" className="va-cite" onClick={() => onCite?.(id)} title="Jump to the exact change this is based on">
+              {label} ↗
+            </button>
+          ))}
+          {group.ungrounded && (
+            // NEVER HIDDEN. A point the model could not ground is shown, greyed,
+            // with a warning — concealing it would hide the fact that the tool
+            // produced an unsupported claim, which is precisely what a reviewer
+            // needs to know about the tool they are trusting.
+            <span className="va-subtlest va-row">
+              <Icon name="warning" size={14} /> this point could not be tied to a recorded change — treat it with caution
+            </span>
+          )}
+        </div>
+      </div>
+    </li>
+  );
+}
+
+function ScopeImpact({ impact }: { impact?: ScopeImpactData }) {
+  if (!impact) return null;
+  const rows = [
+    impact.estimateChanged && 'Estimate',
+    impact.acceptanceCriteriaChanged && 'Acceptance criteria',
+    impact.dueDateChanged && 'Due date'
+  ].filter((value): value is string => typeof value === 'string');
+  if (rows.length === 0 && !impact.note) return null;
+  return (
+    <section className="va-side-block">
+      <h4 className="va-side-block__title">Scope impact</h4>
+      {rows.map(r => <div key={r} className="va-spread"><span className="va-secondary">{r}</span><strong>Changed</strong></div>)}
+      {impact.note && <p className="va-secondary">{impact.note}</p>}
+    </section>
+  );
+}
+
+/** Who made the edits — counted from the recorded trail, not from the model. */
+function People({ fields, viewer }: { fields: DiffField[]; viewer?: Viewer }) {
+  const counts = new Map<string, { edits: number; automation: boolean }>();
+  for (const field of fields) for (const step of field.attribution ?? []) {
+    const name = step.authorName ?? 'Unknown';
+    const prior = counts.get(name) ?? { edits: 0, automation: false };
+    counts.set(name, { edits: prior.edits + 1, automation: prior.automation || step.source === 'AUTOMATION' });
+  }
+  if (counts.size === 0) return null;
+  const viewerEdited = viewer?.name ? counts.has(viewer.name) : null;
+  return (
+    <section className="va-side-block">
+      <h4 className="va-side-block__title">Who changed things</h4>
+      {[...counts.entries()].sort((a, b) => b[1].edits - a[1].edits).map(([name, c]) => (
+        <div key={name} className="va-row">
+          <Avatar name={name} size={22} automation={c.automation} />
+          <span className="va-grow">{name}</span>
+          <span className="va-subtlest">{c.edits === 1 ? '1 edit' : `${c.edits} edits`}</span>
+        </div>
+      ))}
+      {viewerEdited === false && <span className="va-success-text va-row"><Icon name="check" size={14} /> You made none of these edits</span>}
+      {viewerEdited === true && <span className="va-warning-text va-row"><Icon name="warning" size={14} /> Some of these edits are yours</span>}
+    </section>
   );
 }
 
 /**
  * How this summary was produced.
  *
- * Always shown, quietly. A reviewer must never be unable to tell a model's
- * analysis from a template's, and one that had citations stripped deserves to
- * be labelled as such — a report that needed correcting is a report to read
- * more carefully.
+ * Always shown. A reviewer must never be unable to tell a model's analysis
+ * from a template's, and one that had citations stripped deserves to be
+ * labelled as such — a report that needed correcting is a report to read more
+ * carefully.
  */
-function ProvenanceNote({ meta, groundingIssues = 0 }: {meta?:ReportMeta;groundingIssues?:number}) {
-  if (!meta) return null;
-
-  if (meta.degraded) {
-    return (
-      <span className="va-subtlest" title={meta.degradedReason ?? ''}>
-        written without AI — the comparison below is exact
-      </span>
-    );
-  }
-
+function Provenance({ meta, groundingIssues = 0, onGenerate, busy }: { meta?: ReportMeta; groundingIssues?: number; onGenerate?: () => void; busy?: boolean }) {
   return (
-    <span className="va-row">
+    <section className="va-side-block va-side-block--boxed">
+      <h4 className="va-side-block__title">How this was written</h4>
+      {meta?.degraded
+        ? <p className="va-secondary" title={meta.degradedReason ?? ''}>Written without AI — the comparison in Changes is exact.</p>
+        : <p className="va-secondary" title={meta?.model}>{meta?.cached ? 'AI summary, from cache.' : 'AI summary.'} Written from the recorded changes only; every point links to the change it came from.</p>}
       {groundingIssues > 0 && (
-        <span className="va-subtlest" style={{ color: 'var(--va-warning)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-          <IconWarning /> {groundingIssues} unsupported point{groundingIssues === 1 ? '' : 's'} removed
-        </span>
+        <p className="va-warning-text">{groundingIssues} unsupported point{groundingIssues === 1 ? ' was' : 's were'} removed.</p>
       )}
-      <span className="va-subtlest" title={meta.model}>
-        {meta.cached ? 'AI summary, from cache' : 'AI summary'}
-      </span>
-    </span>
+      <p className="va-secondary">This summary is advice. Your signature covers the recorded changes, not this text.</p>
+      {onGenerate && <button type="button" className="va-link-button" disabled={busy} onClick={onGenerate}>{busy ? 'Preparing summary…' : 'Regenerate'}</button>}
+    </section>
   );
 }

@@ -60,13 +60,17 @@ type Action = {
 };
 type SigningContext = {
   actions?: Action[]; transitions?: Action[]; blocker?: string | null; requiredRole?: string | null;
-  issue?: { key?: string; summary?: string; statusName?: string }; actorName?: string; drift?: { evidenceHash?: string }; error?: string;
+  issue?: { key?: string; summary?: string; statusName?: string }; actorName?: string;
+  drift?: { evidenceHash?: string; count?: number; blocked?: boolean }; error?: string;
 };
 type Challenge = Result & { challengeId: string; meaning: string; requiredAssurance: AssuranceLevel };
 type Submitted = Result & { approvalId: string; printedName?: string; meaning?: string };
 
 /** The one action this screen may sign for `transitionId`, or why none. */
 function exactAction(state: SigningContext, transitionId: string): { action: Action | null; blocker: string } {
+  if (state.blocker === 'UNDECIDED_DRIFT' || state.drift?.blocked === true) {
+    return { action: null, blocker: 'Transition blocked: this work item has unreviewed changes since its approved baseline. Review and approve or reject those changes from the VAtlassian issue panel or My approvals, then reopen this transition.' };
+  }
   const list = state.actions ?? (state.transitions ?? []).filter(t => t.eligible !== false);
   if (list.length > 1) return { action: null, blocker: AMBIGUOUS };
   if (list.length === 1) {

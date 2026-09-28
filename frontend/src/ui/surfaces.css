@@ -1,0 +1,323 @@
+/**
+ * The panel, the review window and the worklist.
+ *
+ * Everything here draws from tokens.css so it follows Jira's own light and
+ * dark themes. The one addition is the "discovery" purple Atlassian uses for
+ * AI features: the AI summary wears it, and nothing else does, so a reviewer
+ * always knows which words on screen a model wrote.
+ */
+
+:root {
+  --va-discovery: #6e5dc6;
+  --va-discovery-bg: #f3f0ff;
+  --va-discovery-text: #5e4db2;
+  --va-discovery-line: #dfd8fd;
+  --va-moved-bg: #f8e6a0;
+  --va-moved-text: #7f5f01;
+  --va-flag-line: #f5cd47;
+}
+:root[data-color-mode='dark'] {
+  --va-discovery: #9f8fef;
+  --va-discovery-bg: #2b273f;
+  --va-discovery-text: #b8acf6;
+  --va-discovery-line: #44356f;
+  --va-moved-bg: #533f04;
+  --va-moved-text: #f5cd47;
+  --va-flag-line: #7f5f01;
+}
+
+/* ── Small parts ─────────────────────────────────────────────────────────── */
+
+.va-warning-text { color: var(--va-warning-text); }
+.va-success-text { color: var(--va-success-text); }
+.va-icon { flex-shrink: 0; vertical-align: -3px; }
+.va-seal { flex-shrink: 0; }
+.va-seal--brand { color: var(--va-brand); }
+.va-seal--success { color: var(--va-success-text); }
+.va-seal--warning { color: var(--va-warning-text); }
+.va-seal--neutral { color: var(--va-text-subtlest); }
+
+.va-mark {
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  border-radius: 5px; background: var(--va-brand); color: #fff;
+}
+.va-avatar {
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  border-radius: 50%; color: #fff; font-weight: 700; line-height: 1;
+}
+.va-avatar--automation { background: var(--va-neutral-bg); color: var(--va-neutral-text); border: 1px solid var(--va-border); box-sizing: border-box; }
+
+/* Jira's lozenge: small caps, bold, square-ish. */
+.va-lozenge {
+  display: inline-block; padding: 0 4px; border-radius: 3px;
+  font-size: var(--va-size-micro); font-weight: 700; line-height: 16px;
+  text-transform: uppercase; white-space: nowrap;
+  background: var(--va-neutral-bg); color: var(--va-neutral-text);
+}
+.va-lozenge--progress { background: var(--va-brand-line); color: var(--va-brand-text); }
+.va-lozenge--success { background: var(--va-success-line); color: var(--va-success-text); }
+.va-lozenge--moved { background: var(--va-moved-bg); color: var(--va-moved-text); }
+
+.va-link-button {
+  background: none; border: 0; padding: 0; font: inherit; cursor: pointer;
+  color: var(--va-brand); font-size: var(--va-size-body);
+}
+.va-link-button:hover { color: var(--va-brand-hover); text-decoration: underline; }
+.va-link-button:disabled { color: var(--va-text-subtlest); cursor: not-allowed; text-decoration: none; }
+.va-link-button:focus-visible, .va-btn:focus-visible, .va-icon-button:focus-visible, .va-tab:focus-visible,
+.va-chip-button:focus-visible, .va-timeline__dot:focus-visible, .va-segmented button:focus-visible {
+  outline: 2px solid var(--va-focus); outline-offset: 2px;
+}
+
+.va-btn {
+  height: 32px; padding: 0 10px; border: 0; border-radius: 3px; cursor: pointer;
+  font: inherit; font-size: var(--va-size-body); font-weight: 500;
+  background: var(--va-neutral-bg); color: var(--va-text);
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.va-btn:hover { background: var(--va-surface-hover); }
+.va-btn:disabled { color: var(--va-text-subtlest); cursor: not-allowed; }
+.va-btn--discovery { background: var(--va-discovery-bg); color: var(--va-discovery-text); }
+.va-btn--discovery:hover { background: var(--va-discovery-line); }
+
+.va-icon-button {
+  width: 32px; height: 32px; border: 0; border-radius: 3px; background: transparent; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; color: var(--va-text-subtle);
+  vertical-align: middle;
+}
+.va-icon-button:hover { background: var(--va-surface-hover); }
+.va-icon-button--discovery { color: var(--va-discovery); }
+
+.va-chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 16px; }
+.va-chip-button {
+  height: 24px; padding: 0 10px; border-radius: var(--va-radius-pill); cursor: pointer;
+  border: 1px solid var(--va-border); background: var(--va-surface); color: var(--va-text-subtle);
+  font: inherit; font-size: var(--va-size-meta);
+}
+.va-chip-button:hover { background: var(--va-surface-hover); }
+
+/* ── The issue panel ─────────────────────────────────────────────────────── */
+
+.va-panel-toolbar { margin-bottom: -8px; }
+.va-panel-section { display: flex; flex-direction: column; gap: 10px; }
+.va-panel-section + .va-panel-section { margin-top: 8px; }
+.va-panel-section__head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.va-panel-section__title { margin: 0; font-size: var(--va-size-body); font-weight: 600; color: var(--va-text); }
+.va-panel-section__sub { font-size: var(--va-size-meta); color: var(--va-text-subtle); }
+
+.va-facts-grid {
+  display: grid; grid-template-columns: 150px minmax(0, 1fr); column-gap: 12px; row-gap: 8px; margin: 0; padding: 0;
+  font-size: var(--va-size-body);
+}
+.va-facts-grid dt { color: var(--va-text-subtle); margin: 0; padding: 0; font-size: var(--va-size-dense); }
+.va-facts-grid dd { margin: 0; padding: 0; min-width: 0; }
+.va-footnote { display: flex; gap: 6px; align-items: flex-start; margin: 0; }
+.va-footnote .va-icon { margin-top: 2px; }
+@container (max-width: 480px) { .va-facts-grid { grid-template-columns: minmax(0, 1fr); } }
+
+.va-transitions { list-style: none; margin: 0; padding: 0; border: 1px solid var(--va-border); border-radius: var(--va-radius); }
+.va-transition { display: flex; align-items: center; gap: 10px; padding: 8px 12px; flex-wrap: wrap; }
+.va-transition + .va-transition { border-top: 1px solid var(--va-border); }
+.va-transition__main { display: flex; flex-direction: column; flex: 1 1 220px; min-width: 0; }
+.va-transition__main .va-secondary { font-size: var(--va-size-meta); }
+.va-transition--held .va-transition__main strong { color: var(--va-text-subtle); }
+.va-transition__held { display: inline-flex; align-items: center; gap: 4px; font-size: var(--va-size-meta); color: var(--va-warning-text); flex-basis: 100%; }
+
+.va-decision-row { flex-wrap: wrap; }
+
+/* The baseline card. One card, three moods. */
+.va-base {
+  border: 1px solid var(--va-border); border-radius: var(--va-radius-lg);
+  padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; background: var(--va-surface);
+}
+.va-base--empty { background: var(--va-surface-sunken); }
+.va-base__status { display: flex; flex-direction: column; gap: 2px; }
+.va-base__status.va-row { flex-direction: row; }
+.va-base--clean .va-base__status .va-icon { color: var(--va-success-text); }
+.va-base__signature { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.va-base__links, .va-base__actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* A finished restore, recorded on the card of the baseline it restored to. */
+.va-base__restore { border-top: 1px solid var(--va-border); padding-top: 10px; }
+.va-restore-line .va-details summary { font-size: var(--va-size-meta); }
+.va-steady {
+  font-size: var(--va-size-meta); color: var(--va-success-text); background: var(--va-success-bg);
+  border-radius: var(--va-radius-pill); padding: 1px 10px; white-space: nowrap;
+}
+
+.va-base--drifted { padding: 0; gap: 0; border-color: var(--va-flag-line); overflow: hidden; }
+.va-base__flag {
+  display: flex; gap: 10px; align-items: flex-start; padding: 12px 16px;
+  background: var(--va-warning-bg);
+}
+.va-base__flag > .va-icon { color: var(--va-warning-text); margin-top: 1px; }
+.va-base__body { display: flex; flex-direction: column; gap: 12px; padding: 12px 16px 16px; }
+
+.va-changes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.va-change-row {
+  display: grid; grid-template-columns: minmax(110px, 0.9fr) minmax(0, 1.3fr) minmax(0, 1fr) auto;
+  gap: 10px; align-items: center; padding: 6px 0; font-size: var(--va-size-body);
+}
+.va-change-row + .va-change-row { border-top: 1px solid var(--va-border); }
+.va-change-row__name { font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.va-change-row__what { color: var(--va-text-subtle); }
+.va-change-row__who { font-size: var(--va-size-meta); color: var(--va-text-subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@container (max-width: 520px) {
+  .va-change-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .va-change-row__what, .va-change-row__who { grid-column: 1; }
+}
+
+/* ── The diff ────────────────────────────────────────────────────────────── */
+
+
+.va-steps { list-style: none; margin: 6px 0 0; padding: 0; }
+.va-step {
+  display: grid; grid-template-columns: minmax(150px, 0.8fr) minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 12px; align-items: center; padding: 6px 0; border-top: 1px solid var(--va-border);
+  font-size: var(--va-size-dense);
+}
+.va-step__when { display: flex; flex-direction: column; color: var(--va-text-subtle); }
+.va-step__since { font-size: var(--va-size-micro); color: var(--va-text-subtlest); }
+.va-step__who { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.va-step__values { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.va-step__values del, .va-step__values ins { padding: 0 4px; border-radius: 3px; }
+
+/* The timeline: signature on the left, now on the right, one dot per edit. */
+.va-timeline { padding: 4px 8px 0; }
+.va-timeline__track { position: relative; height: 28px; margin: 0 8px; }
+.va-timeline__rail { position: absolute; left: 0; right: 0; top: 13px; height: 2px; background: var(--va-border); }
+.va-timeline__signed, .va-timeline__now {
+  position: absolute; top: 6px; width: 2px; height: 16px; background: var(--va-text); transform: translateX(-1px);
+}
+.va-timeline__signed { background: var(--va-brand); width: 4px; border-radius: 2px; }
+.va-timeline__dot {
+  position: absolute; top: 7px; width: 14px; height: 14px; border-radius: 50%; padding: 0; cursor: pointer;
+  transform: translateX(-7px); border: 2px solid var(--va-surface); box-shadow: 0 0 0 1px var(--va-border-strong);
+  background: var(--va-mat-cosmetic);
+}
+.va-timeline__dot--CRITICAL { background: var(--va-mat-critical); }
+.va-timeline__dot--MAJOR { background: var(--va-mat-major); }
+.va-timeline__dot--MINOR { background: var(--va-mat-minor); }
+.va-timeline__count {
+  position: absolute; left: 12px; top: -10px; font-size: 10px; font-weight: 700; color: var(--va-text-subtle);
+}
+.va-timeline__labels { display: flex; justify-content: space-between; font-size: var(--va-size-meta); color: var(--va-text-subtle); padding: 2px 8px 0; }
+
+/* ── The review window ───────────────────────────────────────────────────── */
+
+.va-window { display: flex; flex-direction: column; height: 100vh; background: var(--va-surface); color: var(--va-text); }
+.va-window__head { padding: 16px 24px 0; display: flex; flex-direction: column; gap: 10px; border-bottom: 1px solid var(--va-border); }
+.va-window__title { margin: 0; font-size: var(--va-size-title); line-height: 24px; font-weight: 600; }
+.va-tabs { display: flex; gap: 20px; }
+.va-tab {
+  background: none; border: 0; padding: 0 0 10px; font: inherit; font-weight: 500; cursor: pointer;
+  color: var(--va-text-subtle); display: inline-flex; align-items: center; gap: 6px;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.va-tab[aria-selected='true'] { color: var(--va-brand); border-bottom-color: var(--va-brand); }
+.va-tab--discovery .va-icon { color: var(--va-discovery); }
+.va-tab--discovery[aria-selected='true'] { color: var(--va-discovery-text); border-bottom-color: var(--va-discovery); }
+.va-tab__count { font-size: var(--va-size-meta); background: var(--va-brand-bg); color: var(--va-brand-text); border-radius: 8px; padding: 0 6px; }
+.va-window__compare {
+  display: flex; align-items: center; gap: 10px; padding: 8px 24px; flex-wrap: wrap;
+  background: var(--va-surface-sunken); border-bottom: 1px solid var(--va-border); font-size: var(--va-size-body);
+}
+.va-window__body { flex: 1 1 auto; overflow: auto; padding: 20px 24px; }
+/* The Changes tab: the timeline, then the two review panes filling what is left. */
+.va-window__body--split { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 16px; }
+.va-window__body--split > .va-changes { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+@media (max-width: 720px) {
+  .va-window__body--split { display: block; overflow: auto; }
+  .va-window__body--split > .va-changes { display: flex; }
+}
+.va-window__foot { border-top: 1px solid var(--va-border); padding: 12px 24px; background: var(--va-surface); }
+
+.va-decision-bar { display: flex; flex-direction: column; gap: 8px; }
+.va-decision-bar__messages:empty { display: none; }
+.va-decision-bar__messages { display: flex; flex-direction: column; gap: 8px; }
+.va-decision-bar__row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.va-decision-bar__row .va-field { margin: 0; min-width: 280px; }
+
+/* Signing in the window: a sheet over the review, so the act has the screen. */
+.va-sheet {
+  position: fixed; inset: 0; z-index: 10; overflow: auto; padding: 32px 16px;
+  background: rgba(9, 30, 66, 0.54);
+  display: flex; justify-content: center; align-items: flex-start;
+}
+.va-sheet > .va-attest { width: 100%; max-width: 680px; box-shadow: var(--va-shadow-overlay); }
+
+.va-attest__label { font-size: var(--va-size-micro); font-weight: 700; text-transform: uppercase; letter-spacing: 0.02em; margin: 8px 0 2px; opacity: 0.85; }
+.va-checks { list-style: none; margin: 0 0 16px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.va-check { display: flex; gap: 8px; align-items: flex-start; font-size: var(--va-size-body); }
+.va-check--ok .va-icon { color: var(--va-success-text); }
+.va-check--warn .va-icon { color: var(--va-warning-text); }
+.va-check--info .va-icon { color: var(--va-brand); }
+.va-manifest {
+  font-family: var(--va-font-mono); font-size: var(--va-size-meta); color: var(--va-text-subtle);
+  margin: 0 0 12px; padding-top: 12px; border-top: 1px solid var(--va-border);
+}
+
+.va-receipt {
+  display: flex; flex-direction: column; gap: 16px; width: 100%; max-width: 680px; box-sizing: border-box;
+  padding: 24px; background: var(--va-surface); border-radius: var(--va-radius-lg);
+  border-top: 3px solid var(--va-success-text); box-shadow: var(--va-shadow-overlay);
+}
+.va-receipt__head { display: flex; gap: 16px; align-items: center; }
+.va-receipt__eyebrow { font-size: var(--va-size-meta); font-weight: 700; text-transform: uppercase; color: var(--va-success-text); }
+.va-receipt__title { margin: 0; font-size: var(--va-size-lead); font-weight: 600; }
+.va-receipt__facts { display: grid; grid-template-columns: 120px minmax(0, 1fr); column-gap: 16px; row-gap: 8px; margin: 0; }
+.va-receipt__facts dt { color: var(--va-text-subtle); margin: 0; padding: 0; }
+.va-receipt__facts dd { margin: 0; padding: 0; min-width: 0; overflow-wrap: anywhere; }
+
+/* ── The AI summary ──────────────────────────────────────────────────────── */
+
+.va-ai { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 28px; align-items: start; }
+@media (max-width: 900px) { .va-ai { grid-template-columns: minmax(0, 1fr); } }
+.va-ai__main { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.va-ai__for { display: flex; align-items: center; gap: 8px; font-size: var(--va-size-meta); color: var(--va-discovery-text); }
+.va-ai__headline { margin: 0; font-size: var(--va-size-display); line-height: 28px; font-weight: 600; letter-spacing: -0.01em; }
+.va-ai__narrative { margin: 0; font-size: var(--va-size-lead); line-height: 24px; color: var(--va-text-subtle); max-width: 72ch; }
+.va-ai__controls { display: flex; align-items: center; gap: 8px; }
+.va-segmented { display: inline-flex; border: 1px solid var(--va-border); border-radius: 3px; overflow: hidden; }
+.va-segmented button {
+  border: 0; background: var(--va-surface); color: var(--va-text-subtle); font: inherit; font-size: var(--va-size-meta);
+  font-weight: 500; padding: 2px 10px; cursor: pointer;
+}
+.va-segmented button[aria-pressed='true'] { background: var(--va-text); color: var(--va-text-inverse); }
+.va-ai__verdict { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: var(--va-radius); }
+.va-ai__verdict--success { background: var(--va-success-bg); color: var(--va-success-text); }
+.va-ai__verdict--info { background: var(--va-brand-bg); color: var(--va-brand-text); }
+.va-ai__verdict--warning { background: var(--va-warning-bg); color: var(--va-warning-text); }
+.va-ai__verdict--danger { background: var(--va-danger-bg); color: var(--va-danger-text); }
+.va-ai__findings { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.va-finding { display: flex; gap: 12px; border: 1px solid var(--va-border); border-radius: var(--va-radius-lg); padding: 12px 16px; }
+.va-finding--ungrounded { opacity: 0.7; border-style: dashed; }
+.va-finding__index { font-size: var(--va-size-meta); font-weight: 700; color: var(--va-text-subtlest); width: 14px; padding-top: 2px; }
+.va-finding__body { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
+.va-finding__head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.va-ai__questions ul { margin: 6px 0 0; padding-left: 20px; }
+.va-ai__questions li + li { margin-top: 4px; }
+.va-ai__side { display: flex; flex-direction: column; gap: 20px; }
+.va-side-block { display: flex; flex-direction: column; gap: 8px; }
+.va-side-block p { margin: 0; }
+.va-side-block--boxed { padding: 12px; border: 1px solid var(--va-border); border-radius: var(--va-radius); background: var(--va-surface-sunken); }
+.va-side-block__title { margin: 0; font-size: var(--va-size-micro); font-weight: 700; text-transform: uppercase; letter-spacing: 0.02em; color: var(--va-text-subtle); }
+.va-ai-empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; padding: 48px 16px; color: var(--va-discovery); }
+.va-ai-empty .va-secondary { max-width: 520px; margin: 0; }
+.va-ai-empty__title { margin: 0; font-size: var(--va-size-title); color: var(--va-text); font-weight: 600; }
+
+/* ── My approvals ────────────────────────────────────────────────────────── */
+
+.va-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+@media (max-width: 720px) { .va-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.va-tile { border: 1px solid var(--va-border); border-radius: var(--va-radius-lg); padding: 10px 14px; display: flex; flex-direction: column; }
+.va-tile__label { font-size: var(--va-size-meta); color: var(--va-text-subtle); }
+.va-tile__value { font-size: var(--va-size-display); line-height: 32px; font-weight: 600; }
+.va-tile--warning { background: var(--va-warning-bg); border-color: var(--va-flag-line); }
+.va-tile--warning .va-tile__label, .va-tile--warning .va-tile__value { color: var(--va-warning-text); }
+
+/* ── The sidebar glance ──────────────────────────────────────────────────── */
+
+.va-glance { display: flex; flex-direction: column; gap: 8px; font-size: var(--va-size-body); }
+
+/* The panel is a size container, so its rows can reflow in a narrow column. */
+.va-page--panel { container-type: inline-size; }

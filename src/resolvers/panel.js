@@ -11,8 +11,7 @@ import * as signing from '../usecases/signing.js';
 import * as harness from './harness.js';
 import { defineWebAuthnResolvers } from '../usecases/webauthn.js';
 import * as confluence from '../usecases/confluence.js';
-import { withRequestCache } from '../lib/cache.js';
-import { harnessLog } from '../lib/harnessLogger.js';
+import { wrapWithHarness } from '../lib/harnessLogger.js';
 
 const Resolver = ForgeResolver.default ?? ForgeResolver;
 const resolver = new Resolver();
@@ -45,41 +44,5 @@ resolver.define('confluence:checkOut', confluence.checkOut);
 defineWebAuthnResolvers(resolver);
 const definitions = resolver.getDefinitions();
 
-export const handler = async (...args) => {
-  const req = args[0];
-  const functionKey = req?.call?.functionKey;
-  const isHarnessLog = functionKey === 'harness:logAction';
-  const startedAt = Date.now();
-
-  try {
-    const result = await withRequestCache(() => definitions(...args));
-    const durationMs = Date.now() - startedAt;
-
-    if (!isHarnessLog) {
-      const isSuccess = result?.success !== false && result?.ok !== false && !result?.error;
-      harnessLog(isSuccess ? 'RESOLVER' : 'ERROR', `resolver:${functionKey}`, {
-        functionKey,
-        durationMs,
-        issueKey: req?.payload?.issueKey ?? req?.context?.extension?.issue?.key,
-        accountId: req?.context?.accountId,
-        success: isSuccess,
-        reason: result?.reason,
-        error: result?.error,
-        transitioned: result?.transitioned
-      }, isSuccess ? 'INFO' : 'WARN');
-    }
-    return result;
-  } catch (error) {
-    const durationMs = Date.now() - startedAt;
-    harnessLog('ERROR', `resolver:${functionKey}:failed`, {
-      functionKey,
-      durationMs,
-      issueKey: req?.payload?.issueKey ?? req?.context?.extension?.issue?.key,
-      accountId: req?.context?.accountId,
-      error: error?.message,
-      reason: error?.reason
-    }, 'ERROR');
-    throw error;
-  }
-};
+export const handler = wrapWithHarness(definitions, { resolverName: 'panel' });
 

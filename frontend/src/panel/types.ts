@@ -54,6 +54,10 @@ export type PanelRestore = {
   skipped: number;
   jobId?: string | null;
   queuedAt?: number | null;
+  /** When it stopped, restored or not; null while it is still running. */
+  finishedAt?: number | null;
+  /** The baseline version it puts the work item back to. */
+  baselineVersion?: number | null;
   heartbeatAt?: number | null;
   totalSteps?: number;
   completedSteps?: number;
@@ -80,7 +84,9 @@ export type PanelSummary = {
    *  of any drift count, so the client can pair it with the count it displays. */
   drift: { count: number; materialCount: number; decidesDrift: boolean; policyIncomplete: boolean; canApprove: boolean; canReject: boolean; eligible?: boolean;
     /** Descendants drifted against their own baselines. A parent decision covers them; they do not hold the parent. */
-    childrenAwaiting?: number };
+    childrenAwaiting?: number;
+    /** Links approved on the other issue, on their way to this record (jobs/linkWorker.js). */
+    linkPending?: { decidedOnKey: string; queuedAt: number }[] };
   /** Hash of the tracked content right now; moves on every edit. */
   contentHash?: string | null;
   restore: PanelRestore | null;
@@ -97,6 +103,11 @@ export type PanelSummary = {
 export type BaselineField = { fieldId: string; fieldName: string; materiality?: string; retained: boolean; digest?: string; preview?: { text?: string; empty?: boolean; truncated?: boolean; more?: number } | null };
 export type BaselineRecordData = { version: number; approvedName?: string; approvedAt?: number; capturedAt?: number; assuranceLevel?: AssuranceLevel; fidelity?: string; contentHash?: string; fieldCount: number; retainedCount: number; fields: BaselineField[]; history?: { version: number; approvedName?: string; approvedAt?: number; assuranceLevel?: AssuranceLevel }[] };
 
+/** One file a rejection acts on, with the work item it is attached to. */
+export type RejectedFile = { issueId: number | null; issueKey: string | null; id: string; filename: string; reason?: string };
+/** What a rejection does to files: deleted, re-uploaded from the vault, or beyond restoring. */
+export type AttachmentRejection = { deleteFiles: RejectedFile[]; restoreFiles: RejectedFile[]; unrestorableFiles: RejectedFile[]; vaultChecked: boolean };
+
 /** The heavy, authoritative current-record read from `panel:getEvidence`. Rejected server-side
  *  as STALE_EVIDENCE when the caller's expected baseline id/version no longer
  *  matches the latest active baseline — see usePanelEvidence.ts. */
@@ -111,6 +122,6 @@ export type PanelEvidence = {
   reporter?: unknown;
   record: BaselineRecordData | null;
   drift: { count: number; materialCount: number; fields: DiffField[]; groups?: ReviewGroup[]; addedNodes?: any[]; removedNodes?: any[]; movedNodes?: any[]; changedFields?: any[] };
-  rejection: { deleteIssueKeys: string[]; recreateCount: number };
+  rejection: { deleteIssueKeys: string[]; recreateCount: number; attachments?: AttachmentRejection | null };
   restoreHistory: any[];
 };

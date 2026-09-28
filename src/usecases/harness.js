@@ -14,10 +14,12 @@ export async function logAction({ payload, context }) {
   const issueKey = payload?.issueKey || 'NONE';
   const details = payload?.details || {};
   const error = payload?.error;
+  const traceId = payload?.traceId;
 
   harnessLog('CLIENT', action, {
     category,
     issueKey,
+    traceId,
     actorAccountId: accountId,
     clientTimestamp: payload?.timestamp,
     ...details,
@@ -77,8 +79,100 @@ export async function inspectIssue({ payload, context }) {
     auditEntries = [];
   }
 
+  // 1. Vault storage diagnostics
+  let vaultPage = null;
+  let vaultAttachments = [];
+  try {
+    const pageRes = await query({}, 'SELECT confluence_page_id, created_at FROM va_vault_page WHERE issue_id = ?', [numericIssueId]);
+    vaultPage = pageRes?.data?.[0] ?? null;
+    const attRes = await query({}, `SELECT jira_attachment_id, filename, content_hash, confluence_attachment_id, vaulted_at
+      FROM va_vault_attachment WHERE issue_id = ? ORDER BY vaulted_at DESC LIMIT 20`, [numericIssueId]);
+    vaultAttachments = attRes?.data ?? [];
+  } catch {
+    vaultPage = null;
+    vaultAttachments = [];
+  }
+
+  // 2. Child baselines diagnostics
+  let childBaselines = [];
+  if (baseline?.baseline_id) {
+    try {
+      const childRes = await query({}, `SELECT issue_id, issue_key, version, content_hash, captured_at
+        FROM bl_baseline WHERE captured_by_baseline_id = ? ORDER BY issue_key ASC LIMIT 20`, [baseline.baseline_id]);
+      childBaselines = (childRes?.data ?? []).map(c => ({
+        issueId: c.issue_id,
+        issueKey: c.issue_key,
+        version: c.version,
+        contentHash: c.content_hash,
+        capturedAt: c.captured_at
+      }));
+    } catch {
+      childBaselines = [];
+    }
+  }
+
+  // 3. Workflow gate policy simulation
+  let projectDisabled = false;
+  let controlledTransitions = [];
+  const numericProjectId = Number(issueData?.fields?.project?.id);
+  if (numericProjectId && !Number.isNaN(numericProjectId)) {
+    try {
+      const cfgRes = await query({}, 'SELECT value FROM va_config WHERE scope = ?', [`project:${numericProjectId}`]);
+      if (cfgRes?.data?.[0]?.value) {
+        const val = cfgRes.data[0].value;
+        const parsed = typeof val === 'string' ? JSON.parse(val) : val;
+        if (parsed?.enabled === false) projectDisabled = true;
+      }
+      const ctRes = await query({}, `SELECT id, transition_id, from_status_id, to_status_id, required_role, required_assurance, meaning, capture_baseline
+        FROM va_controlled_transition WHERE project_id = ? AND state = 'ACTIVE'`, [numericProjectId]);
+      controlledTransitions = ctRes?.data ?? [];
+    } catch {
+      controlledTransitions = [];
+    }
+  }
+
+  const isBusy = ['RESTORING', 'DECIDING'].includes(review?.state) || Boolean(review?.lock_token);
+  const isLocked = review?.state === 'LOCKED';
+  const driftCount = review?.drift_count ?? treeDrift.length;
+  const hasUndecidedDrift = !projectDisabled && (driftCount > 0 || treeDrift.length > 0);
+
+  let holdReason = null;
+  if (isBusy) {
+    holdReason = 'RESTORE_IN_PROGRESS: ITEM_BUSY';
+  } else if (isLocked) {
+    holdReason = 'RECORD_LOCKED: ITEM_LOCKED';
+  } else if (hasUndecidedDrift) {
+    holdReason = 'UNDECIDED_DRIFT: DRIFT_OUTSTANDING';
+  }
+
+  // 4. Synthesized Health Verdict & Remediations
+  let verdict = 'HEALTHY';
+  const remediations = [];
+
+  if (isBusy) {
+    verdict = 'BUSY_RESTORING';
+    remediations.push('A restore or baseline decision is currently executing. Await completion or lease expiry.');
+  } else if (isLocked) {
+    verdict = 'RECORD_LOCKED';
+    remediations.push('Work item is locked by an ongoing ALM operation. Check active incidents.');
+  } else if (hasUndecidedDrift) {
+    verdict = 'DRIFT_PENDING_REVIEW';
+    remediations.push('Unreviewed drift detected on tracked fields or child items. Review and approve or reject in the VAtlassian panel.');
+  } else if (!baseline) {
+    verdict = 'NO_BASELINE';
+    remediations.push('Work item has no active baseline. Perform a controlled transition to capture one.');
+  } else if ((restores || []).some(r => r.state === 'FAILED' || (r.unmatched && r.unmatched.length > 0))) {
+    verdict = 'RESTORE_INCOMPLETE';
+    remediations.push('Recent restore had unmatched fields or refused items. Check restore verification details.');
+  } else {
+    verdict = 'HEALTHY';
+    remediations.push('Work item matches its active baseline; workflow gate is clear.');
+  }
+
   const result = {
     ok: true,
+    verdict,
+    remediations,
     issue: {
       id: numericIssueId,
       key: issueData?.key || payload?.issueKey,
@@ -86,6 +180,22 @@ export async function inspectIssue({ payload, context }) {
       status: issueData?.fields?.status?.name,
       issueType: issueData?.fields?.issuetype?.name,
       project: issueData?.fields?.project?.key
+    },
+    gateSimulation: {
+      projectDisabled,
+      itemState: review?.state || 'UNTRACKED',
+      driftCount,
+      workitemHeld: Boolean(holdReason),
+      holdReason,
+      activeControlledTransitions: controlledTransitions.length,
+      applicableTransitions: controlledTransitions.map(ct => ({
+        transitionId: ct.transition_id,
+        fromStatusId: ct.from_status_id,
+        toStatusId: ct.to_status_id,
+        requiredRole: ct.required_role,
+        requiredAssurance: ct.required_assurance,
+        captureBaseline: Boolean(ct.capture_baseline)
+      }))
     },
     review: review ? {
       state: review.state,
@@ -104,6 +214,19 @@ export async function inspectIssue({ payload, context }) {
       nodeCount: baseline.node_count,
       capturedAt: baseline.captured_at
     } : null,
+    childBaselines,
+    vault: {
+      confluencePageId: vaultPage?.confluence_page_id || null,
+      pageCreatedAt: vaultPage?.created_at || null,
+      attachmentCount: vaultAttachments.length,
+      attachments: vaultAttachments.map(va => ({
+        jiraAttachmentId: va.jira_attachment_id,
+        filename: va.filename,
+        contentHash: va.content_hash,
+        confluenceAttachmentId: va.confluence_attachment_id,
+        vaultedAt: va.vaulted_at
+      }))
+    },
     drift: {
       treeDriftCount: treeDrift.length,
       items: treeDrift.slice(0, 10)
@@ -144,6 +267,12 @@ export async function inspectIssue({ payload, context }) {
     recentAudit: auditEntries
   };
 
-  harnessLog('DIAGNOSTICS', 'inspectIssue:success', { issueKey: result.issue.key, baselineVersion: result.baseline?.version, state: result.review?.state });
+  harnessLog('DIAGNOSTICS', 'inspectIssue:success', {
+    issueKey: result.issue.key,
+    verdict: result.verdict,
+    baselineVersion: result.baseline?.version,
+    state: result.review?.state
+  });
+
   return result;
 }

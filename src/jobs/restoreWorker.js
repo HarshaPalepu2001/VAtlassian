@@ -8,16 +8,17 @@ import { release } from '../db/itemStateStore.js';
 import { tryAppend } from '../db/store.js';
 import { EVENT } from '../lib/ledger.js';
 import { stateAfter, DECISION } from '../lib/decision.js';
-import { readBaselineTree } from '../db/baselineTreeStore.js';
+import { readBaselineTree, activeRootsForNode } from '../db/baselineTreeStore.js';
 import { controlledFields, projectConfig } from '../db/configStore.js';
 import { scopeFromIssue } from '../lib/trackedFields.js';
 import { createTreeReader } from '../lib/tree/jira.js';
 import { readStableTree } from '../lib/tree/stableRead.js';
 import { planTreeCapture } from '../lib/tree/capturePlan.js';
-import { readTreeWithNodeFields } from '../lib/tree/nodeFields.js';
+import { readTreeWithNodeFields, fieldsForItem } from '../lib/tree/nodeFields.js';
 import { withChildBaselines } from '../lib/tree/childBaselines.js';
+import { approvedLinksResolver } from '../db/approvedLinks.js';
 import { executeTreeRestore } from '../lib/tree/restoreExecutor.js';
-import { verifyTreeRestore } from '../lib/tree/restoreVerifier.js';
+import { verifyTreeRestore, explainRefusals } from '../lib/tree/restoreVerifier.js';
 import { claimRestoreAction, finishRestoreAction, recordReplacement,
   readReplacements, readRestoreActions } from '../db/restoreTreeStore.js';
 import { createRestoreAdapters } from '../lib/tree/restoreAdapters.js';
@@ -43,9 +44,15 @@ function idBase64(value) {
   return Buffer.isBuffer(value) ? value.toString('base64') : String(value);
 }
 
+/**
+ * The plan persisted when the restore was queued. A finished restore's detail
+ * is its result list, and carries the plan in its first entry: a Retry must
+ * find the same plan to resume, and it used to find none ("Restore action plan
+ * is unavailable"), because finishing overwrote the detail it lived in.
+ */
 function actionPlan(restore) {
   const detail = restore?.detail;
-  const steps = detail && !Array.isArray(detail) ? detail.actionPlan : null;
+  const steps = Array.isArray(detail) ? detail[0]?.actionPlan : detail?.actionPlan;
   return Array.isArray(steps) ? { steps } : null;
 }
 
@@ -77,7 +84,7 @@ async function defaultPrepare({ restore, baseline }) {
   const projectId = Number(issue.fields.project.id);
   const issueTypeId = String(issue.fields.issuetype.id);
   const [declared, config, editResponse] = await Promise.all([
-    controlledFields({ projectId, issueTypeId }),
+    fieldsForItem({ issueId: Number(issue.id), projectId, issueTypeId }, { activeRootsForNode, controlledFields }),
     projectConfig(projectId),
     forgeApi.asApp().requestJira(route`/rest/api/3/issue/${issue.key}/editmeta?overrideScreenSecurity=true&overrideEditableFlag=true`)
   ]);
@@ -85,7 +92,7 @@ async function defaultPrepare({ restore, baseline }) {
   const { fields } = scopeFromIssue({ declared, issueFields: issue.fields, editmetaFields: editmeta });
   const reader = createTreeReader({ api: forgeApi, route });
   const stable = await readTreeWithNodeFields({ readStableTree, readTree: reader.read.bind(reader),
-    rootIssueKey: issue.key, rootFields: fields, loadFields: controlledFields });
+    rootIssueKey: issue.key, rootFields: fields });
   const { fieldsFor } = stable;
   const captured = planTreeCapture({ rootIssueId: issue.id, nodes: stable.tree.nodes, controlledFields: fields, fieldsFor });
   return {
@@ -101,7 +108,11 @@ async function defaultPrepare({ restore, baseline }) {
 }
 
 async function defaultExecute({ restoreId, restore, prepared, plan, maxActions }) {
-  const jiraAdapters = createRestoreAdapters({ api: prepared.forgeApi, route });
+  const jiraAdapters = createRestoreAdapters({ api: prepared.forgeApi, route,
+    actorAccountId: restore?.actor_account_id ?? 'system', approvalId: restore?.approval_id ?? null,
+    // A link is changed only when its other end's approved state agrees
+    // (lib/restore/linkConflicts.js).
+    approvedLinksOf: approvedLinksResolver({ baselineTree: prepared.baselineTree }) });
   const adapters = {
     claimRestoreAction, finishRestoreAction, recordReplacement,
     readReplacements, readRestoreActions, ...jiraAdapters,
@@ -218,9 +229,9 @@ export async function runRestoreWorker(eventOrBody, overrides = {}) {
       ? (replacements.length ? 'COMPLETE_WITH_REPLACEMENTS' : 'COMPLETE')
       : (verified.progress ? 'PARTIAL' : 'FAILED');
     const counters = countersFor(executed, state);
-    const unmatched = verified.unmatched ?? [];
+    const unmatched = explainRefusals(verified.unmatched ?? [], executed.refused);
     const detail = [{ ...counters, remaining: Number(executed.remaining ?? 0),
-      refused: executed.refused ?? [], unmatched, verification: verified }];
+      refused: executed.refused ?? [], unmatched, verification: verified, actionPlan: plan.steps }];
     await deps.finishRestore({ restoreId, now: Date.now(), counters, state, detail });
     harnessLog('RESTORE', 'worker:finished', { restoreId: idBase64(restoreId), state,
       replacementsCount: replacements.length, refusedCount: (executed.refused ?? []).length,

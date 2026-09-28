@@ -73,5 +73,38 @@ test('v061 adds the parent-capture link to va_baseline', () => {
   assert.match(sql, /ALTER TABLE va_baseline\s+ADD COLUMN captured_by_baseline_id BINARY\(16\) NULL/);
   assert.match(sqlFor('v062_baseline_captured_by_index'),
     /ALTER TABLE va_baseline ADD INDEX idx_baseline_captured_by \(captured_by_baseline_id\)/);
-  assert.equal(MIGRATIONS.at(-1).id, 'v062_baseline_captured_by_index');
+});
+
+test('v063 records which original a restored attachment stands for, keyed by its own Jira id', () => {
+  const sql = sqlFor('v063_attachment_alias');
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS va_attachment_alias/);
+  assert.match(sql, /PRIMARY KEY \(attachment_id\)/);
+  assert.match(sql, /stands_for_id VARCHAR\(64\) NOT NULL/);
+  assert.match(sql, /content_hash CHAR\(64\) NOT NULL/);
+  assert.match(sql, /KEY idx_attachment_alias_issue \(issue_id\)/);
+});
+
+test('v064 and v065 index vaulted copies by issue and record the app delete grant', () => {
+  assert.match(sqlFor('v064_vault_attachment_issue_index'),
+    /ALTER TABLE va_vault_attachment ADD INDEX idx_vault_attachment_issue \(issue_id, jira_attachment_id\)/);
+  assert.match(sqlFor('v065_vault_app_delete_grant'),
+    /ALTER TABLE va_vault_space ADD COLUMN app_delete_granted_at BIGINT NULL/);
+});
+
+test('v066 and v067 record the media ids rich text points at, for the vault and for restored copies', () => {
+  assert.match(sqlFor('v066_vault_attachment_media'), /ALTER TABLE va_vault_attachment ADD COLUMN media_id VARCHAR\(64\) NULL/);
+  const sql = sqlFor('v067_attachment_alias_media');
+  assert.match(sql, /ADD COLUMN media_id VARCHAR\(64\) NULL/);
+  assert.match(sql, /ADD COLUMN stands_for_media_id VARCHAR\(64\) NULL/);
+});
+
+test('v068 records when a tree version\'s child nodes were read, for a version that re-recorded only a link', () => {
+  assert.match(sqlFor('v068_baseline_nodes_captured_at'), /ALTER TABLE va_baseline ADD COLUMN nodes_captured_at BIGINT NULL/);
+});
+
+test('v069 keeps the link decisions queued for an issue until its record takes them', () => {
+  const sql = sqlFor('v069_link_pending');
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS va_link_pending/);
+  assert.match(sql, /PRIMARY KEY \(issue_id, decided_on_issue_id\)/);
+  assert.equal(MIGRATIONS.at(-1).id, 'v069_link_pending');
 });

@@ -294,6 +294,8 @@ export async function activeRootsForNode(issueId, query = store.throwing) {
             b.assurance_level AS assuranceLevel,
             b.required_role AS requiredRole,
             b.tree_hash AS treeHash,
+            b.project_id AS projectId,
+            b.issue_type_id AS issueTypeId,
             c.content_hash AS nodeContentHash
      FROM va_baseline_node c
      JOIN va_baseline b ON b.baseline_id = c.baseline_id
@@ -312,6 +314,9 @@ export async function activeRootsForNode(issueId, query = store.throwing) {
     transitionAt: r.transitionAt == null ? null : Number(r.transitionAt),
     assuranceLevel: r.assuranceLevel ?? null,
     requiredRole: r.requiredRole ?? null,
+    // The root's scope: what every node it covers tracks (tree/nodeFields.js).
+    projectId: r.projectId == null ? null : Number(r.projectId),
+    issueTypeId: r.issueTypeId == null ? null : String(r.issueTypeId),
     treeHash: r.treeHash ?? null,
     nodeContentHash: r.nodeContentHash ?? null
   }));

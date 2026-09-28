@@ -1,17 +1,17 @@
 import { Component, useEffect, useRef, useState, type ReactNode } from 'react';
 import { view } from '@forge/bridge';
 import Button from '@atlaskit/button';
-import { Card, Page } from '../ui/primitives';
+import { Page } from '../ui/primitives';
 import { Notice } from '../ui/feedback';
-import usePanelEvidence from './usePanelEvidence';
-import DriftSection from './sections/DriftSection';
-import ApprovalControls from './sections/ApprovalControls';
-import BaselineRecord from './sections/BaselineRecord';
-import RestoreStatus from './sections/RestoreStatus';
+import useDecisionState from './useDecisionState';
+import ApprovalControls, { ControlFacts } from './sections/ApprovalControls';
+import BaselineSection from './sections/BaselineSection';
+import { LatestApproval } from './sections/BaselineRecord';
+import RestoreStatus, { restoreBelongsTo, restoreFinished } from './sections/RestoreStatus';
+import { openReview } from '../review/openReview';
 import DiagnosticsHud from './DiagnosticsHud';
 import usePanelState from './usePanelState';
-import { changedFieldCount } from './approvalModel';
-import type { PanelEvidence, PanelSummary } from './types';
+import { resolveSelectedAction } from './approvalModel';
 
 
 
@@ -32,7 +32,7 @@ class PanelBoundary extends Component<{ children: ReactNode }, { failed: boolean
 export default function IssuePanel(props: Props) {
   const [revision, setRevision] = useState(0);
   return <Page variant="panel">
-    <div className="va-row" role="toolbar" aria-label="Approval and baseline controls">
+    <div className="va-row va-panel-toolbar" role="toolbar" aria-label="VAtlassian controls">
       <span className="va-spacer" />
       <Button appearance="subtle" onClick={() => setRevision(value => value + 1)}>Refresh</Button>
     </div>
@@ -52,22 +52,8 @@ function SkeletonRow({ label, failed }: { label: string; failed: boolean }) {
 const RESTORE_ENDED = new Set(['COMPLETE', 'COMPLETE_WITH_REPLACEMENTS', 'PARTIAL', 'FAILED', 'QUEUING_FAILED', 'ERROR']);
 const RESTORE_POLL_MS = 2500;
 const RESTORE_POLL_LIMIT_MS = 120_000;
-
-/** Drift totals as one evidence read states them, falling back to the summary. */
-function evidenceCounts(evidence: PanelEvidence | null, summary: PanelSummary | null) {
-  if (!evidence) return { driftCount: 0, materialCount: 0 };
-  const fieldCount = evidence.drift?.fields?.length ?? 0;
-  // changedFieldCount(), not changedFields.length: the list is node-level and
-  // this total is compared against, and falls back to, field-level counts.
-  const structuralCount = changedFieldCount(evidence.drift)
-    + (evidence.drift?.addedNodes?.length ?? 0) + (evidence.drift?.removedNodes?.length ?? 0)
-    + (evidence.drift?.movedNodes?.length ?? 0);
-  const materialFields = evidence.drift?.fields?.filter(field => field.semanticChange && field.materiality !== 'COSMETIC').length ?? 0;
-  return {
-    driftCount: Number(evidence.drift.count ?? (fieldCount || structuralCount || summary?.drift.count || 0)),
-    materialCount: Number(evidence.drift.materialCount ?? (materialFields || summary?.drift.materialCount || 0))
-  };
-}
+/** Matches the server's marker lifetime (db/linkPendingStore.js). */
+const LINK_POLL_LIMIT_MS = 120_000;
 
 function IssuePanelBody({ issueKey: issueKeyProp, onDone }: Props) {
   // The Forge issue-panel module renders <IssuePanel/> with no props. Read the
@@ -110,6 +96,22 @@ function IssuePanelBody({ issueKey: issueKeyProp, onDone }: Props) {
     }, RESTORE_POLL_MS);
     return () => clearTimeout(timer);
   }, [restoreRunning, summary, refresh]);
+  // A LINK APPROVED ON THE OTHER ISSUE is recorded here by a queued job
+  // (jobs/linkWorker.js) a few seconds after that approval, and nothing in
+  // Jira changes when it lands, so no Jira event would redraw this panel. While
+  // the summary says one is on its way, re-read quietly, the same bounded way
+  // as a running restore above; it stops the moment a read shows it recorded.
+  const linkPendingKey = (summary?.drift?.linkPending ?? []).map(p => `${p.decidedOnKey}:${p.queuedAt}`).join(',');
+  const linkWatchStarted = useRef<number | null>(null);
+  useEffect(() => {
+    if (!linkPendingKey) { linkWatchStarted.current = null; return; }
+    linkWatchStarted.current ??= Date.now();
+    if (Date.now() - linkWatchStarted.current > LINK_POLL_LIMIT_MS) return;
+    const timer = setTimeout(() => {
+      if (document.visibilityState !== 'hidden') void refresh({ background: true });
+    }, RESTORE_POLL_MS);
+    return () => clearTimeout(timer);
+  }, [linkPendingKey, summary, refresh]);
   const redrawnFor = useRef<string | null | undefined>(undefined);
   useEffect(() => {
     if (!summary) return;
@@ -124,52 +126,31 @@ function IssuePanelBody({ issueKey: issueKeyProp, onDone }: Props) {
   // The selected action belongs to the controls. Evidence is keyed to the
   // current baseline, because it is shared by every action surface.
   const [selectedTransitionId, setSelectedTransitionId] = useState('');
-  const [baselineDisclosureOpen, setBaselineDisclosureOpen] = useState(false);
-  const { evidence, heldEvidence, loading: evidenceLoading, error: evidenceError, retry: retryEvidence } = usePanelEvidence({
-    issueKey,
-    // Evidence is the one current-record read shared by the clean banner,
-    // control facts, and review workspace. It must not be keyed to a summary
-    // action whose drift count may change after this read arrives.
-    actionId: 'current-record',
-    baselineVersion: summary?.baseline?.version ?? null,
-    baselineId: summary?.baseline?.baselineId ?? null,
-    evidenceVersion: summary?.evidenceVersion ?? null,
-    contentHash: summary?.contentHash ?? null,
-    enabled: Boolean(summary?.baseline) || baselineDisclosureOpen,
-    onStale: refresh
-  });
-  const hasAuthoritativeEvidence = !summary?.baseline || Boolean(evidence);
-  // What the informational sections show: the authoritative read, or — while
-  // its replacement for the same baseline loads — the previous one, so a
-  // background refresh updates in place instead of flashing "Checking…".
-  const shownEvidence = evidence ?? heldEvidence;
-  const evidenceReady = hasAuthoritativeEvidence || Boolean(evidenceError) || Boolean(heldEvidence);
-  const { driftCount: evidenceDriftCount, materialCount: evidenceMaterialCount } = evidenceCounts(evidence, summary);
-  // PERMISSION TRAVELS WITH THE COUNT IT BELONGS TO.
-  //
-  // Substituting the live re-diff's count for display while leaving
-  // canApprove/canReject as the server computed them from the STORED counter is
-  // what produced VJIRA-17: the panel entered drift-review mode on one number
-  // (1 change) and refused on a verdict about another (0 recorded), then
-  // explained the refusal by naming a role that had never been checked.
-  //
-  // `drift.eligible` is the viewer's own standing on this baseline, answered
-  // independently of any count (panelSummary.js), so it is the right thing to
-  // pair with whichever count is actually on screen.
-  const canDecideShownDrift = evidenceDriftCount > 0 && summary?.drift.eligible === true;
-  const displaySummary = summary && evidence
-    ? { ...summary, drift: { ...summary.drift, count: evidenceDriftCount, materialCount: evidenceMaterialCount,
-      canApprove: canDecideShownDrift, canReject: canDecideShownDrift,
-      decidesDrift: canDecideShownDrift } }
-    : summary;
-  const authoritativeSummary = displaySummary ?? summary;
-  // Counts that agree with the list DriftSection is drawing. Display only:
-  // ApprovalControls keeps `authoritativeSummary`, whose permissions are
-  // paired with the authoritative read and nothing else.
-  const shownCounts = evidenceCounts(shownEvidence, summary);
-  const shownDrift = summary && shownEvidence && !evidence
-    ? { ...summary.drift, count: shownCounts.driftCount, materialCount: shownCounts.materialCount }
-    : authoritativeSummary?.drift;
+  const { evidence, heldEvidence, evidenceLoading, evidenceError, retryEvidence, hasAuthoritativeEvidence,
+    shownEvidence, evidenceReady, authoritativeSummary, shownDrift } = useDecisionState(summary, issueKey, refresh);
+
+  // Drift is decided on the Baseline card; a clean record is decided in
+  // Approvals. One set of controls either way, so one signing session.
+  const reviewingDrift = resolveSelectedAction(authoritativeSummary, selectedTransitionId).reviewingDrift;
+  const review = (tab: 'changes' | 'summary' | 'record') => {
+    void openReview({ issueKey, tab, onClose: () => { void refresh(); onDone?.(); } }).catch(() => {});
+  };
+  const controls = summary && (
+    <ApprovalControls
+      summary={authoritativeSummary!}
+      issueKey={issueKey}
+      onDone={async () => { await refresh(); onDone?.(); }}
+      disabled={!!error || !hasAuthoritativeEvidence}
+      evidence={evidence}
+      evidenceLoading={evidenceLoading}
+      evidenceError={evidenceError}
+      evidenceHeld={Boolean(heldEvidence)}
+      selectedTransitionId={selectedTransitionId}
+      onSelectTransition={setSelectedTransitionId}
+    />
+  );
+  // Running, it is a card of its own; finished, one line of the baseline's record.
+  const restoreStatus = summary && <RestoreStatus issueKey={issueKey} restore={summary.restore} onDone={refresh} />;
 
   return (
     <div className="va-stack">
@@ -185,8 +166,8 @@ function IssuePanelBody({ issueKey: issueKeyProp, onDone }: Props) {
       {!summary && (
         <div className="va-stack" aria-busy={!error} aria-label="Approval summary">
           {(issueKeyProp ?? contextIssue?.key) && <p className="va-secondary">{issueKeyProp ?? contextIssue?.key}</p>}
-          <Card title="Approval"><SkeletonRow label="Control state" failed={!!error} /><SkeletonRow label="Available actions" failed={!!error} /></Card>
-          <Card title="Baseline record"><SkeletonRow label="Latest baseline" failed={!!error} /><SkeletonRow label="Latest approval" failed={!!error} /></Card>
+          <PanelSection title="Approvals"><SkeletonRow label="Control state" failed={!!error} /><SkeletonRow label="Available actions" failed={!!error} /></PanelSection>
+          <PanelSection title="Baseline"><SkeletonRow label="Latest baseline" failed={!!error} /><SkeletonRow label="Latest approval" failed={!!error} /></PanelSection>
         </div>
       )}
 
@@ -204,10 +185,6 @@ function IssuePanelBody({ issueKey: issueKeyProp, onDone }: Props) {
             <Notice danger>Workflow control status is temporarily unavailable. No incident count is being shown; reload before relying on this control state.</Notice>
           )}
 
-          {summary.baseline && (
-            <DriftSection drift={shownDrift!} evidence={shownEvidence} evidenceReady={evidenceReady} issueKey={issueKey} />
-          )}
-
           {!evidence && evidenceError && (
             <Notice>
               Change details could not be loaded. {evidenceError}
@@ -215,30 +192,34 @@ function IssuePanelBody({ issueKey: issueKeyProp, onDone }: Props) {
             </Notice>
           )}
 
-          <ApprovalControls
-            summary={authoritativeSummary!}
-            issueKey={issueKey}
-            onDone={async () => { await refresh(); onDone?.(); }}
-            disabled={!!error || !hasAuthoritativeEvidence}
-            evidence={evidence}
-            evidenceLoading={evidenceLoading}
-            evidenceError={evidenceError}
-            evidenceHeld={Boolean(heldEvidence)}
-            selectedTransitionId={selectedTransitionId}
-            onSelectTransition={setSelectedTransitionId}
-          />
+          {/* TWO SECTIONS, ALWAYS THE SAME TWO. Approvals is the workflow: every
+              controlled move from here and who may sign it. Baseline is the
+              record: what was signed, and — flagged on the same card — what has
+              changed since. Nothing in either expands; reading at length
+              happens in the review window. */}
+          <PanelSection title="Approvals" subtitle={reviewingDrift ? 'Held while changes to the baseline are undecided' : 'Your decision is recorded against your name and cannot be edited afterwards.'}>
+            {reviewingDrift
+              ? <ControlFacts summary={authoritativeSummary!} fromStatusName={summary.issue?.status?.name} held
+                  authoritativeReady={hasAuthoritativeEvidence || Boolean(evidenceError) || Boolean(heldEvidence)} />
+              : controls}
+            <LatestApproval approval={summary.latestApproval} />
+          </PanelSection>
 
-          <BaselineRecord
-            baseline={summary.baseline}
-            latestApproval={summary.latestApproval}
-            record={shownEvidence?.record ?? null}
-            evidenceLoading={evidenceLoading && !shownEvidence}
-            evidenceError={evidenceError}
-            onOpen={() => setBaselineDisclosureOpen(true)}
-            onRetryEvidence={retryEvidence}
-          />
-
-          <RestoreStatus issueKey={issueKey} restore={summary.restore} onDone={refresh} />
+          <PanelSection title="Baseline" subtitle="The approved record this work item is held to">
+            <BaselineSection
+              summary={summary}
+              drift={shownDrift!}
+              evidence={shownEvidence}
+              evidenceReady={evidenceReady}
+              evidenceLoading={evidenceLoading}
+              evidenceError={evidenceError}
+              onRetryEvidence={retryEvidence}
+              onOpenReview={review}
+              decision={reviewingDrift ? controls : null}
+              restore={restoreFinished(summary.restore?.state) && restoreBelongsTo(summary.restore, summary.baseline) ? restoreStatus : null}
+            />
+            {!restoreFinished(summary.restore?.state) && restoreStatus}
+          </PanelSection>
         </>
       )}
 
@@ -247,3 +228,15 @@ function IssuePanelBody({ issueKey: issueKeyProp, onDone }: Props) {
   );
 }
 
+/** One of the panel's two sections: a quiet heading, then its content. Never a card in a card. */
+function PanelSection({ title, subtitle, children }: { title: string; subtitle?: string; children: ReactNode }) {
+  return (
+    <section className="va-panel-section" aria-label={title}>
+      <header className="va-panel-section__head">
+        <h3 className="va-panel-section__title">{title}</h3>
+        {subtitle && <span className="va-panel-section__sub">{subtitle}</span>}
+      </header>
+      <div className="va-stack">{children}</div>
+    </section>
+  );
+}

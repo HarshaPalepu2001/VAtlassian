@@ -120,6 +120,47 @@ test('transition screen refuses a missing exact transition id', async () => {
   assert.equal(result.reason, 'TRANSITION_ID_REQUIRED');
 });
 
+test('unresolved live drift outranks transition configuration and exposes no signing action', async () => {
+  const f = fixture({ available: [] });
+  const originalLoad = f.deps.load;
+  f.deps.load = async () => ({
+    ...await originalLoad(),
+    baseline: { baseline_id: Buffer.alloc(16, 1), field_digests: '{}' },
+    config: { enabled: true }
+  });
+  let transitionReads = 0;
+  f.deps.availableTransitions = async () => { transitionReads += 1; return []; };
+  f.deps.baselineDrift = async () => ({ changed: ['summary', 'description'], contentHash: 'current-hash' });
+
+  const result = await createSigningUsecases(f.deps).signingContext({
+    payload: { surface: 'device-field', transitionId: '101' }, context: { accountId: 'actor-1' }
+  });
+
+  assert.equal(result.blocker, 'UNDECIDED_DRIFT');
+  assert.deepEqual(result.actions, []);
+  assert.equal(result.drift.count, 2);
+  assert.equal(result.drift.blocked, true);
+  assert.equal(transitionReads, 0, 'drift is an item-level hold and must win before edge resolution');
+});
+
+test('a disabled project does not advertise a drift hold that its validator will not enforce', async () => {
+  const f = fixture({ eligibleRoles: ['SDE-1'] });
+  const originalLoad = f.deps.load;
+  f.deps.load = async () => ({
+    ...await originalLoad(),
+    baseline: { baseline_id: Buffer.alloc(16, 1), field_digests: '{}' },
+    config: { enabled: false }
+  });
+  f.deps.baselineDrift = async () => ({ changed: ['summary'], contentHash: 'current-hash' });
+
+  const result = await createSigningUsecases(f.deps).signingContext({
+    payload: { surface: 'device-field', transitionId: '102' }, context: { accountId: 'actor-1' }
+  });
+
+  assert.notEqual(result.blocker, 'UNDECIDED_DRIFT');
+  assert.equal(result.drift.blocked, false);
+});
+
 // The signing screen (src/ui-kit/edit.jsx) renders issue.assignee,
 // issue.reporter, issue.issueTypeName and issue.description* directly from
 // this resolver's response. Dropping them here does not make the field

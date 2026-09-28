@@ -11,10 +11,13 @@ import { activeBaseline } from '../db/baselineStore.js';
 import { baselinePolicy } from '../lib/baselinePolicy.js';
 import { isEligible } from '../lib/reviewer.js';
 import { baselineDecisionMeaning } from '../lib/approval/challenge.js';
-import { enqueueVault } from '../lib/vaultQueue.js';
+import { enqueueVaultJobs } from '../lib/vaultQueue.js';
 import { tryAppend } from '../db/store.js';
 import { EVENT } from '../lib/ledger.js';
 import api, { route } from '@forge/api';
+import { linkDecisionJobs } from '../lib/approval/linkPropagation.js';
+import { enqueueLinkDecisions } from '../lib/linkQueue.js';
+import { markLinkDecisionsPending, clearLinkDecisionPending } from '../db/linkPendingStore.js';
 
 export async function getState(args) { return respond(async () => {
   const state = await load(args); return { drift: state.diff, review: state.review };
@@ -122,19 +125,88 @@ export async function prepareApproval({ issue, actor, decision, expectedEvidence
 }
 
 /**
- * Hands the new baseline's attachments to the vault worker (jobs/vaultWorker.js)
- * — queued, so the copying never spends this approval's time budget. Vaulting
- * is defence in depth, not the record: the baseline row already is. A queue
- * failure is audited and never fails the decision that captured the baseline.
+ * The links this item's standing record held before this approval: [] when it
+ * had no record, null when they cannot be read (which decides nothing about
+ * the other ends). A tree keeps them on its root node; the snapshot has read
+ * that tree already, so this costs no read.
+ */
+function linksBefore(checked) {
+  if (!checked.baseline) return [];
+  if (checked.baseline.tree_hash) {
+    const root = (checked.baselineTree?.nodes ?? []).find(node => node.parentLogicalNodeId == null);
+    const links = root ? checked.baselineTree.values?.[root.logicalNodeId]?.issuelinks : undefined;
+    return Array.isArray(links) ? links : null;
+  }
+  return Array.isArray(checked.baselineValues?.issuelinks) ? checked.baselineValues.issuelinks : null;
+}
+
+/**
+ * ONE LINK CHANGE, ONE DECISION (lib/approval/linkPropagation.js). A link this
+ * approval accepted or dropped is also recorded on the issue at its other end,
+ * by jobs/linkWorker.js, off this approval's time budget. Queued, never
+ * awaited to completion; a queue failure is audited and never fails the
+ * decision, whose own baseline is already durable.
+ */
+async function queueLinkDecisions({ checked, approval, actor }) {
+  const jobs = linkDecisionJobs({
+    issue: { id: checked.issueId, key: checked.issue.key },
+    tracksLinks: (checked.fields ?? []).some(field => field.field_id === 'issuelinks'),
+    before: linksBefore(checked),
+    after: checked.issue?.fields?.issuelinks ?? [],
+    approval: { approvalId: Buffer.from(approval.approval_id).toString('base64'), accountId: actor.accountId,
+      displayName: approval.actor_name ?? approval.printed_name ?? actor.displayName,
+      assuranceLevel: approval.assurance_level }
+  });
+  if (!jobs.length) return;
+  // Marked before queueing, so the other issue explains itself from the first
+  // moment (db/linkPendingStore.js). Best effort: the marker only explains.
+  await markLinkDecisionsPending(jobs, Date.now()).catch(error =>
+    console.error('applyApproval: could not mark link decisions pending', error));
+  let failed;
+  try {
+    ({ failed } = await enqueueLinkDecisions(jobs));
+  } catch (error) {
+    failed = jobs.map(body => ({ body, error }));
+  }
+  for (const { body, error } of failed) {
+    await clearLinkDecisionPending({ issueId: body.otherIssueId, decidedOnIssueId: body.issueId }).catch(() => {});
+    console.error('applyApproval: could not queue a link decision', error);
+    await tryAppend({ actorAccountId: actor.accountId, issueId: body?.otherIssueId,
+      eventType: EVENT.LINK_DECISION_NOT_RECORDED,
+      payload: { reason: 'QUEUE_FAILED', decidedOn: checked.issue.key, error: String(error?.message ?? error) } }).catch(() => {});
+  }
+}
+
+/**
+ * Hands each new baseline's attachments to the vault worker (jobs/vaultWorker.js)
+ * — queued, so the copying never spends this approval's time budget. One job
+ * for the captured item and one for every child its capture baselined: a
+ * child's files are restored from the vault like anyone else's, so they must
+ * be in it. Each job carries the files that baseline recorded, so the vault
+ * holds the set that was signed. Vaulting is defence in depth, not the record:
+ * the baseline row already is. A queue failure is audited and never fails the
+ * decision that captured the baseline.
  */
 async function queueVaulting({ capture, checked, actor }) {
-  const baselineId = Buffer.isBuffer(capture.baselineId) ? capture.baselineId.toString('hex') : String(capture.baselineId ?? '');
+  const hex = id => Buffer.isBuffer(id) ? id.toString('hex') : String(id ?? '');
+  const jobs = [
+    { baselineId: hex(capture.baselineId), issueId: checked.issueId, issueKey: checked.issue.key,
+      projectId: checked.projectId, attachments: capture.attachments },
+    ...(capture.children ?? []).filter(child => child.issueKey && child.projectId).map(child => ({
+      baselineId: hex(child.baselineId), issueId: child.issueId, issueKey: child.issueKey,
+      projectId: child.projectId, attachments: child.attachments }))
+  ];
+  let failed;
   try {
-    await enqueueVault({ baselineId, issueId: checked.issueId, issueKey: checked.issue.key, projectId: checked.projectId });
+    ({ failed } = await enqueueVaultJobs(jobs.map(job => ({ ...job,
+      attachments: Array.isArray(job.attachments) ? job.attachments : undefined }))));
   } catch (error) {
+    failed = jobs.map(body => ({ body, error }));
+  }
+  for (const { body, error } of failed) {
     console.error('applyApproval: could not queue attachment vaulting', error);
-    await tryAppend({ actorAccountId: actor.accountId, issueId: checked.issueId, eventType: EVENT.VAULT_QUEUE_FAILED,
-      payload: { baselineId, error: String(error?.message ?? error) } }).catch(() => {});
+    await tryAppend({ actorAccountId: actor.accountId, issueId: body?.issueId, eventType: EVENT.VAULT_QUEUE_FAILED,
+      payload: { baselineId: body?.baselineId, error: String(error?.message ?? error) } }).catch(() => {});
   }
 }
 
@@ -265,6 +337,8 @@ export async function applyApproval({ issue, actor, approval, prepared, resuming
       }
       if (!capture.captured) fail(capture.reason ?? 'CAPTURE_FAILED');
       await queueVaulting({ capture, checked, actor });
+      await queueLinkDecisions({ checked, approval, actor }).catch(error =>
+        console.error('applyApproval: link decisions not queued', error));
     }
     if (checked.baseline && capture.captured) {
       await markDecided({ issueId: checked.issueId,

@@ -1,52 +1,48 @@
-import { collect, DETECTED_VIA } from '../lib/collect.js';
+import { collectAffectedTrees, affectedTreeRoots, collectTree, collect, ownFlatBaseline } from '../lib/collect.js';
 import { executeQuery } from '../lib/db.js';
-import { retryEvent, eventTime } from './retry.js';
+import { retryEvent } from './retry.js';
 import { withRequestCache } from '../lib/cache.js';
 
-export async function run(event) {
-  return withRequestCache(() => runUncached(event));
+/**
+ * avi:jira:created:issuelink / deleted:issuelink — a link is one object both
+ * issues list, so both ends are measured.
+ *
+ * Each end goes the way an issue update goes (triggers/issue-updated.js): the
+ * governed tree it belongs to, and its own single-issue record when it has one.
+ * It used to run the single-issue collector directly, which for a tree baseline
+ * (every capture writes one) compared the item against the row's empty digest
+ * map and recorded every tracked field as drift.
+ */
+export async function run(event, suppliedDeps = null) {
+  return withRequestCache(() => runUncached(event, suppliedDeps));
 }
 
-async function runUncached(event) {
+async function runUncached(event, suppliedDeps) {
   const issueLink = event?.issueLink;
   if (!issueLink) return;
+  const deps = typeof suppliedDeps?.collectAffectedTrees === 'function'
+    ? { recordReceipt, ...suppliedDeps }
+    : { collectAffectedTrees, affectedTreeRoots, collectTree, collect, ownFlatBaseline, recordReceipt };
 
-  const sourceId = Number(issueLink.sourceIssueId);
-  const destId = Number(issueLink.destinationIssueId);
   const eventId = String(event?.eventId ?? event?.id ?? '');
   const now = Date.now();
+  let failed = null;
 
-  const actorAccountId = event?.atlassianId ?? null;
-  let failed = false;
-
-  for (const issueId of [sourceId, destId]) {
+  for (const issueId of [Number(issueLink.sourceIssueId), Number(issueLink.destinationIssueId)]) {
     if (!issueId) continue;
     try {
-      const result = await collect({
-        issueId,
-        detectedVia: DETECTED_VIA.EVENT,
-        actorAccountId,
-        eventId, eventAt: eventTime(event),
-        now
-      });
-      if (['ERROR', 'UNREADABLE', 'BUSY'].includes(result.outcome)) { failed = true; continue; }
-
-      if (eventId) await recordReceipt(eventId, issueId, now, result.outcome);
-
-      if (result.outcome === 'DRIFT_RECORDED') {
-        console.log('linked: drift', JSON.stringify({
-          issueId,
-          inserted: result.inserted,
-          fields: result.fields,
-          driftCount: result.driftCount
-        }));
-      }
+      const results = await deps.collectAffectedTrees({ ...event, issue: { id: String(issueId) } }, deps);
+      const bad = results.find(r => ['ERROR', 'UNREADABLE', 'BUSY'].includes(r?.outcome));
+      if (bad) { failed = bad.outcome; continue; }
+      const outcome = results.find(r => r?.outcome === 'DRIFT_RECORDED')?.outcome ?? results[0]?.outcome ?? 'NO_CHANGE';
+      if (eventId) await deps.recordReceipt(eventId, issueId, now, outcome);
+      if (outcome === 'DRIFT_RECORDED') console.log('linked: drift', JSON.stringify({ issueId }));
     } catch (e) {
       console.error('linked: handler failed', JSON.stringify({ issueId }), e);
-      failed = true;
+      failed = 'LINK_COLLECTION_FAILED';
     }
   }
-  if (failed) return retryEvent(event, 'LINK_COLLECTION_FAILED');
+  if (failed) return retryEvent(event, failed);
 }
 
 async function recordReceipt(eventId, issueId, now, outcome) {

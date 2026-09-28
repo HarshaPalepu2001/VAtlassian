@@ -6,7 +6,6 @@ import { withRequestCache } from '../lib/cache.js';
 const jobs = {
   migrate: () => import('./migrate.js').then(m => m.run()),
   alerts: () => import('./alerts.js').then(m => m.run()),
-  adoptFields: () => import('./adoptFields.js').then(m => m.run()),
   reconcile: () => import('./reconcile.js').then(m => m.run()),
   rehash: () => import('./rehash.js').then(m => m.run()),
   gatecheck: () => import('./gatecheck.js').then(m => m.run()),
@@ -39,9 +38,8 @@ export function runFiveMinute(_request, { jobs: implementations = jobs } = {}) {
   return withRequestCache(() => runList(['migrate', 'alerts'], implementations));
 }
 
-// Field adoption must finish before either collector measures the tracked set.
 export function runHourly(_request, { jobs: implementations = jobs } = {}) {
-  return withRequestCache(() => runList(['adoptFields', 'reconcile', 'rehash', 'gatecheck', 'vaultBackfill'], implementations));
+  return withRequestCache(() => runList(['reconcile', 'rehash', 'gatecheck', 'vaultBackfill'], implementations));
 }
 
 export function runDaily(_request, { jobs: implementations = jobs } = {}) {

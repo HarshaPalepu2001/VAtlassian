@@ -14,8 +14,11 @@ import { isEligible } from '../lib/reviewer.js';
 import { baselinePolicy } from '../lib/baselinePolicy.js';
 import { baselineDecisionMeaning } from '../lib/approval/challenge.js';
 import { baselineDrift } from '../lib/liveDrift.js';
+import { linkDecisionsPending } from '../db/linkPendingStore.js';
 import { controlledFields } from '../db/configStore.js';
+import { fieldsForItem } from '../lib/tree/nodeFields.js';
 import { MATERIALITY } from '../lib/materiality.js';
+import { canonicaliseIssue } from '../lib/attachmentIdentity.js';
 
 /**
  * THE COMPACT READ — everything the panel needs to paint immediately.
@@ -45,7 +48,9 @@ export async function readIssueSummary({ payload = {}, context }) {
   if (!response.ok) fail('ISSUE_ACCESS_DENIED');
   const issue = await response.json();
   if (!issue.id || !issue.fields?.project?.id || !issue.fields?.issuetype?.id) fail('ISSUE_UNREADABLE');
-  return issue;
+  // The drift count below must read a restored file as the approved original,
+  // exactly as the validator does, or the two would disagree about drift.
+  return canonicaliseIssue(issue);
 }
 
 /** A baseline with incomplete provenance (recorded before Task 4's migration)
@@ -127,7 +132,7 @@ export async function getSummary(args) { return respond(async () => {
     activeRootsForNode(issueId).catch(() => []),
     // The declared tracked set, so drift can be derived from the content
     // rather than read off a counter. One indexed read, no Jira call.
-    controlledFields({ projectId, issueTypeId }).catch(() => [])
+    fieldsForItem({ issueId, projectId, issueTypeId }, { activeRootsForNode, controlledFields }).catch(() => [])
   ]);
 
   // Never offer a transition to the same status, and never offer any once the
@@ -187,6 +192,9 @@ export async function getSummary(args) { return respond(async () => {
     baseline?.tree_hash ? driftedDescendants(baseline.baseline_id).catch(() => 0) : 0,
     baseline?.captured_by_baseline_id ? capturingParent(baseline.captured_by_baseline_id).catch(() => null) : null
   ]);
+  // A link approved on the other end, on its way to this record
+  // (jobs/linkWorker.js): the panel says so and re-reads until it lands.
+  const linkPending = drifted.includes('issuelinks') ? await linkDecisionsPending(issueId).catch(() => []) : [];
   const pendingDrift = Boolean(baseline) && (driftCount > 0 || childrenAwaiting > 0);
   const policyIncomplete = pendingDrift && !policy;
 
@@ -242,6 +250,8 @@ export async function getSummary(args) { return respond(async () => {
     skipped: Number(restores[0].skipped ?? 0),
     jobId: restores[0].job_id ?? null,
     queuedAt: restores[0].queued_at != null ? Number(restores[0].queued_at) : null,
+    finishedAt: restores[0].finished_at != null ? Number(restores[0].finished_at) : null,
+    baselineVersion: restores[0].baseline_version != null ? Number(restores[0].baseline_version) : null,
     heartbeatAt: restores[0].heartbeat_at != null ? Number(restores[0].heartbeat_at) : null,
     totalSteps: Number(restores[0].total_steps ?? 0),
     completedSteps: Number(restores[0].completed_steps ?? 0),
@@ -295,7 +305,7 @@ export async function getSummary(args) { return respond(async () => {
       decidedAt: approval.decided_at != null ? Number(approval.decided_at) : null,
       transitionId: approval.transition_id ?? null
     } : null,
-    drift: { count: driftCount, materialCount, childrenAwaiting, decidesDrift, policyIncomplete,
+    drift: { count: driftCount, materialCount, childrenAwaiting, decidesDrift, policyIncomplete, linkPending,
       // Whether this viewer COULD decide drift on this baseline, independent of
       // whether the stored counter currently shows any. The client needs both.
       eligible: baselineEligible,

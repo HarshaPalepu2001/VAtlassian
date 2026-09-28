@@ -12,6 +12,12 @@ import { DENY } from '../lib/errors.js';
 
 export function fail(reason) { const error = new Error(reason); error.reason = reason; throw error; }
 
+/** A refusal whose sentence depends on the case — it names the work items
+ *  involved — so it carries its own words instead of a DENY entry. */
+export function failWith(reason, message) {
+  const error = new Error(message); error.reason = reason; error.userMessage = message; throw error;
+}
+
 export function actorFrom(context) {
   if (!context?.accountId) fail('AUTHENTICATION_REQUIRED');
   return { accountId: context.accountId };
@@ -28,6 +34,6 @@ export async function respond(operation) {
   try { return serialise(await operation()); }
   catch (error) {
     const reason = error.reason ?? 'ERROR';
-    return { error: DENY[reason] ?? error.message ?? String(error), reason };
+    return { error: error.userMessage ?? DENY[reason] ?? error.message ?? String(error), reason };
   }
 }

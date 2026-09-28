@@ -4,13 +4,19 @@ export type MarkChange = { from?: string[]; to?: string[] };
  *  other side. `before`/`after` are the cell's plain text. */
 export type DiffCell = { op: string; before?: string | null; after?: string | null; header?: boolean; ops?: DiffOp[] };
 export type DiffBlockSide = { text?: string; type?: string; tableId?: string; cells?: { text?: string; header?: boolean }[] };
-export type DiffBlock = { op: string; before?: DiffBlockSide; after?: DiffBlockSide; ops?: DiffOp[]; cells?: DiffCell[]; markChange?: MarkChange };
-export type DiffItem = string | { id?: string; filename?: string; type?: string; inward?: string; outward?: string };
+/** One sentence per structural difference: a type, an attr, or the containers around a block. */
+export type StructureChange = { kind?: string; text: string };
+export type DiffBlock = { op: string; before?: DiffBlockSide; after?: DiffBlockSide; ops?: DiffOp[]; cells?: DiffCell[]; markChange?: MarkChange | null; structureChange?: StructureChange[] };
+/** One edit in a field's history. `fromString`/`toString` are Jira's own rendering of that edit. */
+export type Attribution = {at: number; authorName?: string | null; authorId?: string | null; source?: string; detected?: boolean; fromString?: string | null; toString?: string | null};
+export type DiffItem =string | { id?: string; filename?: string; type?: string; inward?: string; outward?: string };
 export type DiffField = {
  fieldId: string; fieldName: string; summary?: string; driftIds?: string[]; semanticChange?: boolean; materiality?: string;
  attributionStatus?: 'AVAILABLE' | 'UNAVAILABLE' | 'NOT_COLLECTED';
  retained?: boolean; restorable?: string; kind: string; blocks?: DiffBlock[]; ops?: DiffOp[]; added?: DiffItem[]; removed?: DiffItem[]; replaced?: DiffItem[];
- before?: unknown; after?: unknown; churned?: boolean; attribution?: {at: number; authorName?: string; authorId?: string; source?: string; detected?:boolean; fromString?:string|null; toString?:string|null}[];
+ before?: unknown; after?: unknown; churned?: boolean; attribution?: Attribution[];
+ /** Computed by the backend from the same trail: the latest edit, its author, and how many edits there were. */
+ lastChangedAt?: number | null; lastChangedBy?: string | null; firstChangedAt?: number | null; occurrences?: number;
  /** { storedIdentifier: displayName } for values the comparison reduced to ids. */
  valueLabels?: Record<string, string>;
  /** The field's own name, for a view already headed by its work item (a tree review). */

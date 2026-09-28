@@ -24,23 +24,28 @@ const LEGACY_COLUMNS = `
   approved_by, approved_name, transition_at, captured_at,
   assurance_level, TO_BASE64(approval_id) AS approval_id,
   fidelity, field_count, value_bytes, tree_hash, node_count, edge_count, total_field_count`;
-const BASELINE_COLUMNS = `${LEGACY_COLUMNS},
+const CAPTURED_BY_COLUMNS = `${LEGACY_COLUMNS},
   TO_BASE64(captured_by_baseline_id) AS captured_by_baseline_id
+`;
+const BASELINE_COLUMNS = `${CAPTURED_BY_COLUMNS},
+  nodes_captured_at
 `;
 
 /**
  * Every baseline read, across the deploy-to-migration window. Forge SQL
  * applies DDL from the five-minute job, not at deploy (see isUnknownColumn in
  * lib/db.js), and every hold, panel and decision reads baselines: until
- * v061_baseline_captured_by lands, read without the column (null), rather than
- * refuse them all for five minutes.
+ * v061_baseline_captured_by and v068_baseline_nodes_captured_at land, read
+ * without the newer columns (null), rather than refuse them all for five minutes.
  */
 async function selectBaselines(query, sqlFor, params) {
-  try {
-    return await query(sqlFor(BASELINE_COLUMNS), params);
-  } catch (error) {
-    if (!isUnknownColumn(error)) throw error;
-    return query(sqlFor(LEGACY_COLUMNS), params);
+  const tiers = [BASELINE_COLUMNS, CAPTURED_BY_COLUMNS, LEGACY_COLUMNS];
+  for (let i = 0; ; i += 1) {
+    try {
+      return await query(sqlFor(tiers[i]), params);
+    } catch (error) {
+      if (!isUnknownColumn(error) || i === tiers.length - 1) throw error;
+    }
   }
 }
 
@@ -50,7 +55,8 @@ function decode(row) {
     ...row,
     baseline_id: fromBinaryColumn(row.baseline_id),
     approval_id: fromBinaryColumn(row.approval_id),
-    captured_by_baseline_id: row.captured_by_baseline_id == null ? null : fromBinaryColumn(row.captured_by_baseline_id)
+    captured_by_baseline_id: row.captured_by_baseline_id == null ? null : fromBinaryColumn(row.captured_by_baseline_id),
+    nodes_captured_at: row.nodes_captured_at == null ? null : Number(row.nodes_captured_at)
   };
 }
 

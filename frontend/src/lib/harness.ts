@@ -8,22 +8,65 @@
 
 import { invoke } from './bridge';
 
+export type HarnessCategory =
+  | 'UI'
+  | 'BRIDGE'
+  | 'WEBAUTHN'
+  | 'DRIFT'
+  | 'RESTORE'
+  | 'GATE'
+  | 'VAULT'
+  | 'DIAGNOSTICS'
+  | 'RESOLVER'
+  | 'ADMIN'
+  | 'CAPTURE'
+  | 'APPROVAL'
+  | 'TRIGGER'
+  | 'AUDIT'
+  | 'ERROR';
+
 export interface HarnessEvent {
   id: string;
   timestamp: string;
   epochMs: number;
-  category: 'UI' | 'BRIDGE' | 'WEBAUTHN' | 'DRIFT' | 'RESTORE' | 'ERROR';
+  category: HarnessCategory;
   action: string;
   details?: Record<string, unknown>;
   issueKey?: string;
+  traceId?: string;
+  durationMs?: number;
   error?: string;
 }
 
-const MAX_BUFFER_SIZE = 120;
+const MAX_BUFFER_SIZE = 200;
 const eventBuffer: HarnessEvent[] = [];
 let listeners: Array<(events: HarnessEvent[]) => void> = [];
 
-const SECRET_KEYS = ['code', 'secret', 'password', 'token'];
+let activeTraceId: string | null = null;
+
+export function createTraceId(): string {
+  return `tr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+export function getActiveTraceId(): string | null {
+  return activeTraceId;
+}
+
+export function setActiveTraceId(traceId: string | null): void {
+  activeTraceId = traceId;
+}
+
+export function withTrace<T>(traceId: string, fn: () => T): T {
+  const previous = activeTraceId;
+  activeTraceId = traceId;
+  try {
+    return fn();
+  } finally {
+    activeTraceId = previous;
+  }
+}
+
+const SECRET_KEYS = ['code', 'secret', 'password', 'token', 'totp', 'authorization', 'signature'];
 
 /** Redacts at every depth. The bridge nests each resolver payload under
  *  `request`, so a top-level-only check let `request.code` — the signer's
@@ -48,7 +91,7 @@ function sanitizeDetails(details?: Record<string, unknown>): Record<string, unkn
 }
 
 export function recordHarnessEvent(
-  category: HarnessEvent['category'],
+  category: HarnessCategory,
   action: string,
   details?: Record<string, unknown>,
   error?: unknown
@@ -59,6 +102,8 @@ export function recordHarnessEvent(
   const cleanDetails = sanitizeDetails(details);
   const errorMessage = error instanceof Error ? error.message : error ? String(error) : undefined;
   const issueKey = (cleanDetails.issueKey ?? cleanDetails.targetKey ?? cleanDetails.rootIssueKey) as string | undefined;
+  const traceId = (cleanDetails.traceId as string | undefined) ?? activeTraceId ?? undefined;
+  const durationMs = typeof cleanDetails.durationMs === 'number' ? cleanDetails.durationMs : undefined;
 
   const event: HarnessEvent = {
     id,
@@ -68,6 +113,8 @@ export function recordHarnessEvent(
     action,
     details: cleanDetails,
     issueKey,
+    traceId,
+    durationMs,
     error: errorMessage
   };
 
@@ -76,20 +123,27 @@ export function recordHarnessEvent(
     eventBuffer.shift();
   }
 
-  // Console output for immediate developer visibility in browser DevTools
-  const badgeColor = {
+  // Console output for developer visibility in browser DevTools
+  const badgeColor: Record<string, string> = {
     UI: '#0052cc',
     BRIDGE: '#6554c0',
     WEBAUTHN: '#00875a',
     DRIFT: '#ff8b00',
     RESTORE: '#00b8d9',
+    GATE: '#ffab00',
+    VAULT: '#8777d9',
+    DIAGNOSTICS: '#00b8d9',
+    RESOLVER: '#0052cc',
+    ADMIN: '#0747a6',
+    CAPTURE: '#00a3bf',
+    APPROVAL: '#36b37e',
     ERROR: '#de350b'
-  }[category] || '#42526e';
+  };
 
   // eslint-disable-next-line no-console
   console.info(
     `%c[HARNESS:${category}]%c ${action}${issueKey ? ` [${issueKey}]` : ''}`,
-    `background: ${badgeColor}; color: #fff; font-weight: bold; border-radius: 3px; padding: 2px 5px;`,
+    `background: ${badgeColor[category] || '#42526e'}; color: #fff; font-weight: bold; border-radius: 3px; padding: 2px 5px;`,
     'font-weight: bold; color: inherit;',
     cleanDetails,
     error ?? ''
@@ -108,6 +162,7 @@ export function recordHarnessEvent(
       action,
       timestamp,
       issueKey,
+      traceId,
       details: cleanDetails,
       error: errorMessage
     }).catch(() => {});
@@ -124,8 +179,56 @@ export function subscribeHarnessEvents(callback: (events: HarnessEvent[]) => voi
   };
 }
 
-export function getHarnessEvents(): HarnessEvent[] {
-  return [...eventBuffer];
+export function getHarnessEvents(filter?: {
+  category?: string;
+  issueKey?: string;
+  errorOnly?: boolean;
+  traceId?: string;
+  search?: string;
+}): HarnessEvent[] {
+  if (!filter) return [...eventBuffer];
+
+  return eventBuffer.filter(e => {
+    if (filter.category && filter.category !== 'ALL' && e.category !== filter.category) return false;
+    if (filter.issueKey && e.issueKey?.toUpperCase() !== filter.issueKey.toUpperCase()) return false;
+    if (filter.errorOnly && e.category !== 'ERROR' && !e.error) return false;
+    if (filter.traceId && e.traceId !== filter.traceId) return false;
+    if (filter.search) {
+      const q = filter.search.toLowerCase();
+      const matchAction = e.action.toLowerCase().includes(q);
+      const matchDetails = JSON.stringify(e.details || {}).toLowerCase().includes(q);
+      if (!matchAction && !matchDetails) return false;
+    }
+    return true;
+  });
+}
+
+export function getHarnessStats(): {
+  total: number;
+  byCategory: Record<string, number>;
+  errorCount: number;
+  avgBridgeDurationMs: number;
+} {
+  const byCategory: Record<string, number> = {};
+  let errorCount = 0;
+  let bridgeDurationSum = 0;
+  let bridgeCount = 0;
+
+  for (const e of eventBuffer) {
+    byCategory[e.category] = (byCategory[e.category] || 0) + 1;
+    if (e.category === 'ERROR' || e.error) errorCount++;
+    if (e.category === 'BRIDGE' && typeof e.durationMs === 'number') {
+      bridgeDurationSum += e.durationMs;
+      bridgeCount++;
+    }
+  }
+
+  return {
+    total: eventBuffer.length,
+    byCategory,
+    errorCount,
+    avgBridgeDurationMs: bridgeCount > 0 ? Math.round(bridgeDurationSum / bridgeCount) : 0
+  };
 }
 
 export function exportDiagnosticsSnapshot(): string {
@@ -134,6 +237,7 @@ export function exportDiagnosticsSnapshot(): string {
     exportedAt: new Date().toISOString(),
     userAgent: navigator.userAgent,
     url: window.location.href,
+    stats: getHarnessStats(),
     eventCount: eventBuffer.length,
     recentEvents: eventBuffer
   };
@@ -144,7 +248,10 @@ export function exportDiagnosticsSnapshot(): string {
 if (typeof window !== 'undefined') {
   (window as unknown as { __VA_HARNESS__: unknown }).__VA_HARNESS__ = {
     getEvents: getHarnessEvents,
+    getStats: getHarnessStats,
     record: recordHarnessEvent,
+    createTrace: createTraceId,
+    withTrace,
     export: exportDiagnosticsSnapshot,
     clear: () => { eventBuffer.length = 0; }
   };

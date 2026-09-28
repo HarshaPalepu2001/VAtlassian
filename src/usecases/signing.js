@@ -22,6 +22,21 @@ import { gatedTransition } from '../db/configStore.js';
 import { isEligible } from '../lib/reviewer.js';
 import { resolveActions } from '../lib/journey.js';
 import { extractDescription } from './panelEvidence.js';
+import { baselineDrift } from '../lib/liveDrift.js';
+import { rootNodeDigests } from '../db/baselineTreeStore.js';
+
+function issueForSigning(issue) {
+  return {
+    id: String(issue.id),
+    key: issue.key,
+    summary: issue.fields?.summary ?? '',
+    statusName: issue.fields?.status?.name ?? '',
+    issueTypeName: issue.fields?.issuetype?.name ?? '',
+    assignee: issue.fields?.assignee ?? null,
+    reporter: issue.fields?.reporter ?? null,
+    ...extractDescription(issue.fields?.description)
+  };
+}
 
 export function createSigningUsecases(deps = {}) {
   const loadFn = deps.load ?? load;
@@ -29,12 +44,33 @@ export function createSigningUsecases(deps = {}) {
   const gateFn = deps.gatedTransition ?? gatedTransition;
   const eligibleFn = deps.isEligible ?? isEligible;
   const resolveFn = deps.resolveActions ?? resolveActions;
+  const driftFn = deps.baselineDrift ?? baselineDrift;
+  const rootDigestsFn = deps.rootNodeDigests ?? rootNodeDigests;
 
   async function signingContext(args = {}) {
     return respond(async () => {
       const state = await loadFn(args);
       const { issue, actor, projectId, issueTypeId } = state;
       const surface = args?.payload?.surface;
+      // The validator judges the work item before it judges the edge. Mirror
+      // that ordering here so a drifted item never offers a signature that the
+      // validator is certain to refuse. This is the same live baseline
+      // comparison used by the validator, not a stored counter or client flag.
+      const comparison = state.baseline
+        ? await driftFn({ baseline: state.baseline, issueId: state.issueId, issueFields: issue.fields,
+            declared: state.fields, readRootDigests: rootDigestsFn })
+        : { changed: [], contentHash: null };
+      const driftCount = Array.isArray(comparison?.changed) ? comparison.changed.length : Number.NaN;
+      const driftBlocked = state.config?.enabled !== false
+        && (!Number.isSafeInteger(driftCount) || driftCount > 0);
+      const drift = { evidenceHash: state.evidenceHash, count: driftCount, blocked: driftBlocked };
+      if (driftBlocked) {
+        return {
+          actions: [], blocker: 'UNDECIDED_DRIFT', gatedCount: 0,
+          requiredRole: state.gate?.required_role ?? null,
+          issue: issueForSigning(issue), actorName: actor?.displayName ?? null, drift
+        };
+      }
       // THE FIELD MUST NAME THE EXACT TRANSITION IT SITS ON. Forge's
       // issue-transition custom field context carries the destination
       // transition id (Jira's `issueTransition.id`), and this surface exists
@@ -97,18 +133,9 @@ export function createSigningUsecases(deps = {}) {
         blocker,
         gatedCount,
         requiredRole: blockedGate?.required_role ?? null,
-        issue: {
-          id: String(issue.id),
-          key: issue.key,
-          summary: issue.fields?.summary ?? '',
-          statusName: issue.fields?.status?.name ?? '',
-          issueTypeName: issue.fields?.issuetype?.name ?? '',
-          assignee: issue.fields?.assignee ?? null,
-          reporter: issue.fields?.reporter ?? null,
-          ...extractDescription(issue.fields?.description)
-        },
+        issue: issueForSigning(issue),
         actorName: actor?.displayName ?? null,
-        drift: { evidenceHash: state.evidenceHash }
+        drift
       };
     });
   }

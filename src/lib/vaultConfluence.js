@@ -15,7 +15,7 @@ function escapeHtml(value) {
  * Stripped rather than merely escaped: CR/LF have no legitimate place in a
  * filename and stripping avoids relying on the receiving parser's unescaping.
  */
-function sanitizeMultipartFilename(filename) {
+export function sanitizeMultipartFilename(filename) {
   return String(filename).replace(/[\r\n]/g, '').replace(/"/g, "'");
 }
 
@@ -142,4 +142,21 @@ export async function uploadAttachmentToPage({ pageId, filename, buffer }, forge
   if (!res.ok) throw new Error(`Failed to upload attachment ${filename} to page ${pageId}: ${res.status}`);
   const data = await res.json();
   return data.results?.[0] ?? data;
+}
+
+/**
+ * The bytes of a vaulted file, for a restore. Needs read:attachment:confluence
+ * with read:content-details:confluence. The caller checks them against
+ * the SHA-256 recorded when they were vaulted before trusting them.
+ */
+export async function downloadVaultAttachment({ pageId, attachmentId }, forgeApi = api) {
+  const res = await forgeApi.asApp().requestConfluence(
+    route`/wiki/rest/api/content/${pageId}/child/attachment/${attachmentId}/download`
+  );
+  if (!res.ok) {
+    const error = new Error(`Failed to download vaulted attachment ${attachmentId}: ${res.status}`);
+    error.status = res.status;
+    throw error;
+  }
+  return Buffer.from(await res.arrayBuffer());
 }

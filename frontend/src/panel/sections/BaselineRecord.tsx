@@ -4,12 +4,14 @@ import { Badge, Card, Person } from '../../ui/primitives';
 import { AssuranceChip, Collapsible, MaterialityBadge, When } from '../../ui/feedback';
 import { plural } from '../../ui/format';
 import type { BaselineField, BaselineRecordData, PanelBaseline, PanelLatestApproval } from '../types';
+import { RestoreLine } from './RestoreStatus';
+import type { RestoreRow } from './RestoreStatus';
 
 /** The latest transition approval, shown even when it never created a
  *  baseline — see spec 5.2: "latest transition approval owner/time/outcome,
  *  including approvals that did not create a baseline." Rendered as a
  *  deliberate "not yet available" fact rather than being silently omitted. */
-function LatestApproval({ approval }: { approval: PanelLatestApproval | null }) {
+export function LatestApproval({ approval }: { approval: PanelLatestApproval | null }) {
   return (
     <div className="va-stack va-stack--tight">
       <span className="va-secondary">Latest approval</span>
@@ -43,10 +45,12 @@ function LatestApproval({ approval }: { approval: PanelLatestApproval | null }) 
  * facts and the "latest approval" line stay visible and correct regardless of
  * whether that evidence has loaded, is loading, or failed.
  */
-export default function BaselineRecord({ baseline, latestApproval, record, evidenceLoading, evidenceError, onOpen, onRetryEvidence }: {
+export default function BaselineRecord({ baseline, latestApproval, record, restores, evidenceLoading, evidenceError, onOpen, onRetryEvidence }: {
   baseline: PanelBaseline | null;
   latestApproval: PanelLatestApproval | null;
   record: BaselineRecordData | null;
+  /** Every restore of this work item, newest first — the permanent log of what was put back. */
+  restores?: RestoreRow[] | null;
   evidenceLoading?: boolean;
   evidenceError?: string;
   onOpen: () => void;
@@ -157,6 +161,13 @@ export default function BaselineRecord({ baseline, latestApproval, record, evide
               ))}
             </div>
           </details>
+        )}
+
+        {!!restores?.length && (
+          <div className="va-stack va-stack--tight" aria-label="Restores">
+            <span className="va-secondary">Restores</span>
+            {restores.map(r => <RestoreLine key={r.restore_id} restore={r} />)}
+          </div>
         )}
       </div>
     </Card>

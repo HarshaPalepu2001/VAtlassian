@@ -660,5 +660,49 @@ export const MIGRATIONS = [
   // captured on the item's own controlled transition.
   { id: 'v061_baseline_captured_by', sql: `ALTER TABLE va_baseline ADD COLUMN captured_by_baseline_id BINARY(16) NULL` },
   // Publication and repair select a parent capture's child rows by this link.
-  { id: 'v062_baseline_captured_by_index', sql: `ALTER TABLE va_baseline ADD INDEX idx_baseline_captured_by (captured_by_baseline_id)` }
+  { id: 'v062_baseline_captured_by_index', sql: `ALTER TABLE va_baseline ADD INDEX idx_baseline_captured_by (captured_by_baseline_id)` },
+  // A file a rejection re-uploaded from the vault gets a new Jira id. This row
+  // says which original it stands for, once its bytes were checked against the
+  // vault's hash, so every comparison reads it as the file that was approved.
+  // Written only by the app. See lib/attachmentIdentity.js.
+  { id: 'v063_attachment_alias', sql: `CREATE TABLE IF NOT EXISTS va_attachment_alias (
+    attachment_id VARCHAR(64) NOT NULL,
+    issue_id BIGINT NOT NULL,
+    stands_for_id VARCHAR(64) NOT NULL,
+    content_hash CHAR(64) NOT NULL,
+    restore_ref VARCHAR(128) NULL,
+    created_at BIGINT NOT NULL,
+    PRIMARY KEY (attachment_id),
+    KEY idx_attachment_alias_issue (issue_id)
+  )` },
+  // A restore looks up a file's vaulted copy by work item and Jira id, from
+  // whichever baseline vaulted it: a Jira attachment never changes, so any copy
+  // of the same id is a copy of the same bytes.
+  { id: 'v064_vault_attachment_issue_index', sql: `ALTER TABLE va_vault_attachment ADD INDEX idx_vault_attachment_issue (issue_id, jira_attachment_id)` },
+  // When the app's own account was granted Delete all attachments on the
+  // project's scheme, so a rejection can remove a file added after approval.
+  { id: 'v065_vault_app_delete_grant', sql: `ALTER TABLE va_vault_space ADD COLUMN app_delete_granted_at BIGINT NULL` },
+  // A rich-text field points at an attachment by its MEDIA file id, not its
+  // Jira id (probed live 2026-09-24: the download redirect names it). The vault
+  // records it, so a restore knows which file each pointer in an approved
+  // description needs; the alias records the restored copy's media id and the
+  // original's, so the pointer can be rewritten and read back as approved.
+  { id: 'v066_vault_attachment_media', sql: `ALTER TABLE va_vault_attachment ADD COLUMN media_id VARCHAR(64) NULL` },
+  { id: 'v067_attachment_alias_media', sql: `ALTER TABLE va_attachment_alias
+    ADD COLUMN media_id VARCHAR(64) NULL,
+    ADD COLUMN stands_for_media_id VARCHAR(64) NULL` },
+  // When a tree baseline's child nodes were read from Jira. Null means at its
+  // own captured_at. Set on a version that re-recorded only its root's link on
+  // another issue's approval (jobs/linkWorker.js): its children were copied
+  // from the version before, and still own their content from that capture.
+  { id: 'v068_baseline_nodes_captured_at', sql: `ALTER TABLE va_baseline ADD COLUMN nodes_captured_at BIGINT NULL` },
+  // A link decision queued for this issue's record and not yet recorded
+  // (db/linkPendingStore.js): lets its panel and the validator say so.
+  { id: 'v069_link_pending', sql: `CREATE TABLE IF NOT EXISTS va_link_pending (
+    issue_id BIGINT NOT NULL,
+    decided_on_issue_id BIGINT NOT NULL,
+    decided_on_key VARCHAR(64) NOT NULL,
+    queued_at BIGINT NOT NULL,
+    PRIMARY KEY (issue_id, decided_on_issue_id)
+  )` }
 ];

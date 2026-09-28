@@ -1,16 +1,16 @@
-import { FailClosed } from '../errors.js';
-
 /**
- * EVERY NODE IS TRACKED WITH ITS OWN FIELDS.
+ * EVERY NODE IS TRACKED WITH THE ROOT'S FIELDS.
  *
- * Decided 2026-09-24: a baseline tracks exactly the Controlled Fields page rows
- * for its own project and issue type, the parent and each child alike. A tree
- * therefore needs one field list per distinct (project, issue type) among its
- * nodes, known only once the tree has been read.
+ * Decided 2026-09-25, replacing the per-issue-type rule of the 24th. The
+ * approval being made is the root's, so the root's Controlled Fields page rows
+ * are what every node it covers is held to: a Task under an Epic tracks the
+ * Epic's fields, attachments included, whether or not anyone ever configured
+ * Task. Under the old rule it tracked only its own issue type's rows — which,
+ * for a type nobody configured, were none — so a file added to VAT-14 after
+ * its parent's approval was not drift at all.
  *
- * `fieldsFor(node)` accepts a read node (`node.fields.project.id`) or a planned
- * or stored one (`node.projectId`), so capture, the collector, the panel and
- * restore all answer "which fields does this node track" the same way.
+ * `scopeKey`/`nodeScope` stay: they still name an item's own scope, which is
+ * what an item governed by no tree tracks (fieldsForItem below).
  */
 export const scopeKey = (projectId, issueTypeId) => `${Number(projectId)}:${String(issueTypeId)}`;
 
@@ -22,46 +22,42 @@ export function nodeScope(node) {
 }
 
 /**
- * Read a tree with every node's own fields.
- *
- * Reads once with the root's fields. The root's scope is seeded with
- * `rootFields`, so a tree whose nodes all share the root's scope costs no
- * extra lookup and no second read, exactly as before. Only when some node's
- * scope tracks a field not yet read is the tree read again, with the union.
+ * Read a tree with the fields its nodes track — the root's, for every node —
+ * in one read. `fieldsFor(node)` is kept as the interface capture, the
+ * collector, the panel and restore already share.
  */
-export async function readTreeWithNodeFields({ readStableTree, readTree, rootIssueKey, rootFields, loadFields,
-  extraFieldIds = [] }) {
-  const baseIds = [...new Set([...rootFields.map(f => f.field_id), ...extraFieldIds, 'project', 'issuetype'])];
-  let { tree } = await readStableTree({ readTree, rootIssueKey, fieldIds: baseIds });
-  const byScope = new Map();
-  const root = tree.nodes.find(node => String(node.key) === String(rootIssueKey)) ?? tree.nodes[0];
-  if (root) {
-    const { projectId, issueTypeId } = nodeScope(root);
-    byScope.set(scopeKey(projectId, issueTypeId), rootFields);
-  }
-  for (const node of tree.nodes) {
-    const scope = nodeScope(node);
-    const key = scopeKey(scope.projectId, scope.issueTypeId);
-    if (!byScope.has(key)) byScope.set(key, await loadFields(scope) ?? []);
-  }
-  const neededIds = () => [...new Set([...byScope.values()].flat().map(f => f.field_id))];
-  const readIds = [...new Set([...baseIds, ...neededIds()])];
-  if (readIds.length > baseIds.length) {
-    ({ tree } = await readStableTree({ readTree, rootIssueKey, fieldIds: readIds }));
-    // A node that appeared between the two reads may bring a scope of its own.
-    // Its fields must already have been read, or its content is unmeasured.
-    for (const node of tree.nodes) {
-      const scope = nodeScope(node);
-      const key = scopeKey(scope.projectId, scope.issueTypeId);
-      if (!byScope.has(key)) byScope.set(key, await loadFields(scope) ?? []);
-    }
-    if (neededIds().some(id => !readIds.includes(id))) throw new FailClosed('TREE_CHANGED_DURING_CAPTURE');
-  }
-  const fieldsFor = node => {
-    const { projectId, issueTypeId } = nodeScope(node);
-    return byScope.get(scopeKey(projectId, issueTypeId)) ?? [];
-  };
-  return { tree, fieldsFor };
+export async function readTreeWithNodeFields({ readStableTree, readTree, rootIssueKey, rootFields, extraFieldIds = [] }) {
+  const fieldIds = [...new Set([...rootFields.map(f => f.field_id), ...extraFieldIds, 'project', 'issuetype'])];
+  const { tree } = await readStableTree({ readTree, rootIssueKey, fieldIds });
+  return { tree, fieldsFor: () => rootFields };
+}
+
+/**
+ * THE FIELDS ONE WORK ITEM TRACKS, on every single-item path: drift, the panel,
+ * a decision's evidence hash, a restore.
+ *
+ * The same rule as a tree read, seen from the child: an item covered by an
+ * approved tree it is not the root of tracks that root's fields. Reading only
+ * the capture link (`captured_by_baseline_id`) would not do — a drift decision
+ * on the child re-baselines it without one, and the child would quietly fall
+ * back to its own issue type's fields on its next approval.
+ *
+ *   · The item is a root itself: its own fields. It has its own approval.
+ *   · Covered by one or more roots: the most recently approved root's fields.
+ *   · Covered by none: its own issue type's fields, as always.
+ *
+ * A root row with no scope (read before its columns existed) falls back to the
+ * item's own fields rather than guessing.
+ */
+export async function fieldsForItem({ issueId, projectId, issueTypeId }, deps) {
+  const own = () => deps.controlledFields({ projectId, issueTypeId });
+  const roots = await deps.activeRootsForNode(Number(issueId));
+  if (roots.some(root => Number(root.rootIssueId) === Number(issueId))) return own();
+  const governing = roots
+    .filter(root => root.projectId != null && root.issueTypeId != null)
+    .sort((a, b) => Number(b.capturedAt ?? 0) - Number(a.capturedAt ?? 0))[0];
+  if (!governing) return own();
+  return deps.controlledFields({ projectId: Number(governing.projectId), issueTypeId: String(governing.issueTypeId) });
 }
 
 /** Field ids a set of nodes tracks between them: what a verification read must fetch. */

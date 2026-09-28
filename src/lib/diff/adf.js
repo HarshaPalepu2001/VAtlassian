@@ -1,4 +1,7 @@
 import { normaliseAdf } from '../content.js';
+import { canonical } from '../hash.js';
+import { flatten } from './blocks.js';
+import { describeStructure } from './structure.js';
 import { diffText, similarity, isWhitespaceOnly, coalesce, OP } from './text.js';
 
 /**
@@ -24,7 +27,23 @@ import { diffText, similarity, isWhitespaceOnly, coalesce, OP } from './text.js'
  *   7. MARK PASS, separately, so "this sentence became a link" is a formatting
  *      change and not a delete-plus-insert of identical text. This is what
  *      makes cosmetic suppression possible for rich text at all.
+ *   8. STRUCTURE PASS. Everything a block is besides its words and marks — its
+ *      own attrs, the containers it sits in and theirs, the inline nodes that
+ *      are not text — named in a sentence a reviewer can read.
+ *
+ * THE DIFF SEES EVERY BYTE THE HASH SEES. content.js hashes the whole
+ * normalised document, so a panel turned from warning to info, a checkbox
+ * ticked or a checklist item turned into a plain sentence is drift. This file
+ * used to compare a block by its type, text and mark NAMES only, so each of
+ * those compared EQUAL or rendered with nothing to say what had changed — and a
+ * field whose blocks all compared equal was reported unchanged, which the
+ * restore planner skips. A block is now equal only when its normalised bytes
+ * AND its container chain are, and diffAdf() refuses to call two documents the
+ * same when their bytes are not.
  */
+
+// The block layer lives in blocks.js; re-exported so callers keep one import.
+export { flatten, inlineText, markSignature } from './blocks.js';
 
 export const BLOCK_OP = {
   EQUAL: 'equal',
@@ -33,193 +52,21 @@ export const BLOCK_OP = {
   MODIFIED: 'modified',
   MOVE: 'move',
   /** Same text, different formatting. Never queues a review on its own. */
-  MARK_ONLY: 'markOnly'
+  MARK_ONLY: 'markOnly',
+  /**
+   * Same text, different structure: a type, an attr, or the containers around
+   * it. `structureChange` says what, one sentence per difference. Material —
+   * a checkbox ticked or a warning downgraded to info changes what was agreed.
+   */
+  STRUCTURE: 'structure'
 };
-
-/**
- * Blocks are the unit a person edits. Anything not listed is descended into
- * rather than treated as a block, so a document using a node type that did not
- * exist when this was written still diffs its text instead of rendering as one
- * opaque lump.
- */
-const BLOCK_TYPES = new Set([
-  'paragraph', 'heading', 'blockquote', 'codeBlock', 'rule', 'panel',
-  'listItem', 'taskItem', 'decisionItem', 'mediaSingle', 'mediaGroup',
-  'tableRow', 'expand', 'nestedExpand'
-]);
-
-/**
- * What separates two cells in a row's flat text.
- *
- * The row's `text` exists so that the LCS, the similarity pairing and the
- * whitespace check can treat a row like any other block. The cells are carried
- * alongside it and are what the panel actually draws, so this only has to be
- * something a person would not type inside a cell.
- */
-const CELL_SEPARATOR = ' | ';
 
 /** Similarity above which a delete/insert pair is really one modified block. */
 export const PAIR_THRESHOLD = 0.5;
 
-/**
- * Flatten an ADF document into an ordered list of blocks.
- *
- * Each block carries its plain text, its mark signature and a path, so the
- * renderer can point at the exact node and the differ can compare like with
- * like. Nested structures (a list inside a panel inside a blockquote) flatten
- * to their leaf blocks: a person editing a bullet expects the bullet to be the
- * thing that changed, not the panel three levels up.
- */
-export function flatten(doc) {
-  const blocks = [];
-  if (doc == null) return blocks;
-  if (typeof doc === 'string') {
-    return [{ type: 'paragraph', text: doc, marks: [], path: [0], node: null }];
-  }
-
-  const walk = (node, path, ancestry) => {
-    if (!node || typeof node !== 'object') return;
-    if (Array.isArray(node)) {
-      node.forEach((child, i) => walk(child, [...path, i], ancestry));
-      return;
-    }
-
-    // A TABLE ROW IS THE BLOCK, AND IT KEEPS ITS CELLS.
-    //
-    // Every cell holds a paragraph, so the ordinary container rule would
-    // descend past the row and emit one block per cell. A table added after
-    // approval then rendered as a column of green lines — "Planet",
-    // "Diameter (km)", "Type", "Jupiter", … — which is every value the table
-    // contains and none of the structure that makes them mean anything.
-    //
-    // Stopping at the row keeps one edited cell as one changed row, and lets
-    // the panel put the rows back together as a table.
-    if (node.type === 'tableRow') {
-      blocks.push(tableRow(node, path, ancestry));
-      return;
-    }
-
-    const isBlock = BLOCK_TYPES.has(node.type);
-    // DEEP, not shallow. A node whose only descendants are inline content has
-    // no block inside it to descend to, so it IS the block — including one of a
-    // type this file has never heard of. A shallow check drops such a node's
-    // text entirely, which is the failure that matters: a reviewer seeing LESS
-    // than the record contains is far worse than one seeing an odd wrapper.
-    const container = hasBlockDescendant(node);
-
-    // A blockquote whose children are paragraphs is a container, not a block.
-    // Emitting both would double-count its text in every similarity score.
-    if ((isBlock || node.type !== 'doc') && !container) {
-      blocks.push({
-        type: node.type,
-        text: inlineText(node),
-        marks: markSignature(node),
-        attrs: node.attrs ?? null,
-        path,
-        ancestry: [...ancestry],
-        node
-      });
-      return;
-    }
-
-    walk(node.content, [...path, 'content'], isBlock ? [...ancestry, node.type] : ancestry);
-  };
-
-  walk(normaliseAdf(doc), [], []);
-  return blocks;
-}
-
-/**
- * One row, with its cells kept separate.
- *
- * `tableId` is the path of the table the row sits in, so consecutive rows of
- * one table can be grouped back into one rendered table and two adjacent
- * tables are never merged into one.
- */
-function tableRow(node, path, ancestry) {
-  const cells = (node.content ?? []).map((c) => ({
-    text: inlineText(c),
-    header: c?.type === 'tableHeader',
-    colspan: Number(c?.attrs?.colspan ?? 1),
-    rowspan: Number(c?.attrs?.rowspan ?? 1)
-  }));
-  return {
-    type: 'tableRow',
-    text: cells.map((c) => c.text).join(CELL_SEPARATOR),
-    cells,
-    // The row's own path minus its index and the `content` key holding it.
-    tableId: path.slice(0, -2).join('.') || 'table',
-    marks: markSignature(node),
-    attrs: node.attrs ?? null,
-    path,
-    ancestry: [...ancestry],
-    node
-  };
-}
-
-/**
- * Does this node contain a recognised block anywhere beneath it?
- *
- * Deep rather than shallow because ADF nests freely — a panel containing a
- * bullet list containing paragraphs has no block among its immediate children,
- * and a shallow check would emit the whole panel as one block, burying which
- * bullet actually changed.
- */
-function hasBlockDescendant(node) {
-  if (!node || typeof node !== 'object') return false;
-  const content = node.content;
-  if (!Array.isArray(content)) return false;
-  for (const child of content) {
-    if (!child || typeof child !== 'object') continue;
-    if (BLOCK_TYPES.has(child.type)) return true;
-    if (hasBlockDescendant(child)) return true;
-  }
-  return false;
-}
-
-/** All text inside a node, with placeholders for things that are not text. */
-export function inlineText(node) {
-  const out = [];
-  const walk = (n) => {
-    if (!n || typeof n !== 'object') return;
-    if (Array.isArray(n)) { n.forEach(walk); return; }
-    if (n.type === 'text') { out.push(n.text ?? ''); return; }
-    if (n.type === 'mention') { out.push(n.attrs?.text ?? '@user'); return; }
-    if (n.type === 'emoji') { out.push(n.attrs?.text ?? n.attrs?.shortName ?? ''); return; }
-    if (n.type === 'inlineCard' || n.type === 'blockCard') { out.push(n.attrs?.url ?? '[link]'); return; }
-    if (n.type === 'hardBreak') { out.push('\n'); return; }
-    if (n.type === 'media') { out.push(`[attachment ${n.attrs?.id ?? ''}]`); return; }
-    walk(n.content);
-  };
-  walk(node.content ?? node);
-  return out.join('');
-}
-
-/**
- * A stable description of the formatting inside a block.
- *
- * Sorted and de-duplicated, so reordering `[bold, link]` to `[link, bold]` —
- * which Jira does freely — is not a change. Comparing these separately from the
- * text is what lets the differ say "same words, now bold" instead of reporting
- * the sentence as rewritten.
- */
-export function markSignature(node) {
-  const marks = new Set();
-  const walk = (n) => {
-    if (!n || typeof n !== 'object') return;
-    if (Array.isArray(n)) { n.forEach(walk); return; }
-    for (const m of n.marks ?? []) {
-      marks.add(m.type === 'link' ? `link:${m.attrs?.href ?? ''}` : m.type);
-    }
-    walk(n.content);
-  };
-  walk(node.content ?? node);
-  return [...marks].sort();
-}
-
-/** What two blocks are compared on for exact equality. */
+/** What two blocks are compared on for exact equality: their bytes and containers. */
 function signature(block) {
-  return `${block.type} ${block.text} ${block.marks.join(',')}`;
+  return block.sig;
 }
 
 /**
@@ -264,6 +111,16 @@ export function diffAdf(before, after) {
   flushGap();
 
   const withMoves = detectMoves(result);
+
+  // THE BACKSTOP. Every difference inside a block is caught above; one that
+  // lives only in a container with no text beneath it would still compare
+  // every block equal. Two documents whose hashed bytes differ are never
+  // reported as the same — "changed" with a vague note beats "unchanged".
+  if (withMoves.every((blk) => blk.op === BLOCK_OP.EQUAL)
+      && canonical(normaliseAdf(before)) !== canonical(normaliseAdf(after))) {
+    withMoves.push({ op: BLOCK_OP.STRUCTURE, structureChange: [{ kind: 'document', text: 'Document structure changed' }] });
+  }
+
   return {
     blocks: withMoves,
     semanticChange: computeSemanticChange(withMoves, a, b),
@@ -336,15 +193,7 @@ function pairGap(deletes, inserts) {
   if (deletes.length === 1 && inserts.length === 1) {
     const [del] = deletes;
     const [ins] = inserts;
-    if (del.text === ins.text) {
-      return [{
-        op: BLOCK_OP.MARK_ONLY,
-        before: del,
-        after: ins,
-        markChange: { from: del.marks, to: ins.marks }
-      }];
-    }
-    return [modified(del, ins)];
+    return [del.text === ins.text ? sameText(del, ins) : modified(del, ins)];
   }
 
   for (const del of deletes) {
@@ -364,20 +213,7 @@ function pairGap(deletes, inserts) {
     const ins = inserts[best];
     takenInserts.add(best);
 
-    // Identical text, different marks. Reported as its own op so that
-    // materiality can demote it to COSMETIC instead of paging a reviewer
-    // because somebody bolded a word.
-    if (del.text === ins.text) {
-      out.push({
-        op: BLOCK_OP.MARK_ONLY,
-        before: del,
-        after: ins,
-        markChange: { from: del.marks, to: ins.marks }
-      });
-      continue;
-    }
-
-    out.push(modified(del, ins));
+    out.push(del.text === ins.text ? sameText(del, ins) : modified(del, ins));
   }
 
   inserts.forEach((ins, idx) => {
@@ -396,8 +232,35 @@ function modified(del, ins) {
     ops: coalesce(diffText(del.text, ins.text)),
     markChange: sameMarks(del.marks, ins.marks) ? null : { from: del.marks, to: ins.marks }
   };
+  const structure = describeStructure(del, ins);
+  if (structure.length) block.structureChange = structure;
   if (del.cells && ins.cells) block.cells = diffCells(del.cells, ins.cells);
   return block;
+}
+
+/**
+ * Two blocks with the same words that are not the same bytes.
+ *
+ * Marks alone is formatting — its own op, so materiality can demote it to
+ * COSMETIC instead of paging a reviewer because somebody bolded a word.
+ * Anything else is structure, and says what. There is no third outcome: a pair
+ * that differs in a way nothing here can name is still reported, as structure,
+ * because the only alternative is rendering a changed block with nothing to
+ * say about it.
+ */
+function sameText(del, ins) {
+  const structure = describeStructure(del, ins);
+  const markChange = sameMarks(del.marks, ins.marks) ? null : { from: del.marks, to: ins.marks };
+  if (structure.length === 0 && markChange) {
+    return { op: BLOCK_OP.MARK_ONLY, before: del, after: ins, markChange };
+  }
+  return {
+    op: BLOCK_OP.STRUCTURE,
+    before: del,
+    after: ins,
+    markChange,
+    structureChange: structure.length ? structure : [{ kind: 'other', text: 'Structure changed' }]
+  };
 }
 
 /**
@@ -439,6 +302,7 @@ function diffCells(before, after) {
 function sameMarks(a, b) {
   return a.length === b.length && a.every((m, i) => m === b[i]);
 }
+
 
 /**
  * A block deleted here and inserted there, with identical content, is a MOVE.
@@ -494,6 +358,12 @@ function detectMoves(blocks) {
  * overrides this.
  */
 function computeSemanticChange(blocks, aBlocks, bBlocks) {
+  // Structure is meaning. The words did not move, but a ticked box, a lost
+  // checkbox or a warning downgraded to info changes what a reader is told —
+  // and the whitespace test below, which compares text alone, would call it
+  // nothing at all.
+  if (blocks.some((b) => b.op === BLOCK_OP.STRUCTURE || (b.structureChange?.length ?? 0) > 0)) return true;
+
   const changed = blocks.some((b) =>
     b.op === BLOCK_OP.INSERT || b.op === BLOCK_OP.DELETE || b.op === BLOCK_OP.MODIFIED
   );
@@ -514,6 +384,7 @@ function computeMagnitude(blocks) {
     total += Math.max(beforeLen, afterLen);
     if (b.op === BLOCK_OP.INSERT) changed += afterLen;
     else if (b.op === BLOCK_OP.DELETE) changed += beforeLen;
+    else if (b.op === BLOCK_OP.STRUCTURE) changed += Math.max(beforeLen, afterLen);
     else if (b.op === BLOCK_OP.MODIFIED) {
       for (const op of b.ops ?? []) if (op.op !== OP.EQUAL) changed += op.text.length;
     }
@@ -526,13 +397,14 @@ function computeMagnitude(blocks) {
  * the AI payload.
  */
 export function describeAdfDiff(result) {
-  const counts = { added: 0, removed: 0, edited: 0, moved: 0, reformatted: 0 };
+  const counts = { added: 0, removed: 0, edited: 0, moved: 0, reformatted: 0, restructured: 0 };
   for (const b of result.blocks) {
     if (b.op === BLOCK_OP.INSERT) counts.added++;
     else if (b.op === BLOCK_OP.DELETE) counts.removed++;
     else if (b.op === BLOCK_OP.MODIFIED) counts.edited++;
     else if (b.op === BLOCK_OP.MOVE) counts.moved++;
     else if (b.op === BLOCK_OP.MARK_ONLY) counts.reformatted++;
+    else if (b.op === BLOCK_OP.STRUCTURE) counts.restructured++;
   }
 
   const parts = [];
@@ -541,5 +413,6 @@ export function describeAdfDiff(result) {
   if (counts.removed) parts.push(`${counts.removed} removed`);
   if (counts.moved) parts.push(`${counts.moved} moved`);
   if (counts.reformatted) parts.push(`${counts.reformatted} reformatted`);
+  if (counts.restructured) parts.push(`${counts.restructured} restructured`);
   return parts.length > 0 ? parts.join(', ') : 'no visible change';
 }

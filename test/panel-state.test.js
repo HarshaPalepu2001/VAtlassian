@@ -415,7 +415,8 @@ test('evidence returns the retained-value record, live diff fields, and tree rej
   assert.ok(evidence.record, 'the retained-value record is part of evidence for every viewer');
   assert.ok(Array.isArray(evidence.drift.fields));
   assert.ok(evidence.drift.fields.some(field => field.fieldId === 'summary'));
-  assert.deepEqual(evidence.rejection, { deleteIssueKeys: [], recreateCount: 0 });
+  assert.deepEqual(evidence.rejection, { deleteIssueKeys: [], recreateCount: 0,
+    attachments: { deleteFiles: [], restoreFiles: [], unrestorableFiles: [], vaultChecked: true } });
   assert.deepEqual(evidence.restoreHistory, []);
 });
 

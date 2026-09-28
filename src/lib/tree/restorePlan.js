@@ -70,6 +70,13 @@ export function planTreeRestore({ baselineTree, currentTree, controlledFields, f
   const linkFieldIdsOf = node => new Set((fieldsFor(node) ?? [])
     .filter(field => field.field_kind === FIELD_KIND.LINKS || field.field_id === 'issuelinks')
     .map(field => String(field.field_id)));
+  // Files are not a field write either: Jira accepts no attachment list on an
+  // edit. They are put back by re-uploading from the vault and deleting what
+  // was added (../restore/attachments.js), as their own step.
+  const attachmentFieldIdsOf = node => new Set((fieldsFor(node) ?? [])
+    .filter(field => field.field_kind === FIELD_KIND.ATTACHMENTS || field.field_id === 'attachment')
+    .map(field => String(field.field_id)));
+  const currentValuesOf = id => currentTree?.values?.[id] ?? {};
 
   const removed = baselineNodes.filter(node => removedIds.has(idOf(node))).sort(compareByDepthThenId(baselineById));
   const moved = baselineNodes.filter(node => movedIds.has(idOf(node))).sort(compareByDepthThenId(baselineById));
@@ -88,11 +95,28 @@ export function planTreeRestore({ baselineTree, currentTree, controlledFields, f
       // reasoning; the filter is applied to both branches because a recreated
       // node takes the whole field set rather than a diff.
       const linkFieldIds = linkFieldIdsOf(node);
+      const attachmentFieldIds = attachmentFieldIdsOf(node);
       const fieldIds = removedIds.has(idOf(node))
         ? contentFieldIds(fieldsFor(node) ?? []).sort()
         : (changedById.get(idOf(node)) ?? []).filter(fieldId => !isStructuralField(fieldId));
-      const regularFieldIds = fieldIds.filter(fieldId => !linkFieldIds.has(fieldId));
+      const regularFieldIds = fieldIds.filter(fieldId => !linkFieldIds.has(fieldId) && !attachmentFieldIds.has(fieldId));
       const steps = [];
+      const nodeAttachmentIds = fieldIds.filter(fieldId => attachmentFieldIds.has(fieldId));
+      if (nodeAttachmentIds.length > 1) throw new FailClosed('MULTI_ATTACHMENT_FIELD_UNSUPPORTED');
+      if (nodeAttachmentIds.length === 1) {
+        const fieldId = nodeAttachmentIds[0];
+        const target = retainedFields(baselineTree, idOf(node), [fieldId])[fieldId];
+        // FILES BEFORE FIELDS: rich text that shows a file can only be written
+        // while Jira has it. A recreated work item starts with no files: only
+        // one that had some needs the step, and its files come from the
+        // ORIGINAL item's vault page.
+        if (!removedIds.has(idOf(node)) || (Array.isArray(target) && target.length > 0)) {
+          steps.push(action('RESTORE_ATTACHMENTS', idOf(node), parentOf(node), [fieldId], {
+            attachments: target,
+            current: removedIds.has(idOf(node)) ? [] : (currentValuesOf(idOf(node))[fieldId] ?? [])
+          }));
+        }
+      }
       if (regularFieldIds.length > 0) {
         steps.push(action('RESTORE_FIELDS', idOf(node), parentOf(node), regularFieldIds, {
           fields: retainedFields(baselineTree, idOf(node), regularFieldIds)
@@ -138,10 +162,24 @@ export function planTreeRestore({ baselineTree, currentTree, controlledFields, f
     return { logicalNodeId: step.logicalNodeId, issueKey: node?.issueKey ?? null };
   });
 
+  // Files a rejection deletes (added since approval) and re-uploads from the
+  // vault (removed since), named per work item before anyone signs.
+  const attachments = { willDelete: [], willRestore: [] };
+  for (const step of fieldSteps.filter(entry => entry.kind === 'RESTORE_ATTACHMENTS')) {
+    const issueKey = (currentById.get(step.logicalNodeId) ?? baselineById.get(step.logicalNodeId))?.issueKey ?? null;
+    const target = new Set((step.attachments ?? []).map(a => String(a?.id)));
+    const current = new Set((step.current ?? []).map(a => String(a?.id)));
+    const file = a => ({ logicalNodeId: step.logicalNodeId, issueKey, id: String(a?.id ?? ''), filename: a?.filename ?? '' });
+    attachments.willDelete.push(...(step.current ?? []).filter(a => !target.has(String(a?.id))).map(file));
+    attachments.willRestore.push(...(step.attachments ?? []).filter(a => !current.has(String(a?.id))).map(file));
+    delete step.current;
+  }
+
   return {
     steps: [...createSteps, ...moveSteps, ...fieldSteps, ...deleteSteps],
     preflight: {
       willDelete,
+      attachments,
       // Recreation is not destruction, but it is not invisible either: the
       // recreated work item gets a NEW Jira key, and anything outside the tree
       // that referenced the old one will not follow it.

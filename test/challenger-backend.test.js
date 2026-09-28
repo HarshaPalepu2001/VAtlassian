@@ -82,6 +82,8 @@ const hooks = registerHooks({
           export const newId = () => Buffer.from('fixed_16_byte_id');
           export const throwing = async (sql, params) => {
             globalThis.vaChallenger.storeQueries.push({ sql, params });
+            // No approved tree covers these items (tree/nodeFields.js fieldsForItem).
+            if (/FROM va_baseline_node/.test(sql)) return [];
             return globalThis.vaChallenger.storeResultData || { affectedRows: 1 };
           };
           export const tryAppend = async (event) => {

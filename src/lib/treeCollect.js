@@ -126,7 +126,7 @@ export async function collectTree({ rootIssueId, rootIssueKey, detectedVia = DET
   let currentTree, fieldsFor;
   try {
     ({ tree: currentTree, fieldsFor } = await readTreeWithNodeFields({ readStableTree,
-      readTree: reader.read.bind(reader), rootIssueKey, rootFields: cFields, loadFields: controlledFields }));
+      readTree: reader.read.bind(reader), rootIssueKey, rootFields: cFields }));
   } catch (e) {
     return { outcome: 'ERROR', error: e.message };
   }

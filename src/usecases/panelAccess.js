@@ -15,10 +15,11 @@ import { logicalNodeId } from '../lib/tree/model.js';
 import { diffTree } from '../lib/tree/diff.js';
 import { treeReviewDiff } from '../lib/tree/reviewDiff.js';
 import { groupReview } from '../lib/tree/groupedReview.js';
-import { readTreeWithNodeFields } from '../lib/tree/nodeFields.js';
+import { readTreeWithNodeFields, fieldsForItem } from '../lib/tree/nodeFields.js';
 import { withChildBaselines } from '../lib/tree/childBaselines.js';
 import { readBaselineTree, activeRootsForNode } from '../db/baselineTreeStore.js';
 import { maxMateriality } from '../lib/materiality.js';
+import { canonicaliseIssue } from '../lib/attachmentIdentity.js';
 import { fail, actorFrom, serialise, respond } from './access.js';
 
 export { fail, actorFrom, serialise, respond };
@@ -30,7 +31,8 @@ export async function readableIssue({ payload = {}, context }) {
   if (!response.ok) fail('ISSUE_ACCESS_DENIED');
   const issue = await response.json();
   if (!issue.id || !issue.fields?.project?.id || !issue.fields?.issuetype?.id) fail('ISSUE_UNREADABLE');
-  return issue;
+  // A file a rejection re-uploaded reads as the approved original it stands for.
+  return canonicaliseIssue(issue);
 }
 export async function snapshot({ issue, actor, requireAuthority = false, expectedEvidenceHash, includeChangelog = true,
   transition = null, authorityPolicy = null }) {
@@ -40,7 +42,8 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
   const issueTypeId = String(issue.fields.issuetype.id);
   const fromStatusId = String(issue.fields.status?.id ?? '');
   const [declared, config, baseline, review, edge, editResponse] = await Promise.all([
-    controlledFields({ projectId, issueTypeId }), projectConfig(projectId), activeBaseline(issueId),
+    fieldsForItem({ issueId, projectId, issueTypeId }, { activeRootsForNode, controlledFields }),
+    projectConfig(projectId), activeBaseline(issueId),
     getReview(issueId), gateActiveOutOf({ projectId, issueTypeId, fromStatusId }),
     api.asUser().requestJira(route`/rest/api/3/issue/${issue.key}/editmeta`)
   ]);
@@ -109,9 +112,9 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
   })();
 
   let tree = null, currentTree = null, baselineTree = null, treeDiff = null, treeHash = null;
-  // Which fields each node tracks: its own project and issue type's
-  // (lib/tree/nodeFields.js). Capture, the validator's signature check and
-  // this evidence hash must all agree on it, or no signature would match.
+  // Which fields each node tracks: the root's (lib/tree/nodeFields.js).
+  // Capture, the validator's signature check and this evidence hash must all
+  // agree on it, or no signature would match.
   let fieldsFor = () => fields;
   const useTree = gate?.capture_baseline || baseline?.tree_hash;
   if (useTree) {
@@ -119,8 +122,7 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
       readStableTree,
       readTree: createTreeReader({ api, route }).read,
       rootIssueKey: issue.key,
-      rootFields: fields,
-      loadFields: controlledFields
+      rootFields: fields
     });
     fieldsFor = stable.fieldsFor;
     tree = stable.tree;

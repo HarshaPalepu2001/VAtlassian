@@ -1,11 +1,15 @@
 import api, { route } from '@forge/api';
 import {
-  getVaultSite, insertVaultSite, getVaultSpace, insertVaultSpace, setVaultProjectPage, markPermissionLocked
+  getVaultSite, insertVaultSite, getVaultSpace, insertVaultSpace, setVaultProjectPage, markPermissionLocked,
+  markAppDeleteGranted
 } from '../db/vaultStore.js';
 import {
   SITE_VAULT_KEY, SITE_VAULT_NAME, appAccountId, createSpace, findPageByTitle, createProjectPage
 } from './vaultConfluence.js';
-import { getProjectPermissionScheme, attachmentDeleteGrantIds, removeAttachmentDeleteGrants, getProjectsUsingPermissionScheme } from './vaultPermissions.js';
+import {
+  getProjectPermissionScheme, attachmentDeleteGrantIds, removeAttachmentDeleteGrants, getProjectsUsingPermissionScheme,
+  appJiraAccountId, hasAppDeleteGrant, grantAppAttachmentDelete
+} from './vaultPermissions.js';
 import { tryAppend } from '../db/store.js';
 import { EVENT } from './ledger.js';
 
@@ -76,9 +80,23 @@ export async function ensureVaultSpace(projectId, deps = {}) {
   return { spaceId: site.space_id, spaceKey: site.space_key, projectPageId };
 }
 
+/**
+ * Removes every attachment-delete grant on the project's scheme except the
+ * app's own, which it makes sure exists: a rejection deletes files added after
+ * approval, and on a locked project nothing else may. The app's grant is added
+ * FIRST, so there is no moment at which the lockdown has removed it.
+ *
+ * A PROJECT "LOCKED" BEFORE 2026-09-24 WAS NOT. The scheme used to be read
+ * without `expand=permissions`, and Jira returns no grants without it, so the
+ * lockdown recorded the project as locked having removed nothing. Such a
+ * project (permission_locked_at set, app_delete_granted_at not) is finished
+ * here: the app's grant is added and the other delete grants removed, audited
+ * as a repair. The hourly backfill picks every one of them up.
+ */
 export async function lockAttachmentDeletion(projectId, deps = {}) {
   const d = {
     getVaultSpace, getProjectPermissionScheme, attachmentDeleteGrantIds, removeAttachmentDeleteGrants, markPermissionLocked, getProjectsUsingPermissionScheme,
+    appJiraAccountId, hasAppDeleteGrant, grantAppAttachmentDelete, markAppDeleteGranted,
     tryAppend, now: Date.now, actorAccountId: 'system',
     ...deps
   };
@@ -86,14 +104,33 @@ export async function lockAttachmentDeletion(projectId, deps = {}) {
   if (!space) {
     throw new Error(`Cannot lock permissions: vault space not provisioned for project ${projectId}`);
   }
+  const locked = space.permission_locked_at != null;
+  const granted = space.app_delete_granted_at != null;
   // Already done. The hourly backfill re-runs provisioning, and finding the
   // other projects on a shared scheme walks every project on the site.
-  if (space.permission_locked_at != null) {
+  if (locked && granted) {
     return { alreadyLocked: true, schemeId: space.permission_scheme_id ?? null, grantsRemoved: 0, otherProjectKeys: [] };
   }
 
   const scheme = await d.getProjectPermissionScheme(projectId);
-  const grantIds = d.attachmentDeleteGrantIds(scheme);
+  const appAccount = await d.appJiraAccountId();
+  let appGrantAdded = false;
+  if (!d.hasAppDeleteGrant(scheme, appAccount)) {
+    try {
+      await d.grantAppAttachmentDelete({ schemeId: scheme.id, accountId: appAccount });
+      appGrantAdded = true;
+    } catch (error) {
+      await d.tryAppend({ actorAccountId: d.actorAccountId, eventType: EVENT.ATTACHMENT_DELETE_GRANT_FAILED,
+        payload: { projectId, schemeId: scheme.id, error: String(error?.message ?? error) } });
+      throw error;
+    }
+  }
+  await d.markAppDeleteGranted({ projectId, now: d.now() });
+  if (appGrantAdded) {
+    await d.tryAppend({ actorAccountId: d.actorAccountId, eventType: EVENT.ATTACHMENT_DELETE_GRANTED_TO_APP,
+      payload: { projectId, schemeId: scheme.id, schemeName: scheme.name, appAccountId: appAccount } });
+  }
+  const grantIds = d.attachmentDeleteGrantIds(scheme, { keepAccountId: appAccount });
   
   let otherProjectKeys = [];
   if (grantIds.length > 0) {
@@ -101,11 +138,13 @@ export async function lockAttachmentDeletion(projectId, deps = {}) {
     otherProjectKeys = await d.getProjectsUsingPermissionScheme(scheme.id, projectId);
   }
   
-  await d.markPermissionLocked({ projectId, permissionSchemeId: String(scheme.id), now: d.now() });
+  if (!locked) await d.markPermissionLocked({ projectId, permissionSchemeId: String(scheme.id), now: d.now() });
 
   await d.tryAppend({ actorAccountId: d.actorAccountId, eventType: EVENT.ATTACHMENT_DELETE_LOCKED,
-    payload: { projectId, schemeId: scheme.id, schemeName: scheme.name, grantsRemoved: grantIds.length, otherProjectKeys } });
-  return { schemeId: scheme.id, grantsRemoved: grantIds.length, otherProjectKeys };
+    payload: { projectId, schemeId: scheme.id, schemeName: scheme.name, grantsRemoved: grantIds.length, otherProjectKeys,
+      appKeepsDelete: true, ...(locked ? { repaired: true } : {}) } });
+  return { schemeId: scheme.id, grantsRemoved: grantIds.length, otherProjectKeys, appGrantAdded,
+    ...(locked ? { alreadyLocked: true, repaired: true } : {}) };
 }
 
 /** Never throws — vaulting is defense-in-depth and must not block the caller. */

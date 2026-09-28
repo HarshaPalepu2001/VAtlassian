@@ -41,7 +41,8 @@ function failure(error) {
     code: error?.code ?? null,
     reason: error?.reason ?? null
   });
-  return { success: false, reason: error.reason ?? 'SERVICE_UNAVAILABLE', error: DENY[error.reason] ?? DENY.SERVICE_UNAVAILABLE };
+  return { success: false, reason: error.reason ?? 'SERVICE_UNAVAILABLE',
+    error: error.userMessage ?? DENY[error.reason] ?? DENY.SERVICE_UNAVAILABLE };
 }
 function note(payload) {
   if (payload.note == null) return null;

@@ -440,7 +440,7 @@ test('CHALLENGE 5.1: restoreStateLabel produces accurate human-readable text for
   assert.equal(restoreStateLabel('QUEUED'), 'Restoration in progress');
 });
 
-test('CHALLENGE 5.2: RestoreStatus renders danger badges and retry buttons for QUEUING_FAILED and ERROR', async () => {
+test('CHALLENGE 5.2: RestoreStatus shows the latest restore with a danger badge and one Retry restore', async () => {
   let retriedId = null;
   setup(async (key, payload) => {
     if (key === 'restore:getState') {
@@ -465,21 +465,16 @@ test('CHALLENGE 5.2: RestoreStatus renders danger badges and retry buttons for Q
   await flush();
 
   assert.match(text(), /Queuing failed/);
-  assert.match(text(), /Restore error/);
-  assert.match(text(), /Restored and verified/);
+  // Older restores belong to the Baseline record's log, not the panel.
+  assert.doesNotMatch(text(), /Restore error/);
+  assert.doesNotMatch(text(), /Restored and verified/);
 
-  // Check badges tone
-  const badges = [...container.querySelectorAll('.va-badge')];
-  const qfBadge = badges.find(b => b.textContent.includes('Queuing failed'));
+  const qfBadge = [...container.querySelectorAll('.va-badge')].find(b => b.textContent.includes('Queuing failed'));
   assert.ok(qfBadge?.className.includes('danger'), 'QUEUING_FAILED badge must have danger tone');
-  const errBadge = badges.find(b => b.textContent.includes('Restore error'));
-  assert.ok(errBadge?.className.includes('danger'), 'ERROR badge must have danger tone');
 
-  // Check retry buttons
   const retryButtons = [...container.querySelectorAll('button')].filter(b => b.textContent.includes('Retry restore'));
-  assert.equal(retryButtons.length, 2, 'Must render Retry restore buttons for QUEUING_FAILED and ERROR, but NOT for COMPLETE');
+  assert.equal(retryButtons.length, 1, 'only the latest restore can be retried from the panel');
 
-  // Click retry on first button
   await act(() => retryButtons[0].click());
   await flush();
   assert.equal(retriedId, 'res-qf', 'Retry restore should invoke restore:retry with res-qf');

@@ -50,28 +50,32 @@ test('a change to a field only the child tracks is found with per-node scope', (
   assert.deepEqual(changes.map(c => [c.kind, c.fields]), [['FIELD_CHANGED', ['customfield_9']]]);
 });
 
-test('readTreeWithNodeFields re-reads once with the union when a child needs another field', async () => {
+// ─── Every node of a tree tracks the ROOT's fields ──────────────────────────
+//
+// Decided 2026-09-25, replacing the per-issue-type rule of the 24th: the
+// approval being made is the root's, so the root's Controlled Fields are what
+// every node it covers is held to. A Task under an Epic tracks the Epic's
+// fields — attachments included — whether or not anyone configured Task.
+
+test('a child of another issue type is read and tracked with the root\'s fields', async () => {
   const reads = [];
-  const loaded = [];
   const tree = { nodes: [node('1', 'S', null, { summary: 'r', customfield_1: 'a' }), node('2', 'X', '1', { summary: 'c' })] };
-  const extra = [F('summary'), F('customfield_9')];
   const result = await readTreeWithNodeFields({
     readStableTree: async ({ fieldIds }) => { reads.push([...fieldIds].sort()); return { tree }; },
-    readTree: null, rootIssueKey: 'K-1', rootFields: story,
-    loadFields: async ({ issueTypeId }) => { loaded.push(issueTypeId); return issueTypeId === 'S' ? story : extra; }
+    readTree: null, rootIssueKey: 'K-1', rootFields: story
   });
-  assert.equal(reads.length, 2);
-  assert.ok(reads[1].includes('customfield_9'));
-  assert.deepEqual(loaded, ['X'], 'the root scope is never looked up again');
-  assert.deepEqual(result.fieldsFor(tree.nodes[1]).map(f => f.field_id), ['summary', 'customfield_9']);
-  assert.deepEqual(result.fieldsFor({ projectId: 1, issueTypeId: 'S' }), story, 'planned nodes resolve too');
+  assert.equal(reads.length, 1, 'one read: every node needs exactly the root\'s fields');
+  assert.ok(reads[0].includes('customfield_1'));
+  assert.deepEqual(result.fieldsFor(tree.nodes[1]), story);
+  assert.deepEqual(result.fieldsFor({ projectId: 9, issueTypeId: 'Z' }), story, 'planned nodes resolve too');
   assert.equal(scopeKey(1, 'S'), '1:S');
 });
 
-test('readTreeWithNodeFields reads once when every node shares the root\'s scope', async () => {
-  let reads = 0;
-  const tree = { nodes: [node('1', 'S', null, { summary: 'r' }), node('2', 'S', '1', { summary: 'c' })] };
-  await readTreeWithNodeFields({ readStableTree: async () => { reads += 1; return { tree }; },
-    readTree: null, rootIssueKey: 'K-1', rootFields: story, loadFields: async () => assert.fail('no lookup') });
-  assert.equal(reads, 1);
+test('a child field the root does not track is not a child change', () => {
+  const rootOnly = () => story;
+  const base = planTreeCapture({ rootIssueId: '1', nodes: [nodes[0], node('2', 'T', '1', { summary: 'c', customfield_9: 'a' })],
+    controlledFields: story, fieldsFor: rootOnly });
+  const now = planTreeCapture({ rootIssueId: '1', nodes: [nodes[0], node('2', 'T', '1', { summary: 'c', customfield_9: 'b' })],
+    controlledFields: story, fieldsFor: rootOnly });
+  assert.deepEqual(diffTree({ baselineTree: base, currentTree: now, controlledFields: story, scopeFor: rootOnly }).changes, []);
 });

@@ -273,7 +273,9 @@ const Edit = () => {
         if (opts.length === 0) {
           const reqRole = res.requiredRole || (res.transitions || []).find(t => t.requiredRole)?.requiredRole;
           const isNotEligible = res.blocker === 'NOT_ELIGIBLE_FOR_RULE' || (!res.blocker && (res.transitions || []).some(t => t.eligible === false));
-          if (res.blocker === 'GATE_NOT_ENFORCED') {
+          if (res.blocker === 'UNDECIDED_DRIFT' || res.drift?.blocked === true) {
+            blockerMsg = 'Transition blocked: this work item has unreviewed changes since its approved baseline. Review and approve or reject those changes from the VAtlassian issue panel or My approvals, then reopen this transition.';
+          } else if (res.blocker === 'GATE_NOT_ENFORCED') {
             blockerMsg = "The approval rule exists, but the VAtlassian validator is not attached to this transition in Jira. Ask a Jira administrator to re-attach it.";
           } else if (res.blocker === 'WRONG_FIELD_FOR_RULE') {
             blockerMsg = "This transition needs a biometric device check. Ask an administrator to put the 'Biometric Authentication' field on this transition screen.";
@@ -288,7 +290,17 @@ const Edit = () => {
 
         setBlocker(blockerMsg);
         setOptions(opts);
-        if (opts.length === 1) { setCtId(opts[0].ctId); setCapturesBaseline(opts[0].capturesBaseline === true); }
+        if (opts.length === 1) {
+          setCtId(opts[0].ctId);
+          setCapturesBaseline(opts[0].capturesBaseline === true);
+        } else {
+          setCtId(null);
+          setCapturesBaseline(false);
+          setAffirmed(false);
+          setCode('');
+          setToken('');
+          view.submit('');
+        }
         if (opts.length === 1 && !blockerMsg && !hash) {
           setStatus({
             kind: 'error',

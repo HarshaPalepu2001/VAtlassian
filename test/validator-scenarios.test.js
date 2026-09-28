@@ -16,7 +16,7 @@
  *      unspent, eligible signature over the current content.
  *   4. A project disabled in VAtlassian holds nothing for drift.
  */
-import { world, DRIFT, doc, WORKFLOW } from './helpers/validator-world.js';
+import { world, DRIFT, doc, WORKFLOW, TRACKED } from './helpers/validator-world.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { diffWorkflow, FINDING, SEVERITY } from '../src/lib/gateDrift.js';
@@ -167,7 +167,7 @@ test('S16 the refusal tells the person where to go', async () => {
   const w = await approvedItem();
   w.edit('T-1', { summary: 'edited' });
   const r = await w.transition('T-1', '41');
-  assert.match(r.errorMessage, /Approval & Baseline panel/);
+  assert.match(r.errorMessage, /VAtlassian panel/);
 });
 
 test('S17 a held move is recorded as a blocked transition in the audit trail', async () => {
@@ -1122,4 +1122,86 @@ test('S137 a linked issue is not a child: editing it holds nothing, whatever the
   await freeEverywhere(w, 'L-9');
   await freeEverywhere(w, 'P-1');
   assert.equal((await w.panel('P-1')).drift.childrenAwaiting, 0);
+});
+
+// ─── J. Attachments ─────────────────────────────────────────────────────────
+//
+// Files are a controlled field like any other: adding or removing one holds
+// the item and shows on the panel. A rejection re-uploads a removed file from
+// the vault under a NEW Jira id and records that it stands for the original
+// (va_attachment_alias); from then on the validator and the panel read it as
+// the approved file.
+
+const FILES_TRACKED = [...TRACKED, { field_id: 'attachment', field_kind: 'ATTACHMENTS', store_values: true, materiality: 'MAJOR' }];
+const attached = (id, filename, size = 100) => ({ id, filename, size, mimeType: 'application/pdf',
+  created: '2026-09-01T00:00:00.000+0000', author: { accountId: 'someone' } });
+
+async function withFiles() {
+  const w = world({ tracked: FILES_TRACKED });
+  await approvedItem({ w, fields: { attachment: [attached('100', 'spec.pdf')] } });
+  return w;
+}
+
+test('S140 a file added after approval holds the item, and the panel can decide it', async () => {
+  const w = await withFiles();
+  await freeEverywhere(w, 'T-1');
+  w.edit('T-1', { attachment: [attached('100', 'spec.pdf'), attached('101', 'late.txt', 3)] });
+  await heldEverywhere(w, 'T-1');
+  const { panel } = await agree(w, 'T-1');
+  assert.equal(panel.drift.count, 1);
+});
+
+test('S141 a file removed after approval holds the item', async () => {
+  const w = await withFiles();
+  w.edit('T-1', { attachment: [] });
+  await heldEverywhere(w, 'T-1');
+  await agree(w, 'T-1');
+});
+
+test('S142 a file swapped for another under the same name holds the item', async () => {
+  const w = await withFiles();
+  w.edit('T-1', { attachment: [attached('102', 'spec.pdf')] });
+  await heldEverywhere(w, 'T-1');
+});
+
+test('S143 a file a rejection restored under a new id, with its alias recorded, is the approved file', async () => {
+  const w = await withFiles();
+  w.edit('T-1', { attachment: [attached('900', 'spec.pdf')] });
+  await heldEverywhere(w, 'T-1');
+  w.attachmentAliases.push({ issue_id: Number(w.issue('T-1').id), attachment_id: '900', stands_for_id: '100' });
+  await freeEverywhere(w, 'T-1');
+  const { panel } = await agree(w, 'T-1');
+  assert.equal(panel.drift.count, 0);
+});
+
+test('S144 an alias for another work item\'s file does not make a file look approved here', async () => {
+  const w = await withFiles();
+  w.edit('T-1', { attachment: [attached('900', 'spec.pdf')] });
+  w.attachmentAliases.push({ issue_id: 424242, attachment_id: '900', stands_for_id: '100' });
+  await heldEverywhere(w, 'T-1');
+});
+
+test('S145 an unreadable alias table fails towards drift: a restored item is held, never cleared by a guess', async () => {
+  const w = await withFiles();
+  w.edit('T-1', { attachment: [attached('900', 'spec.pdf')] });
+  w.attachmentAliases.push({ issue_id: Number(w.issue('T-1').id), attachment_id: '900', stands_for_id: '100' });
+  w.faults.add('db:alias');
+  await heldEverywhere(w, 'T-1');
+});
+
+test('S146 a baseline captured before attachments were tracked is not drifted by tracking them', async () => {
+  const w = world();
+  await approvedItem({ w, fields: { attachment: [attached('100', 'spec.pdf')] } });
+  w.controlledFields.set('1:1', structuredClone(FILES_TRACKED));
+  w.edit('T-1', { attachment: [] });
+  await freeEverywhere(w, 'T-1');
+});
+
+test('S147 a child\'s file change holds the child, not its parent', async () => {
+  const { w } = await familyWorld({ subtaskTracked: [
+    { field_id: 'summary', field_kind: 'TEXT', store_values: true, materiality: 'MAJOR' },
+    { field_id: 'attachment', field_kind: 'ATTACHMENTS', store_values: true, materiality: 'MAJOR' }] });
+  w.edit('P-2', { attachment: [attached('555', 'child-added.png')] });
+  await heldEverywhere(w, 'P-2');
+  await freeEverywhere(w, 'P-1');
 });

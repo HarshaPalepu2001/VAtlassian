@@ -202,6 +202,31 @@ test('tracking an unreviewed field explicitly retains contents for baseline rest
  await select(0,'1');const track=button('Track and retain');assert.ok(track);await act(()=>track.click());await flush();assert.equal(payload.storeValues,true);
 });
 
+const searchable=()=>({...setup('Summary'),
+ excluded:[{fieldId:'environment_custom',fieldName:'Deployment environment'}],
+ available:[{fieldId:'attachment',fieldName:'Attachment'},{fieldId:'customfield_10015',fieldName:'Start date'},{fieldId:'priority',fieldName:'Priority'}]});
+const search=async value=>{await act(()=>typeInto(container.querySelector('input[type=search]'),value));await flush();};
+test('the field search finds any trackable field by name and tracks it with its contents retained',async()=>{
+ let payload;
+ await mount('Fields',(key,p)=>{if(key==='admin:trackField'){payload=p;return {success:true};}return searchable();});
+ await select(0,'1');await search('attach');
+ assert.match(text(),/Attachment/);assert.doesNotMatch(text(),/Start date|Priority|Deployment environment/);
+ await act(()=>button('Track and retain').click());await flush();
+ assert.deepEqual({fieldId:payload.fieldId,storeValues:payload.storeValues,issueTypeId:payload.issueTypeId},{fieldId:'attachment',storeValues:true,issueTypeId:'*'});
+});
+test('the field search matches field ids, and reaches deliberately excluded fields too',async()=>{
+ await mount('Fields',()=>searchable());await select(0,'1');
+ await search('customfield_10015');assert.match(text(),/Start date/);assert.doesNotMatch(text(),/Attachment/);
+ await search('deployment');assert.match(text(),/Deployment environment/);assert.match(text(),/Excluded/);assert.ok(button('Track and retain'));
+});
+test('a tracked field found by search says so instead of offering to track it again',async()=>{
+ await mount('Fields',()=>searchable());await select(0,'1');await search('summ');
+ assert.match(text(),/Summary/);assert.match(text(),/Tracked/);assert.equal(button('Track and retain'),undefined);
+});
+test('a search with no match says the field is not trackable here, and why that can be',async()=>{
+ await mount('Fields',()=>searchable());await select(0,'1');await search('comment');
+ assert.match(text(),/No trackable field matches/);
+});
 test('editing a transition saves its exact edge, revision and authentication settings',async()=>{
  const rule={ctId:'a'.repeat(32),revision:'rule-version',projectId:'1',issueTypeId:'2',transitionId:'100',fromStatusId:'*',toStatusId:'3',meaning:'Approved',requiredRole:'QA',requiredAssurance:'BIOMETRIC',captureBaseline:true,blockOnDrift:true,requireDecision:true};
  let update;

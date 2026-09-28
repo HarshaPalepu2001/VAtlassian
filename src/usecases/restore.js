@@ -14,11 +14,23 @@ const idBase64 = value => Buffer.isBuffer(value) ? value.toString('base64') : St
 export async function getState(args) { return respond(async () => {
   const prepared = await load(args);
   const rows = await restoresForIssue(prepared.issueId);
-  return { restores: rows.map(row => ({ ...row,
-    error: row.last_error ?? null,
-    progress: { totalSteps: Number(row.total_steps ?? 0), completedSteps: Number(row.completed_steps ?? 0),
-      remainingSteps: Math.max(0, Number(row.total_steps ?? 0) - Number(row.completed_steps ?? 0)) }
-  })) };
+  // Each restore was started by a reject decision; its signed name is who
+  // triggered it, as the baseline record shows it.
+  const approvals = new Map(await Promise.all([...new Set(rows.map(row => row.approval_id).filter(Boolean))]
+    .map(async id => [id, await approvalById(id).catch(() => null)])));
+  const at = value => value != null ? Number(value) : null;
+  return { restores: rows.map(row => {
+    const approval = approvals.get(row.approval_id);
+    return { ...row,
+      error: row.last_error ?? null,
+      progress: { totalSteps: Number(row.total_steps ?? 0), completedSteps: Number(row.completed_steps ?? 0),
+        remainingSteps: Math.max(0, Number(row.total_steps ?? 0) - Number(row.completed_steps ?? 0)) },
+      actorName: approval?.printed_name ?? approval?.actor_name ?? null,
+      startedAt: at(row.started_at),
+      finishedAt: at(row.finished_at),
+      baselineVersion: at(row.baseline_version)
+    };
+  }) };
 }); }
 export async function retry(args) { return respond(async () => {
   const prepared = await load(args);

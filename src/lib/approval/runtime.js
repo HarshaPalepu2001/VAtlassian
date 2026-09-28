@@ -6,23 +6,24 @@ import { baselinePolicy } from '../baselinePolicy.js';
 import { baselineDecisionMeaning } from './challenge.js';
 import { availableTransitions, exactAvailableTransition, applyTransition } from '../transitions.js';
 import { readStableTree } from '../tree/stableRead.js';
-import { readTreeWithNodeFields } from '../tree/nodeFields.js';
+import { readTreeWithNodeFields, fieldsForItem } from '../tree/nodeFields.js';
 import { planTreeCapture } from '../tree/capturePlan.js';
 import { createTreeReader } from '../tree/jira.js';
 import { baselineDrift } from '../liveDrift.js';
+import { linkDecisionsPending } from '../../db/linkPendingStore.js';
+import { canonicaliseIssue } from '../attachmentIdentity.js';
 
-export async function approvalContentHash({ issue, declared, modifiedFields = {}, activeBaseline, readTree,
-  loadFields = async () => [] }) {
+export async function approvalContentHash({ issue, declared, modifiedFields = {}, activeBaseline, readTree }) {
   const { fields } = scopeFromIssue({ declared, issueFields: issue.fields, editmetaFields: {} });
   if (!activeBaseline?.tree_hash) {
     return { fields, contentHash: project({ ...issue.fields, ...modifiedFields }, fields).contentHash };
   }
   if (typeof readTree !== 'function') throw new FailClosed('SERVICE_UNAVAILABLE');
   const rootIssueId = issue.issueId ?? issue.id;
-  // Each node over its own fields, as the panel's evidence and the capture
-  // compute it (lib/tree/nodeFields.js), or no signature would ever match.
+  // Every node over the root's fields, as the panel's evidence and the
+  // capture compute it (lib/tree/nodeFields.js), or no signature would match.
   const stable = await readTreeWithNodeFields({ readStableTree, readTree, rootIssueKey: issue.issueKey ?? issue.key,
-    rootFields: fields, loadFields });
+    rootFields: fields });
   const nodes = stable.tree.nodes.map(node => String(node.id) === String(rootIssueId)
     ? { ...node, fields: { ...issue.fields, ...node.fields, ...modifiedFields } }
     : node);
@@ -193,7 +194,7 @@ export function hidesControlledTransition(rules, available, { issueTypeId, fromS
 /** No diff/LLM or writes on the hot-path snapshot; fresh Jira content closes trigger lag. */
 export async function gateRuntime() {
   const { api, route, query, audit, eligible, approvals, config, baselines } = await shared();
-  const { rootNodeDigests } = await import('../../db/baselineTreeStore.js');
+  const { rootNodeDigests, activeRootsForNode } = await import('../../db/baselineTreeStore.js');
   const resolve = args => resolveEdge({
     gated: id => config.gatedTransition({ projectId: args.issue.projectId, issueTypeId: args.issue.issueTypeId,
       fromStatusId: args.fromStatusId, toStatusId: args.toStatusId, transitionId: id }),
@@ -238,7 +239,7 @@ export async function gateRuntime() {
       const response = await readAsUserOrApp(() => api.asUser().requestJira(issuePath),
         () => api.asApp().requestJira(issuePath)).catch(() => { throw new FailClosed('SERVICE_UNAVAILABLE'); });
       if (!response?.ok) throw new FailClosed('SERVICE_UNAVAILABLE');
-      const issue = describeIssue(await response.json());
+      const issue = describeIssue(await canonicaliseIssue(await response.json()));
       if (issue.statusId !== fromStatusId) throw new FailClosed('STATUS_CHANGED');
 
       // THE ITEM FIRST, THE EDGE SECOND. This validator is attached to every
@@ -248,7 +249,9 @@ export async function gateRuntime() {
       // thrown, and gate.js refuses on it only after the drift hold has run.
       const [items, declared, health, active] = await Promise.all([
         query('SELECT state, baseline_version FROM va_item_state WHERE issue_id = ?', [issue.issueId]),
-        config.controlledFields({ projectId: issue.projectId, issueTypeId: issue.issueTypeId }),
+        // A child of an approved tree is held to its root's fields, here as on
+        // every other path — or a file added to it would never hold anything.
+        fieldsForItem(issue, { activeRootsForNode, controlledFields: config.controlledFields }),
         config.projectConfig(issue.projectId),
         baselines.activeBaseline(issue.issueId)
       ]);
@@ -263,14 +266,16 @@ export async function gateRuntime() {
       // ago holds the item before any collector has seen it.
       const drift = await baselineDrift({ baseline: active, issueId: issue.issueId, issueFields: issue.fields,
         declared, readRootDigests: rootNodeDigests });
+      // Only a held link explains itself this way, and only then is it read.
+      const linkPending = drift.changed.includes('issuelinks')
+        && (await linkDecisionsPending(issue.issueId).catch(() => [])).length > 0;
 
       const edge = await resolve({ issue, fromStatusId, toStatusId, transitionId, approvalId, configuredTransitionId });
       // The approval content hash reads the whole tree for a tree baseline, so
       // it is computed only when a signature is actually being checked.
       const contentHash = async () => (await approvalContentHash({ issue, declared, modifiedFields, activeBaseline: active,
-        readTree: active?.tree_hash ? createTreeReader({ api, route }).read : null,
-        loadFields: config.controlledFields })).contentHash;
-      return { ...issue, ...edge, health, item, contentHash, driftCount: drift.changed.length };
+        readTree: active?.tree_hash ? createTreeReader({ api, route }).read : null })).contentHash;
+      return { ...issue, ...edge, health, item, contentHash, driftCount: drift.changed.length, linkPending };
     }
   };
 }

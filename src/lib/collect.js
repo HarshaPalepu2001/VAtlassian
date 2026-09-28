@@ -6,6 +6,8 @@ import { summarise } from './valuestore.js';
 import { normaliseField } from './content.js';
 import { controlledFields, projectConfig, reviewStatusIds } from '../db/configStore.js';
 import { scopeFromIssue } from './trackedFields.js';
+import { fieldsForItem } from './tree/nodeFields.js';
+import { activeRootsForNode } from '../db/baselineTreeStore.js';
 import { activeBaseline, readAllValues } from '../db/baselineStore.js';
 import { recordDrift, existingChangelogKeys } from '../db/driftStore.js';
 import { getReview, applyObservation, touch, refreshHeader } from '../db/itemStateStore.js';
@@ -16,6 +18,7 @@ import { EVENT } from './ledger.js';
 import { recordObservation } from '../db/observationStore.js';
 import { DETECTED_VIA } from './detectedVia.js';
 import { recordScopeMove } from './scopeMove.js';
+import { canonicaliseIssue } from './attachmentIdentity.js';
 export { DETECTED_VIA };
 export { discoverActiveRootsByAncestor, affectedTreeRoots, collectTree, collectAffectedTrees, ownFlatBaseline } from './treeCollect.js';
 
@@ -93,7 +96,9 @@ async function run({ issueId, issueKey, detectedVia, actorAccountId, eventId, ev
   // be expanded into "every field Jira has" — a full field-catalogue read on
   // every issue update, to produce a tracked set nobody asked for.
   const [declared, config, reviewStatuses, baseline] = await Promise.all([
-    controlledFields({ projectId, issueTypeId }),
+    // A child of an approved tree is measured over its root's fields — the
+    // ones its baseline was captured with (lib/tree/nodeFields.js).
+    fieldsForItem({ issueId, projectId, issueTypeId }, { activeRootsForNode, controlledFields }),
     projectConfig(projectId),
     reviewStatusIds(projectId),
     activeBaseline(issueId)
@@ -393,7 +398,7 @@ async function readIssue(issueKey) {
       if (res.status !== 404) console.error('collect: issue read failed', issueKey, res.status);
       return null;
     }
-    return await res.json();
+    return await canonicaliseIssue(await res.json());
   } catch (e) {
     console.error('collect: issue read threw', issueKey, e);
     return null;

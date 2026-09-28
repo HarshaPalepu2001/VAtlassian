@@ -50,9 +50,9 @@ export function transitionScopeLabel(transition: TransitionFacts, fromStatusName
   return `${from} ${ARROW} ${transitionDestination(transition)}`;
 }
 
-/** The primary decision button's label. */
+/** The primary decision button's label: "Approve to Done", the way Jira names a move. */
 export function transitionApproveLabel(transition: TransitionFacts): string {
-  return `Approve ${ARROW} ${transitionDestination(transition)}`;
+  return `Approve to ${transitionDestination(transition)}`;
 }
 
 /**

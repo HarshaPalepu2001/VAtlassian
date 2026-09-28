@@ -1,6 +1,7 @@
 import { route } from '@forge/api';
 import { project } from '../content.js';
 import { OUTCOME } from './executor.js';
+import { canonicaliseIssue } from '../attachmentIdentity.js';
 
 /**
  * Proving the restore worked.
@@ -41,7 +42,10 @@ export async function verifyRestore({ api, issueKey, controlledFields, baselineD
   try {
     const res = await api.asApp().requestJira(route`/rest/api/3/issue/${issueKey}?fields=*all`);
     if (!res.ok) throw new Error(`status ${res.status}`);
-    const body = await res.json();
+    // Read under canonical attachment ids: a file this restore re-uploaded is
+    // confirmed as the approved original only once its alias is recorded,
+    // which happens after its bytes matched the vault's hash.
+    const body = await canonicaliseIssue(await res.json());
     current = body.fields ?? {};
     currentStatusId = current.status?.id == null ? null : String(current.status.id);
   } catch (e) {

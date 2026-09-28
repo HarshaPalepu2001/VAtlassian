@@ -19,6 +19,9 @@ function baseOverrides(overrides = {}) {
     uploadAttachmentToPage: async () => ({ id: 'catt1' }),
     readIssueAttachments: async () => [{ id: 'a1', filename: 'x.png' }],
     downloadAttachment: async () => Buffer.from('bytes'),
+    identityRecords: async () => new Map(),
+    mediaIdOf: async () => null,
+    vaultedCopies: async () => new Map(),
     tryAppend: async () => {},
     now: () => 1000,
     ...overrides
@@ -110,4 +113,60 @@ test('an issue with no attachments still gets its page and completes', async () 
   const result = await runVaultWorker({ body: baseBody() }, baseOverrides({ readIssueAttachments: async () => [] }));
   assert.equal(result.state, 'COMPLETE');
   assert.equal(result.vaulted, 0);
+});
+
+test('a baseline that recorded its files vaults exactly those, not whatever is on the issue now', async () => {
+  const uploaded = [];
+  const recorded = [];
+  const overrides = baseOverrides({
+    // Added after approval, before this job ran: not part of what was signed.
+    readIssueAttachments: async () => [{ id: 'a1', filename: 'spec.pdf' }, { id: 'a9', filename: 'late.txt' }],
+    uploadAttachmentToPage: async ({ filename }) => { uploaded.push(filename); return { id: 'c-' + filename }; },
+    insertVaultAttachment: async (args) => recorded.push(args)
+  });
+  const result = await runVaultWorker({ body: { ...baseBody(), attachments: [{ id: 'a1', jiraId: 'a1', filename: 'spec.pdf' }] } }, overrides);
+  assert.deepEqual(result, { state: 'COMPLETE', vaulted: 1, skipped: 0, failed: 0 });
+  assert.deepEqual(uploaded, ['a1-spec.pdf']);
+  assert.deepEqual(recorded.map(r => r.jiraAttachmentId), ['a1']);
+});
+
+test('a recorded file gone from the issue is carried forward from its earlier vaulted copy', async () => {
+  const recorded = [];
+  const audits = [];
+  const overrides = baseOverrides({
+    readIssueAttachments: async () => [],
+    vaultedCopies: async ({ attachmentIds }) => new Map([[attachmentIds[0], { content_hash: 'h1', confluence_attachment_id: 'c-old' }]]),
+    insertVaultAttachment: async (args) => recorded.push(args),
+    tryAppend: async (event) => audits.push(event)
+  });
+  const result = await runVaultWorker({ body: { ...baseBody(), attachments: [{ id: 'a1', jiraId: 'a1', filename: 'spec.pdf' }] } }, overrides);
+  assert.equal(result.vaulted, 1);
+  assert.equal(recorded[0].contentHash, 'h1');
+  assert.equal(recorded[0].confluenceAttachmentId, 'c-old');
+  assert.equal(audits[0].payload.carriedForward, true);
+});
+
+test('a recorded file gone from the issue and never vaulted is reported, not invented', async () => {
+  const audits = [];
+  const overrides = baseOverrides({ readIssueAttachments: async () => [], tryAppend: async (event) => audits.push(event) });
+  const result = await runVaultWorker({ body: { ...baseBody(), attachments: [{ id: 'a1', jiraId: 'a1', filename: 'spec.pdf' }] } }, overrides);
+  assert.equal(result.failed, 1);
+  assert.equal(audits[0].eventType, 'ATTACHMENT_VAULT_FAILED');
+  assert.match(audits[0].payload.error, /removed from the work item before it could be vaulted/);
+});
+
+test('a restored copy is vaulted under the id of the original it stands for, downloaded by its real id', async () => {
+  const downloads = [];
+  const recorded = [];
+  const overrides = baseOverrides({
+    readIssueAttachments: async () => [{ id: '900', filename: 'spec.pdf' }],
+    identityRecords: async () => new Map([[42, { files: new Map([['900', 'a1']]), media: new Map([['m-900', 'm-a1']]) }]]),
+    mediaIdOf: async () => 'm-900',
+    downloadAttachment: async (attachment) => { downloads.push(attachment.jiraId); return Buffer.from('bytes'); },
+    insertVaultAttachment: async (args) => recorded.push(args)
+  });
+  await runVaultWorker({ body: { ...baseBody(), attachments: [{ id: 'a1', jiraId: '900', filename: 'spec.pdf' }] } }, overrides);
+  assert.deepEqual(downloads, ['900']);
+  assert.equal(recorded[0].jiraAttachmentId, 'a1');
+  assert.equal(recorded[0].mediaId, 'm-a1', 'recorded under the media id the approved rich text points at');
 });

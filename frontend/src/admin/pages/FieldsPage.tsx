@@ -7,6 +7,7 @@ import { assertResult, errorMessage } from '../../lib/result';
 import type { Result } from '../../lib/result';
 import type { AvailableField, ControlledField, Project } from '../types';
 import FieldClassification from './FieldClassification';
+import { searchFields, type FieldHit } from '../fieldSearch';
 type Setup = Result & { controlled: (ControlledField & { pinned?: boolean; declared?: boolean })[]; excluded: AvailableField[]; available: AvailableField[]; storage?: { storedBytes: number; items: number } };
 export default function FieldsPage({ projects }: { projects: Project[] }) {
   const [projectId, setProject] = useState('');
@@ -15,6 +16,7 @@ export default function FieldsPage({ projects }: { projects: Project[] }) {
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [ai, setAi] = useState(false);
+  const [query, setQuery] = useState('');
   const request = useRef(0);
   const load = useCallback(async () => {
     const seq = ++request.current;
@@ -25,7 +27,7 @@ export default function FieldsPage({ projects }: { projects: Project[] }) {
       if (seq === request.current) setData(r);
     } catch (e) { if (seq === request.current) setError(errorMessage(e)); }
   }, [projectId]);
-  useEffect(() => { setAi(false); setMessage(''); void load(); return () => { ++request.current; }; }, [load]);
+  useEffect(() => { setAi(false); setMessage(''); setQuery(''); void load(); return () => { ++request.current; }; }, [load]);
   async function mutate(action: () => Promise<Result>) {
     if (busy) return;
     setBusy(true); setError(''); setMessage('');
@@ -44,6 +46,12 @@ export default function FieldsPage({ projects }: { projects: Project[] }) {
           {data.storage && <p>Site-wide storage: {(data.storage.storedBytes / 1048576).toFixed(2)} MiB across {data.storage.items} work items</p>}
           <p className="va-muted">Retain contents enables field restoration. Digest-only evidence cannot restore the original value.</p>
         </Card>
+        <Field label="Find a field to track">
+          <input type="search" className="va-input" value={query} placeholder="Search by name or id, e.g. Attachment or customfield_10015"
+            aria-label="Find a field to track" onChange={e => setQuery(e.target.value)} />
+        </Field>
+        {query.trim() ? <SearchResults hits={searchFields(data, query)} query={query} busy={busy}
+          onTrack={fieldId => mutate(() => invoke<Result>('admin:trackField', { projectId, issueTypeId: '*', fieldId, storeValues: true }))} /> : <>
         <Card title="Tracked fields">{data.controlled.map(f => <div className="va-record-field" key={f.field_id}><div className="va-row"><strong>{f.field_name}</strong><Badge>{f.field_kind}</Badge>{f.pinned && <Badge>Always tracked</Badge>}<span className="va-spacer" />
           <label><input type="checkbox" checked={!!f.store_values} disabled={busy} onChange={e => {
             const storeValues = e.target.checked;
@@ -52,7 +60,24 @@ export default function FieldsPage({ projects }: { projects: Project[] }) {
           {!f.pinned && <Button isDisabled={busy} onClick={() => mutate(() => invoke<Result>('admin:saveField', { projectId, issueTypeId: '*', fieldId: f.field_id, state: 'EXCLUDED' }))}>Exclude</Button>}
         </div></div>)}</Card>
         {[{ title: 'Deliberately excluded', fields: data.excluded }, { title: 'Not yet reviewed', fields: data.available }].map(group => <Card key={group.title} title={group.title}>{!group.fields.length ? <p className="va-muted">No fields in this group.</p> : group.fields.map(f => <div className="va-record-field va-row" key={f.fieldId}><strong>{f.fieldName}</strong><span className="va-spacer" /><Button isDisabled={busy} onClick={() => mutate(() => invoke<Result>('admin:trackField', { projectId, issueTypeId: '*', fieldId: f.fieldId, storeValues: true }))}>Track and retain</Button></div>)}</Card>)}
+        </>}
       </> : projectId && !error ? <Loading label="Loading controlled fields…" /> : null}
     </div>
   </Page>;
+}
+
+const STATUS_LABEL: Record<FieldHit['status'], string> = { tracked: 'Tracked', excluded: 'Excluded', available: 'Not yet reviewed' };
+
+function SearchResults({ hits, query, busy, onTrack }: { hits: FieldHit[]; query: string; busy: boolean; onTrack: (fieldId: string) => void }) {
+  if (!hits.length) return <Card title="Search results"><p className="va-muted">
+    No trackable field matches “{query.trim()}”. Fields that change without anyone editing the work item — comments,
+    worklogs, watchers, status, updated — are never tracked, and a field is offered only once it is on one of this project's screens.
+  </p></Card>;
+  return <Card title="Search results">{hits.map(h => <div className="va-record-field va-row" key={h.fieldId}>
+    <strong>{h.fieldName}</strong><span className="va-muted">{h.fieldId}</span>{h.kind && <Badge>{h.kind}</Badge>}
+    <Badge tone={h.status === 'tracked' ? 'brand' : h.status === 'available' ? 'warning' : 'neutral'}>{STATUS_LABEL[h.status]}</Badge>
+    {h.pinned && <Badge>Always tracked</Badge>}
+    <span className="va-spacer" />
+    {h.status !== 'tracked' && <Button isDisabled={busy} onClick={() => onTrack(h.fieldId)}>Track and retain</Button>}
+  </div>)}</Card>;
 }

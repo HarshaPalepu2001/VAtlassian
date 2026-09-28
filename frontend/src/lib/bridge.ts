@@ -1,5 +1,5 @@
 import { invoke as forgeInvoke, events } from '@forge/bridge';
-import { recordHarnessEvent } from './harness';
+import { recordHarnessEvent, getActiveTraceId } from './harness';
 
 /** Resolver keys whose success means a durable, visible state change — a
  *  signature recorded, a transition retried, a restoration retried. Every
@@ -23,9 +23,13 @@ function isDurable(result: unknown): boolean {
 export async function invoke<T = unknown>(key: string, payload?: Record<string, unknown>): Promise<T> {
   const isInternalTelemetry = key === 'harness:logAction';
   const startedAt = Date.now();
+  const activeTrace = getActiveTraceId();
+  const enrichedPayload = payload
+    ? (activeTrace && !payload.traceId ? { ...payload, traceId: activeTrace } : payload)
+    : (activeTrace ? { traceId: activeTrace } : undefined);
 
   try {
-    const result = await forgeInvoke<T>(key, payload) as T;
+    const result = await forgeInvoke<T>(key, enrichedPayload) as T;
     const durationMs = Date.now() - startedAt;
 
     if (!isInternalTelemetry) {
@@ -36,6 +40,7 @@ export async function invoke<T = unknown>(key: string, payload?: Record<string, 
 
       recordHarnessEvent(isOk ? 'BRIDGE' : 'ERROR', `invoke:${key}`, {
         durationMs,
+        traceId: activeTrace ?? (payload?.traceId as string | undefined),
         success: isOk,
         issueKey: payload?.issueKey,
         ...(payload ? { request: payload } : {}),
@@ -61,6 +66,7 @@ export async function invoke<T = unknown>(key: string, payload?: Record<string, 
     if (!isInternalTelemetry) {
       recordHarnessEvent('ERROR', `invoke:${key}:failed`, {
         durationMs,
+        traceId: activeTrace ?? (payload?.traceId as string | undefined),
         issueKey: payload?.issueKey,
         request: payload
       }, error);
@@ -68,4 +74,3 @@ export async function invoke<T = unknown>(key: string, payload?: Record<string, 
     throw error;
   }
 }
-

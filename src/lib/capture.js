@@ -11,9 +11,11 @@ import { EVENT } from './ledger.js';
 import { scopeFromIssue } from './trackedFields.js';
 import { meetsAssurance } from './approval/levels.js';
 import { controlledFieldsHash, requireBaselineProvenance } from './baselinePolicy.js';
-import { readTreeWithNodeFields } from './tree/nodeFields.js';
+import { readTreeWithNodeFields, fieldsForItem } from './tree/nodeFields.js';
+import { canonicaliseIssue, recordedAttachments } from './attachmentIdentity.js';
 import { planChildBaselines, nextVersions, writeChildBaselines, publishChildBaselines } from '../db/childBaselineStore.js';
 import {
+  activeRootsForNode,
   beginTreeBaseline,
   publishTreeBaseline,
   verifyTreeCapture,
@@ -21,9 +23,6 @@ import {
 } from '../db/baselineTreeStore.js';
 
 const MAX_VERSION_ATTEMPTS = 3;
-// writeCapturedTreeBaseline's `controlledFields` parameter shadows the store
-// lookup; this is the lookup, by scope, for a child's own fields.
-const controlledFieldsForScope = controlledFields;
 
 /**
  * Two DIFFERENT approvals racing the same issue can both read the same
@@ -72,10 +71,13 @@ async function run({ issueId, issueKey, transition, transitionAt, now }) {
     ), { sinceMs: transitionAt - 1000, maxPages: 3 })
   ]);
   if (!issue) return { captured: false, reason: 'ISSUE_UNREADABLE' };
+  await canonicaliseIssue(issue);
   const projectId = Number(issue.fields.project.id);
   const issueTypeId = String(issue.fields.issuetype.id);
   const [config, declared, gate] = await Promise.all([
-    projectConfig(projectId), controlledFields({ projectId, issueTypeId }),
+    // The same set the validator's signature check hashed (approval/runtime.js).
+    projectConfig(projectId),
+    fieldsForItem({ issueId: Number(issue.id), projectId, issueTypeId }, { activeRootsForNode, controlledFields }),
     gatedTransition({ projectId, issueTypeId, fromStatusId, toStatusId,
       transitionId: transition?.transitionId ?? transition?.id ?? null })
   ]);
@@ -165,7 +167,8 @@ export async function writeCapturedBaseline({ issueId, issueKey, projectId, issu
       eventType: EVENT.BASELINE_DEGRADED, issueId, payload: { version, fidelity: baseline.fidelity } });
   }
   return { captured: true, alreadyCaptured: !!existing, baselineId: result.baselineId,
-    version, fidelity: baseline.fidelity, reviewer: reviewer.accountId };
+    version, fidelity: baseline.fidelity, reviewer: reviewer.accountId,
+    attachments: recordedAttachments(plan.raw, fields) };
 }
 
 async function recentConsumedApproval(issueId, fromStatusId, toStatusId, at) {
@@ -207,7 +210,6 @@ export async function writeCapturedTreeBaseline({
     publishTreeBaseline,
     upsertBaselined,
     tryAppend,
-    controlledFieldsFor: controlledFieldsForScope,
     nextVersions,
     writeChildBaselines,
     publishChildBaselines,
@@ -298,13 +300,12 @@ export async function writeCapturedTreeBaseline({
     throw error;
   }
 
-  // Every node with its OWN project and issue type's fields: the parent's
-  // signature authenticates each child's content over exactly what that child
-  // tracks, which is what the child's own baseline below records.
+  // Every node with the ROOT's fields: the parent's signature authenticates
+  // each child's content over the fields the parent is approved on, which is
+  // what the child's own baseline below records.
   const stable = await readTreeWithNodeFields({
     readStableTree: services.readStableTree, readTree: services.readTree,
-    rootIssueKey: rootIssue.key, rootFields: controlledFields,
-    loadFields: services.controlledFieldsFor, extraFieldIds: ['status', 'parent']
+    rootIssueKey: rootIssue.key, rootFields: controlledFields, extraFieldIds: ['status', 'parent']
   });
   const { fieldsFor } = stable;
   const treePlan = services.planTreeCapture({
@@ -443,10 +444,16 @@ export async function writeCapturedTreeBaseline({
     }
   }
 
+  // What each new baseline recorded as its files: the vault copies exactly
+  // these (jobs/vaultWorker.js), for the parent and for every child.
+  const sourceOf = issueId => stable.tree.nodes.find(node => Number(node.id) === Number(issueId));
   return {
     captured: true,
     children: children.map(child => ({ issueId: Number(child.issue_id), version: Number(child.version),
-      baselineId: child.baseline_id })),
+      baselineId: child.baseline_id, issueKey: child.issue_key, projectId: Number(child.project_id),
+      attachments: recordedAttachments(child.raw, fieldsFor(sourceOf(child.issue_id)
+        ?? { projectId: child.project_id, issueTypeId: child.issue_type_id })) })),
+    attachments: recordedAttachments(treePlan.values?.[rootNode.logicalNodeId], controlledFields),
     nodeCount: treePlan.nodeCount,
     fieldCount: treePlan.totalFieldCount,
     baselineId: reserved.baselineId,

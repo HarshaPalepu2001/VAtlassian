@@ -99,6 +99,8 @@ export function treeReviewDiff({ baseline, baselineTree, currentTree, treeDiff, 
       summary: `${label} in the governed tree`,
       magnitude: 1,
       driftIds: [],
+      // Same shape as a diffIssue() field: the report reads attribution unguarded.
+      attribution: [],
       attributionStatus: 'NOT_COLLECTED',
       occurrences: 0,
       logicalNodeId: change.logicalNodeId,

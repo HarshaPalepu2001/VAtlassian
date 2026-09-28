@@ -1,3 +1,7 @@
+import { findLinkConflicts, LinkConflictError } from '../restore/linkConflicts.js';
+import { restoreAttachments, pointAtLiveFiles, explainRichTextRefusal } from '../restore/attachments.js';
+import { adfMediaIds } from '../attachmentIdentity.js';
+
 export class JiraRestoreError extends Error {
   constructor({ operation, status, detail }) {
     super(`${operation} failed${status ? ` (${status})` : ''}: ${detail}`);
@@ -49,10 +53,19 @@ const PERMISSION_FOR_KIND = {
   MOVE_NODE: 'EDIT_ISSUES',
   RESTORE_FIELDS: 'EDIT_ISSUES',
   RESTORE_LINKS: 'EDIT_ISSUES',
+  // Deleting an added file is not checked here: on a project whose attachment
+  // deletion is locked only the app's own account holds that grant, and a
+  // refusal is named per file rather than failing the whole restore.
+  RESTORE_ATTACHMENTS: 'CREATE_ATTACHMENTS',
   DELETE_ADDED_NODE: 'DELETE_ISSUES'
 };
 
-export function createRestoreAdapters({ api, route }) {
+/**
+ * `actorAccountId`/`approvalId`: the signed rejection, recorded on the audit
+ * entries an attachment restore writes.
+ */
+export function createRestoreAdapters({ api, route, actorAccountId = 'system', approvalId = null, attachmentDeps = null,
+  approvedLinksOf = null }) {
   const request = (path, options) => api.asApp().requestJira(path, options);
   return {
     /**
@@ -98,6 +111,13 @@ export function createRestoreAdapters({ api, route }) {
       const fields = { ...retainedFields };
       delete fields.status;
       delete fields.parent;
+      // Files cannot be set on create; RESTORE_ATTACHMENTS uploads them after.
+      // Nor can rich text that shows them, which Jira would refuse until they
+      // exist: RESTORE_FIELDS writes it once they do.
+      delete fields.attachment;
+      for (const [fieldId, value] of Object.entries(fields)) {
+        if (adfMediaIds(value).length > 0) delete fields[fieldId];
+      }
       fields.project = { id: String(node?.projectId ?? node?.fields?.project?.id ?? '') };
       fields.issuetype = { id: String(node?.issueTypeId ?? node?.fields?.issuetype?.id ?? '') };
       if (parentKey != null) fields.parent = { key: String(parentKey) };
@@ -122,11 +142,24 @@ export function createRestoreAdapters({ api, route }) {
     },
 
     async editIssue(issueIdOrKey, fields) {
-      await checked(await request(
-        route`/rest/api/3/issue/${issueIdOrKey}?overrideScreenSecurity=true&overrideEditableFlag=true`,
-        requestOptions('PUT', { fields })
-      ), 'RESTORE_FIELDS');
+      try {
+        await checked(await request(
+          route`/rest/api/3/issue/${issueIdOrKey}?overrideScreenSecurity=true&overrideEditableFlag=true`,
+          requestOptions('PUT', { fields })
+        ), 'RESTORE_FIELDS');
+      } catch (error) {
+        if (error instanceof JiraRestoreError) error.detail = explainRichTextRefusal(error.detail);
+        throw error;
+      }
       return { issueIdOrKey, fieldIds: Object.keys(fields).sort() };
+    },
+
+    /** Rich text pointed at the files the item has now (../restore/attachments.js). */
+    async pointAtLiveFiles(issueId, fields) {
+      if (!Object.values(fields ?? {}).some(value => adfMediaIds(value).length > 0)) return fields;
+      const deps = attachmentDeps ?? (await import('../restore/attachmentAdapters.js'))
+        .createAttachmentRestoreDeps({ api, route, actorAccountId, approvalId });
+      return pointAtLiveFiles(fields, deps.identity ? await deps.identity(issueId) : null);
     },
 
     async restoreLinks(issueIdOrKey, target) {
@@ -137,7 +170,8 @@ export function createRestoreAdapters({ api, route }) {
       const read = await request(route`/rest/api/3/issue/${issueIdOrKey}?fields=issuelinks`, { headers: { Accept: 'application/json' } });
       if (!ok(read)) throw new JiraRestoreError({ operation: 'READ_LINKS', status: Number(read.status) || null,
         detail: errorText(await responseBody(read)) });
-      const current = (await responseBody(read))?.fields?.issuelinks;
+      const body = await responseBody(read);
+      const current = body?.fields?.issuelinks;
       if (!Array.isArray(current)) {
         throw new JiraRestoreError({ operation: 'READ_LINKS', status: null,
           detail: 'Jira omitted the current issue links; no links were changed.' });
@@ -145,8 +179,15 @@ export function createRestoreAdapters({ api, route }) {
 
       const desired = new Map(target.map(link => [linkIdentity(link), link]));
       const existing = new Map(current.map(link => [linkIdentity(link), link]));
-      const additions = [...desired].filter(([key]) => !existing.has(key));
-      const removals = [...existing].filter(([key]) => !desired.has(key));
+      // A link belongs to both ends (../restore/linkConflicts.js). A change the
+      // other end's approved state forbids is left exactly as it is.
+      const conflicts = await findLinkConflicts({ selfIssueId: body?.id ?? issueIdOrKey,
+        additions: [...desired].filter(([key]) => !existing.has(key)).map(([, link]) => link),
+        removals: [...existing].filter(([key]) => !desired.has(key)).map(([, link]) => link),
+        approvedLinksOf });
+      const held = new Set(conflicts.map(c => linkIdentity(c.link)));
+      const additions = [...desired].filter(([key]) => !existing.has(key) && !held.has(key));
+      const removals = [...existing].filter(([key]) => !desired.has(key) && !held.has(key));
       if (removals.some(([, link]) => !link.id)) {
         throw new JiraRestoreError({ operation: 'RESTORE_LINKS', status: null,
           detail: 'A current issue link has no deletion id; the link set cannot be restored exactly.' });
@@ -168,7 +209,16 @@ export function createRestoreAdapters({ api, route }) {
             detail: errorText(await responseBody(response)) });
         }
       }));
+      // The rest of the set is restored; the step still refuses, so the
+      // reviewer is told which link was kept and why.
+      if (conflicts.length) throw new LinkConflictError(conflicts);
       return { issueIdOrKey, added: additions.length, removed: removals.length };
+    },
+
+    async restoreAttachments({ issueKey, issueId, sourceIssueId, target }) {
+      return restoreAttachments({ issueKey, issueId, sourceIssueId, target,
+        deps: attachmentDeps ?? (await import('../restore/attachmentAdapters.js'))
+          .createAttachmentRestoreDeps({ api, route, actorAccountId, approvalId }) });
     },
 
     async deleteIssue(issueIdOrKey) {

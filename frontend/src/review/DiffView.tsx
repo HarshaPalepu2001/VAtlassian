@@ -1,70 +1,139 @@
-import React, { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { MaterialityBadge, When } from '../ui/feedback';
 import { Badge } from '../ui/primitives';
-import type { ReactNode } from 'react';
-import type { DiffField, DiffOp, DiffBlock, DiffCell, DiffItem, MarkChange, ReviewGroup } from './types';
+import { Avatar } from '../ui/brand';
+import { formatTimestamp, relativeTime, sinceLabel } from '../ui/format';
+import type { KeyboardEvent, ReactNode } from 'react';
+import type { Attribution as Step, DiffField, DiffOp, DiffBlock, DiffCell, DiffItem, MarkChange, ReviewGroup, StructureChange } from './types';
 const IconArrowRight = () => <span aria-hidden>→</span>;
 const IconRemove = () => <span aria-hidden>−</span>;
 const IconAdd = () => <span aria-hidden>+</span>;
-const IconRefresh = () => <span aria-hidden>↻</span>;
 
 /**
  * The diff.
  *
- * Three ideas, in priority order:
+ * Two panes. On the left, every change, listed the way a parent's decision
+ * covers it: the parent's own fields, the structure (work items added,
+ * removed or moved), then each drifted child's fields. On the right, the one
+ * change picked there, in full.
  *
- *   1. A reviewer scanning this should be able to skip a field in under a
- *      second. Material changes open by default; cosmetic ones stay one line.
- *   2. Every change carries WHO and WHEN inline, not in a separate activity
- *      tab. "Who did this" is the second question a reviewer asks and making
- *      them go somewhere else for it is what turns a diff tool into a chore.
- *   3. Nothing is rendered as an empty value that is really a missing one. A
- *      field whose contents were never retained says so.
+ * Three questions, answered on the list row before anyone clicks:
+ *
+ *   1. WHAT changed — the value, or for rich text what kind of edit, in one
+ *      line.
+ *   2. WHO and WHEN — the last editor and how long ago, with the exact time on
+ *      hover, and how many edits it took. A reviewer triages on "Sam, two days
+ *      ago, three edits" long before they read a value.
+ *   3. HOW BAD — the row's spine, coloured by materiality.
+ *
+ * The detail then answers HOW IT GOT HERE: every edit in order, each with its
+ * own from → to and its distance from the signature, so a date that moved
+ * twice reads as two steps rather than one surprising jump. The reviewer lands
+ * on the most severe change.
+ *
+ * Nothing is rendered as an empty value that is really a missing one. A field
+ * whose contents were never retained says so.
  */
 
-export default function DiffView({ fields, groups, focusDriftId }: {fields: DiffField[]; groups?: ReviewGroup[]; focusDriftId?: string}) {
-  if (!fields || fields.length === 0) {
-    return <div className="va-muted">No fields have changed since this work item was approved.</div>;
-  }
+type Props = {
+  fields: DiffField[];
+  groups?: ReviewGroup[];
+  focusDriftId?: string;
+  /** A field picked from the timeline: selected and highlighted like a citation. */
+  focusFieldId?: string;
+  /** Bumped on every citation or timeline pick, so picking the same change twice still selects it. */
+  focusKey?: number;
+  /** When the baseline was signed: the origin every "+3 days" is measured from. */
+  baselineAt?: number | null;
+  /** The clock relative times are read against; tests pin it, callers omit it. */
+  now?: number;
+};
+
+type Section = { key: string; title: string | null; version: number | null; fields: DiffField[] };
+
+const SEVERITY = ['CRITICAL', 'MAJOR', 'MINOR', 'COSMETIC'];
+const severity = (field: DiffField) => {
+  const rank = SEVERITY.indexOf(field.materiality ?? 'COSMETIC');
+  return rank < 0 ? SEVERITY.length : rank;
+};
+
+export default function DiffView({ fields, groups, focusDriftId, focusFieldId, focusKey, baselineAt, now }: Props) {
   // A parent's review covers its children: one section per work item, each
   // child compared with its own latest baseline. The groups hold the same
   // fields as the flat list, so nothing is shown twice or left out.
-  if (groups && groups.length > 0) {
-    return (
-      <div className="va-stack">
-        {groups.map((group) => (
-          <section key={group.kind === 'STRUCTURE' ? 'structure' : `issue-${group.issueKey}`} className="va-diff-group"
-            aria-label={groupTitle(group)}>
-            <header className="va-diff-group__head">
-              <span className="va-diff-group__title">{groupTitle(group)}</span>
-              {group.kind === 'ISSUE' && group.baselineVersion != null && (
-                <span className="va-secondary">against version {group.baselineVersion}</span>
-              )}
-            </header>
-            <div className="va-ledger">
-              {group.fields.map((field) => (
-                <FieldDiff
-                  key={field.fieldId}
-                  field={{ ...field, fieldName: field.label ?? field.fieldName }}
-                  focused={!!focusDriftId && (field.driftIds ?? []).includes(focusDriftId)}
-                />
-              ))}
-            </div>
-          </section>
-        ))}
-      </div>
-    );
+  const grouped = Boolean(groups && groups.length > 0);
+  const sections: Section[] = grouped
+    ? groups!.map(group => ({
+      key: group.kind === 'STRUCTURE' ? 'structure' : `issue-${group.issueKey}`,
+      title: groupTitle(group),
+      version: group.kind === 'ISSUE' ? group.baselineVersion ?? null : null,
+      fields: group.fields
+    }))
+    : [{ key: 'all', title: null, version: null, fields: fields ?? [] }];
+  const ordered = sections.flatMap(section => section.fields);
+
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // The change a citation or timeline pick pointed at flashes once; picking
+  // another row by hand clears it.
+  const [flashId, setFlashId] = useState<string | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  const focused = ordered.find(f => (!!focusFieldId && f.fieldId === focusFieldId)
+    || (!!focusDriftId && (f.driftIds ?? []).includes(focusDriftId)));
+  useEffect(() => {
+    if (!focused) return;
+    setSelectedId(focused.fieldId);
+    setFlashId(focused.fieldId);
+  }, [focused?.fieldId, focusKey]);
+
+  // The first most severe change, until the reviewer picks one. A pick that
+  // disappears on an evidence refresh falls back the same way.
+  const selected = ordered.find(f => f.fieldId === selectedId)
+    ?? ordered.reduce<DiffField | undefined>((best, f) => (!best || severity(f) < severity(best) ? f : best), undefined);
+
+  useEffect(() => {
+    listRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest' });
+  }, [selected?.fieldId]);
+
+  if (!selected) {
+    return <div className="va-muted">No fields have changed since this work item was approved.</div>;
+  }
+
+  const pick = (field: DiffField) => { setSelectedId(field.fieldId); setFlashId(null); };
+  function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    const at = ordered.indexOf(selected!);
+    const next = event.key === 'ArrowDown' ? at + 1 : event.key === 'ArrowUp' ? at - 1
+      : event.key === 'Home' ? 0 : event.key === 'End' ? ordered.length - 1 : null;
+    if (next == null) return;
+    event.preventDefault();
+    const index = Math.max(0, Math.min(ordered.length - 1, next));
+    pick(ordered[index]);
+    listRef.current?.querySelectorAll<HTMLElement>('[role="option"]')[index]?.focus();
   }
 
   return (
-    <div className="va-ledger">
-      {fields.map((field) => (
-        <FieldDiff
-          key={field.fieldId}
-          field={field}
-          focused={!!focusDriftId && (field.driftIds ?? []).includes(focusDriftId)}
-        />
-      ))}
+    <div className="va-review">
+      <div ref={listRef} className="va-review__list" role="listbox" aria-label="Changes" onKeyDown={onKeyDown}>
+        {sections.map(section => (
+          <div key={section.key} role="group" aria-label={section.title ?? 'Changes'} className="va-diff-group">
+            {section.title && (
+              <div className="va-diff-group__head">
+                <span className="va-diff-group__title">{section.title}</span>
+                {section.version != null && <span className="va-secondary">against version {section.version}</span>}
+              </div>
+            )}
+            {section.fields.map(field => (
+              <ChangeRow key={`${field.issueKey ?? ''}:${field.fieldId}`} field={field}
+                // Inside its work item's section a field is named plainly.
+                name={grouped ? field.label ?? field.fieldName : field.fieldName}
+                selected={field === selected} onSelect={() => pick(field)} now={now} />
+            ))}
+          </div>
+        ))}
+      </div>
+      <section className="va-review__detail" aria-label="Selected change">
+        <FieldDetail key={selected.fieldId} field={selected} flash={flashId === selected.fieldId} baselineAt={baselineAt} now={now} />
+      </section>
     </div>
   );
 }
@@ -75,57 +144,61 @@ function groupTitle(group: ReviewGroup): string {
   return [group.issueKey, group.summary].filter(Boolean).join(' · ') || 'Work item';
 }
 
-function FieldDiff({ field, focused }: {field: DiffField;focused: boolean}) {
-  // Material changes open, formatting-only closed. That single default is most
-  // of the panel's usability: the reviewer's eye lands on what needs deciding.
-  const [open, setOpen] = useState(Boolean(field.semanticChange && field.materiality !== 'COSMETIC'));
+/** "Sam Ortiz · 2 days ago · 3 edits", or nothing when no edit was recorded. */
+function whoLine(field: DiffField, now?: number): { text: string; title?: string } | null {
+  const last = lastEdit(field);
+  if (!last) return null;
+  const edits = Math.max(field.occurrences ?? 0, (field.attribution ?? []).length);
+  return {
+    text: `${last.by ?? 'Someone'}${last.at ? ` · ${relativeTime(last.at, now)}` : ''}${edits > 1 ? ` · ${edits} edits` : ''}`,
+    title: formatTimestamp(last.at) ?? undefined
+  };
+}
 
-  // A citation chip in the AI report was clicked and it points here. Open and
-  // flash, so the claim and its evidence are visibly the same thing.
-  React.useEffect(() => {
-    if (focused) setOpen(true);
-  }, [focused]);
-
-  const rowClass = [
-    'va-ledger__row',
-    `va-ledger__row--${field.materiality ?? 'COSMETIC'}`,
-    focused ? 'va-highlight' : ''
-  ].filter(Boolean).join(' ');
-
+/** One line in the list: name, the change in a line, and who last touched it. */
+function ChangeRow({ field, name, selected, onSelect, now }: { field: DiffField; name: string; selected: boolean; onSelect: () => void; now?: number }) {
+  const who = whoLine(field, now);
   return (
-    <div id={`field-${field.fieldId}`} className={rowClass}>
-      <button
-        type="button"
-        className="va-ledger__head"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-      >
-        <span className="va-ledger__name">{field.fieldName}</span>
-        {/* The one-line index entry. Only shown while collapsed — once the row
-            is open the values themselves are right there, and repeating them
-            in prose above is the kind of label that says nothing twice. */}
-        {!open && <span className="va-ledger__meta va-grow">{headline(field)}</span>}
-        {open && <span className="va-grow" />}
-        {field.retained === false && <Badge tone="neutral">value not kept</Badge>}
-        {field.restorable === 'NO' && <Badge tone="neutral">cannot revert</Badge>}
-        <MaterialityBadge level={field.materiality} />
-        {/* A disclosure marker, not the word "Hide" repeated down the column.
-            The button already carries aria-expanded, so the glyph is decoration
-            for the eye and the state is announced properly regardless. */}
-        <span className={open ? 'va-ledger__toggle va-ledger__toggle--open' : 'va-ledger__toggle'} aria-hidden />
-      </button>
-      {open && (
-        <div className="va-ledger__body">
-          <Body field={field} />
-          <Attribution field={field} />
-        </div>
-      )}
+    <div role="option" aria-selected={selected} tabIndex={selected ? 0 : -1} onClick={onSelect}
+      className={`va-review__row va-review__row--${field.materiality ?? 'COSMETIC'}`}>
+      <span className="va-review__row-name">{name}</span>
+      <span className="va-review__row-what">{headline(field)}</span>
+      {who && <span className="va-review__row-who" title={who.title}>{who.text}</span>}
     </div>
   );
 }
 
+/** The selected change in full: its values, then every edit that got it here. */
+function FieldDetail({ field, flash, baselineAt, now }: { field: DiffField; flash: boolean; baselineAt?: number | null; now?: number }) {
+  const who = whoLine(field, now);
+  return (
+    <article id={`field-${field.fieldId}`} className={flash ? 'va-review__field va-highlight' : 'va-review__field'}>
+      <header className="va-review__field-head">
+        <h3 className="va-review__field-name">{field.fieldName}</h3>
+        {field.retained === false && <Badge tone="neutral">value not kept</Badge>}
+        {field.restorable === 'NO' && <Badge tone="neutral">cannot revert</Badge>}
+        <MaterialityBadge level={field.materiality} />
+      </header>
+      {who && <div className="va-review__row-who" title={who.title}>Last changed by {who.text}</div>}
+      <Body field={field} />
+      <Attribution field={field} baselineAt={baselineAt} />
+    </article>
+  );
+}
+
+
+/** The latest edit — the backend's own figure first, the trail's last step otherwise. */
+function lastEdit(field: DiffField): { at: number | null; by: string | null } | null {
+  const trail = field.attribution ?? [];
+  const tail = trail[trail.length - 1];
+  const at = field.lastChangedAt ?? tail?.at ?? null;
+  const by = field.lastChangedBy ?? tail?.authorName ?? null;
+  if (at == null && by == null) return null;
+  return { at: at == null ? null : Number(at), by };
+}
+
 /** The collapsed row's single line: the change itself, in the reader's words. */
-function headline(field: DiffField): string {
+export function headline(field: DiffField): string {
   if (field.retained === false) return 'Changed — approved value was not kept';
   if (field.kind === 'multi' || field.kind === 'links' || field.kind === 'attachments') {
     const added = (field.added ?? []).length;
@@ -135,10 +208,35 @@ function headline(field: DiffField): string {
     if (removed) parts.push(`${removed} removed`);
     return parts.length ? parts.join(', ') : 'Changed';
   }
-  if (field.kind === 'adf' || field.kind === 'text') return 'Text edited';
+  if (field.kind === 'adf') return blockSummary(field.blocks) ?? 'Text edited';
+  if (field.kind === 'text') return 'Text edited';
   const before = display(field, field.before);
   const after = display(field, field.after);
-  return `${before.text} to ${after.text}`;
+  return `${before.text} → ${after.text}`;
+}
+
+/**
+ * "1 paragraph edited, 1 added" — what kind of edit a rich-text field took,
+ * counted from the same blocks the body draws. Table rows are counted as rows,
+ * because "3 paragraphs added" for a new table is true and misleading.
+ */
+function blockSummary(blocks?: DiffBlock[]): string | null {
+  if (!blocks || blocks.length === 0) return null;
+  const tally = new Map<string, number>();
+  let unit = 'paragraph';
+  for (const block of blocks) {
+    const verb = block.op === 'insert' ? 'added' : block.op === 'delete' ? 'removed' : block.op === 'move' ? 'moved'
+      : block.op === 'markOnly' ? 'reformatted' : block.op === 'modified' || block.op === 'structure' ? 'edited' : null;
+    if (!verb) continue;
+    if (tableIdOf(block) != null) unit = 'row';
+    tally.set(verb, (tally.get(verb) ?? 0) + 1);
+  }
+  if (tally.size === 0) return null;
+  const order = ['edited', 'added', 'removed', 'moved', 'reformatted'].filter(v => tally.has(v));
+  return order.map((verb, i) => {
+    const n = tally.get(verb)!;
+    return i === 0 ? `${n} ${n === 1 ? unit : `${unit}s`} ${verb}` : `${n} ${verb}`;
+  }).join(', ');
 }
 
 function Body({ field }: {field: DiffField}) {
@@ -241,6 +339,8 @@ function TableDiff({ rows }: {rows: DiffBlock[]}) {
   return (
     <div className="va-block va-block-table">
       <div className="va-subtlest va-table-caption">{caption}</div>
+      {/* A table's own attrs (layout, row numbers) show on every row; say it once. */}
+      <StructureNote changes={[...new Map(rows.flatMap((r) => r.structureChange ?? []).map((c) => [c.text, c])).values()]} />
       <table className="va-diff-table">
         <tbody>
           {rows.map((row, i) => <TableRowDiff key={i} row={row} />)}
@@ -251,7 +351,7 @@ function TableDiff({ rows }: {rows: DiffBlock[]}) {
 }
 
 function TableRowDiff({ row }: {row: DiffBlock}) {
-  const op = row.op === 'markOnly' || row.op === 'move' ? 'equal' : row.op;
+  const op = row.op === 'markOnly' || row.op === 'move' ? 'equal' : row.op === 'structure' ? 'modified' : row.op;
   const side = op === 'delete' ? row.before : (row.after ?? row.before);
 
   // `cells` is only present on an edited row, where the backend paired the
@@ -302,6 +402,7 @@ function Block({ block }: {block:DiffBlock}) {
       return (
         <div className="va-block va-block-modified">
           <InlineDiff ops={block.ops} />
+          <StructureNote changes={block.structureChange} />
           {block.markChange && <MarkNote change={block.markChange} />}
         </div>
       );
@@ -318,6 +419,17 @@ function Block({ block }: {block:DiffBlock}) {
           <MarkNote change={block.markChange} />
         </div>
       );
+    // Same words, different structure. Drawn as an edited block, because it is
+    // one: the words alone would read as "nothing changed here", which is the
+    // failure this op exists to prevent.
+    case 'structure':
+      return (
+        <div className="va-block va-block-modified">
+          {block.after?.text ?? block.before?.text}
+          <StructureNote changes={block.structureChange} />
+          {block.markChange && <MarkNote change={block.markChange} />}
+        </div>
+      );
     default:
       return null;
   }
@@ -330,7 +442,22 @@ function Block({ block }: {block:DiffBlock}) {
  * because reporting it as delete-plus-insert of identical text is exactly the
  * noise that makes people stop reading diffs.
  */
-function MarkNote({ change }: {change?:MarkChange}) {
+/**
+ * "Checklist item (unticked) → Paragraph", "Panel type: warning → info".
+ *
+ * The backend writes these sentences, so the panel, the report and the AI
+ * payload all say the same thing about the same change.
+ */
+function StructureNote({ changes }: {changes?: StructureChange[]}) {
+  if (!changes || changes.length === 0) return null;
+  return (
+    <div className="va-subtlest" style={{ marginTop: 4 }}>
+      Structure: {changes.map((c) => c.text).join(' · ')}
+    </div>
+  );
+}
+
+function MarkNote({ change }: {change?:MarkChange | null}) {
   if (!change) return null;
   const added = (change.to ?? []).filter((m) => !(change.from ?? []).includes(m));
   const removed = (change.from ?? []).filter((m) => !(change.to ?? []).includes(m));
@@ -382,7 +509,7 @@ function ScalarDiff({ field }: {field: DiffField}) {
 function Chip({ side, value }: {side:'was'|'now'; value:{text:string;id?:string}}) {
   return (
     <span className={`va-chip va-chip--${side === 'was' ? 'before' : 'after'}`}>
-      <span className="va-chip__side">{side}</span>
+      <span className="va-chip__side">{side === 'was' ? 'Approved' : 'Now'}</span>
       <span className="va-chip__value">{value.text}</span>
       {value.id && <span className="va-chip__id">id {value.id}</span>}
     </span>
@@ -432,13 +559,10 @@ function AttachmentDiff({ field }: {field:DiffField}) {
         {(field.added ?? []).map((a, i) => (
           <span key={`a${i}`} className="va-pill va-pill-after"><IconAdd /> {typeof a === 'string' ? a : a.filename}</span>
         ))}
-        {(field.replaced ?? []).map((a, i) => (
-          <span key={`x${i}`} className="va-pill"><IconRefresh /> {typeof a === 'string' ? a : a.filename} (same name, different file)</span>
-        ))}
       </div>
-      {(field.removed ?? []).length > 0 && (
+      {((field.removed ?? []).length > 0 || (field.added ?? []).length > 0) && (
         <div className="va-subtlest" style={{ marginTop: 8 }}>
-          Deleted attachments cannot be re-uploaded by an app. Ask whoever removed them to add them back.
+          Rejecting uploads removed files again from the vault and permanently deletes added ones.
         </div>
       )}
     </>
@@ -446,15 +570,21 @@ function AttachmentDiff({ field }: {field:DiffField}) {
 }
 
 /**
- * WHO, WHEN, AND HOW MANY TIMES — inline, under every change.
+ * HOW IT GOT HERE — inline, under every change.
  *
  * This is the difference between a diff tool and a traceability tool. "Priority
  * went from High to Highest" is a diff. "Raised by Automation for Jira, lowered
  * by Priya, raised again by Sam, nine days after approval" is something a
  * reviewer can act on — and it is only knowable by joining the changelog to the
  * value comparison, which is what the backend does.
+ *
+ * Each step prints Jira's own from → to for that edit. Rich text is the
+ * exception: Jira's history holds a flattened copy of the whole document, which
+ * is noise, so those steps say "edited" and the block diff above carries the
+ * net change. A change VAtlassian noticed without a matching Jira history entry
+ * says so rather than inventing a before and after.
  */
-function Attribution({ field }: {field:DiffField}) {
+function Attribution({ field, baselineAt }: {field:DiffField; baselineAt?: number | null}) {
   const trail = field.attribution ?? [];
   if (trail.length === 0) {
     return (
@@ -470,29 +600,49 @@ function Attribution({ field }: {field:DiffField}) {
     );
   }
 
+  const richText = field.kind === 'adf' || field.kind === 'text';
   return (
     <div className="va-trace">
       <div className="va-row" style={{ marginBottom: 2 }}>
         <span className="va-trace__title">
-          Changed {trail.length === 1 ? 'once' : `${trail.length} times`} since approval
+          How it got here · changed {trail.length === 1 ? 'once' : `${trail.length} times`} since approval
         </span>
         {field.churned && <Badge tone="neutral">ended where it started</Badge>}
       </div>
-      {/* Name left, time right. Five edits should read as a column of dates a
-          reviewer can scan, not five sentences they have to parse. */}
-      {trail.map((t, i) => (
-        <div className="va-trace-row" key={`${t.at}-${i}`}>
-          <span className="va-grow va-truncate">
-            {t.authorName ?? t.authorId ?? 'Unknown'}
-            {t.detected && <span className="va-muted"> · seen by VAtlassian, not in Jira history</span>}
-            {t.source === 'AUTOMATION' && <Badge tone="neutral">automation</Badge>}
-            {t.source === 'APP' && <Badge tone="neutral">app</Badge>}
-            {t.source === 'BASELINE' && <Badge tone="brand">restore</Badge>}
-          </span>
-          <When ms={t.at} />
-        </div>
-      ))}
+      <ol className="va-steps">
+        {trail.map((t, i) => (
+          <li className="va-step" key={`${t.at}-${i}`}>
+            <span className="va-step__when">
+              <When ms={t.at} />
+              {sinceLabel(baselineAt, t.at) && <span className="va-step__since">{sinceLabel(baselineAt, t.at)}</span>}
+            </span>
+            <span className="va-step__who">
+              <Avatar name={t.authorName ?? t.authorId} automation={t.source === 'AUTOMATION'} />
+              <span className="va-truncate">{t.authorName ?? t.authorId ?? 'Unknown'}</span>
+              {t.source === 'AUTOMATION' && <Badge tone="neutral">automation</Badge>}
+              {t.source === 'APP' && <Badge tone="neutral">app</Badge>}
+              {t.source === 'BASELINE' && <Badge tone="brand">restore</Badge>}
+            </span>
+            <span className="va-step__what"><StepChange step={t} richText={richText} /></span>
+          </li>
+        ))}
+      </ol>
     </div>
+  );
+}
+
+function StepChange({ step, richText }: { step: Step; richText: boolean }) {
+  if (step.detected) return <span className="va-muted">Seen changed by VAtlassian · not in Jira history</span>;
+  if (richText) return <span className="va-muted">Edited</span>;
+  const from = step.fromString ?? null;
+  const to = step.toString ?? null;
+  if (from == null && to == null) return <span className="va-muted">Changed</span>;
+  return (
+    <span className="va-step__values">
+      <del className="va-del">{from == null || from === '' ? 'Empty' : from}</del>
+      <IconArrowRight />
+      <ins className="va-ins">{to == null || to === '' ? 'Empty' : to}</ins>
+    </span>
   );
 }
 

@@ -161,3 +161,25 @@ export async function verifyTreeRestore({
     unmatched
   };
 }
+
+/**
+ * A field that does not match because Jira REFUSED to write it is not a field
+ * "Jira accepted but something overrode". The verifier cannot tell the two
+ * apart; the executor's refusals can. This names the refusal, in Jira's words,
+ * for every unmatched field a refused step was meant to write.
+ */
+export function explainRefusals(unmatched, refused) {
+  const byNodeField = new Map();
+  for (const entry of refused ?? []) {
+    const detail = entry?.error?.detail ?? entry?.error?.message ?? null;
+    if (!detail) continue;
+    // A link conflict is the APP declining, with its own sentence; it is not
+    // Jira refusing anything (../restore/linkConflicts.js).
+    byNodeField.set(`${entry.logicalNodeId}:*`,
+      entry?.error?.code === 'LINK_CONFLICT' ? detail : `Jira refused to write it: ${detail}`);
+  }
+  return (unmatched ?? []).map(entry => {
+    const reason = byNodeField.get(`${entry.logicalNodeId}:*`);
+    return reason && entry.kind === 'FIELD_CHANGED' ? { ...entry, reason } : entry;
+  });
+}

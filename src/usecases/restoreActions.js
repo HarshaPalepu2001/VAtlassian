@@ -12,13 +12,14 @@ import { tryAppend } from '../db/store.js';
 import { EVENT } from '../lib/ledger.js';
 
 import { executeTreeRestore } from '../lib/tree/restoreExecutor.js';
-import { verifyTreeRestore } from '../lib/tree/restoreVerifier.js';
+import { verifyTreeRestore, explainRefusals } from '../lib/tree/restoreVerifier.js';
 import { claimRestoreAction, finishRestoreAction, recordReplacement, readReplacements, readRestoreActions } from '../db/restoreTreeStore.js';
 import { createTreeReader } from '../lib/tree/jira.js';
 import { readStableTree } from '../lib/tree/stableRead.js';
 import { createRestoreAdapters } from '../lib/tree/restoreAdapters.js';
 import { planTreeRestore } from '../lib/tree/restorePlan.js';
 import { enqueueRestore } from '../lib/restore/queue.js';
+import { approvedLinksResolver } from '../db/approvedLinks.js';
 import * as restoreStore from '../db/restoreStore.js';
 
 function asBase64(value) {
@@ -92,7 +93,9 @@ export async function performRestore({ prepared, actor, approval }) {
   try {
     if (isTree) {
       const treeReader = createTreeReader({ api: forgeApi, route });
-      const jiraAdapters = createRestoreAdapters({ api: forgeApi, route });
+      const jiraAdapters = createRestoreAdapters({ api: forgeApi, route,
+        actorAccountId: actor.accountId, approvalId: approval.approval_id,
+        approvedLinksOf: approvedLinksResolver({ baselineTree }) });
       const adapters = {
         claimRestoreAction,
         finishRestoreAction,
@@ -140,7 +143,9 @@ export async function performRestore({ prepared, actor, approval }) {
         skipped: executed.remaining,
         irreversible: 0
       };
-      unmatched = verified?.unmatched ?? [];
+      // Name each refusal in its own words — a link kept because the other end
+      // approved otherwise is not "Jira accepted but something overrode it".
+      unmatched = explainRefusals(verified?.unmatched ?? [], executed.refused);
       detail = [{ attempted: executed.attempted, completed: executed.completed,
         remaining: executed.remaining, refused: executed.refused ?? [], replacements, unmatched,
         verification: verified && {
@@ -149,7 +154,9 @@ export async function performRestore({ prepared, actor, approval }) {
         } }];
     } else {
       const executed = await executeRestore({ api: forgeApi, plan, issueKey: issue.key, issueId,
-        controlledFields: fields, ...config.restore });
+        controlledFields: fields, ...config.restore,
+        actorAccountId: actor.accountId, approvalId: approval.approval_id,
+        approvedLinksOf: approvedLinksResolver() });
       const verified = await verifyRestore({ api: forgeApi, issueKey: issue.key, controlledFields: fields,
         baselineDigests: typeof baseline.field_digests === 'string' ? JSON.parse(baseline.field_digests) : baseline.field_digests,
         detail: executed.detail, expectedStatusId: null });
