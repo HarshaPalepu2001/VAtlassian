@@ -99,7 +99,7 @@ async function recordLinkDecision(eventOrBody, body, deps) {
   }
 
   const approval = { approvalId: Buffer.from(String(body.approvalId), 'base64'), accountId: body.approvedBy,
-    displayName: body.approvedName, assuranceLevel: body.assuranceLevel };
+    displayName: body.approvedName, assuranceLevel: body.assuranceLevel, signerRole: body.signerRole ?? null };
   let written, contentHash, fieldDigests;
   try {
     if (tree) {
@@ -118,6 +118,12 @@ async function recordLinkDecision(eventOrBody, body, deps) {
     if (review) await deps.release({ issueId, state: review.state, now,
       counters: { driftCount: review.drift_count ?? 0, driftedFieldCount: review.drifted_field_count ?? 0,
         maxMateriality: review.max_materiality ?? null } }).catch(() => {});
+    // The new evidence tables are not there yet: wait for the migration.
+    if (error?.reason === 'SCHEMA_PENDING') {
+      const retry = retryEvent(eventOrBody, 'SCHEMA_PENDING');
+      if (!retry?.retryExhausted) return retry;
+      await notRecorded('SCHEMA_PENDING');
+    }
     throw error;
   }
 

@@ -435,6 +435,42 @@ test('My Approvals opens the review window for a work item instead of embedding 
  assert.equal(reads.length,2,'closing the window re-reads the list');
 });
 
+test('My approvals groups the work into changes, restores and transitions, most urgent first, each saying what it needs',async()=>{
+ const calls=[];
+ setup(async(key,payload)=>{
+  calls.push([key,payload]);
+  if(key==='queue:list')return {success:true,nextPageToken:null,items:[
+   {issueId:'5',issueKey:'T-5',summary:'Move me',status:'Ready',state:'BASELINED',baselineVersion:1,driftCount:0,materialCount:0,kind:'TRANSITION',transitionCount:1,transitionLabel:'Sign to move to Done',pendingMove:true},
+   {issueId:'1',issueKey:'T-1',summary:'Edited',status:'Done',state:'DRIFTED',baselineVersion:3,driftCount:2,materialCount:1,kind:'CHANGES',note:'LINK_RECORDING',waitingSince:Date.now()-86_400_000},
+   {issueId:'2',issueKey:'T-2',summary:'Half done',status:'Done',state:'DRIFTED',baselineVersion:3,driftCount:0,materialCount:0,kind:'CHANGES',note:'DECISION_INCOMPLETE',waitingSince:null},
+   {issueId:'3',issueKey:'T-3',summary:'Mine to retry',status:'Done',state:'ERROR',baselineVersion:2,driftCount:1,materialCount:1,kind:'RESTORE',restoreId:'cmVzdG9yZQ==',restoreState:'PARTIAL',canRetry:true,waitingSince:Date.now()-3_600_000},
+   {issueId:'4',issueKey:'T-4',summary:'Someone else rejected',status:'Done',state:'ERROR',baselineVersion:2,driftCount:1,materialCount:1,kind:'RESTORE',restoreId:'b3RoZXI=',restoreState:'FAILED',canRetry:false,waitingSince:Date.now()-7_200_000}
+  ]};
+  if(key==='restore:retry')return {success:true,state:'RESTORING'};
+  return {};
+ });
+ await act(()=>root.render(h(QueueList)));await flush();
+ const headings=[...container.querySelectorAll('.va-card__title, h2, h3')].map(e=>e.textContent).filter(t=>/to decide|to finish|to sign/.test(t));
+ assert.deepEqual(headings,['Changes to decide','Restores to finish','Transitions to sign']);
+ assert.match(text(),/Restores to finish\s*2/);
+ assert.match(text(),/A linked work item's approval is being recorded here/);
+ assert.match(text(),/The last decision on this work item did not finish/);
+ assert.match(text(),/Approved — retry the move/);
+ assert.match(text(),/Only the reviewer who rejected can retry it\. You can approve or reject the changes again\./);
+ const retries=[...container.querySelectorAll('button')].filter(b=>b.textContent==='Retry restore');
+ assert.equal(retries.length,1,'Retry only on the restore this reviewer rejected');
+ await act(()=>retries[0].click());await flush();
+ assert.deepEqual(calls.find(([key])=>key==='restore:retry')[1],{issueKey:'T-3',restoreId:'cmVzdG9yZQ=='});
+ assert.equal(calls.filter(([key])=>key==='queue:list').length,2,'the list re-reads after a retry');
+});
+
+test('My approvals never says nothing waits while there is more to search',async()=>{
+ setup(async key=>key==='queue:list'?{success:true,items:[],nextPageToken:'40'}:{});
+ await act(()=>root.render(h(QueueList)));await flush();
+ assert.doesNotMatch(text(),/Nothing waits on your signature/);
+ assert.ok(clickButton('Keep looking'));
+});
+
 test('wildcard and directed controls landing on the same destination display different exact scope labels',async()=>{
  setup(async key=>key==='panel:getSummary'?actor([
   transition({transitionId:'5',anyStatus:false}),
@@ -1483,6 +1519,18 @@ test('the transition screen announces "Preparing signature" and "Checking biomet
  assert.match(liveStatus().textContent,/Checking biometric/);
 });
 
+test('a resolver call is not followed by a second invocation just to log it',async()=>{
+ // The server's resolver wrapper (lib/harnessLogger.js) already logs every
+ // call with its duration and outcome; beaconing the client's copy doubled
+ // every Forge invocation, background polling included.
+ const keys=[];
+ setup(async key=>{keys.push(key);return {success:true};});
+ await invoke('panel:getSummary',{issueKey:'T-1'});
+ await flush();
+ assert.deepEqual(keys,['panel:getSummary']);
+ assert.ok(getHarnessEvents().some(e=>e.action==='invoke:panel:getSummary'),'still recorded for the diagnostics HUD');
+});
+
 test('the diagnostics harness never records an authenticator code, even nested inside a resolver request',async()=>{
  setup(async()=>({success:false,error:'That code could not be verified.'}));
  await invoke('approval:submit',{issueKey:'T-1',challengeId:'c'.repeat(32),code:'343968',confirmed:true});
@@ -1821,6 +1869,14 @@ test('a transition with no VAtlassian validator attached is a blocking finding, 
  assert.match(text(),/cannot be enforced yet/);
  assert.match(text(),/Attach the signature validator to this transition in Jira/);
  assert.equal(clickButton('Add rule').disabled,true);
+});
+
+test('a restore someone else rejected offers no Retry, and says who can and what this viewer can still do',async()=>{
+ setup(key=>key==='restore:getState'?Promise.resolve({restores:[{restore_id:'r1',state:'PARTIAL',actorName:'Sam Ortiz',baselineVersion:2,canRetry:false}]}):Promise.resolve({}));
+ await act(()=>root.render(h(RestoreStatus,{issueKey:'T-1',restore:{restoreId:'r1',state:'PARTIAL',attempted:2,succeeded:1,failed:1,skipped:0,baselineVersion:2}})));await flush();
+ assert.equal(Boolean(clickButton('Retry restore')),false,'the server refuses anyone but the reviewer who rejected');
+ assert.match(text(),/Only Sam Ortiz, who rejected these changes, can retry this restore/);
+ assert.match(text(),/You can still approve or reject the changes/);
 });
 
 test('a restore ERROR state is labelled "Restore error" and enables Retry restore', async () => {
@@ -2378,6 +2434,29 @@ test('rich-text steps say edited, and a change seen without Jira history says so
  assert.match(steps[1].textContent,/Seen changed by VAtlassian/);
 });
 
+test('attachment drift names the file and its audit details, including same-name replacement',async()=>{
+ const field={fieldId:'attachment',fieldName:'Attachments',kind:'attachments',retained:true,materiality:'MAJOR',
+  added:[{id:'501',filename:'proof.pdf',size:8192,mimeType:'application/pdf',authorName:'Sam',created:'2026-09-21T11:00:00.000Z'}],
+  removed:[{id:'500',filename:'proof.pdf',size:4096,mimeType:'application/pdf',authorName:'Priya',created:'2026-09-20T10:00:00.000Z'}],
+  attribution:[]};
+ await renderInto(React.createElement(DiffView,{fields:[field]}));
+ assert.match(text(),/proof\.pdf/);
+ assert.match(text(),/8 KB/);
+ assert.match(text(),/4 KB/);
+ assert.match(text(),/Sam/);
+ assert.match(text(),/Priya/);
+ assert.match(text(),/ID 501/);
+ assert.match(text(),/ID 500/);
+ assert.match(text(),/application\/pdf/);
+});
+
+test('a sweep detection is labelled as detection, not an attributed edit',async()=>{
+ const field={...drifted(),lastChangedAt:null,lastChangedBy:null,attribution:[{at:2000,detected:true,authorName:null,source:'UNKNOWN'}]};
+ await renderInto(React.createElement(DiffView,{fields:[field],baselineAt:1000}));
+ assert.doesNotMatch(container.querySelector('.va-review__row').textContent,/last changed|Someone/);
+ assert.match(container.querySelector('.va-step').textContent,/Detected/);
+});
+
 // ── The review window ────────────────────────────────────────────────────────
 
 function windowSetup(over={},handler){
@@ -2429,6 +2508,39 @@ test('the Baseline record lists every restore, newest first, with no retry of it
  assert.match(lines[1].textContent,/Restore failed.*Restoring version 3 · by Sam Ortiz/);
  assert.match(lines[1].querySelector('details').textContent,/Jira refused the due date/);
  assert.equal(clickButton('Retry restore'),undefined,'the log is a record; retrying happens on the panel');
+});
+
+test('the Baseline record compares saved versions in its own diff view',async()=>{
+ const calls=windowSetup({},(key,payload)=>key==='panel:compareVersions'?{
+  fromVersion:payload.fromVersion,toVersion:payload.toVersion,
+  from:{approvedName:'Priya',approvedAt:1000},to:{approvedName:'Sam',approvedAt:2000},
+  changedFieldCount:1,fields:[{fieldId:'root:summary',fieldName:'T-1 · Summary',label:'Summary',issueKey:'T-1',
+   kind:'text',retained:true,materiality:'MAJOR',before:'old',after:'new',ops:[{op:'delete',text:'old'},{op:'insert',text:'new'}],
+   attribution:[],attributionStatus:'NOT_COLLECTED'}]}:undefined);
+ await act(()=>root.render(h(ReviewWindow,{issueKey:'T-1',tab:'record'})));await flush();await flush();
+ assert.ok(calls.some(([key,payload])=>key==='panel:compareVersions'&&payload.fromVersion===2&&payload.toVersion===3));
+ assert.match(container.querySelector('.va-window__compare').textContent,/Current signed baseline version 3/);
+ assert.match(text(),/Compare signed versions/);
+ assert.match(text(),/old/);
+ assert.match(text(),/new/);
+ assert.match(text(),/Priya/);
+ assert.match(text(),/Sam/);
+ assert.doesNotMatch(container.querySelector('.va-version-compare').textContent,/Jira did not record who made this change/);
+ const versions=container.querySelectorAll('.va-version-compare input[type="number"]');
+ await act(()=>typeInto(versions[0],'1'));await flush();
+ await act(()=>clickButton('Compare').click());await flush();
+ assert.ok(calls.some(([key,payload])=>key==='panel:compareVersions'&&payload.fromVersion===1&&payload.toVersion===3),
+  'the selected pair must reach the saved-version endpoint');
+});
+
+test('historical comparison explains incomplete access and does not offer link rejection',async()=>{
+ const links={fieldId:'root:issuelinks',fieldName:'T-1 · Links',kind:'links',retained:true,
+  materiality:'MAJOR',added:[{id:'link-1',type:'blocks',outward:'T-2'}],removed:[],
+  attribution:[],attributionStatus:'NOT_COLLECTED'};
+ await renderInto(h(DiffView,{fields:[],mode:'versions',fromVersion:1,toVersion:3,incomplete:true}));
+ assert.match(text(),/No visible differences.*incomplete/);
+ await act(()=>root.render(h(DiffView,{fields:[links],mode:'versions',fromVersion:1,toVersion:3})));await flush();
+ assert.doesNotMatch(text(),/Rejecting these changes restores/);
 });
 
 test('signing in the window ends on a receipt, and Done closes the window as decided',async()=>{

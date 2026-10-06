@@ -1,6 +1,4 @@
 import { runAdmin, query, validScope } from './adminRuntime.js';
-const ACTIVE = 'ACTIVE';
-const REVOKED = 'REVOKED';
 
 export async function getAlertDestination(req, overrides) {
   return runAdmin(req, async (deps) => {

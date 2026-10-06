@@ -41,21 +41,24 @@ export function fieldRow(deps, scope, payload, catalogue, accountId) {
  * evidence of an intent the runtime never honoured.
  *
  * RETIRED — accepted by earlier builds, refused now, and stripped from stored
- * configuration by retiredConfigKeys() below:
+ * configuration by stripRetiredConfig() below:
  *   visibility          no reader. The visibility filtering in panelAccess.js
  *                       is Jira issue-security scoped, not driven by this key.
  *   notifications.*     no reader; no digest job was ever built.
  *   restore.commentOnRestore  executeRestore() does not read it.
+ *   reviewStatusIds     no reader. Nothing supersedes an approval when an
+ *                       item re-enters a status, so there was nothing to set.
+ *   queueThreshold      did not decide what is queued: any drift queues and
+ *                       holds. It only relabelled the queue row, and could
+ *                       call a major change "Formatting only".
  * `policy.mode` is kept because saveConfig refuses STRICT outright rather than
  * storing an unenforced locking promise; see fieldsConfiguration.js.
  */
 export function validateConfig(config) {
   if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('Configuration must be an object.');
-  const allowed = new Set(['enabled', 'reviewStatusIds', 'queueThreshold', 'ai', 'restore', 'policy']);
+  const allowed = new Set(['enabled', 'ai', 'restore', 'policy', 'vault']);
   if (Object.keys(config).some(k => !allowed.has(k))) throw new Error('Unknown configuration key.');
   for (const key of ['enabled']) if (config[key] !== undefined && typeof config[key] !== 'boolean') throw new Error(`${key} must be a boolean.`);
-  if (config.reviewStatusIds !== undefined && (!Array.isArray(config.reviewStatusIds) || config.reviewStatusIds.some(s => !/^\d+$/.test(String(s))))) throw new Error('Invalid review statuses.');
-  if (config.queueThreshold !== undefined && !['COSMETIC', 'MINOR', 'MAJOR', 'CRITICAL'].includes(config.queueThreshold)) throw new Error('Invalid queue threshold.');
   if (config.policy !== undefined) {
     if (!config.policy || typeof config.policy !== 'object' || Array.isArray(config.policy)) throw new Error('Invalid policy settings.');
     if (Object.keys(config.policy).some(k => !['mode'].includes(k))) throw new Error('Unknown policy setting.');
@@ -76,6 +79,11 @@ export function validateConfig(config) {
     if (config.restore.notifyUsers !== undefined && typeof config.restore.notifyUsers !== 'boolean') throw new Error('notifyUsers must be a boolean.');
     if (config.restore.perFieldRetries !== undefined && (!Number.isSafeInteger(config.restore.perFieldRetries) || config.restore.perFieldRetries < 0 || config.restore.perFieldRetries > 10)) throw new Error('perFieldRetries must be between 0 and 10.');
     if (config.restore.actAs !== undefined && !['app', 'user'].includes(config.restore.actAs)) throw new Error('Invalid actAs value.');
+  }
+  if (config.vault !== undefined) {
+    if (!config.vault || typeof config.vault !== 'object' || Array.isArray(config.vault)) throw new Error('Invalid attachment protection settings.');
+    if (Object.keys(config.vault).some(k => !['lockAttachmentDeletion'].includes(k))) throw new Error('Unknown attachment protection setting.');
+    if (config.vault.lockAttachmentDeletion !== undefined && typeof config.vault.lockAttachmentDeletion !== 'boolean') throw new Error('lockAttachmentDeletion must be a boolean.');
   }
   // Only JSON data is persisted; reject prototype keys at every depth before merge.
   const walk = value => {
@@ -102,7 +110,7 @@ export function validateConfig(config) {
  */
 export function stripRetiredConfig(config) {
   if (!config || typeof config !== 'object' || Array.isArray(config)) return config;
-  const { visibility, notifications, ...rest } = config;
+  const { visibility, notifications, reviewStatusIds, queueThreshold, ...rest } = config;
   if (rest.restore && typeof rest.restore === 'object' && !Array.isArray(rest.restore)) {
     const { commentOnRestore, ...restore } = rest.restore;
     rest.restore = restore;

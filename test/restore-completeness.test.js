@@ -191,6 +191,7 @@ function workerFixture(verifyResult) {
       approvalById: async () => ({ decision: 'REJECT', approval_id: Buffer.alloc(16, 3) }),
       claimRestore: async () => true,
       heartbeatRestore: async () => {},
+      refreshItemLock: async () => {},
       beginRestoreVerification: async () => true,
       finishRestore: async args => { calls.push(['finish', args.state]); restore.state = args.state; },
       failRestore: async () => { calls.push(['fail']); },

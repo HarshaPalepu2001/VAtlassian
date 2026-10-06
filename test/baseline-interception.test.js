@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  observe, supersedeOnReviewEntry, OUTCOME, REVIEW_STATE
+  observe, OUTCOME, REVIEW_STATE
 } from '../src/lib/interception.js';
 import { project, FIELD_KIND } from '../src/lib/content.js';
 
@@ -25,59 +25,6 @@ function reviewFor(issueFields, extra = {}) {
 }
 
 const APPROVED = { summary: 'Ship it', priority: { id: '3' } };
-
-// ─── What does and does not disarm a standing baseline ───────────────────────
-
-test('ONWARD workflow movement does not disarm a baseline', () => {
-  // The easy mistake would be to void a baseline the moment the item leaves the
-  // status it was approved in. That is fatal here: a reviewed item is SUPPOSED
-  // to keep moving through the workflow afterwards, and a baseline that
-  // evaporates on the next transition protects nothing.
-  const prior = reviewFor(APPROVED);
-  const result = supersedeOnReviewEntry({
-    prior,
-    currentStatusId: '10002',        // In Progress — not a review status
-    reviewStatusIds: ['10001'],
-    now: 1000
-  });
-  assert.equal(result.superseded, false);
-  assert.equal(result.review.baseline_id, prior.baseline_id);
-});
-
-test('re-entering a review status DOES disarm the baseline', () => {
-  const prior = reviewFor(APPROVED);
-  const result = supersedeOnReviewEntry({
-    prior,
-    currentStatusId: '10001',
-    reviewStatusIds: ['10001'],
-    now: 1000
-  });
-  assert.equal(result.superseded, true);
-  assert.equal(result.review.baseline_id, null);
-  assert.equal(result.review.state, REVIEW_STATE.ARCHIVED);
-});
-
-test('THE ONE EXCEPTION: drift already recorded is not wiped by returning to review', () => {
-  // Somebody changed approved content while the approval stood; sending the
-  // item back to review must not be a way to make that disappear.
-  const prior = reviewFor(APPROVED, { state: REVIEW_STATE.DRIFTED });
-  const result = supersedeOnReviewEntry({
-    prior,
-    currentStatusId: '10001',
-    reviewStatusIds: ['10001'],
-    now: 1000
-  });
-  assert.equal(result.superseded, false);
-  assert.equal(result.review.state, REVIEW_STATE.DRIFTED);
-});
-
-test('an unknown current status changes nothing rather than guessing', () => {
-  const prior = reviewFor(APPROVED);
-  const result = supersedeOnReviewEntry({
-    prior, currentStatusId: null, reviewStatusIds: ['10001'], now: 1000
-  });
-  assert.equal(result.superseded, false);
-});
 
 // ─── observe ─────────────────────────────────────────────────────────────────
 

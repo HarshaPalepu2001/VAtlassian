@@ -61,16 +61,22 @@ export async function protectPage({ payload, context }) {
   const ref = new GovernedObjectRef('confluence', context?.accountId, context?.workspaceId, 'page', pageId, null);
   
   const snapshot = await adapter.stableCapture(ref);
+
+  // The restriction first, as the viewer. A page they may not restrict is not
+  // protected, whatever else could be recorded about it — and recording it as
+  // PROTECTED anyway would tell everyone a page is locked that anyone can edit.
+  if (!await adapter.lock(ref)) {
+    return { success: false, ok: false, error: 'The page could not be restricted. You need permission to change who can edit it.' };
+  }
+
   const snapshotJson = JSON.stringify(snapshot);
   const hash = createHash('sha256').update(snapshotJson).digest('hex');
   await objectStore.set(hash, Buffer.from(snapshotJson, 'utf8'));
-  
+
   const baselineId = randomUUID();
   await throwing('DELETE FROM va_governance_baseline WHERE subject_id = ?', [pageId]);
   await throwing('INSERT INTO va_governance_baseline (baseline_id, subject_id, content_hash) VALUES (?, ?, ?)', [baselineId, pageId, hash]);
-  
-  await adapter.lock(ref);
-  
+
   const approvalId = randomUUID();
   await throwing('DELETE FROM va_governance_approval WHERE subject_id = ?', [pageId]);
   await throwing('INSERT INTO va_governance_approval (approval_id, subject_id, state) VALUES (?, ?, ?)', [approvalId, pageId, 'CONSUMED']);

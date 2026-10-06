@@ -154,9 +154,14 @@ export function recordHarnessEvent(
     try { fn([...eventBuffer]); } catch { /* ignore */ }
   });
 
-  // Fire-and-forget beacon to backend so events appear in Forge logs for the agent
-  // Skip beaconing harness:logAction itself to prevent infinite recursion
-  if (action !== 'harness:logAction') {
+  // Fire-and-forget beacon to backend so events appear in Forge logs for the agent.
+  // Skip beaconing harness:logAction itself to prevent infinite recursion, and
+  // a resolver call that reached the server: its wrapper (lib/harnessLogger.js)
+  // already logged it with duration and outcome, and a beacon per call doubled
+  // every invocation. A call that failed in transport (`:failed`) never reached
+  // the server, so that one is still sent.
+  const serverLogged = action.startsWith('invoke:') && !action.endsWith(':failed');
+  if (action !== 'harness:logAction' && !serverLogged) {
     void invoke('harness:logAction', {
       category,
       action,

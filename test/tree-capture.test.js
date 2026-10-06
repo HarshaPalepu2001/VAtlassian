@@ -5,7 +5,20 @@ import { planTreeCapture } from '../src/lib/tree/capturePlan.js';
 
 let calls = [];
 
+// The rule a capture applied is part of what it records (lib/evidence/versionEvidence.js).
+const ruleScope = { source: 'OWN', projectId: 100, issueTypeId: '200', imposedByBaselineId: null, imposedByVersion: null };
+// What a capture writes beside the baseline: the evidence rows, the child pins, the security levels.
+const evidenceDeps = {
+  writeVersionEvidence: async () => {},
+  pinChildVersions: async () => {},
+  recordNodeSecurity: async () => {},
+  activeBaselines: async () => new Map()
+};
+const digest = 'd'.repeat(64);
+
 function threeNodeFixture() {
+  const fields = Array.from({ length: 48 }, (_, i) => ({ field_id: `field_${i}`, field_kind: 'TEXT',
+    store_values: true, materiality: 'MAJOR' }));
   calls = [];
   return {
     rootIssue: { id: 1, key: 'VA-1', fields: { summary: 'Root' } },
@@ -14,12 +27,15 @@ function threeNodeFixture() {
       required_role: 'Quality Reviewer', required_assurance: 'ESIGNATURE'
     },
     approval: { approvalId: 'approval', accountId: 'user', displayName: 'Reviewer', assuranceLevel: 'ESIGNATURE', content_hash: 'hash' },
-    controlledFields: Array(48).fill({ store_values: true }),
+    controlledFields: fields,
+    ruleScope,
     deps: {
+      ...evidenceDeps,
       readStableTree: async () => { calls.push('read-stable-tree'); return { tree: { nodes: [1, 2, 3] } }; },
       planTreeCapture: () => { calls.push('plan-tree-capture'); return {
         treeHash: 'hash', nodeCount: 3, edgeCount: 2, totalFieldCount: 48,
-        nodes: [{ logicalNodeId: 'root', originalIssueId: 1, projectId: 100, issueTypeId: '200' }],
+        nodes: [{ logicalNodeId: 'root', originalIssueId: 1, projectId: 100, issueTypeId: '200',
+          fieldDigests: JSON.stringify(Object.fromEntries(fields.map(field => [field.field_id, digest]))) }],
         values: { root: {} }
       }; },
       baselineForApproval: async () => null,
@@ -150,7 +166,7 @@ function publicationFixture() {
   const nodes = [{
     logicalNodeId: 'node-1', originalIssueId: 1, currentIssueId: 1,
     issueKey: 'VA-1', parentLogicalNodeId: null, projectId: 100,
-    issueTypeId: '200', contentHash: 'content-hash', fieldDigests: '{}', nodeOrder: 0
+    issueTypeId: '200', contentHash: 'content-hash', fieldDigests: JSON.stringify({ summary: digest }), nodeOrder: 0
   }];
   const values = { 'node-1': { summary: 'Signed root' } };
   return {
@@ -166,9 +182,11 @@ function publicationFixture() {
       materiality: 'MAJOR', store_values: true, writable: true
     }],
     transitionAt: 1700000000000,
+    ruleScope,
     deps: {
+      ...evidenceDeps,
       readStableTree: async ({ fieldIds }) => {
-        assert.deepEqual(fieldIds.sort(), ['issuetype', 'parent', 'project', 'status', 'summary']);
+        assert.deepEqual(fieldIds.sort(), ['issuetype', 'parent', 'project', 'security', 'status', 'summary']);
         return { tree: { nodes: [rootIssue] } };
       },
       planTreeCapture: () => ({
@@ -244,6 +262,7 @@ test('tree capture refuses incomplete baseline-owned policy before reading Jira'
     },
     controlledFields: [{ field_id: 'summary', field_kind: 'TEXT', store_values: true }],
     transitionAt: 1700000000000,
+    ruleScope,
     deps: {
       baselineForApproval: async () => null,
       readStableTree: async () => assert.fail('incomplete policy must not read Jira')
@@ -264,6 +283,7 @@ test('a completed capture is idempotent without rereading changed Jira content',
     },
     controlledFields: [{ field_id: 'summary', field_kind: 'TEXT', store_values: true }],
     transitionAt: 1700000000000,
+    ruleScope,
     deps: {
       baselineForApproval: async () => ({
         baseline_id: baselineId, state: 'ACTIVE', version: 2,
@@ -293,6 +313,7 @@ test('a published tree capture repairs a missing item-state index without reread
     },
     controlledFields: [{ field_id: 'summary', field_kind: 'TEXT', store_values: true }],
     transitionAt: 1700000000000,
+    ruleScope,
     deps: {
       baselineForApproval: async () => ({
         baseline_id: baselineId, issue_id: 1, project_id: 100, issue_type_id: '200',
@@ -321,6 +342,7 @@ test('a completed capture cannot be borrowed by mismatched signed evidence', asy
     },
     controlledFields: [{ field_id: 'summary', field_kind: 'TEXT', store_values: true }],
     transitionAt: 1700000000000,
+    ruleScope,
     deps: {
       baselineForApproval: async () => ({
         baseline_id: Buffer.alloc(16, 9), state: 'ACTIVE', version: 2,

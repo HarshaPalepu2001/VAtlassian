@@ -304,6 +304,17 @@ body {
   overflow: hidden;
 }
 
+/* A flush card's table runs edge to edge; its title and any text around the
+   table keep the ordinary card inset. */
+.va-card--flush > .va-card__header {
+  padding: 20px 20px 0;
+}
+
+.va-card--flush > p,
+.va-card--flush > .va-banner {
+  margin: 12px 20px;
+}
+
 .va-card__header {
   margin-bottom: 14px;
 }

@@ -42,3 +42,11 @@ test('a completed restore failure releases the lock as an error', async () => {
     counters: { driftCount: 1, driftedFieldCount: 1, maxMateriality: null }
   }]);
 });
+
+test('the reject comment is posted before the restore runs, so it never claims the restore is done', async () => {
+  const { rejectionComment } = await import('../src/usecases/drift.js');
+  const text = rejectionComment('Priya Raman').content.flatMap(p => p.content.map(n => n.text)).join(' ');
+  assert.match(text, /Priya Raman/);
+  assert.doesNotMatch(text, /has been (automatically )?restored/i);
+  assert.match(text, /being restored/i);
+});

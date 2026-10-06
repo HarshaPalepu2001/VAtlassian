@@ -3,7 +3,7 @@ import { planCapture, FIDELITY } from './baseline.js';
 import { fetchChangelog, highestChangelogId } from './changelog.js';
 import { assignReviewer } from './reviewer.js';
 import { controlledFields, projectConfig, gatedTransition } from '../db/configStore.js';
-import { writeBaseline, currentVersion, baselineForApproval } from '../db/baselineStore.js';
+import { writeBaseline, currentVersion, baselineForApproval, activeBaselines } from '../db/baselineStore.js';
 import { upsertBaselined, getReview } from '../db/itemStateStore.js';
 import { executeQuery, fromBinaryColumn } from './db.js';
 import { tryAppend, isDuplicateKey } from '../db/store.js';
@@ -11,8 +11,12 @@ import { EVENT } from './ledger.js';
 import { scopeFromIssue } from './trackedFields.js';
 import { meetsAssurance } from './approval/levels.js';
 import { controlledFieldsHash, requireBaselineProvenance } from './baselinePolicy.js';
-import { readTreeWithNodeFields, fieldsForItem } from './tree/nodeFields.js';
+import { readTreeWithNodeFields, fieldScope } from './tree/nodeFields.js';
 import { canonicaliseIssue, recordedAttachments } from './attachmentIdentity.js';
+import { FailClosed } from './errors.js';
+import { versionEvidence, linkRows, trackedLinks, linkedIssueIds, CAUSE } from './evidence/versionEvidence.js';
+import { treeCaptureEvidence, nodeSecurityLevels } from './evidence/treeEvidence.js';
+import { writeVersionEvidence, pinChildVersions, recordNodeSecurity } from '../db/evidenceStore.js';
 import { planChildBaselines, nextVersions, writeChildBaselines, publishChildBaselines } from '../db/childBaselineStore.js';
 import {
   activeRootsForNode,
@@ -50,12 +54,18 @@ async function writeWithVersionRetry(currentVersionFn, issueId, initialVersion, 
   throw lastError;
 }
 
+/** A capture that threw: a governed refusal keeps its reason, so the trigger retries it as that. */
+export function captureFailure(error) {
+  return { captured: false, reason: error instanceof FailClosed ? error.reason : 'ERROR',
+    error: String(error?.message ?? error) };
+}
+
 /** Trigger capture consumes an existing approval; it never manufactures one. */
 export async function captureBaseline(args) {
   try { return await run({ now: Date.now(), ...args }); }
   catch (error) {
     console.error('capture failed', args.issueId, error);
-    return { captured: false, reason: 'ERROR', error: String(error.message ?? error) };
+    return captureFailure(error);
   }
 }
 
@@ -74,13 +84,14 @@ async function run({ issueId, issueKey, transition, transitionAt, now }) {
   await canonicaliseIssue(issue);
   const projectId = Number(issue.fields.project.id);
   const issueTypeId = String(issue.fields.issuetype.id);
-  const [config, declared, gate] = await Promise.all([
+  const [config, scoped, gate] = await Promise.all([
     // The same set the validator's signature check hashed (approval/runtime.js).
     projectConfig(projectId),
-    fieldsForItem({ issueId: Number(issue.id), projectId, issueTypeId }, { activeRootsForNode, controlledFields }),
+    fieldScope({ issueId: Number(issue.id), projectId, issueTypeId }, { activeRootsForNode, controlledFields }),
     gatedTransition({ projectId, issueTypeId, fromStatusId, toStatusId,
       transitionId: transition?.transitionId ?? transition?.id ?? null })
   ]);
+  const declared = scoped.fields;
   if (!config.enabled) return { captured: false, reason: 'DISABLED' };
   if (!gate) return { captured: false, reason: 'NOT_A_GATE' };
   if (!gate.capture_baseline) return { captured: false, reason: 'CAPTURE_DISABLED' };
@@ -95,17 +106,21 @@ async function run({ issueId, issueKey, transition, transitionAt, now }) {
     transitionId: transition?.transitionId ?? transition?.id ?? null, fromStatusId, toStatusId,
     changelogEntries: changelog.entries, changelogFailed: changelog.failed || changelog.truncated,
     requiredRole: gate.required_role, requiredAssurance: gate.required_assurance,
-    reviewerFieldId: config.reviewerFieldId ?? null });
+    reviewerFieldId: config.reviewerFieldId ?? null,
+    ruleScope: scoped.ruleScope, cause: CAUSE.OWN_TRANSITION });
 }
 
 export async function writeCapturedBaseline({ issueId, issueKey, projectId, issueTypeId,
   controlledFields: fields, issueFields, editmetaFields = {}, transitionAt, capturedAt,
   approver, transitionId = null, fromStatusId = null, toStatusId = null,
   changelogEntries = [], changelogFailed = false, requiredRole, requiredAssurance,
-  reviewerFieldId = null },
-  deps = { baselineForApproval, currentVersion, writeBaseline, assignReviewer, upsertBaselined, tryAppend, getReview }) {
+  reviewerFieldId = null, cause = CAUSE.OWN_TRANSITION, ruleScope = null },
+  deps = { baselineForApproval, currentVersion, writeBaseline, assignReviewer, upsertBaselined, tryAppend, getReview,
+    activeBaselines }) {
   if (!fields?.length) return { captured: false, reason: 'NO_TRACKED_FIELDS' };
   if (!approver?.approvalId || !approver?.assuranceLevel) return { captured: false, reason: 'NO_APPROVAL' };
+  // Which rule required these fields is part of the record (evidence/versionEvidence.js).
+  if (!ruleScope) return { captured: false, reason: 'BASELINE_POLICY_INCOMPLETE' };
   const existing = await deps.baselineForApproval(issueId, approver.approvalId);
   if (existing && !['ACTIVE', 'SUPERSEDED', 'CAPTURING'].includes(existing.state)) {
     return { captured: false, reason: 'CAPTURE_INCOMPLETE' };
@@ -142,12 +157,36 @@ export async function writeCapturedBaseline({ issueId, issueKey, projectId, issu
   if (existing?.state === 'CAPTURING' && existing.content_hash !== plan.baseline.content_hash) {
     return { captured: false, reason: 'CAPTURE_INCOMPLETE' };
   }
+  // THE EVIDENCE THIS VERSION PUBLISHES WITH. Built from exactly what was
+  // projected and checked above; writeBaseline writes it before publishing and
+  // refuses to publish without it.
+  const writesVersion = !existing || existing.state === 'CAPTURING';
+  let evidence = null;
+  if (writesVersion) {
+    const links = trackedLinks(fields, issueFields);
+    const others = linkedIssueIds(links);
+    const otherVersions = others.length ? await deps.activeBaselines(others) : new Map();
+    evidence = {
+      required: true,
+      cause,
+      links: linkRows({ links, otherVersions }),
+      evidence: versionEvidence({
+        fields, digests: plan.digests, writable: plan.writable,
+        rule: { ...ruleScope, transitionId, approvers: [{ role: requiredRole, assurance: requiredAssurance }],
+          controlledFieldsHash: plan.baseline.controlled_fields_hash },
+        signature: { approvalId: approver.approvalId, signerAccountId: approver.accountId,
+          signerName: approver.displayName, role: requiredRole, assurance: approver.assuranceLevel,
+          cause, transitionId, fromStatusId, toStatusId, transitionAt,
+          statusAtCapture: issueFields?.status?.id ?? null, signedAt: capturedAt }
+      })
+    };
+  }
   const result = existing && existing.state !== 'CAPTURING' ? { baselineId: existing.baseline_id }
     : existing
-      ? await deps.writeBaseline({ ...plan, resume: existing })
+      ? await deps.writeBaseline({ ...plan, resume: existing, evidence })
       : await writeWithVersionRetry(deps.currentVersion, issueId, version, async freshVersion => {
           version = freshVersion;
-          return deps.writeBaseline({ ...plan, baseline: { ...plan.baseline, version: freshVersion }, resume: existing });
+          return deps.writeBaseline({ ...plan, baseline: { ...plan.baseline, version: freshVersion }, resume: existing, evidence });
         });
   const baseline = existing ?? { ...plan.baseline, version };
   const reviewer = await deps.assignReviewer({ baseline, issueFields, projectId, issueTypeId,
@@ -199,7 +238,7 @@ export function approvalFrom(record, requiredAssurance = 'NATIVE_TRANSITION') {
 
 
 export async function writeCapturedTreeBaseline({
-  rootIssue, policy, approval, controlledFields, transitionAt, deps = {}
+  rootIssue, policy, approval, controlledFields, transitionAt, ruleScope = null, cause = CAUSE.OWN_TRANSITION, deps = {}
 }) {
   const services = {
     baselineForApproval,
@@ -214,6 +253,10 @@ export async function writeCapturedTreeBaseline({
     writeChildBaselines,
     publishChildBaselines,
     getReview,
+    writeVersionEvidence,
+    pinChildVersions,
+    recordNodeSecurity,
+    activeBaselines,
     ...deps
   };
 
@@ -228,6 +271,8 @@ export async function writeCapturedTreeBaseline({
     || !approval.assuranceLevel || !approval.content_hash) {
     return { captured: false, reason: 'NO_APPROVAL' };
   }
+  // Which rule required these fields is part of every record this writes.
+  if (!ruleScope) return { captured: false, reason: 'BASELINE_POLICY_INCOMPLETE' };
 
   const existing = await services.baselineForApproval(rootIssue.id, approval.approvalId);
   if (existing && existing.state !== 'CAPTURING') {
@@ -305,9 +350,10 @@ export async function writeCapturedTreeBaseline({
   // what the child's own baseline below records.
   const stable = await readTreeWithNodeFields({
     readStableTree: services.readStableTree, readTree: services.readTree,
-    rootIssueKey: rootIssue.key, rootFields: controlledFields, extraFieldIds: ['status', 'parent']
+    rootIssueKey: rootIssue.key, rootFields: controlledFields, extraFieldIds: ['status', 'parent', 'security']
   });
   const { fieldsFor } = stable;
+  const nodeOf = issueId => stable.tree.nodes.find(node => Number(node.id) === Number(issueId));
   const treePlan = services.planTreeCapture({
     rootIssueId: rootIssue.id, nodes: stable.tree.nodes, controlledFields, fieldsFor
   });
@@ -371,8 +417,7 @@ export async function writeCapturedTreeBaseline({
   // next version, over its own fields, authenticated by this approval. Written
   // before the parent publishes and published after it, so a child never has a
   // standing baseline from a parent capture that did not complete.
-  const childRows = planChildBaselines({ treePlan, rootIssueId: rootIssue.id, fieldsFor,
-    nodeOf: issueId => stable.tree.nodes.find(node => Number(node.id) === Number(issueId)),
+  const childRows = planChildBaselines({ treePlan, rootIssueId: rootIssue.id, fieldsFor, nodeOf,
     parent: { baselineId: reserved.baselineId, approvalId: approval.approvalId, accountId: approval.accountId,
       displayName: approval.displayName, assuranceLevel: approval.assuranceLevel, policy,
       transitionAt, capturedAt },
@@ -383,12 +428,27 @@ export async function writeCapturedTreeBaseline({
     ? await services.writeChildBaselines({ rows: childRows, parentBaselineId: reserved.baselineId })
     : [];
 
+  // THE EVIDENCE OF EVERY VERSION THIS CAPTURE WRITES (evidence/treeEvidence.js),
+  // before anything publishes: publication requires it.
+  await services.writeVersionEvidence({ entries: await treeCaptureEvidence({
+    rootIssueId: rootIssue.id, parentBaselineId: reserved.baselineId, parentVersion: version,
+    rootDigests: rootNode.fieldDigests, controlledFields, children, nodeOf, fieldsFor, ruleScope, cause, policy, approval,
+    transitionAt, signedAt: capturedAt, controlledFieldsHash: provenance.controlled_fields_hash,
+    activeBaselines: services.activeBaselines }) });
+  if (children.length) {
+    await services.pinChildVersions({ parentBaselineId: reserved.baselineId,
+      pins: children.map(child => ({ issueId: child.issue_id, baselineId: child.baseline_id, version: child.version })) });
+  }
+  // An unseen level is UNKNOWN, not "no level" (evidence/treeEvidence.js).
+  await services.recordNodeSecurity({ baselineId: reserved.baselineId, levels: nodeSecurityLevels(stable.tree.nodes) });
+
   await services.publishTreeBaseline({
     baselineId: reserved.baselineId,
     issueId: Number(rootIssue.id),
-    version: Number(version)
+    version: Number(version),
+    requireEvidence: true
   });
-  if (children.length) await services.publishChildBaselines({ parentBaselineId: reserved.baselineId });
+  if (children.length) await services.publishChildBaselines({ parentBaselineId: reserved.baselineId, requireEvidence: true });
 
   await services.upsertBaselined({
     issueId: Number(rootIssue.id),
@@ -446,12 +506,11 @@ export async function writeCapturedTreeBaseline({
 
   // What each new baseline recorded as its files: the vault copies exactly
   // these (jobs/vaultWorker.js), for the parent and for every child.
-  const sourceOf = issueId => stable.tree.nodes.find(node => Number(node.id) === Number(issueId));
   return {
     captured: true,
     children: children.map(child => ({ issueId: Number(child.issue_id), version: Number(child.version),
       baselineId: child.baseline_id, issueKey: child.issue_key, projectId: Number(child.project_id),
-      attachments: recordedAttachments(child.raw, fieldsFor(sourceOf(child.issue_id)
+      attachments: recordedAttachments(child.raw, fieldsFor(nodeOf(child.issue_id)
         ?? { projectId: child.project_id, issueTypeId: child.issue_type_id })) })),
     attachments: recordedAttachments(treePlan.values?.[rootNode.logicalNodeId], controlledFields),
     nodeCount: treePlan.nodeCount,

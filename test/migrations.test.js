@@ -106,5 +106,88 @@ test('v069 keeps the link decisions queued for an issue until its record takes t
   const sql = sqlFor('v069_link_pending');
   assert.match(sql, /CREATE TABLE IF NOT EXISTS va_link_pending/);
   assert.match(sql, /PRIMARY KEY \(issue_id, decided_on_issue_id\)/);
-  assert.equal(MIGRATIONS.at(-1).id, 'v069_link_pending');
+});
+
+test('v070 records when Jira last refused the app its attachment-delete grant', () => {
+  assert.match(sqlFor('v070_vault_space_app_delete_check'),
+    /ALTER TABLE va_vault_space ADD COLUMN app_delete_checked_at BIGINT NULL/);
+});
+
+test('v071-v074 let a vaulted copy live in the Object Store, and a project have no vault space', () => {
+  assert.match(sqlFor('v071_vault_attachment_confluence_optional'),
+    /ALTER TABLE va_vault_attachment MODIFY COLUMN confluence_attachment_id VARCHAR\(64\) NULL/);
+  const storage = sqlFor('v072_vault_attachment_storage');
+  assert.match(storage, /ADD COLUMN storage VARCHAR\(16\) NOT NULL DEFAULT 'CONFLUENCE'/, 'existing rows are Confluence copies');
+  assert.match(storage, /ADD COLUMN object_key VARCHAR\(191\) NULL/);
+  assert.match(sqlFor('v073_vault_space_id_optional'), /MODIFY COLUMN space_id VARCHAR\(64\) NULL/);
+  assert.match(sqlFor('v074_vault_space_key_optional'), /MODIFY COLUMN space_key VARCHAR\(64\) NULL/);
+});
+
+test('v075-v087 stay in the list: they may already have run on a site', () => {
+  for (const id of ['v075_baseline_field', 'v076_baseline_rule', 'v077_baseline_signature',
+    'v078_baseline_node_child', 'v079_baseline_link', 'v080_baseline_policy_recorded', 'v081_capture_lease',
+    'v082_drift_observations', 'v083_decisions', 'v084_decision_group', 'v085_decision_signature',
+    'v086_security_level', 'v087_baseline_cause']) {
+    assert.ok(sqlFor(id), id);
+  }
+});
+
+test('migration ids are unique and the list ends at v105', () => {
+  const ids = MIGRATIONS.map(m => m.id);
+  assert.equal(new Set(ids).size, ids.length);
+  assert.equal(MIGRATIONS.at(-1).id, 'v105_baseline_content_as_of');
+});
+
+test('v088-v093 replace the draft field, rule and signature tables with the spec shape', () => {
+  assert.match(sqlFor('v088_drop_draft_baseline_field'), /^DROP TABLE IF EXISTS va_baseline_field$/);
+  const field = sqlFor('v089_baseline_field');
+  for (const column of ['label_source VARCHAR\\(16\\) NOT NULL', 'materiality VARCHAR\\(16\\) NOT NULL',
+    'restorable BOOLEAN NULL', 'digest CHAR\\(64\\) NOT NULL', 'required_by TEXT NOT NULL']) {
+    assert.match(field, new RegExp(column), column);
+  }
+  assert.doesNotMatch(field, /severity/);
+  assert.match(field, /PRIMARY KEY \(baseline_id, field_id\)/);
+
+  assert.match(sqlFor('v090_drop_draft_baseline_rule'), /^DROP TABLE IF EXISTS va_baseline_rule$/);
+  const rule = sqlFor('v091_baseline_rule');
+  for (const column of ['rule_key CHAR\\(32\\) NOT NULL', 'source VARCHAR\\(16\\) NOT NULL', 'approvers TEXT NOT NULL',
+    'imposed_by_baseline_id BINARY\\(16\\) NULL', 'imposed_by_version INT NULL']) {
+    assert.match(rule, new RegExp(column), column);
+  }
+  assert.doesNotMatch(rule, /\brole VARCHAR/, 'a rule holds a set of approvers, not one role');
+
+  assert.match(sqlFor('v092_drop_draft_baseline_signature'), /^DROP TABLE IF EXISTS va_baseline_signature$/);
+  const signature = sqlFor('v093_baseline_signature');
+  for (const column of ['cause_baseline_id BINARY\\(16\\) NULL', 'decision_id BINARY\\(16\\) NULL',
+    'transition_id VARCHAR\\(32\\) NULL', 'transition_at BIGINT NULL', 'status_at_capture VARCHAR\\(32\\) NULL',
+    'signed_at BIGINT NOT NULL']) {
+    assert.match(signature, new RegExp(column), column);
+  }
+  assert.match(signature, /PRIMARY KEY \(baseline_id, approval_id\)/);
+});
+
+test('v094-v097 put the drift observation columns in the spec shape', () => {
+  // Each re-runnable: a DDL that applied but was never ledgered must not stall every later migration.
+  assert.match(sqlFor('v094_drift_drop_draft_editor'), /^ALTER TABLE va_drift DROP COLUMN IF EXISTS editor_account_id$/);
+  assert.match(sqlFor('v095_drift_drop_draft_decision'), /^ALTER TABLE va_drift DROP COLUMN IF EXISTS decision_id$/);
+  assert.match(sqlFor('v096_drift_decision'), /^ALTER TABLE va_drift ADD COLUMN IF NOT EXISTS decision_id BINARY\(16\) NULL$/);
+  assert.match(sqlFor('v097_drift_by_baseline'),
+    /^ALTER TABLE va_drift ADD INDEX IF NOT EXISTS idx_drift_baseline \(baseline_id, field_id\)$/);
+});
+
+test('v098-v103 replace the draft decision tables; a signature is appended, never overwritten', () => {
+  assert.match(sqlFor('v098_drop_draft_decision'), /^DROP TABLE IF EXISTS va_decision$/);
+  assert.match(sqlFor('v099_drop_draft_decision_group'), /^DROP TABLE IF EXISTS va_decision_group$/);
+  assert.match(sqlFor('v100_drop_draft_decision_signature'), /^DROP TABLE IF EXISTS va_decision_signature$/);
+  assert.match(sqlFor('v101_decision'), /decision_id BINARY\(16\) NOT NULL/);
+  assert.doesNotMatch(sqlFor('v102_decision_group'), /evidence_hash/, 'a group\'s evidence is computed, not stored');
+  const signature = sqlFor('v103_decision_signature');
+  assert.match(signature, /PRIMARY KEY \(decision_id, group_key, approval_id\)/);
+  assert.match(signature, /evidence_hash CHAR\(64\) NOT NULL/);
+});
+
+test('v104-v105 add the lease acquisition time and a migrated version\'s content time', () => {
+  assert.match(sqlFor('v104_capture_lease_acquired'),
+    /^ALTER TABLE va_capture_lease ADD COLUMN IF NOT EXISTS acquired_at BIGINT NULL$/);
+  assert.match(sqlFor('v105_baseline_content_as_of'), /^ALTER TABLE va_baseline ADD COLUMN IF NOT EXISTS content_as_of BIGINT NULL$/);
 });

@@ -1,4 +1,4 @@
-import { REVIEW_STATE } from './interception.js';
+import { REVIEW_STATE, lockLeaseMs } from './interception.js';
 import { MATERIALITY } from './materiality.js';
 
 /**
@@ -47,9 +47,9 @@ export const REFUSE_MESSAGE = {
 };
 
 
-export const LOCK_TTL_MS = 60 * 1000;
+export { LOCK_TTL_MS, RESTORE_LEASE_MS, lockLeaseMs } from './interception.js';
 
-export function canDecide({ review, baseline, isEligible, authRequired = false, authVerified = false, now = Date.now(), lockTtlMs = LOCK_TTL_MS }) {
+export function canDecide({ review, baseline, isEligible, authRequired = false, authVerified = false, now = Date.now(), lockTtlMs = lockLeaseMs(review?.state) }) {
   if (!baseline) return { allow: false, reason: REFUSE.NO_BASELINE };
   if (!isEligible) return { allow: false, reason: REFUSE.NOT_ELIGIBLE };
   if (review?.state === REVIEW_STATE.LOCKED) {

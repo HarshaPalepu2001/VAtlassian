@@ -1,6 +1,6 @@
 import { executeQuery, toBinaryParam, fromBinaryColumn, limitClause, affectedRows } from '../lib/db.js';
 import { throwing, isDuplicateKey } from './store.js';
-import { REVIEW_STATE } from '../lib/interception.js';
+import { REVIEW_STATE, LOCK_TTL_MS, RESTORE_LEASE_MS } from '../lib/interception.js';
 
 /**
  * va_item_state — one row per work item. THIS IS THE REVIEWER QUEUE.
@@ -151,13 +151,14 @@ export async function touch(issueId, now, lastChangelogId = undefined) {
  * rather than a flag — two reviewers clicking Reject at the same moment, one
  * wins.
  */
-export async function acquire({ issueId, expectedVersion, state, allowedStates = null, now = Date.now(), staleOlderThan = 60000 }) {
+export async function acquire({ issueId, expectedVersion, state, allowedStates = null, now = Date.now(),
+  staleOlderThan = LOCK_TTL_MS, restoreLeaseMs = RESTORE_LEASE_MS }) {
   const states = Array.isArray(allowedStates) && allowedStates.length ? allowedStates : null;
   let stateClause = '';
   const params = [state, now, issueId, expectedVersion];
   if (states) {
-    stateClause = ` AND (state IN (${states.map(() => '?').join(', ')}) OR (state IN ('DECIDING', 'RESTORING') AND (last_checked_at IS NULL OR last_checked_at <= ?)))`;
-    params.push(...states, now - staleOlderThan);
+    stateClause = ` AND (state IN (${states.map(() => '?').join(', ')}) OR ${STALE_LOCK})`;
+    params.push(...states, ...staleCutoffs(now, staleOlderThan, restoreLeaseMs));
   }
   const result = await executeQuery(
     `UPDATE va_item_state SET state = ?, last_checked_at = ?, version = version + 1
@@ -167,19 +168,41 @@ export async function acquire({ issueId, expectedVersion, state, allowedStates =
   return { acquired: (affectedRows(result) ?? 0) === 1 };
 }
 
-/** Break abandoned locks older than staleOlderThan and return them to the queue. */
-export async function recoverStaleLocks(now = Date.now(), staleOlderThan = 60000) {
-  const cutoff = now - staleOlderThan;
+/**
+ * An operation lock past its lease (lib/interception.js lockLeaseMs): a
+ * DECIDING row after a minute, a RESTORING row only after the restore lease.
+ * Binds two cutoffs, in that order — see staleCutoffs().
+ */
+const STALE_LOCK = `((state = 'DECIDING' AND (last_checked_at IS NULL OR last_checked_at <= ?))
+  OR (state = 'RESTORING' AND (last_checked_at IS NULL OR last_checked_at <= ?)))`;
+const staleCutoffs = (now, decidingTtl = LOCK_TTL_MS, restoreLease = RESTORE_LEASE_MS) =>
+  [now - decidingTtl, now - restoreLease];
+
+/** Break abandoned locks past their lease and return them to the queue. */
+export async function recoverStaleLocks(now = Date.now(), staleOlderThan = LOCK_TTL_MS, restoreLeaseMs = RESTORE_LEASE_MS) {
   const result = await executeQuery(
     `UPDATE va_item_state
      SET state = CASE WHEN drift_count > 0 THEN '${REVIEW_STATE.DRIFTED}' ELSE '${REVIEW_STATE.BASELINED}' END,
          last_checked_at = ?,
          version = version + 1
-     WHERE state IN ('DECIDING', 'RESTORING')
-       AND (last_checked_at IS NULL OR last_checked_at <= ?)`,
-    [now, cutoff]
+     WHERE ${STALE_LOCK}`,
+    [now, ...staleCutoffs(now, staleOlderThan, restoreLeaseMs)]
   );
   return affectedRows(result) ?? 0;
+}
+
+/**
+ * The restore worker's heartbeat on the work item's lock. Only a RESTORING row
+ * is touched, so a lock already released or taken over is left alone, and the
+ * CAS version is not bumped: this carries nothing a concurrent writer could
+ * conflict with, exactly like touch().
+ */
+export async function refreshRestoreLock({ issueId, now = Date.now() }) {
+  const result = await executeQuery(
+    `UPDATE va_item_state SET last_checked_at = ? WHERE issue_id = ? AND state = '${REVIEW_STATE.RESTORING}'`,
+    [now, issueId]
+  );
+  return (affectedRows(result) ?? 0) === 1;
 }
 
 /** Release a lock into a settled state. Unconditional: we hold it. */
@@ -241,6 +264,28 @@ export async function driftedInProjects(projectIds, {
        AND state IN (${states.map(() => '?').join(', ')})
      ORDER BY last_drift_at DESC LIMIT ${limitClause(limit)}`,
     [...ids, ...states]
+  );
+  return rows.map(decode);
+}
+
+/**
+ * EVERY ITEM WAITING ON A DECISION in the projects a reviewer's grants cover:
+ * changed since approval (DRIFTED), or a decision or restore that did not
+ * finish (ERROR). Scoped by the reviewer's GRANTS, not by which transitions
+ * are controlled today — an item signed under a rule since removed is still
+ * held by Jira until someone decides it. `siteWide` for a grant with no
+ * project. Oldest first, so a cut at `limit` drops the newest, not the most
+ * overdue. The caller checks the role each item's baseline froze.
+ */
+export async function awaitingDecision({ projectIds = [], siteWide = false, limit = 200 } = {}) {
+  const ids = [...new Set((projectIds ?? []).map(Number).filter(Number.isFinite))];
+  if (!siteWide && ids.length === 0) return [];
+  const scope = siteWide ? '' : ` AND project_id IN (${ids.map(() => '?').join(', ')})`;
+  const rows = await throwing(
+    `SELECT ${REVIEW_COLUMNS} FROM va_item_state
+     WHERE state IN ('${REVIEW_STATE.DRIFTED}', '${REVIEW_STATE.ERROR}')${scope}
+     ORDER BY last_drift_at ASC LIMIT ${limitClause(limit)}`,
+    siteWide ? [] : ids
   );
   return rows.map(decode);
 }
@@ -308,13 +353,12 @@ export async function queueForProject(projectId, { states = [REVIEW_STATE.DRIFTE
  * baseline to measure against, and
  * one that is DECIDING or RESTORING is mid-operation and must be left alone.
  */
-export async function dueForReconcile(limit = 50, now = Date.now(), staleOlderThan = 60000) {
+export async function dueForReconcile(limit = 50, now = Date.now(), staleOlderThan = LOCK_TTL_MS) {
   const rows = await throwing(
     `SELECT ${REVIEW_COLUMNS} FROM va_item_state
-     WHERE state IN ('BASELINED', 'DRIFTED')
-        OR (state IN ('DECIDING', 'RESTORING') AND (last_checked_at IS NULL OR last_checked_at <= ?))
+     WHERE state IN ('BASELINED', 'DRIFTED') OR ${STALE_LOCK}
      ORDER BY last_checked_at ASC LIMIT ${limitClause(limit)}`,
-    [now - staleOlderThan]
+    staleCutoffs(now, staleOlderThan)
   );
   return rows.map(decode);
 }
@@ -377,7 +421,7 @@ function truncate(s, max) {
  * va_item_state row, if it has one at all, is never a sweep target: its tree
  * is examined as a whole, from its root, by the aggregate collector.
  */
-export async function dueTreeRoots(limit = 50, now = Date.now(), staleOlderThan = 60000) {
+export async function dueTreeRoots(limit = 50, now = Date.now(), staleOlderThan = LOCK_TTL_MS) {
   const rows = await throwing(
     `SELECT i.issue_id, i.issue_key, i.state, TO_BASE64(i.baseline_id) AS baseline_id, i.baseline_version,
              i.last_checked_at, i.last_drift_at
@@ -386,10 +430,11 @@ export async function dueTreeRoots(limit = 50, now = Date.now(), staleOlderThan 
      JOIN va_baseline_node n ON n.baseline_id = b.baseline_id AND n.original_issue_id = i.issue_id AND n.parent_logical_node_id IS NULL
      WHERE b.state = 'ACTIVE' AND (
         i.state IN ('BASELINED', 'DRIFTED')
-        OR (i.state IN ('DECIDING', 'RESTORING') AND (i.last_checked_at IS NULL OR i.last_checked_at <= ?))
+        OR (i.state = 'DECIDING' AND (i.last_checked_at IS NULL OR i.last_checked_at <= ?))
+        OR (i.state = 'RESTORING' AND (i.last_checked_at IS NULL OR i.last_checked_at <= ?))
      )
      ORDER BY i.last_checked_at ASC LIMIT ${limitClause(limit)}`,
-    [now - staleOlderThan]
+    staleCutoffs(now, staleOlderThan)
   );
   return rows.map(decode);
 }

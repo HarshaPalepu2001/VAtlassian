@@ -1,5 +1,5 @@
 import api, { route } from '@forge/api';
-import { OUTCOME, REVIEW_STATE } from './interception.js';
+import { OUTCOME, REVIEW_STATE, isStaleLock } from './interception.js';
 import { controlledFields } from '../db/configStore.js';
 import { getReview, applyObservation } from '../db/itemStateStore.js';
 import { voidOthers } from '../db/approvalStore.js';
@@ -110,8 +110,7 @@ export async function collectTree({ rootIssueId, rootIssueKey, detectedVia = DET
     return { outcome: OUTCOME.NO_BASELINE };
   }
 
-  const isStaleLock = review.last_checked_at != null && now != null && (Number(now) - Number(review.last_checked_at) > 60000);
-  if ((review.state === REVIEW_STATE.DECIDING || review.state === REVIEW_STATE.RESTORING) && !isStaleLock) {
+  if ((review.state === REVIEW_STATE.DECIDING || review.state === REVIEW_STATE.RESTORING) && !isStaleLock(review, now)) {
     return { outcome: OUTCOME.BUSY };
   }
 

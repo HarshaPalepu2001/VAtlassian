@@ -6,10 +6,10 @@ import { baselinePolicy } from '../baselinePolicy.js';
 import { baselineDecisionMeaning } from './challenge.js';
 import { availableTransitions, exactAvailableTransition, applyTransition } from '../transitions.js';
 import { readStableTree } from '../tree/stableRead.js';
-import { readTreeWithNodeFields, fieldsForItem } from '../tree/nodeFields.js';
+import { readTreeWithNodeFields, scopeForItem } from '../tree/nodeFields.js';
 import { planTreeCapture } from '../tree/capturePlan.js';
 import { createTreeReader } from '../tree/jira.js';
-import { baselineDrift } from '../liveDrift.js';
+import { baselineDrift, logLiveDrift } from '../liveDrift.js';
 import { linkDecisionsPending } from '../../db/linkPendingStore.js';
 import { canonicaliseIssue } from '../attachmentIdentity.js';
 
@@ -247,15 +247,18 @@ export async function gateRuntime() {
       // which transition this is may stand between a drifted item and its
       // refusal. Everything below that can fail on the edge is reported, not
       // thrown, and gate.js refuses on it only after the drift hold has run.
-      const [items, declared, health, active] = await Promise.all([
+      const [items, scoped, health, active] = await Promise.all([
         query('SELECT state, baseline_version FROM va_item_state WHERE issue_id = ?', [issue.issueId]),
         // A child of an approved tree is held to its root's fields, here as on
         // every other path — or a file added to it would never hold anything.
-        fieldsForItem(issue, { activeRootsForNode, controlledFields: config.controlledFields }),
+        scopeForItem(issue, { activeRootsForNode }).then(async found => ({ found,
+          fields: await config.controlledFields({ projectId: found.projectId, issueTypeId: found.issueTypeId }) })),
         config.projectConfig(issue.projectId),
         baselines.activeBaseline(issue.issueId)
       ]);
       const item = items[0] ?? null;
+      const declared = scoped.fields;
+      const scope = scoped.found;
       if (active && item && Number(item.baseline_version) !== Number(active.version)) {
         query('UPDATE va_item_state SET baseline_version = ? WHERE issue_id = ?', [active.version, issue.issueId]).catch(() => {});
         item.baseline_version = active.version;
@@ -266,6 +269,7 @@ export async function gateRuntime() {
       // ago holds the item before any collector has seen it.
       const drift = await baselineDrift({ baseline: active, issueId: issue.issueId, issueFields: issue.fields,
         declared, readRootDigests: rootNodeDigests });
+      logLiveDrift('gate', { issueKey: issue.issueKey, issueTypeId: issue.issueTypeId, comparison: drift, scope });
       // Only a held link explains itself this way, and only then is it read.
       const linkPending = drift.changed.includes('issuelinks')
         && (await linkDecisionsPending(issue.issueId).catch(() => [])).length > 0;
@@ -275,7 +279,8 @@ export async function gateRuntime() {
       // it is computed only when a signature is actually being checked.
       const contentHash = async () => (await approvalContentHash({ issue, declared, modifiedFields, activeBaseline: active,
         readTree: active?.tree_hash ? createTreeReader({ api, route }).read : null })).contentHash;
-      return { ...issue, ...edge, health, item, contentHash, driftCount: drift.changed.length, linkPending };
+      return { ...issue, ...edge, health, item, contentHash, driftCount: drift.changed.length, linkPending,
+        driftedFields: drift.changed, driftDiagnostics: drift.diagnostics ?? null, driftScope: scope };
     }
   };
 }

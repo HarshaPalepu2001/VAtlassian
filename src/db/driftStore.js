@@ -1,5 +1,6 @@
-import { executeQuery, toBinaryParam, fromBinaryColumn, limitClause, affectedRows } from '../lib/db.js';
+import { executeQuery, toBinaryParam, fromBinaryColumn, limitClause, affectedRows, isUnknownColumn } from '../lib/db.js';
 import { newId, throwing, isDuplicateKey } from './store.js';
+import { observationOf } from '../lib/observation.js';
 
 /**
  * va_drift — the append-only record of what changed after approval.
@@ -11,40 +12,48 @@ import { newId, throwing, isDuplicateKey } from './store.js';
  * transactions to make that safe.
  */
 
-export async function hasUnresolvedDrift(projectId, query = executeQuery) {
-  const siteWide = projectId == null;
-  const rows = await query(
-    `SELECT 1 FROM va_drift WHERE ${siteWide ? '' : 'project_id = ? AND '}approval_id IS NULL LIMIT 1`,
-    siteWide ? [] : [projectId]
-  );
-  if (!rows?.result) throw rows?.error ?? new Error('Unresolved-drift storage is unavailable');
-  if (!Array.isArray(rows.data)) throw new Error('Unresolved-drift storage returned an unreadable result');
-  return rows.data.length > 0;
-}
-
-const DRIFT_COLUMNS = `
+const LEGACY_DRIFT_COLUMNS = `
   TO_BASE64(drift_id) AS drift_id, issue_id, project_id,
   TO_BASE64(baseline_id) AS baseline_id, baseline_version,
   field_id, field_name, from_digest, to_digest, from_repr, to_repr,
   actor_account_id, actor_name, occurred_at, changelog_id, detected_via, source,
   materiality, TO_BASE64(approval_id) AS approval_id
 `;
+// Written since v082/v096 (docs/specs/2026-10-03-baseline-evidence-model-design.md §7.1).
+// Until those land on a site, reads fall back to the legacy list rather than
+// failing every panel, hold and decision for the minutes after a deploy.
+const DRIFT_COLUMNS = `${LEGACY_DRIFT_COLUMNS},
+  observed_at, trigger_kind, trigger_account_id, edit_status, edited_at,
+  TO_BASE64(decision_id) AS decision_id
+`;
 
-function decode(row) {
+async function selectDrift(query, build, params) {
+  try {
+    return await query(build(DRIFT_COLUMNS), params);
+  } catch (error) {
+    if (!isUnknownColumn(error)) throw error;
+    return query(build(LEGACY_DRIFT_COLUMNS), params);
+  }
+}
+
+function toObservation(row) {
   if (!row) return null;
   return {
     ...row,
     drift_id: fromBinaryColumn(row.drift_id),
     baseline_id: fromBinaryColumn(row.baseline_id),
     approval_id: fromBinaryColumn(row.approval_id),
-    // A stable string handle for the AI payload and for the panel's citation
-    // chips. The model is given these and must cite them; anything it emits
-    // that is not in this set is stripped. Base64 rather than hex only because
-    // it is what the column already yields — no decode round trip on a path
-    // that runs for every drift row on every panel open.
-    key: row.drift_id
+    decision_id: fromBinaryColumn(row.decision_id ?? null),
+    // A stable string handle for the AI payload and the panel's citation chips.
+    key: row.drift_id,
+    observation: observationOf(row)
   };
 }
+
+const LEGACY_INSERT_COLUMNS = `drift_id, issue_id, project_id, baseline_id, baseline_version, field_id, field_name,
+        from_digest, to_digest, from_repr, to_repr, actor_account_id, actor_name,
+        occurred_at, changelog_id, detected_via, source, materiality, approval_id`;
+const LEGACY_INSERT_VALUES = 'FROM_BASE64(?), ?, ?, FROM_BASE64(?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL';
 
 /**
  * Record one observed change.
@@ -60,36 +69,31 @@ function decode(row) {
  *
  * A duplicate is therefore a SUCCESS, not an error, and is reported as such.
  */
-export async function recordDrift(drift) {
+export async function recordDrift(drift, query = throwing) {
   const driftId = newId();
+  const legacy = [
+    toBinaryParam(driftId), drift.issue_id, drift.project_id, toBinaryParam(drift.baseline_id),
+    drift.baseline_version, drift.field_id, drift.field_name ?? drift.field_id,
+    drift.from_digest ?? null, drift.to_digest ?? null,
+    truncate(drift.from_repr, 512), truncate(drift.to_repr, 512),
+    drift.actor_account_id ?? null, drift.actor_name ?? null, drift.occurred_at,
+    drift.changelog_id ?? null, drift.detected_via ?? 'EVENT', drift.source ?? 'JIRA', drift.materiality
+  ];
+  const provenance = [drift.observed_at ?? null, drift.trigger_kind ?? null, drift.trigger_account_id ?? null,
+    drift.edit_status ?? null, drift.edited_at ?? null];
   try {
-    await throwing(
-      `INSERT INTO va_drift
-       (drift_id, issue_id, project_id, baseline_id, baseline_version, field_id, field_name,
-        from_digest, to_digest, from_repr, to_repr, actor_account_id, actor_name,
-        occurred_at, changelog_id, detected_via, source, materiality, approval_id)
-       VALUES (FROM_BASE64(?), ?, ?, FROM_BASE64(?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
-      [
-        toBinaryParam(driftId),
-        drift.issue_id,
-        drift.project_id,
-        toBinaryParam(drift.baseline_id),
-        drift.baseline_version,
-        drift.field_id,
-        drift.field_name ?? drift.field_id,
-        drift.from_digest ?? null,
-        drift.to_digest ?? null,
-        truncate(drift.from_repr, 512),
-        truncate(drift.to_repr, 512),
-        drift.actor_account_id ?? null,
-        drift.actor_name ?? null,
-        drift.occurred_at,
-        drift.changelog_id ?? null,
-        drift.detected_via,
-        drift.source,
-        drift.materiality
-      ]
-    );
+    try {
+      await query(
+        `INSERT INTO va_drift (${LEGACY_INSERT_COLUMNS},
+          observed_at, trigger_kind, trigger_account_id, edit_status, edited_at)
+         VALUES (${LEGACY_INSERT_VALUES}, ?, ?, ?, ?, ?)`,
+        [...legacy, ...provenance]
+      );
+    } catch (error) {
+      // Before v082 lands on a site: the observation is still recorded.
+      if (!isUnknownColumn(error)) throw error;
+      await query(`INSERT INTO va_drift (${LEGACY_INSERT_COLUMNS}) VALUES (${LEGACY_INSERT_VALUES})`, legacy);
+    }
     return { inserted: true, driftId };
   } catch (e) {
     if (isDuplicateKey(e)) return { inserted: false, duplicate: true };
@@ -112,13 +116,33 @@ function truncate(s, max) {
 /** Every change to a work item since its current baseline, oldest first. */
 export async function driftForIssue(issueId, baselineVersion, { undecidedOnly = false, limit = 500 } = {}) {
   const clause = undecidedOnly ? 'AND approval_id IS NULL' : '';
-  const rows = await throwing(
-    `SELECT ${DRIFT_COLUMNS} FROM va_drift
+  const rows = await selectDrift(throwing, columns =>
+    `SELECT ${columns} FROM va_drift
      WHERE issue_id = ? AND baseline_version = ? ${clause}
      ORDER BY occurred_at ASC LIMIT ${limitClause(limit)}`,
     [issueId, baselineVersion]
   );
-  return rows.map(decode);
+  return rows.map(toObservation);
+}
+
+/** One bounded read for the changed descendants in a root review. */
+export async function driftForIssueVersions(pairs, query = throwing, limit = 2000) {
+  const unique = new Map();
+  for (const pair of pairs ?? []) {
+    const issueId = Number(pair.issueId), version = Number(pair.version);
+    if (!Number.isSafeInteger(issueId) || issueId <= 0 || !Number.isSafeInteger(version) || version <= 0) continue;
+    unique.set(`${issueId}:${version}`, [issueId, version]);
+  }
+  if (!unique.size) return { rows: [], truncated: false };
+  const selected = [...unique.values()];
+  const clauses = selected.map(() => '(issue_id = ? AND baseline_version = ?)').join(' OR ');
+  const rows = await selectDrift(query, columns =>
+    `SELECT ${columns} FROM va_drift
+     WHERE approval_id IS NULL AND (${clauses})
+     ORDER BY occurred_at ASC LIMIT ${limitClause(limit + 1)}`,
+    selected.flat()
+  );
+  return { rows: rows.slice(0, limit).map(toObservation), truncated: rows.length > limit };
 }
 
 /** Counts for the review row, computed in the database rather than in JS. */
@@ -148,8 +172,8 @@ export async function driftSummary(issueId, baselineVersion) {
  * both call this, and a retried decision must not silently claim credit for
  * drift somebody else already ruled on.
  */
-export async function markDecided({ issueId, baselineVersion, approvalId }) {
-  const result = await executeQuery(
+export async function markDecided({ issueId, baselineVersion, approvalId }, execute = executeQuery) {
+  const result = await execute(
     `UPDATE va_drift SET approval_id = FROM_BASE64(?)
      WHERE issue_id = ? AND baseline_version = ? AND approval_id IS NULL`,
     [toBinaryParam(approvalId), issueId, baselineVersion]

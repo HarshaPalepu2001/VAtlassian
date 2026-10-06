@@ -43,7 +43,7 @@ function world({ onIssue = [], vault = {}, aliases = {} } = {}) {
       if (w.faults.has('audit')) throw Object.assign(new Error('ledger down'), { status: 503 });
       w.calls.push(['audit', eventType]); w.audit.push({ eventType, payload });
     },
-    preserve: async () => ({ confluenceAttachmentId: 'kept-1' })
+    preserve: async () => ({ storage: 'CONFLUENCE', confluenceAttachmentId: 'kept-1' })
   };
   return w;
 }
@@ -64,7 +64,7 @@ test('an added file is written to the ledger with its hash, then deleted', async
   assert.deepEqual(result.removed, [{ id: '3', filename: 'evil.exe' }]);
   assert.deepEqual(w.calls, [['audit', 'ATTACHMENT_REMOVED_BY_RESTORE'], ['remove', '3']], 'evidence before destruction');
   assert.equal(w.audit[0].payload.contentHash, hash('mz'));
-  assert.equal(w.audit[0].payload.vaultCopy, 'kept-1');
+  assert.deepEqual(w.audit[0].payload.vaultCopy, { storage: 'CONFLUENCE', confluenceAttachmentId: 'kept-1', objectKey: null });
 });
 
 test('nothing is deleted when the ledger entry cannot be written', async () => {
@@ -77,7 +77,7 @@ test('nothing is deleted when the ledger entry cannot be written', async () => {
 test('a file already restored is found by its alias and not uploaded again', async () => {
   const w = world({ onIssue: [[file('900', 'spec.pdf'), 'pdf'], [file('2', 'data.csv'), 'csv']], aliases: { 900: '1' } });
   const result = await run(w);
-  assert.deepEqual(result, { restored: [], removed: [] });
+  assert.deepEqual(result, { restored: [], removed: [], unpointable: [] });
   assert.deepEqual(w.calls, []);
 });
 
@@ -155,12 +155,24 @@ test('the reject dialog is told which files go, which come back, and which canno
     ],
     issue: { issueId: 10, issueKey: 'T-1' },
     removedNodes: [{ issueId: 12, issueKey: 'T-3', files: [{ id: '8', filename: 'gone-with-item.png' }] }],
-    lookup: async ({ issueId, attachmentIds }) => new Map(attachmentIds.filter(id => id !== '4').map(id => [id, { issueId }]))
+    lookup: async ({ issueId, attachmentIds }) => new Map(attachmentIds.filter(id => id !== '4')
+      .map(id => [id, { issueId, confluence_attachment_id: `c${id}`, confluence_page_id: 'p', media_id: 'm' }]))
   });
   assert.deepEqual(rejection.deleteFiles, [{ issueId: 10, issueKey: 'T-1', id: '3', filename: 'added.txt' }]);
   assert.deepEqual(rejection.restoreFiles.map(f => `${f.issueKey}:${f.filename}`), ['T-1:spec.pdf', 'T-2:child.pdf', 'T-3:gone-with-item.png']);
   assert.deepEqual(rejection.unrestorableFiles.map(f => f.filename), ['lost.doc']);
   assert.equal(rejection.vaultChecked, true);
+});
+
+test('a restorable file the vault holds no media id for is named: text showing it cannot be re-pointed', async () => {
+  const rejection = await attachmentRejection({
+    reviewFields: [{ kind: 'attachments', removed: [{ id: '1', filename: 'known.png' }, { id: '2', filename: 'old.png' }] }],
+    issue: { issueId: 10, issueKey: 'T-1' },
+    lookup: async () => new Map([['1', { media_id: 'm1', storage: 'OBJECT_STORE', object_key: 'vault/sha256/a' }],
+      ['2', { media_id: null, confluence_attachment_id: 'c2', confluence_page_id: 'p' }]])
+  });
+  assert.deepEqual(rejection.restoreFiles.map(f => f.filename), ['known.png', 'old.png']);
+  assert.deepEqual(rejection.mediaUnknownFiles.map(f => f.filename), ['old.png']);
 });
 
 test('when the vault cannot be checked the dialog says so instead of guessing', async () => {
@@ -180,4 +192,50 @@ test('removedNodeFiles lists the files of work items a tree rejection recreates'
       values: { n2: { attachment: [{ id: '8', filename: 'a.png' }] }, n4: { attachment: [{ id: '9' }] } } }
   });
   assert.deepEqual(files, [{ issueId: 12, issueKey: 'T-3', files: [{ id: '8', filename: 'a.png' }] }]);
+});
+
+// ── Copies kept in the Forge Object Store ───────────────────────────────────
+
+function objectStoreWorld(getContent) {
+  const w = world({ onIssue: [[file('2', 'data.csv'), 'csv']], vault: { 1: { filename: 'spec.pdf', bytes: 'pdf' } } });
+  w.deps.vaultedCopies = async ({ attachmentIds }) => new Map(attachmentIds.filter(id => w.vault[id]).map(id => [id, {
+    jira_attachment_id: id, filename: w.vault[id].filename, content_hash: hash(w.vault[id].bytes),
+    storage: 'OBJECT_STORE', object_key: `vault/sha256/${hash(w.vault[id].bytes)}`, confluence_attachment_id: null, baseline_id: 'b1' }]));
+  w.deps.downloadVaulted = getContent;
+  return w;
+}
+
+test('a file vaulted to the Object Store is put back from there', async () => {
+  const asked = [];
+  const w = objectStoreWorld(async copy => { asked.push(copy.object_key); return Buffer.from('pdf'); });
+  const result = await restoreAttachments({ issueKey: 'T-1', issueId: 10, target: approved, deps: w.deps });
+  assert.deepEqual(result.restored.map(r => r.id), ['1']);
+  assert.deepEqual(asked, [`vault/sha256/${hash('pdf')}`]);
+});
+
+test('an Object Store copy that is gone is named as missing from there, not retried', async () => {
+  const w = objectStoreWorld(async () => { throw Object.assign(new Error('no object'), { status: 404 }); });
+  await assert.rejects(() => restoreAttachments({ issueKey: 'T-1', issueId: 10, target: approved, deps: w.deps }), error => {
+    assert.equal(error.status, 422);
+    assert.match(error.detail, /missing from the Forge Object Store/);
+    return true;
+  });
+});
+
+test('an Object Store that cannot be reached is a system failure, retried', async () => {
+  const w = objectStoreWorld(async () => { throw Object.assign(new Error('store down'), { status: 503 }); });
+  await assert.rejects(() => restoreAttachments({ issueKey: 'T-1', issueId: 10, target: approved, deps: w.deps }),
+    error => error.status === 503);
+});
+
+test('the restore adapter reads each copy from where it was vaulted', async () => {
+  const { createAttachmentRestoreDeps } = await import('../src/lib/restore/attachmentAdapters.js');
+  const confluenceCalls = [];
+  const api = { asApp: () => ({ requestConfluence: async path => { confluenceCalls.push(String(path)); return { ok: true, arrayBuffer: async () => Buffer.from('c') }; } }) };
+  const deps = createAttachmentRestoreDeps({ api, route: (s, ...v) => s.reduce((a, b, i) => a + b + (v[i] ?? ''), ''),
+    objectStore: { getContent: async key => Buffer.from(`os:${key}`) } });
+  assert.equal((await deps.downloadVaulted({ storage: 'OBJECT_STORE', object_key: 'vault/sha256/x' })).toString(), 'os:vault/sha256/x');
+  assert.equal(confluenceCalls.length, 0);
+  assert.equal((await deps.downloadVaulted({ storage: 'CONFLUENCE', confluence_page_id: 'p', confluence_attachment_id: 'a' })).toString(), 'c');
+  assert.equal(confluenceCalls.length, 1, 'a Confluence copy is downloaded from Confluence');
 });

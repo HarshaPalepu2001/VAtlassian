@@ -15,10 +15,15 @@ function provenancedBaseline() {
   };
 }
 
+// The evidence every writeBaseline call now passes explicitly; these tests are
+// about the baseline row, so its evidence is not required and not written.
+const unrequiredEvidence = () => ({ evidence: { required: false, cause: 'OWN_TRANSITION', links: [],
+  evidence: { fields: [], rules: [], signatures: [] } }, writeEvidence: async () => {} });
+
 test('scalar baseline insert records immutable control provenance', async () => {
   const queries = [];
   await writeBaseline({
-    baseline: provenancedBaseline(), raw: {},
+    baseline: provenancedBaseline(), raw: {}, ...unrequiredEvidence(),
     query: async (sql, params) => {
       queries.push({ sql, params });
       return sql.includes("SET state = 'ACTIVE'") ? { affectedRows: 1 } : [];
@@ -36,7 +41,7 @@ test('scalar publication is guarded by provenance at the database update', async
   const queries = [];
   const executed = [];
   await assert.rejects(() => writeBaseline({
-    baseline: provenancedBaseline(), raw: {},
+    baseline: provenancedBaseline(), raw: {}, ...unrequiredEvidence(),
     query: async (sql, params) => {
       queries.push({ sql, params });
       return sql.includes("SET state = 'ACTIVE'") ? { affectedRows: 0 } : [];
@@ -197,4 +202,72 @@ test('between deploy and migration, baseline reads fall back to the columns that
   assert.equal(partial.nodes_captured_at, null);
   await assert.rejects(() => baselineByVersion(1, 2, async () => { throw new Error('connection reset'); }), /connection reset/,
     'any other failure still fails');
+});
+
+test('a capture\'s evidence is written before publication, and publication requires it', async () => {
+  const order = [];
+  await writeBaseline({
+    baseline: provenancedBaseline(), raw: {},
+    evidence: { required: true, cause: 'OWN_TRANSITION', links: [], evidence: { fields: [], rules: [], signatures: [] } },
+    writeEvidence: async ({ entries }) => { order.push(['evidence', entries[0].cause, entries[0].baselineId.length]); },
+    query: async sql => {
+      if (sql.includes("SET state = 'ACTIVE'")) { order.push(['publish', sql]); return { affectedRows: 1 }; }
+      return [];
+    },
+    execute: async () => ({ result: true, data: {} })
+  });
+  assert.deepEqual(order[0], ['evidence', 'OWN_TRANSITION', 16]);
+  assert.equal(order[1][0], 'publish');
+  assert.match(order[1][1], /AND policy_recorded = TRUE/);
+});
+
+test('a version without required evidence publishes on its provenance alone', async () => {
+  let publish;
+  await writeBaseline({
+    baseline: provenancedBaseline(), raw: {},
+    evidence: { required: false, cause: 'LINK_RECORD', links: [], evidence: { fields: [], rules: [], signatures: [] } },
+    writeEvidence: async () => {},
+    query: async sql => { if (sql.includes("SET state = 'ACTIVE'")) { publish = sql; return { affectedRows: 1 }; } return []; },
+    execute: async () => ({ result: true, data: {} })
+  });
+  assert.doesNotMatch(publish, /policy_recorded/);
+});
+
+test('a write without its evidence is refused before anything is written', async () => {
+  const written = [];
+  const record = async sql => { written.push(sql); return { affectedRows: 1, result: true, data: {} }; };
+  for (const evidence of [undefined, null]) {
+    await assert.rejects(() => writeBaseline({ baseline: provenancedBaseline(), raw: { summary: 'x' }, evidence,
+      writeEvidence: async () => { written.push('evidence'); }, query: record, execute: record }),
+    error => error.reason === 'CAPTURE_INCOMPLETE');
+  }
+  assert.deepEqual(written, []);
+});
+
+test('a resumed capture clears its version\'s earlier evidence, then writes this attempt\'s', async () => {
+  const resume = { baseline_id: Buffer.alloc(16, 5), state: 'CAPTURING', version: 2 };
+  const run = state => {
+    const order = [];
+    const written = writeBaseline({ baseline: provenancedBaseline(), raw: {}, resume,
+      evidence: { required: true, cause: 'OWN_TRANSITION', links: [], evidence: { fields: [], rules: [], signatures: [] } },
+      writeEvidence: async ({ entries }) => { order.push(['evidence', entries[0].baselineId.equals(resume.baseline_id)]); },
+      query: async (sql, params) => {
+        const text = sql.replace(/\s+/g, ' ').trim();
+        if (text.startsWith('SELECT state FROM va_baseline')) { order.push(['state', params[0]]); return [{ state }]; }
+        if (text.startsWith('DELETE FROM')) order.push(['delete', text.match(/DELETE FROM (\w+)/)[1]]);
+        if (text.includes("SET state = 'ACTIVE'")) { order.push(['publish']); return { affectedRows: 1 }; }
+        return [];
+      },
+      execute: async () => ({ result: true, data: {} }) });
+    return { order, written };
+  };
+  const resumed = run('CAPTURING');
+  await resumed.written;
+  assert.deepEqual(resumed.order, [['state', resume.baseline_id.toString('base64')],
+    ['delete', 'va_baseline_field'], ['delete', 'va_baseline_rule'], ['delete', 'va_baseline_signature'],
+    ['delete', 'va_baseline_link'], ['delete', 'va_baseline_value'], ['evidence', true], ['publish']]);
+  const published = run('ACTIVE');
+  await assert.rejects(() => published.written, error => error.reason === 'CAPTURE_INCOMPLETE');
+  assert.deepEqual(published.order, [['state', resume.baseline_id.toString('base64')]],
+    'a version that is no longer CAPTURING is never cleared or rewritten');
 });

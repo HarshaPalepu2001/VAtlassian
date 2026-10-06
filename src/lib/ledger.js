@@ -187,8 +187,10 @@ export const EVENT = {
   CONTENT_CHANGED: 'CONTENT_CHANGED',
   ITEM_FIRST_OBSERVED: 'ITEM_FIRST_OBSERVED',
   // 2026-08-26: the item left the status its baseline was signed into, so that
-  // signature stopped describing the record and drift detection disarmed —
-  // lib/interception.js's supersede().
+  // signature stopped describing the record and drift detection disarmed.
+  // That path is gone (drift holds, it never disarms); this is now written only
+  // when a baselined work item is deleted (triggers/issue-deleted.js), and
+  // older ledgers may still carry the re-entry form.
   //
   // Audited rather than silent because it is a change in the CONTROL that
   // applies to a record, not a change to the record. Every other event here
@@ -248,6 +250,7 @@ export const EVENT = {
   CHANGE_APPROVED: 'CHANGE_APPROVED',
   CHANGE_REJECTED: 'CHANGE_REJECTED',
   BASELINE_CAPTURED: 'BASELINE_CAPTURED',
+  // No longer written; kept so older ledger entries still have a name.
   BASELINE_DISARMED: 'BASELINE_DISARMED',
   BASELINE_DEGRADED: 'BASELINE_DEGRADED',
   // A baselined work item was moved to another project or issue type in Jira.
@@ -318,5 +321,12 @@ export const EVENT = {
   // The app's own account was granted Delete all attachments on a locked
   // project's scheme, so a rejection can remove a file added after approval.
   ATTACHMENT_DELETE_GRANTED_TO_APP: 'ATTACHMENT_DELETE_GRANTED_TO_APP',
-  ATTACHMENT_DELETE_GRANT_FAILED: 'ATTACHMENT_DELETE_GRANT_FAILED'
+  ATTACHMENT_DELETE_GRANT_FAILED: 'ATTACHMENT_DELETE_GRANT_FAILED',
+  // An administrator turned the project's attachment-delete lockdown off. The
+  // grants it removed are NOT put back (grantsRestored: false): which holders
+  // had them is in the ATTACHMENT_DELETE_LOCKED entry, for a person to re-add.
+  ATTACHMENT_DELETE_LOCK_DISABLED: 'ATTACHMENT_DELETE_LOCK_DISABLED',
+  // Where this site's vault is: CONFLUENCE, or OBJECT_STORE on a site without
+  // Confluence (lib/vaultTier.js). Written when the answer is first remembered.
+  VAULT_TIER_DETECTED: 'VAULT_TIER_DETECTED'
 };

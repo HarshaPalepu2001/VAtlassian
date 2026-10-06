@@ -22,7 +22,7 @@ import { gatedTransition } from '../db/configStore.js';
 import { isEligible } from '../lib/reviewer.js';
 import { resolveActions } from '../lib/journey.js';
 import { extractDescription } from './panelEvidence.js';
-import { baselineDrift } from '../lib/liveDrift.js';
+import { baselineDrift, logLiveDrift } from '../lib/liveDrift.js';
 import { rootNodeDigests } from '../db/baselineTreeStore.js';
 
 function issueForSigning(issue) {
@@ -65,6 +65,7 @@ export function createSigningUsecases(deps = {}) {
         && (!Number.isSafeInteger(driftCount) || driftCount > 0);
       const drift = { evidenceHash: state.evidenceHash, count: driftCount, blocked: driftBlocked };
       if (driftBlocked) {
+        logLiveDrift('signing-form', { issueKey: issue?.key, issueTypeId, comparison });
         return {
           actions: [], blocker: 'UNDECIDED_DRIFT', gatedCount: 0,
           requiredRole: state.gate?.required_role ?? null,

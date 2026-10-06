@@ -3,10 +3,10 @@ import { verifyAssertionForApproval } from '../../../usecases/webauthn.js';
 
 export function getLevel() { return 'BIOMETRIC'; }
 export function describe() { return { id: 'webauthn', level: getLevel(), configured: true, label: 'Sign with biometric approval' }; }
-export async function verify({ binding, confirmed, webauthn, webauthnDeps, context }) {
+export async function verify({ binding, approvalChallengeId, confirmed, webauthn, webauthnDeps, context }) {
   if (confirmed !== true) return { ok: false, reason: 'CONFIRMATION_REQUIRED', level: getLevel() };
   const verifier = webauthnDeps?.verifyAssertion ?? verifyAssertionForApproval;
-  const result = await verifier({ binding, payload: webauthn, context });
+  const result = await verifier({ binding, approvalChallengeId, payload: webauthn, context });
   if (!result?.ok) {
     const reason = result?.reason ?? WEBAUTHN_FAIL.UNAVAILABLE;
     return {

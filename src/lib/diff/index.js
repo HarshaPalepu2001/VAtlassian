@@ -1,7 +1,7 @@
-import { normaliseField } from '../content.js';
+import { normaliseField, digestsEquivalent } from '../content.js';
 import { canonical, sha256Hex } from '../hash.js';
-import { diffField } from './fields.js';
-import { classify, maxMateriality, MATERIALITY, shouldQueue } from '../materiality.js';
+import { diffField, presentationKind, withAttachmentDetails } from './fields.js';
+import { classify, maxMateriality, MATERIALITY } from '../materiality.js';
 import { attributionByField, timeline } from '../changelog.js';
 
 export * from './fields.js';
@@ -36,7 +36,6 @@ export * from './adf.js';
  * @param controlledFields  [{ field_id, field_kind, store_values, writable, materiality }]
  * @param driftRows         va_drift rows for this baseline version
  * @param changelogEntries  from lib/changelog.js
- * @param queueThreshold    project config
  */
 export function diffIssue({
   baseline,
@@ -44,8 +43,7 @@ export function diffIssue({
   currentFields = {},
   controlledFields = [],
   driftRows = [],
-  changelogEntries = [],
-  queueThreshold = MATERIALITY.MINOR
+  changelogEntries = []
 }) {
   const fieldIds = controlledFields.map((f) => f.field_id);
   const attribution = attributionByField(changelogEntries, fieldIds);
@@ -68,27 +66,27 @@ export function diffIssue({
       continue;
     }
 
-    const retained = field.store_values === true
-      && Object.prototype.hasOwnProperty.call(baselineValues, field.field_id);
+    const retained = Object.prototype.hasOwnProperty.call(baselineValues, field.field_id);
 
     const beforeRaw = baselineValues[field.field_id];
     const afterRaw = currentFields[field.field_id];
+    const displayKind = presentationKind(field.field_kind, beforeRaw, afterRaw);
 
     // Compared NORMALISED, written back RAW. Normalisation sorts multi-values
     // and strips ADF localIds, so comparing raw values would report phantom
     // changes on every read; but writing a normalised value back into Jira
     // would itself be a silent second edit. The differ therefore sees
     // normalised values and the restore planner reads the raw ones.
-    const before = retained ? safeNormalise(field.field_kind, beforeRaw) : undefined;
-    const after = safeNormalise(field.field_kind, afterRaw);
+    const before = retained ? safeNormalise(displayKind, beforeRaw) : undefined;
+    const after = safeNormalise(displayKind, afterRaw);
 
     let digestChanged = true;
     if (!retained) {
       const currentDigest = sha256Hex(canonical({ f: field.field_id, k: field.field_kind, v: after }));
-      digestChanged = bDigests[field.field_id] !== currentDigest;
+      digestChanged = !digestsEquivalent(field.field_id, bDigests[field.field_id], currentDigest);
     }
 
-    const diff = diffField({ field, before, after, retained, digestChanged });
+    const diff = withAttachmentDetails(diffField({ field: { ...field, field_kind: displayKind }, before, after, retained, digestChanged }), beforeRaw, afterRaw);
     if (!diff.changed) continue;
 
     const events = (driftByField.get(field.field_id) ?? [])
@@ -99,8 +97,9 @@ export function diffIssue({
     const trace = touches.length ? touches : events.map(e => ({
       at: Number(e.occurred_at), authorId: e.actor_account_id ?? null,
       authorName: e.actor_name ?? null, source: e.source ?? 'UNKNOWN',
-      detected: ['SWEEP', 'RECONCILE'].includes(e.detected_via), fromString: null, toString: null
+      detected: ['SWEEP', 'RECONCILE'].includes(e.detected_via) && !e.changelog_id, fromString: null, toString: null
     }));
+    const confirmed = trace.filter(t => !t.detected);
 
     const materiality = classify(
       field.field_id,
@@ -113,7 +112,6 @@ export function diffIssue({
     fields.push({
       ...diff,
       materiality,
-      queued: shouldQueue(materiality, queueThreshold),
 
       // WHAT THE IDENTIFIERS MEAN.
       //
@@ -145,9 +143,9 @@ export function diffIssue({
       })),
       driftIds: events.map((e) => e.key),
       occurrences: Math.max(touches.length, events.length),
-      firstChangedAt: touches[0]?.at ?? events[0]?.occurred_at ?? null,
-      lastChangedAt: touches[touches.length - 1]?.at ?? events[events.length - 1]?.occurred_at ?? null,
-      lastChangedBy: touches[touches.length - 1]?.authorName ?? events[events.length - 1]?.actor_name ?? null,
+      firstChangedAt: confirmed[0]?.at ?? null,
+      lastChangedAt: confirmed.at(-1)?.at ?? null,
+      lastChangedBy: confirmed.at(-1)?.authorName ?? null,
 
       // WENT AWAY AND CAME BACK. A field edited three times that ends where it
       // started is not drift a reviewer needs to act on, but it IS something

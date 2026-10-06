@@ -305,9 +305,22 @@ export function normaliseLinks(list) {
     .sort((a, b) => (canonical(a) < canonical(b) ? -1 : 1));
 }
 
+/**
+ * A rich-text document with nothing in it.
+ *
+ * Jira returns `{type:'doc', version:1, content:[]}` for a rich-text field that
+ * was once set and then cleared, and null for one that never was. Nobody typed
+ * anything in either, so they are the same value: reading them as different made
+ * a restore to "nothing" look like a change on a field with no content.
+ */
+export function isEmptyAdf(node) {
+  return node != null && typeof node === 'object' && !Array.isArray(node)
+    && node.type === 'doc' && (!Array.isArray(node.content) || node.content.length === 0);
+}
+
 export function normaliseField(kind, value) {
   switch (kind) {
-    case FIELD_KIND.ADF: return normaliseAdf(value);
+    case FIELD_KIND.ADF: return isEmptyAdf(value) ? null : normaliseAdf(value);
     case FIELD_KIND.TEXT: return normaliseText(value);
     case FIELD_KIND.MULTI: return normaliseMulti(value);
     case FIELD_KIND.ATTACHMENTS: return normaliseAttachments(value);
@@ -411,6 +424,24 @@ export function project(issueFields, controlledFields) {
  * reading of an unknown difference is "changed". Callers that know their scope
  * are expected to say so.
  */
+/**
+ * Two stored digests for one field, read as the same value or not.
+ *
+ * Equal digests are the same value. The one exception is a baseline stored
+ * before an empty rich-text document was read as "no value": its digest for an
+ * empty document differs from the digest of a field that was never set, and
+ * both mean nothing. Those baselines stay valid rather than drifting.
+ */
+export function digestsEquivalent(fieldId, a, b) {
+  const x = a ?? null;
+  const y = b ?? null;
+  if (x === y) return true;
+  if (x == null || y == null) return false;
+  const none = sha256Hex(canonical({ f: fieldId, k: FIELD_KIND.ADF, v: null }));
+  const legacyEmpty = sha256Hex(canonical({ f: fieldId, k: FIELD_KIND.ADF, v: normaliseAdf({ type: 'doc', version: 1, content: [] }) }));
+  return (x === none && y === legacyEmpty) || (x === legacyEmpty && y === none);
+}
+
 export function changedFields(prevDigests, nextDigests, scopeIds = null) {
   const prev = prevDigests ?? {};
   const next = nextDigests ?? {};
@@ -424,7 +455,7 @@ export function changedFields(prevDigests, nextDigests, scopeIds = null) {
 
   const changed = [];
   for (const k of keys.sort()) {
-    if ((prev[k] ?? null) !== (next[k] ?? null)) changed.push(k);
+    if (!digestsEquivalent(k, prev[k], next[k])) changed.push(k);
   }
   return changed;
 }

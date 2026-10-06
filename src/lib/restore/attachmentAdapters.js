@@ -3,6 +3,8 @@ import { readMediaId } from '../mediaIdentity.js';
 import { downloadVaultAttachment, uploadAttachmentToPage, sanitizeMultipartFilename } from '../vaultConfluence.js';
 import { jiraIdOf } from '../attachmentIdentity.js';
 import { tryAppend } from '../../db/store.js';
+import { STORAGE } from '../vaultLocation.js';
+import { defaultVaultObjectStore } from '../vaultObjectStore.js';
 import { EVENT } from '../ledger.js';
 
 /**
@@ -38,8 +40,11 @@ async function detailOf(response) {
  * @param actorAccountId, approvalId  who rejected, and the signed rejection,
  *                      recorded on every ledger entry this writes.
  */
-export function createAttachmentRestoreDeps({ api, route, actorAccountId = 'system', approvalId = null, append = tryAppend }) {
+export function createAttachmentRestoreDeps({ api, route, actorAccountId = 'system', approvalId = null, append = tryAppend,
+  objectStore = null }) {
   const jira = (path, options) => api.asApp().requestJira(path, options);
+  let store = objectStore;
+  const vaultStore = async () => (store ??= await defaultVaultObjectStore());
   return {
     async aliases(issueId) {
       try {
@@ -61,8 +66,11 @@ export function createAttachmentRestoreDeps({ api, route, actorAccountId = 'syst
 
     vaultedCopies,
 
-    downloadVaulted: copy => downloadVaultAttachment({
-      pageId: copy.confluence_page_id, attachmentId: copy.confluence_attachment_id }, api),
+    /** From wherever the copy was vaulted (lib/vaultLocation.js). */
+    async downloadVaulted(copy) {
+      if ((copy.storage ?? STORAGE.CONFLUENCE) === STORAGE.OBJECT_STORE) return (await vaultStore()).getContent(copy.object_key);
+      return downloadVaultAttachment({ pageId: copy.confluence_page_id, attachmentId: copy.confluence_attachment_id }, api);
+    },
 
     async upload({ issueKey, filename, mimeType, buffer }) {
       const boundary = '----VAtlassianRestore' + Math.random().toString(36).slice(2);
@@ -116,13 +124,23 @@ export function createAttachmentRestoreDeps({ api, route, actorAccountId = 'syst
       return written;
     },
 
-    /** Keep the bytes of a file about to be deleted on the item's vault page, when it has one. */
+    /**
+     * Keep the bytes of a file about to be deleted: on the item's vault page
+     * when it has one, otherwise in the Object Store.
+     */
     async preserve({ issueId, file, buffer }) {
-      const page = await getVaultPage(issueId);
-      if (!page?.confluence_page_id) return null;
-      const uploaded = await uploadAttachmentToPage({ pageId: page.confluence_page_id,
-        filename: `rejected-${jiraIdOf(file)}-${file.filename ?? 'file'}`, buffer }, api);
-      return { confluenceAttachmentId: String(uploaded?.id ?? '') || null };
+      const page = await getVaultPage(issueId).catch(() => null);
+      if (page?.confluence_page_id) {
+        try {
+          const uploaded = await uploadAttachmentToPage({ pageId: page.confluence_page_id,
+            filename: `rejected-${jiraIdOf(file)}-${file.filename ?? 'file'}`, buffer }, api);
+          return { storage: STORAGE.CONFLUENCE, confluenceAttachmentId: String(uploaded?.id ?? '') || null };
+        } catch (error) {
+          console.error('restore: could not keep the removed file in Confluence; using the Object Store', error);
+        }
+      }
+      const put = await (await vaultStore()).putContent({ buffer });
+      return { storage: STORAGE.OBJECT_STORE, objectKey: put.objectKey };
     }
   };
 }

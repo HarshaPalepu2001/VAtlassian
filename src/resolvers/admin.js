@@ -47,6 +47,9 @@ resolver.define('admin:deleteField', req => admin.deleteField(req));
 resolver.define('admin:setRetention', req => admin.setRetention(req));
 resolver.define('admin:saveConfig', req => admin.saveConfig(req));
 resolver.define('admin:getConfig', req => admin.getConfig(req));
+resolver.define('admin:getVaultStatus', req => admin.getVaultStatus(req));
+resolver.define('admin:getVaultTier', req => admin.getVaultTier(req));
+resolver.define('admin:setVaultTier', req => admin.setVaultTier(req));
 
 import * as diagnostics from '../usecases/diagnostics.js';
 resolver.define('diagnostics:write-identity', () => diagnostics.checkWriteIdentity());

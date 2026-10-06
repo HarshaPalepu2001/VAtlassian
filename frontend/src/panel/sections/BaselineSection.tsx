@@ -147,7 +147,8 @@ export default function BaselineSection({ summary, drift, evidence, evidenceRead
     : `${plural(drift.materialCount, 'change')} need${drift.materialCount === 1 ? 's' : ''} a decision`;
   const childrenChanged = (evidence?.drift?.groups ?? []).filter(g => g.kind === 'ISSUE' && !g.isRoot).length;
   const linkPendingFrom = [...new Set((summary.drift?.linkPending ?? []).map(p => p.decidedOnKey))];
-  const latest = fields.map(f => ({ at: Number(f.lastChangedAt ?? f.attribution?.[f.attribution.length - 1]?.at ?? 0), by: f.lastChangedBy ?? f.attribution?.[f.attribution.length - 1]?.authorName }))
+  const latest = fields.map(f => { const confirmed = f.attribution?.filter(step => !step.detected).at(-1);
+    return { at: Number(f.lastChangedAt ?? confirmed?.at ?? 0), by: f.lastChangedBy ?? confirmed?.authorName }; })
     .filter(x => x.at > 0).sort((a, b) => b.at - a.at)[0];
   const rank = (m?: string) => { const i = ['CRITICAL', 'MAJOR', 'MINOR', 'COSMETIC'].indexOf(m ?? 'COSMETIC'); return i < 0 ? 4 : i; };
   const shown = [...fields].sort((a, b) => rank(a.materiality) - rank(b.materiality)).slice(0, ROWS_SHOWN);

@@ -123,3 +123,48 @@ test('a recreated work item is created without its attachment list, which Jira w
   assert.equal('attachment' in body.fields, false);
   assert.equal(body.fields.summary, 's');
 });
+
+// ── Rich text that shows a file a tree rejection puts back ─────────────────
+
+const imageDoc = mediaId => ({ type: 'doc', version: 1, content: [{ type: 'mediaSingle', content: [
+  { type: 'media', attrs: { type: 'file', id: mediaId, collection: '' } }] }] });
+const WITH_TEXT = [...FIELDS, { field_id: 'description', field_name: 'Description', field_kind: 'ADF', store_values: true }];
+
+function textTrees() {
+  const t = trees();
+  t.controlledFields = WITH_TEXT;
+  t.baselineTree.values.root.description = imageDoc('m-orig');
+  t.baselineTree.nodes[0].digests.description = 'D';
+  t.currentTree.values.root.description = imageDoc('m-orig');
+  t.currentTree.nodes[0].digests.description = 'D';
+  return t;
+}
+
+test('a tree rejection that puts a file back re-points the unchanged text that shows it, after the files', () => {
+  const plan = planTreeRestore(textTrees());
+  assert.deepEqual(plan.steps.map(s => [s.kind, s.logicalNodeId]),
+    [['RESTORE_ATTACHMENTS', 'root'], ['REPOINT_RICH_TEXT', 'root']]);
+  assert.deepEqual(plan.steps[1].fieldIds, ['description']);
+  assert.deepEqual(plan.steps[1].fields.description, imageDoc('m-orig'), 'the approved value, re-pointed only at execution');
+  assert.deepEqual(plan.preflight.richTextRepoint, [{ logicalNodeId: 'root', issueKey: 'T-1', fieldIds: ['description'] }]);
+});
+
+test('no file coming back means no rich text to re-point', () => {
+  const t = textTrees();
+  t.currentTree.values.root.attachment = [spec, added];
+  const plan = planTreeRestore(t);
+  assert.deepEqual(plan.steps.map(s => s.kind), ['RESTORE_ATTACHMENTS']);
+  assert.deepEqual(plan.preflight.richTextRepoint, []);
+});
+
+test('the re-point step edits only text whose pointer really moves', async () => {
+  for (const [pointed, expectEdit] of [[imageDoc('m-copy'), true], [null, false]]) {
+    const { adapters } = journal();
+    const edits = [];
+    adapters.editIssue = async (target, fields) => edits.push([target, fields]);
+    adapters.pointAtLiveFiles = async (_issueId, fields) => (pointed ? { ...fields, description: pointed } : fields);
+    const result = await executeTreeRestore({ restoreId: 'r1', rootIssueKey: 'T-1', ...textTrees(), fieldsFor: () => WITH_TEXT, adapters });
+    assert.equal(result.state, 'READY_TO_VERIFY');
+    assert.deepEqual(edits, expectEdit ? [['T-1', { description: imageDoc('m-copy') }]] : []);
+  }
+});

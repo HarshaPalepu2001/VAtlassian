@@ -81,6 +81,18 @@ export async function pendingApprovalForActor({ issueId, accountId, fromStatusId
     ORDER BY decided_at DESC LIMIT 1`, [issueId, accountId, fromStatusId, now]);
   return decode(result.data[0]);
 }
+/**
+ * pendingApprovalForActor() for a whole worklist page in one read: this
+ * reviewer's signed workflow approvals whose transition has not happened yet.
+ */
+export async function pendingMovesFor({ accountId, issueIds, now = Date.now() }) {
+  const ids = [...new Set((issueIds ?? []).map(Number).filter(Number.isFinite))];
+  if (!accountId || ids.length === 0) return [];
+  const result = await query(`SELECT issue_id, transition_id, from_status_id, to_status_id FROM va_approval
+    WHERE account_id = ? AND state = 'PENDING' AND decision = 'APPROVE' AND baseline_id IS NULL AND expires_at > ?
+      AND issue_id IN (${ids.map(() => '?').join(', ')})`, [accountId, now, ...ids]);
+  return result.data.map(row => ({ ...row, issue_id: Number(row.issue_id) }));
+}
 export async function casConsume({ approvalId, now }) {
   const result = await query(`UPDATE va_approval SET state = 'CONSUMED', consumed_at = ?
     WHERE approval_id = FROM_BASE64(?) AND state = 'PENDING' AND decision = 'APPROVE' AND expires_at > ?`,

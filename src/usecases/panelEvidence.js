@@ -1,8 +1,13 @@
-import { load, respond, fail, filterViewableTree, filterViewableTreeDiff, filterViewableReviewDiff } from './panelAccess.js';
-import { baselineHistory } from '../db/baselineStore.js';
+import { load, readableIssue, respond, fail, filterViewableTree, filterViewableTreeDiff, filterViewableReviewDiff } from './panelAccess.js';
+import { baselineHistory, activeBaseline, baselineByVersion, readAllValues } from '../db/baselineStore.js';
+import { readBaselineTree } from '../db/baselineTreeStore.js';
+import { controlledFields } from '../db/configStore.js';
 import { restoresForIssue } from '../db/restoreStore.js';
+import { driftForIssueVersions } from '../db/driftStore.js';
 import { approvalById } from '../db/approvalStore.js';
-import { buildRecord } from '../lib/record.js';
+import { recordSnapshot, compareBaselineSnapshots } from '../lib/baselineVersions.js';
+import { logicalNodeId } from '../lib/tree/model.js';
+import { withStoredAttribution } from '../lib/tree/reviewAttribution.js';
 import { attachmentRejection, removedNodeFiles } from '../lib/restore/attachmentPreflight.js';
 
 /**
@@ -10,11 +15,9 @@ import { attachmentRejection, removedNodeFiles } from '../lib/restore/attachment
  * full differences, baseline history, and restoration history.
  *
  * Loaded after the summary, or when the evidence section opens. Uses
- * panelAccess.js's snapshot() mechanics unchanged: this module adds no new
- * Jira or SQL reads of its own beyond the two narrow history lists and, when a
- * rejection would re-upload files, one indexed lookup of their vaulted copies.
- * It only shapes what snapshot() already produces into the evidence half of
- * the panel model. Every approval challenge/submit/retry still performs its own fresh
+ * panelAccess.js's snapshot() for the authoritative state, then reads saved
+ * version history and descendant drift attribution for the review display.
+ * Every approval challenge/submit/retry still performs its own fresh
  * authoritative read — this is presentation, not authorization.
  */
 
@@ -84,8 +87,11 @@ export async function getEvidence(args) { return respond(async () => {
     baseline?.approval_id ? approvalById(baseline.approval_id) : null
   ]);
 
-  const record = buildRecord({ baseline, controlledFields: prepared.fields, baselineValues: prepared.baselineValues,
-    digests: baseline ? JSON.parse(baseline.field_digests || '{}') : {}, approval: approvalRecord });
+  const record = baseline?.tree_hash
+    ? recordSnapshot({ baseline, nodes: prepared.baselineTree?.nodes ?? [],
+      values: prepared.baselineTree?.values ?? {} }, prepared.fields)
+    : baseline ? recordSnapshot({ baseline, values: prepared.baselineValues }, prepared.fields) : null;
+  if (record && approvalRecord && !record.signedAt) record.signedAt = approvalRecord.signed_at ?? approvalRecord.decided_at ?? null;
   if (record) {
     record.history = (history ?? []).map(h => ({
       version: Number(h.version),
@@ -103,10 +109,20 @@ export async function getEvidence(args) { return respond(async () => {
   const viewableTree = prepared.tree ? await filterViewableTree(prepared.tree) : prepared.tree;
   const viewableTreeDiff = filterViewableTreeDiff(prepared.treeDiff, viewableTree);
   const viewableReviewDiff = filterViewableReviewDiff(prepared.reviewDiff, viewableTree);
+  const descendantPairs = (viewableReviewDiff?.groups ?? [])
+    .filter(group => group.kind === 'ISSUE' && !group.isRoot && group.issueId && group.baselineVersion)
+    .map(group => ({ issueId: group.issueId, version: group.baselineVersion }));
+  let storedHistory = { rows: [], truncated: false };
+  let storedHistoryUnavailable = false;
+  if (descendantPairs.length) {
+    try { storedHistory = await driftForIssueVersions(descendantPairs); }
+    catch { storedHistoryUnavailable = true; }
+  }
+  const attributedReviewDiff = withStoredAttribution(viewableReviewDiff, storedHistory.rows);
   const { groupedDrift, deleteIssueKeys, recreateCount } = buildTreeRejection({ tree: viewableTree, treeDiff: viewableTreeDiff });
   // Files a rejection deletes, re-uploads from the vault, or cannot restore.
   const attachments = baseline ? await attachmentRejection({
-    reviewFields: viewableReviewDiff?.fields ?? prepared.diff?.fields ?? [],
+    reviewFields: attributedReviewDiff?.fields ?? prepared.diff?.fields ?? [],
     issue: { issueId: prepared.issueId, issueKey: issue.key },
     removedNodes: removedNodeFiles({ treeDiff: viewableTreeDiff, baselineTree: prepared.baselineTree })
   }) : null;
@@ -119,15 +135,74 @@ export async function getEvidence(args) { return respond(async () => {
     assignee: issue.fields.assignee, reporter: issue.fields.reporter,
     record,
     drift: {
-      count: Number(prepared.driftCount ?? viewableReviewDiff?.changedFieldCount ?? prepared.diff?.changedFieldCount ?? 0),
-      materialCount: Number(viewableReviewDiff?.materialFieldCount ?? prepared.diff?.materialFieldCount ?? 0),
-      fields: viewableReviewDiff?.fields ?? prepared.diff?.fields ?? [],
+      count: Number(prepared.treeDiff
+        ? attributedReviewDiff?.changedFieldCount ?? 0
+        : prepared.driftCount ?? attributedReviewDiff?.changedFieldCount ?? prepared.diff?.changedFieldCount ?? 0),
+      materialCount: Number(attributedReviewDiff?.materialFieldCount ?? prepared.diff?.materialFieldCount ?? 0),
+      fields: attributedReviewDiff?.fields ?? prepared.diff?.fields ?? [],
+      historyTruncated: prepared.reviewDiff?.historyTruncated === true || storedHistory.truncated,
+      historyUnavailable: prepared.reviewDiff?.historyUnavailable === true || storedHistoryUnavailable,
       // A tree parent's review, one section per issue (lib/tree/groupedReview.js),
       // recomputed after the visibility filter. Absent for a single-issue diff.
-      ...(viewableReviewDiff?.groups ? { groups: viewableReviewDiff.groups } : {}),
+      ...(attributedReviewDiff?.groups ? { groups: attributedReviewDiff.groups } : {}),
       ...groupedDrift
     },
     rejection: { deleteIssueKeys, recreateCount, attachments },
     restoreHistory: restores
   };
+}); }
+
+function versionNumber(value) {
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || number < 1 || String(value).trim() === '') fail('INVALID_BASELINE_VERSION');
+  return number;
+}
+
+async function savedSnapshot(baseline) {
+  if (baseline.tree_hash) return { baseline, ...await readBaselineTree(baseline.baseline_id) };
+  const id = logicalNodeId(baseline.issue_id);
+  return { baseline, nodes: [{ logicalNodeId: id, originalIssueId: baseline.issue_id,
+    currentIssueId: baseline.issue_id, issueKey: null, parentLogicalNodeId: null,
+    projectId: baseline.project_id, issueTypeId: baseline.issue_type_id,
+    fieldDigests: baseline.field_digests }],
+  values: { [id]: await readAllValues(baseline.issue_id, baseline.version) } };
+}
+
+/** Lazy, read-only comparison of two published signatures; no live Jira value becomes either side. */
+export async function compareVersions(args) { return respond(async () => {
+  const issue = await readableIssue(args);
+  const issueId = Number(issue.id);
+  const fromVersion = versionNumber(args.payload?.fromVersion);
+  const toVersion = versionNumber(args.payload?.toVersion);
+  const active = await activeBaseline(issueId);
+  if (args.payload?.expectedBaselineVersion != null && Number(args.payload.expectedBaselineVersion) !== Number(active?.version ?? 0)) fail('STALE_EVIDENCE');
+  if (!active || fromVersion > Number(active.version) || toVersion > Number(active.version)) fail('BASELINE_VERSION_UNAVAILABLE');
+  const [fromBaseline, toBaseline] = await Promise.all([
+    baselineByVersion(issueId, fromVersion), baselineByVersion(issueId, toVersion)
+  ]);
+  if (!fromBaseline || !toBaseline) fail('BASELINE_VERSION_UNAVAILABLE');
+  const [from, to] = await Promise.all([savedSnapshot(fromBaseline), savedSnapshot(toBaseline)]);
+
+  // Both historical trees are stored under app authority. Check every node
+  // against the viewer's current Jira browse permission before it enters the
+  // response. The root's direct asUser issue read already proves root access.
+  const all = [...from.nodes, ...to.nodes];
+  const checks = await filterViewableTree({ nodes: all.map(node => ({ ...node,
+    id: node.currentIssueId ?? node.originalIssueId })) });
+  const allowedIds = new Set((checks?.nodes ?? []).map(node => String(node.id)));
+  allowedIds.add(String(issueId));
+  const visible = snapshot => ({ ...snapshot,
+    nodes: snapshot.nodes.filter(node => allowedIds.has(String(node.currentIssueId ?? node.originalIssueId))) });
+  // A deleted or now restricted historical child has no current browse grant.
+  // Keep its content private, but do not label a partial comparison an exact match.
+  const incomplete = visible(from).nodes.length !== from.nodes.length
+    || visible(to).nodes.length !== to.nodes.length;
+  const scopeKeys = new Map();
+  for (const node of [...visible(from).nodes, ...visible(to).nodes]) {
+    const projectId = Number(node.projectId ?? issue.fields.project.id);
+    const issueTypeId = String(node.issueTypeId ?? issue.fields.issuetype.id);
+    scopeKeys.set(`${projectId}:${issueTypeId}`, { projectId, issueTypeId });
+  }
+  const definitions = (await Promise.all([...scopeKeys.values()].map(scope => controlledFields(scope)))).flat();
+  return { ...compareBaselineSnapshots(visible(from), visible(to), definitions), incomplete };
 }); }

@@ -82,8 +82,8 @@ test('retention days and acknowledgement change atomically', async () => {
   }
 });
 
-test('unsupported STRICT policy cannot be enabled even with no drift', async () => {
-  const deps = fixture(); deps.hasUnresolvedDrift = async () => false;
+test('unsupported STRICT policy cannot be enabled', async () => {
+  const deps = fixture();
   const result = await admin.saveConfig(request({ projectId: '1', config: { policy: { mode: 'STRICT' } } }), deps);
   assert.equal(result.success, false);
   assert.equal(deps.writes.length, 0);
@@ -115,10 +115,10 @@ test('capture policy ignores retention on explicitly excluded fields', async () 
 
 test('saving one project setting preserves other overrides and rejects stale revisions', async () => {
   const deps = fixture();
-  deps.readConfigRecord = async () => ({ config: { ai: { enabled: true, maxCompletionTokens: 2048 }, queueThreshold: 'MAJOR' }, revision: 'current' });
+  deps.readConfigRecord = async () => ({ config: { ai: { enabled: true, maxCompletionTokens: 2048 }, restore: { perFieldRetries: 5 } }, revision: 'current' });
   const result = await admin.saveConfig(request({ projectId: '1', expectedRevision: 'current', config: { ai: { enabled: false } } }), deps);
   assert.equal(result.success, true, result.error);
-  assert.deepEqual(deps.writes[0][1], { ai: { enabled: false, maxCompletionTokens: 2048 }, queueThreshold: 'MAJOR' });
+  assert.deepEqual(deps.writes[0][1], { ai: { enabled: false, maxCompletionTokens: 2048 }, restore: { perFieldRetries: 5 } });
   const stale = await admin.saveConfig(request({ projectId: '1', expectedRevision: 'old', config: { ai: { enabled: true } } }), deps);
   assert.equal(stale.success, false);
   assert.equal(deps.writes.length, 1);
@@ -134,11 +134,11 @@ test('getConfig and saveConfig handle site-wide defaults with null or empty proj
     const deps = fixture();
     deps.readConfigRecord = async (key) => {
       assert.equal(key, 'site');
-      return { config: { enabled: true, queueThreshold: 'MINOR' }, revision: 'rev-site' };
+      return { config: { enabled: true }, revision: 'rev-site' };
     };
     deps.projectConfig = async (pid) => {
       assert.equal(pid, null);
-      return { enabled: true, queueThreshold: 'MINOR' };
+      return { enabled: true };
     };
     const getRes = await admin.getConfig(request({ projectId: emptyPid }), deps);
     assert.equal(getRes.success, true);
@@ -147,12 +147,12 @@ test('getConfig and saveConfig handle site-wide defaults with null or empty proj
     const saveRes = await admin.saveConfig(request({
       projectId: emptyPid,
       expectedRevision: 'rev-site',
-      config: { enabled: false, queueThreshold: 'CRITICAL', restore: { actAs: 'user', notifyUsers: true } }
+      config: { enabled: false, ai: { maxCompletionTokens: 2048 }, restore: { actAs: 'user', notifyUsers: true } }
     }), deps);
     assert.equal(saveRes.success, true);
     assert.equal(deps.writes[0][0], 'site');
     assert.equal(deps.writes[0][1].enabled, false);
-    assert.equal(deps.writes[0][1].queueThreshold, 'CRITICAL');
+    assert.equal(deps.writes[0][1].ai.maxCompletionTokens, 2048);
     assert.equal(deps.writes[0][1].restore.actAs, 'user');
     assert.equal(deps.writes[0][1].restore.notifyUsers, true);
   }
@@ -245,17 +245,11 @@ test('classification preserves implicit mandatory field retention under capture 
 
 test('settings with verified runtime consumers are persisted exactly as chosen', async () => {
   const cases = [
-    // src/lib/collect.js:119, capture.js:77, panelAccess.js:69
+    // src/lib/collect.js, capture.js, gate.js, panelAccess.js
     [{ enabled: false }, c => assert.equal(c.enabled, false)],
-    // src/lib/collect.js:293 shouldQueue(), diff/index.js, panelAccess.js:91
-    [{ queueThreshold: 'MAJOR' }, c => assert.equal(c.queueThreshold, 'MAJOR')],
-    // src/lib/collect.js:97, transitionPlan.js, interception.js
-    [{ reviewStatusIds: ['3', '4'] }, c => assert.deepEqual(c.reviewStatusIds, ['3', '4'])],
-    // src/lib/restore/executor.js:100
+    // src/lib/restore/executor.js (single-issue restores)
     [{ restore: { notifyUsers: true } }, c => assert.equal(c.restore.notifyUsers, true)],
-    // src/lib/restore/executor.js:99
     [{ restore: { actAs: 'user' } }, c => assert.equal(c.restore.actAs, 'user')],
-    // src/lib/restore/executor.js:159
     [{ restore: { perFieldRetries: 5 } }, c => assert.equal(c.restore.perFieldRetries, 5)],
     // src/lib/aiClassification.js:331, report.js:238
     [{ ai: { maxCompletionTokens: 8192 } }, c => assert.equal(c.ai.maxCompletionTokens, 8192)]
@@ -272,7 +266,9 @@ test('settings with no runtime consumer are refused rather than silently stored'
   for (const config of [
     { visibility: 'all' },
     { notifications: { digest: false } },
-    { restore: { commentOnRestore: false } }
+    { restore: { commentOnRestore: false } },
+    { reviewStatusIds: ['3'] },
+    { queueThreshold: 'MAJOR' }
   ]) {
     const deps = fixture();
     const result = await admin.saveConfig(request({ projectId: '1', config }), deps);
@@ -286,14 +282,17 @@ test('a legacy stored setting does not block saving the settings that still work
   // written before the key was retired must not make every later save fail.
   const deps = fixture();
   deps.readConfigRecord = async () => ({
-    config: { visibility: 'all', notifications: { digest: true }, restore: { commentOnRestore: true, notifyUsers: false } },
+    config: { visibility: 'all', notifications: { digest: true }, reviewStatusIds: ['3'], queueThreshold: 'CRITICAL',
+      restore: { commentOnRestore: true, notifyUsers: false } },
     revision: 'legacy'
   });
-  const result = await admin.saveConfig(request({ projectId: '1', expectedRevision: 'legacy', config: { queueThreshold: 'CRITICAL' } }), deps);
+  const result = await admin.saveConfig(request({ projectId: '1', expectedRevision: 'legacy', config: { enabled: false } }), deps);
   assert.equal(result.success, true, result.error);
   const saved = deps.writes.at(-1)[1];
-  assert.equal(saved.queueThreshold, 'CRITICAL');
+  assert.equal(saved.enabled, false);
   assert.equal(saved.visibility, undefined, 'retired key was carried forward');
+  assert.equal(saved.reviewStatusIds, undefined, 'retired key was carried forward');
+  assert.equal(saved.queueThreshold, undefined, 'retired key was carried forward');
   assert.equal(saved.notifications, undefined, 'retired key was carried forward');
   assert.equal(saved.restore.commentOnRestore, undefined, 'retired key was carried forward');
   assert.equal(saved.restore.notifyUsers, false, 'a working sibling setting was dropped');
@@ -304,18 +303,18 @@ test('audit failure prevents a settings change from being written', async () => 
   // audit trail must not take effect, or the record and the running
   // configuration disagree with no way to tell when they diverged.
   const deps = fixture({ auditError: true });
-  const result = await admin.saveConfig(request({ projectId: '1', config: { queueThreshold: 'MAJOR' } }), deps);
+  const result = await admin.saveConfig(request({ projectId: '1', config: { enabled: false } }), deps);
   assert.equal(result.success, false);
   assert.equal(deps.writes.length, 0);
 });
 
 test('the audit record of a settings change names the scope and the resulting values', async () => {
   const deps = fixture();
-  await admin.saveConfig(request({ projectId: '1', config: { queueThreshold: 'MAJOR' } }), deps);
+  await admin.saveConfig(request({ projectId: '1', config: { enabled: false } }), deps);
   const event = deps.events.at(-1);
   assert.equal(event.eventType, EVENT.CONFIG_CHANGED);
   assert.equal(event.payload.scope, 'project:1');
-  assert.equal(event.payload.config.queueThreshold, 'MAJOR');
+  assert.equal(event.payload.config.enabled, false);
 });
 
 test('every default configuration key is one the validator still accepts', async () => {
@@ -421,7 +420,7 @@ test('a Jira administrator cannot configure controls without being a VAtlassian 
   // Appointing administrators is the Jira administrator's power. Everything
   // that decides what is approved, signed, captured or retained is not.
   const attempts = [
-    ['saveConfig', { projectId: '1', config: { queueThreshold: 'MAJOR' } }],
+    ['saveConfig', { projectId: '1', config: { enabled: false } }],
     ['createControlledTransition', { projectId: '1', issueTypeId: '2', fromStatusId: '*', toStatusId: '2',
       transitionId: '100', requiredRole: 'QA', meaning: 'Approved', requiredAssurance: 'ESIGNATURE' }],
     ['grantEligibility', { targetAccountId: 'reviewer', projectId: '1', issueTypeId: '*', role: 'QA' }],

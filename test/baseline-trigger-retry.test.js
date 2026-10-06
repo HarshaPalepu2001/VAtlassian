@@ -33,6 +33,28 @@ test('capture failures are visible incidents and request retry', async () => {
     recordIncident: async (...args) => incidents.push(args) });
   assert.equal(result._retry, true); assert.equal(incidents[0][2], 'BASELINE_CAPTURE_FAILED');
 });
+test('a capture refused while the migration is pending records an incident only once its retries run out', async () => {
+  const incidents = [];
+  const deps = { captureBaseline: async () => ({ captured: false, reason: 'SCHEMA_PENDING' }),
+    recordIncident: async (...args) => incidents.push(args) };
+  for (let retryCount = 0; retryCount < 4; retryCount += 1) {
+    const retried = await transitioned({ ...event, retryContext: { retryCount } }, deps);
+    assert.equal(retried._retry, true, `attempt ${retryCount} is retried`);
+  }
+  assert.deepEqual(incidents, [], 'the deploy-to-migration window is not an incident');
+  const last = await transitioned({ ...event, retryContext: { retryCount: 4 } }, deps);
+  assert.equal(last.retryExhausted, true);
+  assert.equal(incidents.length, 1);
+  assert.equal(incidents[0][2], 'BASELINE_CAPTURE_FAILED');
+});
+test('every other capture failure still records an incident on each attempt', async () => {
+  const incidents = [];
+  const deps = { captureBaseline: async () => ({ captured: false, reason: 'CAPTURE_INCOMPLETE' }),
+    recordIncident: async (...args) => incidents.push(args) };
+  await transitioned({ ...event, retryContext: { retryCount: 1 } }, deps);
+  await transitioned({ ...event, retryContext: { retryCount: 4 } }, deps);
+  assert.deepEqual(incidents.map(i => i[2]), ['BASELINE_CAPTURE_FAILED', 'BASELINE_CAPTURE_FAILED']);
+});
 test('successful and duplicate capture still checks current drift', async () => {
   let checks = 0;
   await transitioned(event, { captureBaseline: async () => ({ captured: true, alreadyCaptured: true }),

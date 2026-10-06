@@ -100,7 +100,7 @@ test('ledger clears stale pagination when a lookup fails',async()=>{
 test('settings saves only changed live preferences without materializing inherited values',async()=>{
  let savedConfig;
  await mount('Settings',(key,payload)=>{
-  if(key==='admin:getConfig') return {success:true,revision:'site-rev',config:{enabled:true,visibility:'reviewer-only',queueThreshold:'MINOR',ai:{enabled:true,maxCompletionTokens:4096},restore:{commentOnRestore:true,notifyUsers:false}}};
+  if(key==='admin:getConfig') return {success:true,revision:'site-rev',config:{enabled:true,visibility:'reviewer-only',ai:{enabled:true,maxCompletionTokens:4096},restore:{commentOnRestore:true,notifyUsers:false}}};
   if(key==='admin:saveConfig'){savedConfig=payload;return {success:true};}
   return {success:true};
  });
@@ -253,25 +253,37 @@ test('failed rule and role reads never claim empty authoritative rosters',async(
 
 // ── Settings controls must reach their runtime consumer ──────────────────────
 const liveConfig=()=>({success:true,revision:'rev-1',config:{
- enabled:true,queueThreshold:'MINOR',reviewStatusIds:[],
+ enabled:true,
  ai:{enabled:true,maxCompletionTokens:4096},
  restore:{actAs:'app',notifyUsers:false,perFieldRetries:2}}});
 const labelled=t=>[...container.querySelectorAll('label')].find(l=>l.textContent.includes(t));
 
 test('settings offers every preference that has a runtime consumer',async()=>{
  await mount('Settings',key=>key==='admin:getConfig'?liveConfig():{success:true,statuses:[]});
- for(const control of ['Content processing','Queue threshold','Restore as','Notify watchers','Retries per field']){
+ for(const control of ['Content processing','Restore as','Notify watchers','Retries per field','Vault storage']){
   assert.ok(text().includes(control),`${control} is missing from the settings page`);
  }
 });
 
-test('settings never claims a working preference is unsupported',async()=>{
+test('settings offers no control for a retired preference',async()=>{
+ // reviewStatusIds had no reader; queueThreshold only relabelled queue rows.
  await mount('Settings',key=>key==='admin:getConfig'?liveConfig():{success:true,statuses:[]});
- // queueThreshold drives collect.js shouldQueue(); restore.notifyUsers drives
- // executor.js. Telling an administrator otherwise is a false statement about
- // a control that does work.
- assert.doesNotMatch(text(),/queue-threshold filtering[^.]*do not have complete runtime support/i);
- assert.doesNotMatch(text(),/author notifications[^.]*do not have complete runtime support/i);
+ await select(0,'1');
+ assert.doesNotMatch(text(),/Review statuses|Queue threshold/);
+ assert.equal([...container.querySelectorAll('option')].some(o=>o.value==='CRITICAL'),false);
+});
+
+test('turning capture off says what stops, including the drift hold',async()=>{
+ await mount('Settings',key=>key==='admin:getConfig'?liveConfig():{success:true,statuses:[]});
+ await act(()=>labelled('Capture baselines').querySelector('input').click());await flush();
+ assert.match(text(),/no longer captures a baseline/);
+ assert.match(text(),/no longer held at transitions/);
+ assert.match(text(),/still require a signature/);
+});
+
+test('restoration discloses that tree baselines ignore its settings',async()=>{
+ await mount('Settings',key=>key==='admin:getConfig'?liveConfig():{success:true,statuses:[]});
+ assert.match(text(),/includes child work items is always restored as the app/);
 });
 
 test('settings sends each changed preference to the resolver unchanged',async()=>{
@@ -281,13 +293,12 @@ test('settings sends each changed preference to the resolver unchanged',async()=
   if(key==='admin:saveConfig'){saved=payload;return {success:true};}
   return {success:true,statuses:[]};
  });
- const threshold=[...container.querySelectorAll('select')].find(s=>[...s.options].some(o=>o.value==='CRITICAL'));
- await act(()=>{threshold.value='CRITICAL';threshold.dispatchEvent(new window.Event('change',{bubbles:true}));});
+ const actAs=[...container.querySelectorAll('select')].find(s=>[...s.options].some(o=>o.value==='user'));
+ await act(()=>{actAs.value='user';actAs.dispatchEvent(new window.Event('change',{bubbles:true}));});
  await act(()=>labelled('Notify watchers').querySelector('input').click());
  await flush();
  await act(()=>button('Save settings').click());await flush();
- assert.equal(saved.config.queueThreshold,'CRITICAL');
- assert.equal(saved.config.restore.notifyUsers,true);
+ assert.deepEqual(saved.config.restore,{actAs:'user',notifyUsers:true});
  // Untouched preferences stay absent so the project keeps inheriting them.
  assert.equal(saved.config.ai,undefined);
  assert.equal(saved.config.enabled,undefined);
@@ -299,30 +310,6 @@ test('settings refuses to save a retries value the resolver would reject',async(
  assert.ok(retries,'retries input is missing');
  await act(()=>typeInto(retries,'50'));await flush();
  assert.equal(button('Save settings').disabled,true);
-});
-
-test('settings separates a failed status lookup from a project with no statuses',async()=>{
- await mount('Settings',key=>key==='admin:getConfig'?liveConfig():{success:false,error:'Jira statuses unavailable'});
- await select(0,'1');
- assert.doesNotMatch(text(),/No statuses were returned/);
- assert.match(text(),/statuses could not be loaded|unavailable/i);
-});
-
-test('settings discloses stored review statuses missing from the project and preserves them',async()=>{
- let saved;
- await mount('Settings',(key,payload)=>{
-  if(key==='admin:getConfig')return {...liveConfig(),config:{...liveConfig().config,reviewStatusIds:['3','99']}};
-  if(key==='admin:saveConfig'){saved=payload;return {success:true};}
-  return {success:true,statuses:[{id:'3',name:'In Review'}]};
- });
- await select(0,'1');
- // '99' is stored but absent from this project's live statuses. Hiding it
- // would make the page disagree with what the runtime actually uses.
- assert.match(text(),/1 stored status|not in this project/i);
- const open=[...container.querySelectorAll('label')].find(l=>l.textContent.includes('In Review'));
- await act(()=>open.querySelector('input').click());await flush();
- await act(()=>button('Save settings').click());await flush();
- assert.ok(saved.config.reviewStatusIds.includes('99'),'an unlisted stored status was silently dropped');
 });
 
 test('the ledger reports new activity without redrawing the record being read',async()=>{
@@ -403,4 +390,116 @@ test('an approved change is shown, not only a rejected one',async()=>{
  assert.match(text(),/2 approv/i,'approved changes are invisible while rejections are not');
  assert.match(text(),/1 reject/);
  assert.doesNotMatch(text(),/other/,'nothing should be left over when every event is named');
+});
+
+const vaultStatus=(over={})=>({success:true,projectId:1,
+ vault:{storage:'CONFLUENCE',siteSpaceKey:'VATVAULT',projectPageId:'pp1'},
+ lockdown:{enabled:false,lockedAt:null,lockedSchemeId:null},
+ appDelete:{grantedAt:1,refusedAt:null},
+ scheme:{id:10000,name:'Default Permission Scheme'},schemeError:null,sharedWith:null,...over});
+
+test('attachment protection is chosen per project, never for the site',async()=>{
+ const asked=[];
+ await mount('Settings',key=>{asked.push(key);return key==='admin:getConfig'?liveConfig():{success:true,statuses:[]};});
+ assert.match(text(),/Attachment protection/);
+ assert.match(text(),/set per project/);
+ assert.equal(labelled('Lock attachment deletion'),undefined,'no lockdown control at site scope');
+ assert.equal(asked.includes('admin:getVaultStatus'),false);
+});
+
+test('turning the lockdown on warns about a shared scheme and sends only that change',async()=>{
+ let saved;const sharing=[];
+ await mount('Settings',(key,payload)=>{
+  if(key==='admin:getConfig')return liveConfig();
+  if(key==='admin:getVaultStatus'){sharing.push(payload.checkSharing);return vaultStatus(payload.checkSharing?{sharedWith:['SEC']}:{});}
+  if(key==='admin:saveConfig'){saved=payload;return {success:true,note:'Attachment deletion is locked: 2 grants removed from the permission scheme.'};}
+  return {success:true,statuses:[]};
+ });
+ await select(0,'1');
+ assert.match(text(),/Confluence vault space VATVAULT/);
+ assert.match(text(),/Default Permission Scheme/);
+ assert.doesNotMatch(text(),/often shared/,'no warning before the box is ticked');
+ await act(()=>labelled('Lock attachment deletion').querySelector('input').click());await flush();
+ assert.match(text(),/often shared/);
+ await act(()=>button('Check which projects share it').click());await flush();
+ assert.match(text(),/Shared with: SEC/);
+ await act(()=>button('Save settings').click());await flush();
+ assert.deepEqual(saved.config,{vault:{lockAttachmentDeletion:true}});
+ assert.match(text(),/2 grants removed/);
+ assert.deepEqual(sharing.slice(0,2),[false,true]);
+});
+
+test('a lockdown applied earlier is disclosed even with the setting off',async()=>{
+ await mount('Settings',key=>key==='admin:getConfig'?liveConfig():key==='admin:getVaultStatus'
+  ?vaultStatus({lockdown:{enabled:false,lockedAt:1727000000000,lockedSchemeId:'10000'}}):{success:true,statuses:[]});
+ await select(0,'1');
+ assert.match(text(),/Delete grants were removed from this project's scheme/);
+ assert.match(text(),/stay removed until someone re-adds them/);
+});
+
+test('turning the lockdown off says removed grants are not put back',async()=>{
+ await mount('Settings',key=>key==='admin:getConfig'?{...liveConfig(),config:{...liveConfig().config,vault:{lockAttachmentDeletion:true}}}
+  :key==='admin:getVaultStatus'?vaultStatus({lockdown:{enabled:true,lockedAt:1727000000000,lockedSchemeId:'10000'}}):{success:true,statuses:[]});
+ await select(0,'1');
+ assert.match(text(),/Locked since/);
+ await act(()=>labelled('Lock attachment deletion').querySelector('input').click());await flush();
+ assert.match(text(),/does not put removed grants back/);
+});
+
+test('an unreadable vault status is reported, not shown as unprotected',async()=>{
+ await mount('Settings',key=>key==='admin:getConfig'?liveConfig():key==='admin:getVaultStatus'?{success:false,error:'Vault storage down'}:{success:true,statuses:[]});
+ await select(0,'1');
+ assert.match(text(),/vault status could not be read: Vault storage down/);
+});
+
+test('a Jira-only site is told its vault is the Forge Object Store',async()=>{
+ await mount('Settings',key=>key==='admin:getConfig'?liveConfig()
+  :key==='admin:getVaultStatus'?vaultStatus({vault:{storage:'OBJECT_STORE',storageReason:'NO_CONFLUENCE_404',storageChosen:false,siteSpaceKey:null,projectPageId:null}})
+  :{success:true,statuses:[]});
+ await select(0,'1');
+ assert.match(text(),/copied to the Forge Object Store, because this site has no Confluence vault/);
+});
+
+test('vault storage is a site-wide choice, shown at every scope and saved only on request',async()=>{
+ const chosen=[];let pinned=false;
+ await mount('Settings',(key,payload)=>{
+  if(key==='admin:getConfig')return liveConfig();
+  if(key==='admin:getVaultTier')return {success:true,storage:pinned?'CONFLUENCE':'OBJECT_STORE',storageChosen:pinned,siteSpaceKey:null};
+  if(key==='admin:setVaultTier'){chosen.push(payload.tier);pinned=true;return {success:true,note:'New vault copies go to Confluence. Existing copies stay where they are.'};}
+  return {success:true,statuses:[]};
+ });
+ // Site scope: no project is selected, and the control is still there.
+ assert.match(text(),/New copies go to the Forge Object Store/);
+ const storage=[...container.querySelectorAll('select')].find(s=>[...s.options].some(o=>o.value==='OBJECT_STORE'));
+ assert.ok(storage,'the storage control is missing');
+ assert.equal(button('Save vault storage').disabled,true,'nothing to save before a change');
+ await act(()=>{storage.value='CONFLUENCE';storage.dispatchEvent(new window.Event('change',{bubbles:true}));});await flush();
+ assert.deepEqual(chosen,[],'choosing an option must not save it');
+ await act(()=>button('Save vault storage').click());await flush();
+ assert.deepEqual(chosen,['CONFLUENCE']);
+ assert.match(text(),/Existing copies stay where they are/);
+ assert.match(text(),/New copies go to Confluence/);
+});
+
+test('a workflow finding names the transition it is about, and cleared findings can be shown',async()=>{
+ const asked=[];
+ await mount('Health',(key,payload)=>{
+  if(key==='admin:listGateFindings'){asked.push(payload?.includeCleared);return {success:true,findings:[{findingKey:'k',type:'GATE_ABSENT',severity:'CRITICAL',
+   projectName:'First project',issueTypeName:'Story',fromStatusName:'In Review',toStatusName:'Done',transitionId:'31',
+   detail:'No validator.',firstSeenAt:1727000000000,lastSeenAt:1727000000000,clearedAt:null}]};}
+  if(key==='admin:getAlertDestination')return {success:true,configured:true,undelivered:0,projectId:'1',issueTypeId:'10'};
+  return {success:true,issueTypes:[]};
+ });
+ assert.match(text(),/Controlled transition has no signature validator/);
+ assert.match(text(),/Story · In Review → Done · transition 31/);
+ await act(()=>labelled('Include cleared findings').querySelector('input').click());await flush();
+ assert.deepEqual(asked,[false,true]);
+});
+
+test('credentials say they cover authenticator apps and not biometric devices',async()=>{
+ await mount('Credentials',()=>({success:true,grants:[],credentials:[{accountId:'a',displayName:'Pat',state:'LOCKED'}]}));
+ assert.match(text(),/authenticator app codes only/);
+ assert.match(text(),/Biometric device registrations are not listed here/);
+ assert.match(text(),/Locked/);
+ assert.doesNotMatch(text(),/PENDING_CONFIRM|LOCKED/);
 });

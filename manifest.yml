@@ -268,9 +268,17 @@ modules:
     - key: restore-worker
       handler: jobs/restoreWorker.handler
       timeoutSeconds: 600
+      # Whole attachment files are held in memory while they are hashed and
+      # copied (lib/vaultObjectStore.js MAX_VAULT_BYTES is set against this).
+      runtime:
+        memoryMB: 1024
     - key: vault-worker
       handler: jobs/vaultWorker.handler
       timeoutSeconds: 600
+      # Whole attachment files are held in memory while they are hashed and
+      # copied (lib/vaultObjectStore.js MAX_VAULT_BYTES is set against this).
+      runtime:
+        memoryMB: 1024
     - key: link-worker
       handler: jobs/linkWorker.handler
       timeoutSeconds: 600

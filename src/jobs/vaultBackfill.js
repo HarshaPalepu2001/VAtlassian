@@ -9,15 +9,28 @@
  * captures a baseline but no finished vault, and provisions a bounded batch.
  * provisionVault never throws and is idempotent, so a project that keeps
  * failing is simply retried next hour, with each failure in the ledger.
+ *
+ * Projects whose administrator turned the attachment-delete lockdown on and
+ * that are not yet locked are provisioned too; provisionVault reads the
+ * setting itself, so a project with it off never has its scheme touched.
  */
-import { projectsNeedingVault } from '../db/vaultStore.js';
+import { projectsNeedingVault, projectsNeedingLockdown } from '../db/vaultStore.js';
+import { projectsWantingLockdown, getConfig } from '../db/configStore.js';
 import { provisionVault } from '../lib/vaultProvision.js';
+import { TIER_CONFIG_KEY } from '../lib/vaultTier.js';
+import { STORAGE } from '../lib/vaultLocation.js';
 
 const BATCH = 10;
 
 export async function run(deps = {}) {
-  const d = { projectsNeedingVault, provisionVault, ...deps };
-  const projectIds = await d.projectsNeedingVault({ limit: BATCH });
+  const d = { projectsNeedingVault, projectsWantingLockdown, projectsNeedingLockdown, provisionVault,
+    vaultTier: async () => (await getConfig(TIER_CONFIG_KEY, null))?.tier ?? null, ...deps };
+  // On an Object Store site a project has no Confluence page to wait for.
+  const objectStoreOnly = (await d.vaultTier().catch(() => null)) === STORAGE.OBJECT_STORE;
+  const unfinished = await d.projectsNeedingVault({ limit: BATCH, objectStoreOnly });
+  const wanting = await d.projectsWantingLockdown();
+  const unlocked = wanting.length ? await d.projectsNeedingLockdown(wanting) : [];
+  const projectIds = [...new Set([...unfinished, ...unlocked])].slice(0, BATCH);
   let provisioned = 0;
   let failed = 0;
   for (const projectId of projectIds) {

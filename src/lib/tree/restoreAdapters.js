@@ -57,6 +57,7 @@ const PERMISSION_FOR_KIND = {
   // deletion is locked only the app's own account holds that grant, and a
   // refusal is named per file rather than failing the whole restore.
   RESTORE_ATTACHMENTS: 'CREATE_ATTACHMENTS',
+  REPOINT_RICH_TEXT: 'EDIT_ISSUES',
   DELETE_ADDED_NODE: 'DELETE_ISSUES'
 };
 
@@ -154,12 +155,24 @@ export function createRestoreAdapters({ api, route, actorAccountId = 'system', a
       return { issueIdOrKey, fieldIds: Object.keys(fields).sort() };
     },
 
-    /** Rich text pointed at the files the item has now (../restore/attachments.js). */
+    /**
+     * Rich text pointed at the files the item has now (../restore/attachments.js):
+     * of two copies of one original, the one still on the item.
+     */
     async pointAtLiveFiles(issueId, fields) {
       if (!Object.values(fields ?? {}).some(value => adfMediaIds(value).length > 0)) return fields;
       const deps = attachmentDeps ?? (await import('../restore/attachmentAdapters.js'))
         .createAttachmentRestoreDeps({ api, route, actorAccountId, approvalId });
-      return pointAtLiveFiles(fields, deps.identity ? await deps.identity(issueId) : null);
+      const record = deps.identity ? await deps.identity(issueId) : null;
+      let liveJiraIds = null;
+      if (record?.media?.size && deps.readCurrent) {
+        try {
+          liveJiraIds = new Set((await deps.readCurrent(String(issueId))).map(a => String(a?.id ?? '')));
+        } catch (error) {
+          console.error('restore: could not read the files on the item; the newest restored copy is shown', error);
+        }
+      }
+      return pointAtLiveFiles(fields, record, { liveJiraIds });
     },
 
     async restoreLinks(issueIdOrKey, target) {

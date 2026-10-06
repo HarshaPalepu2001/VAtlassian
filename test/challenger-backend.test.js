@@ -19,13 +19,13 @@ globalThis.vaChallenger = {
 };
 
 const mockedModules = {
-  'lib/db.js': ['executeQuery', 'toBinaryParam', 'fromBinaryColumn', 'limitClause', 'affectedRows'],
+  'lib/db.js': ['executeQuery', 'toBinaryParam', 'fromBinaryColumn', 'limitClause', 'affectedRows', 'isUnknownColumn'],
   'db/store.js': ['newId', 'throwing', 'tryAppend', 'isDuplicateKey'],
   'db/configStore.js': [
     'controlledFields', 'projectConfig', 'gatedTransition',
     'declaredFieldRows', 'seedControlledFields', 'countControlledFields'
   ],
-  'db/baselineStore.js': ['writeBaseline', 'currentVersion', 'baselineForApproval', 'valueBatches'],
+  'db/baselineStore.js': ['writeBaseline', 'currentVersion', 'baselineForApproval', 'activeBaselines', 'valueBatches'],
   'db/itemStateStore.js': ['upsertBaselined', 'getReview']
 };
 
@@ -67,6 +67,7 @@ const hooks = registerHooks({
           export const fromBinaryColumn = (x) => Buffer.isBuffer(x) ? x : Buffer.from(String(x ?? ''), 'base64');
           export const limitClause = (x) => \`LIMIT \${x}\`;
           export const affectedRows = (res) => Number(res?.affectedRows ?? 1);
+          export const isUnknownColumn = () => false;
           export const executeQuery = async (sql, params) => {
             globalThis.vaChallenger.dbQueries.push({ sql, params });
             return { result: true, data: globalThis.vaChallenger.dbResultData || [] };
@@ -119,6 +120,7 @@ const hooks = registerHooks({
           };
           export const currentVersion = async (issueId) => globalThis.vaChallenger.baselineVersion;
           export const baselineForApproval = async (issueId, approvalId) => globalThis.vaChallenger.existingBaseline || null;
+          export const activeBaselines = async () => new Map();
           export const valueBatches = rows => (rows.length ? [rows] : []);
         `
       };

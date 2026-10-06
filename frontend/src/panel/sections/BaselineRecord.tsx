@@ -1,8 +1,13 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Button from '@atlaskit/button';
 import { Badge, Card, Person } from '../../ui/primitives';
 import { AssuranceChip, Collapsible, MaterialityBadge, When } from '../../ui/feedback';
-import { plural } from '../../ui/format';
+import { formatTimestamp, plural } from '../../ui/format';
+import { invoke } from '../../lib/bridge';
+import { assertResult, errorMessage } from '../../lib/result';
+import type { Result } from '../../lib/result';
+import DiffView from '../../review/DiffView';
+import type { DiffField, ReviewGroup } from '../../review/types';
 import type { BaselineField, BaselineRecordData, PanelBaseline, PanelLatestApproval } from '../types';
 import { RestoreLine } from './RestoreStatus';
 import type { RestoreRow } from './RestoreStatus';
@@ -45,7 +50,8 @@ export function LatestApproval({ approval }: { approval: PanelLatestApproval | n
  * facts and the "latest approval" line stay visible and correct regardless of
  * whether that evidence has loaded, is loading, or failed.
  */
-export default function BaselineRecord({ baseline, latestApproval, record, restores, evidenceLoading, evidenceError, onOpen, onRetryEvidence }: {
+export default function BaselineRecord({ issueKey, baseline, latestApproval, record, restores, evidenceLoading, evidenceError, onOpen, onRetryEvidence }: {
+  issueKey?: string;
   baseline: PanelBaseline | null;
   latestApproval: PanelLatestApproval | null;
   record: BaselineRecordData | null;
@@ -76,6 +82,8 @@ export default function BaselineRecord({ baseline, latestApproval, record, resto
   const notRetained = record ? record.fieldCount - record.retainedCount : 0;
 
   return (
+    <div className="va-stack va-record-page">
+    {issueKey && <VersionComparison key={`${issueKey}:${baseline.version}`} issueKey={issueKey} latestVersion={baseline.version} />}
     <Card title="Baseline record">
       <div className="va-stack">
         <LatestApproval approval={latestApproval} />
@@ -171,7 +179,78 @@ export default function BaselineRecord({ baseline, latestApproval, record, resto
         )}
       </div>
     </Card>
+    </div>
   );
+}
+
+type Comparison = Result & { fromVersion: number; toVersion: number;
+  from: { approvedName?: string | null; approvedAt?: number | null };
+  to: { approvedName?: string | null; approvedAt?: number | null };
+  fields: DiffField[]; groups?: ReviewGroup[]; changedFieldCount: number; incomplete?: boolean };
+
+function VersionComparison({ issueKey, latestVersion }: { issueKey: string; latestVersion: number }) {
+  const defaultFrom = Math.max(1, latestVersion - 1);
+  const [fromDraft, setFromDraft] = useState(String(defaultFrom));
+  const [toDraft, setToDraft] = useState(String(latestVersion));
+  const [pair, setPair] = useState({ from: defaultFrom, to: latestVersion });
+  const [comparison, setComparison] = useState<Comparison | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [retry, setRetry] = useState(0);
+  const sequence = useRef(0);
+
+  useEffect(() => {
+    if (latestVersion < 2) return;
+    const ticket = ++sequence.current;
+    setLoading(true); setError(''); setComparison(null);
+    invoke<Comparison>('panel:compareVersions', { issueKey, fromVersion: pair.from,
+      toVersion: pair.to, expectedBaselineVersion: latestVersion })
+      .then(raw => {
+        const next = assertResult(raw);
+        if (ticket === sequence.current) {
+          if (next.fromVersion !== pair.from || next.toVersion !== pair.to) throw new Error('The requested versions changed while loading.');
+          setComparison(next);
+        }
+      })
+      .catch(e => { if (ticket === sequence.current) setError(errorMessage(e)); })
+      .finally(() => { if (ticket === sequence.current) setLoading(false); });
+    return () => { ++sequence.current; };
+  }, [issueKey, latestVersion, pair.from, pair.to, retry]);
+
+  function compare() {
+    const from = Number(fromDraft), to = Number(toDraft);
+    if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 1 || to < 1 || from > latestVersion || to > latestVersion) {
+      setError(`Choose versions from 1 to ${latestVersion}.`); setComparison(null); return;
+    }
+    if (from === pair.from && to === pair.to) setRetry(value => value + 1);
+    else setPair({ from, to });
+  }
+
+  return <section className="va-version-compare" aria-label="Compare signed versions">
+    <div className="va-version-compare__head">
+      <div><h3>Compare signed versions</h3><p className="va-secondary">Choose any two saved baselines to see what each signature recorded.</p></div>
+      {latestVersion > 1 && <div className="va-version-compare__controls">
+        <label>From version <input type="number" min="1" max={latestVersion} value={fromDraft} onChange={event => setFromDraft(event.target.value)} /></label>
+        <label>To version <input type="number" min="1" max={latestVersion} value={toDraft} onChange={event => setToDraft(event.target.value)} /></label>
+        <button type="button" className="va-btn" onClick={compare}>Compare</button>
+      </div>}
+    </div>
+    {latestVersion < 2 && <p className="va-muted">A second signed baseline will make version comparison available.</p>}
+    {loading && <p className="va-muted">Loading saved versions…</p>}
+    {error && <p className="va-warning-text" role="alert">Version comparison could not be loaded. {error} <button type="button" className="va-link-button" onClick={() => setRetry(value => value + 1)}>Retry</button></p>}
+    {comparison && <>
+      {comparison.incomplete && <p className="va-warning-text" role="status">This comparison is incomplete because one or more historical work items cannot be verified against your current Jira access. Visible differences are shown below; a match does not establish that the complete baselines are identical.</p>}
+      <div className="va-version-compare__provenance">
+        <span><strong>Version {comparison.fromVersion}</strong> · {comparison.from.approvedName ?? 'Reviewer'} · {formatTimestamp(comparison.from.approvedAt) ?? 'Time unavailable'}</span>
+        <span aria-hidden>→</span>
+        <span><strong>Version {comparison.toVersion}</strong> · {comparison.to.approvedName ?? 'Reviewer'} · {formatTimestamp(comparison.to.approvedAt) ?? 'Time unavailable'}</span>
+        <span className="va-secondary">{plural(comparison.changedFieldCount, 'difference')}</span>
+      </div>
+      <div className="va-version-compare__diff"><DiffView fields={comparison.fields} groups={comparison.groups}
+        mode="versions" fromVersion={comparison.fromVersion} toVersion={comparison.toVersion} incomplete={comparison.incomplete} /></div>
+      <p className="va-subtlest">This compares signed snapshots. The Changes tab shows edits since the active baseline and their Jira history.</p>
+    </>}
+  </section>;
 }
 
 function RecordField({ field }: {field: BaselineField}) {

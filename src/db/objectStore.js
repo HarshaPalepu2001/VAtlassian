@@ -1,11 +1,13 @@
-import { default as fos } from '@forge/object-store';
+// The named export: `default` is the whole CommonJS module outside a bundler.
+import { objectStore as fos } from '@forge/object-store';
 import { fetch } from '@forge/api';
 import { createHash } from 'crypto';
 
 export const objectStore = {
   async set(key, value) {
     const buffer = Buffer.isBuffer(value) ? value : Buffer.from(value);
-    const checksum = createHash('sha256').update(buffer).digest('hex');
+    // The store checks the upload against this, and expects it base64-encoded.
+    const checksum = createHash('sha256').update(buffer).digest('base64');
     const uploadDetails = await fos.createUploadUrl({
       key,
       length: buffer.length,

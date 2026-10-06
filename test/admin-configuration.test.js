@@ -236,12 +236,12 @@ test('saveConfig validates AI options and persists disabled setting', async () =
   assert.equal(bad.writes.length, 0);
 });
 
-test('site-wide STRICT mode is refused while any project has unresolved drift', async () => {
+test('site-wide STRICT mode is refused as unsupported', async () => {
   const deps = fixture();
-  deps.hasUnresolvedDrift = async projectId => projectId == null;
   const result = await admin.saveConfig(request({ config: { policy: { mode: 'STRICT' } } }), deps);
   assert.equal(result.success, false);
-  assert.match(result.error, /unresolved drift/);
+  assert.match(result.error, /not supported/);
+  assert.equal(deps.writes.length, 0);
 });
 
 test('creating a capture-baseline transition provisions the vault for its project', async () => {
@@ -302,4 +302,134 @@ test('wildcard retention cannot disable evidence for a specifically gated issue 
   assert.equal(result.success, false);
   assert.match(result.error, /Retention cannot be disabled/);
   assert.equal(deps.writes.length, 0, 'the unsafe wildcard retention change must not persist');
+});
+
+test('attachment protection is refused for the whole site: it edits one project\'s permission scheme', async () => {
+  const deps = fixture();
+  const result = await admin.saveConfig(request({ config: { vault: { lockAttachmentDeletion: true } } }), deps);
+  assert.equal(result.success, false);
+  assert.match(result.error, /per project/);
+  assert.equal(deps.writes.length, 0);
+});
+
+test('attachment protection accepts only its one boolean', async () => {
+  for (const vault of [{ lockAttachmentDeletion: 'yes' }, { other: true }, []]) {
+    const deps = fixture();
+    const result = await admin.saveConfig(request({ projectId: '1', config: { vault } }), deps);
+    assert.equal(result.success, false, JSON.stringify(vault));
+  }
+});
+
+test('turning the lockdown on saves it, then applies it to the scheme at once and says what it removed', async () => {
+  const deps = fixture();
+  const calls = [];
+  deps.provisionVault = async (projectId, options) => {
+    calls.push([projectId, options.lockdownEnabled, options.forceLock]);
+    return { errors: [], lockdown: { grantsRemoved: 2, otherProjectKeys: ['SEC'] } };
+  };
+  const result = await admin.saveConfig(request({ projectId: '1', config: { vault: { lockAttachmentDeletion: true } } }), deps);
+  assert.equal(result.success, true);
+  assert.deepEqual(deps.writes[0].slice(0, 2), ['project:1', { vault: { lockAttachmentDeletion: true } }]);
+  assert.deepEqual(calls, [[1, true, true]]);
+  assert.match(result.note, /2 grants removed/);
+  assert.match(result.note, /SEC lost these grants too/);
+});
+
+test('turning the lockdown off clears the lock and says the removed grants are not put back', async () => {
+  const deps = fixture();
+  deps.readConfigRecord = async () => ({ config: { vault: { lockAttachmentDeletion: true } }, revision: 'r1' });
+  const unlocked = [];
+  deps.markPermissionUnlocked = async args => unlocked.push(args);
+  deps.provisionVault = async () => { throw new Error('turning off must not provision'); };
+  const result = await admin.saveConfig(request({ projectId: '1', config: { vault: { lockAttachmentDeletion: false } } }), deps);
+  assert.equal(result.success, true);
+  assert.deepEqual(unlocked, [{ projectId: 1 }]);
+  const off = deps.events.find(e => e.eventType === 'ATTACHMENT_DELETE_LOCK_DISABLED');
+  assert.deepEqual(off.payload, { projectId: 1, grantsRestored: false });
+  assert.match(result.note, /not put back/);
+});
+
+test('a save that leaves the lockdown as it was touches no permission scheme', async () => {
+  const deps = fixture();
+  deps.provisionVault = async () => { throw new Error('unchanged setting must not provision'); };
+  const result = await admin.saveConfig(request({ projectId: '1', config: { ai: { enabled: false } } }), deps);
+  assert.equal(result.success, true);
+  assert.equal(result.note, undefined);
+});
+
+test('vault status reports the lockdown setting, what was applied, the app grant and the scheme', async () => {
+  const deps = fixture();
+  let walked = false;
+  Object.assign(deps, {
+    projectConfig: async () => ({ vault: { lockAttachmentDeletion: false } }),
+    getVaultSpace: async () => ({ project_page_id: 'pp1', permission_locked_at: 1700, permission_scheme_id: '10000', app_delete_granted_at: 1600, app_delete_checked_at: null }),
+    getVaultSite: async () => ({ space_key: 'VATVAULT' }),
+    getConfig: async () => null,
+    getProjectPermissionScheme: async () => ({ id: 10000, name: 'Default Permission Scheme', permissions: [] }),
+    getProjectsUsingPermissionScheme: async () => { walked = true; return ['SEC']; }
+  });
+  const result = await admin.getVaultStatus(request({ projectId: '1' }), deps);
+  assert.equal(result.success, true);
+  assert.deepEqual(result.vault, { storage: 'CONFLUENCE', storageReason: null, storageChosen: false, siteSpaceKey: 'VATVAULT', projectPageId: 'pp1' });
+  assert.deepEqual(result.lockdown, { enabled: false, lockedAt: 1700, lockedSchemeId: '10000' },
+    'a lock applied before the setting existed is still reported');
+  assert.deepEqual(result.appDelete, { grantedAt: 1600, refusedAt: null });
+  assert.deepEqual(result.scheme, { id: 10000, name: 'Default Permission Scheme' });
+  assert.equal(result.sharedWith, null);
+  assert.equal(walked, false, 'the site-wide project walk only runs when asked');
+
+  const shared = await admin.getVaultStatus(request({ projectId: '1', checkSharing: true }), deps);
+  assert.deepEqual(shared.sharedWith, ['SEC']);
+});
+
+test('vault status still answers when the scheme cannot be read', async () => {
+  const deps = fixture();
+  Object.assign(deps, {
+    projectConfig: async () => ({}),
+    getVaultSpace: async () => null,
+    getVaultSite: async () => null,
+    getConfig: async () => ({ tier: 'OBJECT_STORE', reason: 'NO_CONFLUENCE_404' }),
+    getProjectPermissionScheme: async () => { throw new Error('403'); },
+    getProjectsUsingPermissionScheme: async () => []
+  });
+  const result = await admin.getVaultStatus(request({ projectId: '1', checkSharing: true }), deps);
+  assert.equal(result.success, true);
+  assert.equal(result.scheme, null);
+  assert.match(result.schemeError, /403/);
+  assert.equal(result.vault.storage, 'OBJECT_STORE', 'a Jira-only site reports its Object Store vault');
+  assert.equal(result.vault.storageReason, 'NO_CONFLUENCE_404');
+  assert.equal(result.lockdown.enabled, false);
+});
+
+test('vault storage is read for the whole site, with no project', async () => {
+  const deps = fixture();
+  Object.assign(deps, {
+    getVaultSite: async () => null,
+    getConfig: async () => ({ tier: 'OBJECT_STORE', reason: 'CHOSEN_BY_ADMIN' }),
+    getVaultSpace: async () => { throw new Error('a project was read'); },
+    getProjectPermissionScheme: async () => { throw new Error('a project was read'); },
+    getProjectsUsingPermissionScheme: async () => []
+  });
+  const result = await admin.getVaultTier(request({}), deps);
+  assert.equal(result.success, true, result.error);
+  assert.equal(result.storage, 'OBJECT_STORE');
+  assert.equal(result.storageChosen, true);
+  assert.equal(result.siteSpaceKey, null);
+});
+
+test('vault storage can be pinned by an administrator or handed back to detection', async () => {
+  const deps = fixture();
+  const saved = [];
+  deps.setConfig = async (key, value) => saved.push([key, value]);
+  const pinned = await admin.setVaultTier(request({ tier: 'OBJECT_STORE' }), deps);
+  assert.equal(pinned.success, true);
+  assert.equal(saved[0][0], 'vault:tier');
+  assert.deepEqual({ tier: saved[0][1].tier, reason: saved[0][1].reason }, { tier: 'OBJECT_STORE', reason: 'CHOSEN_BY_ADMIN' });
+  assert.match(pinned.note, /Existing copies stay where they are/);
+
+  const auto = await admin.setVaultTier(request({ tier: 'AUTO' }), deps);
+  assert.equal(auto.success, true);
+  assert.ok(deps.calls.some(c => c.sql === 'DELETE FROM va_config WHERE cfg_key = ?' && c.params[0] === 'vault:tier'));
+
+  assert.equal((await admin.setVaultTier(request({ tier: 'S3' }), fixture())).success, false);
 });

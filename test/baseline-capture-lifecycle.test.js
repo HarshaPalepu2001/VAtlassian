@@ -12,6 +12,7 @@ function fixture() {
     issueFields: { summary: 'Approved' }, editmetaFields: { summary: {} }, transitionAt: 100, capturedAt: 100,
     transitionId: '31', fromStatusId: 'review', toStatusId: 'approved',
     requiredRole: 'Quality Reviewer', requiredAssurance: 'ESIGNATURE',
+    ruleScope: { source: 'OWN', projectId: 2, issueTypeId: '3', imposedByBaselineId: null, imposedByVersion: null },
     approver: { approvalId: Buffer.alloc(16, 1), accountId: 'a', assuranceLevel: 'ESIGNATURE',
       contentHash: project({ summary: 'Approved' }, fields).contentHash } };
   const calls = [];
@@ -19,7 +20,8 @@ function fixture() {
   const deps = { baselineForApproval: async () => null, currentVersion: async () => 0,
     writeBaseline: async args => { calls.push('write'); written = args; return { baselineId: Buffer.alloc(16, 2) }; },
     assignReviewer: async () => ({ accountId: 'a' }), upsertBaselined: async () => calls.push('publish'),
-    tryAppend: async () => calls.push('audit'), getReview: async () => null };
+    tryAppend: async () => calls.push('audit'), getReview: async () => null,
+    activeBaselines: async () => new Map() };
   return { args, deps, calls, written: () => written };
 }
 test('capture refuses content that differs from the signature', async () => {
@@ -110,4 +112,55 @@ test('scalar capture refuses to publish without complete policy provenance', asy
     { captured: false, reason: 'BASELINE_POLICY_INCOMPLETE' }
   );
   assert.deepEqual(calls, []);
+});
+
+test('a capture hands the write its evidence, and the write must require it', async () => {
+  const { args, deps, written } = fixture();
+  assert.equal((await writeCapturedBaseline(args, deps)).captured, true);
+  const { evidence } = written();
+  assert.equal(evidence.required, true);
+  assert.equal(evidence.cause, 'OWN_TRANSITION');
+  assert.deepEqual(evidence.evidence.fields.map(f => [f.field_id, f.materiality, f.restorable]), [['summary', 'MAJOR', true]]);
+  assert.equal(evidence.evidence.rules[0].source, 'OWN');
+  assert.equal(evidence.evidence.rules[0].approvers, JSON.stringify([{ role: 'Quality Reviewer', assurance: 'ESIGNATURE' }]));
+  assert.equal(evidence.evidence.signatures[0].signer_account_id, 'a');
+  assert.equal(evidence.evidence.signatures[0].signer_name, 'a',
+    'a signer with no display name is named by their account id, never "Unknown"');
+  assert.equal(evidence.evidence.signatures[0].transition_id, '31');
+  assert.deepEqual(evidence.links, [], 'no link field tracked, no links recorded');
+});
+
+test('a capture of a child held to its parent\'s fields records that rule as inherited from that parent', async () => {
+  const { args, deps, written } = fixture();
+  args.ruleScope = { source: 'INHERITED', projectId: 2, issueTypeId: 'epic', imposedByBaselineId: Buffer.alloc(16, 9), imposedByVersion: 6 };
+  args.cause = 'DRIFT_DECISION';
+  await writeCapturedBaseline(args, deps);
+  const { evidence } = written();
+  assert.equal(evidence.cause, 'DRIFT_DECISION');
+  assert.equal(evidence.evidence.rules[0].source, 'INHERITED');
+  assert.equal(evidence.evidence.rules[0].issue_type_id, 'epic');
+  assert.equal(evidence.evidence.rules[0].imposed_by_version, 6);
+});
+
+test('a capture without its rule scope is refused before anything is written', async () => {
+  const { args, deps, calls } = fixture();
+  args.ruleScope = null;
+  assert.equal((await writeCapturedBaseline(args, deps)).reason, 'BASELINE_POLICY_INCOMPLETE');
+  assert.deepEqual(calls, []);
+});
+
+test('tracked links are recorded with the other end\'s version at that moment', async () => {
+  const { args, deps, written } = fixture();
+  const linksField = { field_id: 'issuelinks', field_kind: 'LINKS', schema_type: 'array', materiality: 'MAJOR',
+    store_values: true, writable: false };
+  const links = [{ id: '15539', type: { id: '10022', name: 'Deployments' }, outwardIssue: { id: '43903', key: 'VAT-3' } }];
+  args.controlledFields = [...fields, linksField];
+  args.issueFields = { summary: 'Approved', issuelinks: links };
+  args.approver.contentHash = project(args.issueFields, args.controlledFields).contentHash;
+  const asked = [];
+  deps.activeBaselines = async ids => { asked.push(ids); return new Map([[43903, { baseline_id: Buffer.alloc(16, 5), version: 4 }]]); };
+  assert.equal((await writeCapturedBaseline(args, deps)).captured, true);
+  assert.deepEqual(asked, [[43903]]);
+  assert.deepEqual(written().evidence.links.map(l => [l.link_id, l.direction, l.other_issue_key, l.other_baseline_version]),
+    [['15539', 'OUTWARD', 'VAT-3', 4]]);
 });

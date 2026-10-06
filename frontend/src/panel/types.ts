@@ -106,7 +106,7 @@ export type BaselineRecordData = { version: number; approvedName?: string; appro
 /** One file a rejection acts on, with the work item it is attached to. */
 export type RejectedFile = { issueId: number | null; issueKey: string | null; id: string; filename: string; reason?: string };
 /** What a rejection does to files: deleted, re-uploaded from the vault, or beyond restoring. */
-export type AttachmentRejection = { deleteFiles: RejectedFile[]; restoreFiles: RejectedFile[]; unrestorableFiles: RejectedFile[]; vaultChecked: boolean };
+export type AttachmentRejection = { deleteFiles: RejectedFile[]; restoreFiles: RejectedFile[]; unrestorableFiles: RejectedFile[]; mediaUnknownFiles?: RejectedFile[]; vaultChecked: boolean };
 
 /** The heavy, authoritative current-record read from `panel:getEvidence`. Rejected server-side
  *  as STALE_EVIDENCE when the caller's expected baseline id/version no longer
@@ -121,7 +121,7 @@ export type PanelEvidence = {
   assignee?: unknown;
   reporter?: unknown;
   record: BaselineRecordData | null;
-  drift: { count: number; materialCount: number; fields: DiffField[]; groups?: ReviewGroup[]; addedNodes?: any[]; removedNodes?: any[]; movedNodes?: any[]; changedFields?: any[] };
+  drift: { count: number; materialCount: number; fields: DiffField[]; groups?: ReviewGroup[]; historyTruncated?: boolean; historyUnavailable?: boolean; addedNodes?: any[]; removedNodes?: any[]; movedNodes?: any[]; changedFields?: any[] };
   rejection: { deleteIssueKeys: string[]; recreateCount: number; attachments?: AttachmentRejection | null };
   restoreHistory: any[];
 };

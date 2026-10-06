@@ -4,7 +4,7 @@ import { restoreById, claimRestore, heartbeatRestore, beginRestoreVerification,
 import { activeBaseline, activeBaselines, readAllValues } from '../db/baselineStore.js';
 import { approvalById } from '../db/approvalStore.js';
 import { markDecided } from '../db/driftStore.js';
-import { release } from '../db/itemStateStore.js';
+import { release, refreshRestoreLock } from '../db/itemStateStore.js';
 import { tryAppend } from '../db/store.js';
 import { EVENT } from '../lib/ledger.js';
 import { stateAfter, DECISION } from '../lib/decision.js';
@@ -153,9 +153,17 @@ export async function runRestoreWorker(eventOrBody, overrides = {}) {
     restoreById, activeBaseline, approvalById, claimRestore, heartbeatRestore,
     beginRestoreVerification, finishRestore: finishQueuedRestore,
     markRestoreQueued, markRestoreQueueFailure, failRestore, markDecided, release,
+    refreshItemLock: refreshRestoreLock,
     enqueue: enqueueRestore, prepare: defaultPrepare, executeBatch: defaultExecute,
     verify: defaultVerify, append: tryAppend, ...overrides
   };
+  // The work item's RESTORING lock is what the gate, the collectors and every
+  // other decision read; va_restore's own heartbeat is invisible to them. Kept
+  // fresh at each checkpoint so a long or slow-delivered restore is never
+  // mistaken for an abandoned one. Best effort: a missed beat only shortens
+  // the lease, which the next beat restores.
+  const beat = at => Promise.resolve(deps.refreshItemLock({ issueId: Number(body.issueId), now: at }))
+    .catch(error => console.error('restoreWorker: could not refresh the item lock', error));
   if (!body?.restoreId) return { state: 'FAILED', reason: 'RESTORE_NOT_FOUND' };
 
   const restore = await deps.restoreById(body.restoreId);
@@ -176,6 +184,7 @@ export async function runRestoreWorker(eventOrBody, overrides = {}) {
   const claimed = await deps.claimRestore({ restoreId, now });
   if (!claimed) return { state: restore.state, skipped: true };
   harnessLog('RESTORE', 'worker:claim', { restoreId: idBase64(restoreId), issueId: body.issueId });
+  await beat(now);
 
   try {
     const approval = await deps.approvalById(restore.approval_id);
@@ -206,6 +215,7 @@ export async function runRestoreWorker(eventOrBody, overrides = {}) {
       }
       await deps.heartbeatRestore({ restoreId, completedSteps: Number(executed.completed ?? 0),
         totalSteps, now: Date.now() });
+      await beat(Date.now());
       try {
         const pushed = await deps.enqueue({ restoreId: idBase64(restoreId), issueId: Number(body.issueId),
           baselineId: String(body.baselineId), baselineVersion: Number(body.baselineVersion) });
@@ -215,6 +225,11 @@ export async function runRestoreWorker(eventOrBody, overrides = {}) {
         return { state: 'RESTORING', restoreId, progress: { totalSteps, completedSteps: Number(executed.completed ?? 0), remainingSteps: Number(executed.remaining ?? 0) } };
       } catch (error) {
         await deps.markRestoreQueueFailure({ restoreId, error, now: Date.now() });
+        // No batch is coming, so the item is not left RESTORING for the gate to
+        // report as running. ERROR, as for any restore that could not run;
+        // Retry resumes it (usecases/restore.js).
+        await deps.release({ issueId: Number(body.issueId), state: 'ERROR', now: Date.now(),
+          counters: { driftCount: 1, driftedFieldCount: 1, maxMateriality: null } }).catch(() => {});
         harnessLog('ERROR', 'worker:requeueFailed', { restoreId: idBase64(restoreId), error: error?.message });
         return { state: 'QUEUING_FAILED', restoreId, error: String(error?.message ?? error) };
       }
@@ -223,6 +238,7 @@ export async function runRestoreWorker(eventOrBody, overrides = {}) {
     if (!await deps.beginRestoreVerification({ restoreId, now: Date.now() })) {
       return { state: 'RESTORING', restoreId, skipped: true };
     }
+    await beat(Date.now());
     const verified = await deps.verify({ restoreId, restore, approval, prepared, plan });
     const replacements = verified.replacements ?? [];
     const state = verified.matches

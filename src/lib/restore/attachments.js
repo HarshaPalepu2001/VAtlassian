@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { canonicalAttachments, jiraIdOf, rewriteAdfMedia } from '../attachmentIdentity.js';
+import { canonicalAttachments, jiraIdOf, rewriteAdfMedia, liveCopyMedia } from '../attachmentIdentity.js';
+import { isReadableCopy, describeLocation } from '../vaultLocation.js';
 
 /**
  * PUTTING A WORK ITEM'S FILES BACK.
@@ -32,7 +33,7 @@ import { canonicalAttachments, jiraIdOf, rewriteAdfMedia } from '../attachmentId
  */
 
 export class AttachmentRestoreError extends Error {
-  constructor({ status = 422, detail, refused = [] }) {
+  constructor({ status = 422, detail, refused = [], unpointable = [] }) {
     super(detail);
     this.name = 'AttachmentRestoreError';
     this.code = 'ATTACHMENT_RESTORE_FAILED';
@@ -40,7 +41,28 @@ export class AttachmentRestoreError extends Error {
     this.status = status;
     this.detail = detail;
     this.refused = refused;
+    this.unpointable = unpointable;
   }
+}
+
+/** How many times a restored copy's media id is asked for before it counts as unknown. */
+export const MEDIA_ID_ATTEMPTS = 3;
+const MEDIA_ID_PAUSE_MS = 400;
+const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * A just-uploaded file's media id. Jira can take a moment to hand the file to
+ * its media store, so an unknown answer is asked again before it is believed.
+ */
+async function mediaIdWithRetry(deps, attachmentId) {
+  if (!deps.mediaIdOf) return null;
+  const sleep = deps.sleep ?? pause;
+  for (let attempt = 1; attempt <= MEDIA_ID_ATTEMPTS; attempt++) {
+    const mediaId = await deps.mediaIdOf(attachmentId);
+    if (mediaId) return mediaId;
+    if (attempt < MEDIA_ID_ATTEMPTS) await sleep(MEDIA_ID_PAUSE_MS * attempt);
+  }
+  return null;
 }
 
 /** A failure that says nothing about this file and everything about the next request. */
@@ -85,6 +107,10 @@ export async function restoreAttachments({ issueKey, issueId, sourceIssueId = is
   const refused = [];
   const restored = [];
   const removed = [];
+  // Restored files whose copy's media id stayed unknown: rich text showing the
+  // original cannot be pointed at them (see the executor, which names the
+  // fields instead of sending Jira a pointer it would refuse).
+  const unpointable = [];
   const refuse = (file, reason) => refused.push({ id: String(file.id), filename: describeFile(file), reason });
 
   const copies = missing.length
@@ -93,14 +119,25 @@ export async function restoreAttachments({ issueKey, issueId, sourceIssueId = is
 
   for (const file of missing) {
     const copy = copies.get(String(file.id));
-    if (!copy?.confluence_attachment_id || !copy?.confluence_page_id) {
+    if (!isReadableCopy(copy)) {
       refuse(file, 'No copy of this file is in the vault, so it cannot be put back. Ask whoever removed it to attach it again.');
       continue;
     }
     try {
-      const bytes = await deps.downloadVaulted(copy);
+      let bytes;
+      try {
+        bytes = await deps.downloadVaulted(copy);
+      } catch (error) {
+        // Recorded, but gone from where it was kept: a fact about this file,
+        // not the system, so it is named rather than retried.
+        if (Number(error?.status) === 404) {
+          refuse(file, `The vaulted copy is missing from ${describeLocation(copy)}, so it cannot be put back.`);
+          continue;
+        }
+        throw error;
+      }
       if (sha256(bytes) !== copy.content_hash) {
-        refuse(file, 'The vaulted copy no longer matches the hash recorded when it was vaulted, so it was not restored. It may have been changed in Confluence.');
+        refuse(file, `The vaulted copy no longer matches the hash recorded when it was vaulted, so it was not restored. It may have been changed in ${describeLocation(copy)}.`);
         continue;
       }
       const uploaded = await deps.upload({ issueKey, filename: file.filename || copy.filename, mimeType: file.mimeType, buffer: bytes });
@@ -117,8 +154,9 @@ export async function restoreAttachments({ issueKey, issueId, sourceIssueId = is
       // The copy's media id, so rich text that showed the original can point
       // at it. Unknown only if Jira stops answering the way it did when probed;
       // the file is still restored, and a description that needs the pointer
-      // is refused by Jira and named, never written with a guess.
-      const mediaId = deps.mediaIdOf ? await deps.mediaIdOf(newId) : null;
+      // is named as not restored, never written with a guess.
+      const mediaId = await mediaIdWithRetry(deps, newId);
+      if (!mediaId && copy.media_id) unpointable.push({ id: String(file.id), attachmentId: newId, originalMediaId: String(copy.media_id) });
       await deps.recordAlias({ attachmentId: newId, issueId: Number(issueId), standsForId: String(file.id),
         contentHash: copy.content_hash, restoreRef, mediaId, standsForMediaId: copy.media_id ?? null });
       await deps.audit('ATTACHMENT_RESTORED', { issueKey, originalAttachmentId: String(file.id), attachmentId: newId,
@@ -142,7 +180,8 @@ export async function restoreAttachments({ issueKey, issueId, sourceIssueId = is
       const kept = await deps.preserve({ issueId: Number(issueId), file, buffer: bytes }).catch(() => null);
       await deps.audit('ATTACHMENT_REMOVED_BY_RESTORE', { issueKey, attachmentId: jiraId, filename: file.filename,
         size: file.size ?? null, contentHash, author: file.author?.accountId ?? null, created: file.created ?? null,
-        vaultCopy: kept?.confluenceAttachmentId ?? null }, Number(issueId));
+        vaultCopy: kept ? { storage: kept.storage ?? null, confluenceAttachmentId: kept.confluenceAttachmentId ?? null,
+          objectKey: kept.objectKey ?? null } : null }, Number(issueId));
       await deps.remove(jiraId);
       removed.push({ id: jiraId, filename: describeFile(file) });
     } catch (error) {
@@ -156,10 +195,10 @@ export async function restoreAttachments({ issueKey, issueId, sourceIssueId = is
   }
 
   if (refused.length) {
-    throw new AttachmentRestoreError({ refused,
+    throw new AttachmentRestoreError({ refused, unpointable,
       detail: refused.map(entry => `${entry.filename}: ${entry.reason}`).join(' ') });
   }
-  return { restored, removed };
+  return { restored, removed, unpointable };
 }
 
 /**
@@ -173,10 +212,13 @@ export async function restoreAttachments({ issueKey, issueId, sourceIssueId = is
  * original file is still on the item there is nothing to swap, and the
  * description goes back byte for byte.
  *
- * `records`: identityRecords() for this item — media: Map(copy -> original).
+ * `record`: identityRecords() for this item. `liveJiraIds`: the Jira ids on the
+ * item now, so that of two copies of one original — restored, deleted,
+ * restored again — the one still there is shown, not the first one recorded
+ * (lib/attachmentIdentity.js liveCopyMedia).
  */
-export function pointAtLiveFiles(fields, record) {
-  const forward = new Map([...(record?.media ?? new Map())].map(([copy, original]) => [original, copy]));
+export function pointAtLiveFiles(fields, record, { liveJiraIds = null } = {}) {
+  const forward = liveCopyMedia(record, liveJiraIds);
   if (!forward.size) return fields;
   const out = {};
   for (const [fieldId, value] of Object.entries(fields ?? {})) out[fieldId] = rewriteAdfMedia(value, forward);

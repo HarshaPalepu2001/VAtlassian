@@ -484,6 +484,34 @@
    Baseline record
    --------------------------------------------------------------------------- */
 
+.va-record-page { min-width: 0; }
+.va-version-compare {
+  border: 1px solid var(--va-border); border-radius: var(--va-radius-lg);
+  padding: 16px; display: flex; flex-direction: column; gap: 12px;
+  background: var(--va-surface);
+}
+.va-version-compare__head { display: flex; justify-content: space-between; align-items: end; gap: 16px; flex-wrap: wrap; }
+.va-version-compare__head h3 { margin: 0 0 4px; font-size: var(--va-size-lead); }
+.va-version-compare__head p { margin: 0; }
+.va-version-compare__controls { display: flex; align-items: end; gap: 8px; flex-wrap: wrap; }
+.va-version-compare__controls label { display: flex; flex-direction: column; gap: 4px; font-size: var(--va-size-meta); color: var(--va-text-subtle); }
+.va-version-compare__controls input {
+  width: 86px; min-height: 32px; padding: 4px 8px; border: 1px solid var(--va-border-strong);
+  border-radius: var(--va-radius); background: var(--va-surface); color: var(--va-text); font: inherit;
+}
+.va-version-compare__controls input:focus-visible { outline: 2px solid var(--va-focus); outline-offset: 2px; }
+.va-version-compare__provenance { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; padding: 10px 0; border-block: 1px solid var(--va-border); font-size: var(--va-size-meta); }
+.va-version-compare__diff { height: min(54vh, 520px); min-height: 300px; display: flex; }
+.va-version-compare__diff > .va-review { min-width: 0; }
+.va-version-compare > .va-subtlest { margin: 0; }
+
+.va-file-changes { display: flex; flex-direction: column; gap: 10px; }
+.va-file-change { padding: 10px 12px; border-left: 3px solid var(--va-border-strong); background: var(--va-surface-sunken); border-radius: var(--va-radius); overflow-wrap: anywhere; }
+.va-file-change--removed { border-left-color: var(--va-del-line); }
+.va-file-change--added { border-left-color: var(--va-ins-line); }
+.va-file-change__facts { display: flex; gap: 4px 14px; flex-wrap: wrap; margin-top: 4px; color: var(--va-text-subtle); font-size: var(--va-size-meta); }
+@media (max-width: 720px) { .va-version-compare__diff { height: auto; min-height: 340px; display: block; } }
+
 .va-record-field {
   padding: 12px 0;
   border-bottom: 1px solid var(--va-border);

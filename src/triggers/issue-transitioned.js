@@ -27,8 +27,14 @@ async function runUncached(event, suppliedDeps) {
     if (['NO_APPROVAL', 'INSUFFICIENT_ASSURANCE'].includes(result.reason)) {
       await deps.recordIncident(issueId, actorAccountId, 'UNAUTHORIZED_TRANSITION', now);
     } else if (!result.captured && !['DISABLED', 'NOT_A_GATE', 'CAPTURE_DISABLED'].includes(result.reason)) {
-      await deps.recordIncident(issueId, actorAccountId, 'BASELINE_CAPTURE_FAILED', now);
-      return retryEvent(event, result.reason ?? 'CAPTURE_FAILED');
+      const retry = retryEvent(event, result.reason ?? 'CAPTURE_FAILED');
+      // SCHEMA_PENDING is the deploy-to-migration window: the retry is expected
+      // to succeed once the migration runs, so only a capture still refused when
+      // the retries run out is an incident. Every other failure is one at once.
+      if (result.reason !== 'SCHEMA_PENDING' || retry?.retryExhausted) {
+        await deps.recordIncident(issueId, actorAccountId, 'BASELINE_CAPTURE_FAILED', now);
+      }
+      return retry;
     }
     // Also compare after a successful capture: a delayed/duplicate transition
     // event must not hide edits that arrived between signing and this read.

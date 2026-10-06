@@ -206,3 +206,37 @@ test('a failed write hands the lock back as it was', async () => {
   await assert.rejects(() => runLinkWorker(jobFor([{ change: 'add', link: onVat30 }]), w.deps), /boom/);
   assert.equal(w.calls.released[0].state, 'DRIFTED');
 });
+
+test('a link job carries the signer\'s role, so the other end records who signed as what', () => {
+  const [job] = linkDecisionJobs({ issue: VAT30, tracksLinks: true, before: [],
+    after: [{ id: '15539', type: deploys, outwardIssue: { id: VAT3.id, key: VAT3.key } }],
+    approval: { approvalId: 'AAAA', accountId: 'a', displayName: 'A', assuranceLevel: 'ESIGNATURE', signerRole: 'QA' } });
+  assert.equal(job.signerRole, 'QA');
+});
+
+test('the worker hands the writer the signer\'s role, or null for a job queued before roles travelled', async () => {
+  const values = { summary: 'x', issuelinks: [] };
+  const w = world({ baseline: flatRow(project(values, [LINKS, SUMMARY]).digests), values });
+  await runLinkWorker({ ...jobFor([{ change: 'add', link: onVat30 }]), signerRole: 'QA' }, w.deps);
+  assert.equal(w.calls.flat[0].approval.signerRole, 'QA');
+  const old = world({ baseline: flatRow(project(values, [LINKS, SUMMARY]).digests), values });
+  await runLinkWorker(jobFor([{ change: 'add', link: onVat30 }]), old.deps);
+  assert.equal(old.calls.flat[0].approval.signerRole, null);
+});
+
+test('an other end whose evidence tables are not there yet is retried after the lock is handed back, then fails once retries run out', async () => {
+  const values = { summary: 'x', issuelinks: [] };
+  const w = world({ baseline: flatRow(project(values, [LINKS, SUMMARY]).digests), values });
+  const pending = Object.assign(new Error('pending'), { reason: 'SCHEMA_PENDING' });
+  w.deps.writeDerivedFlat = async () => { throw pending; };
+  const result = await runLinkWorker({ body: jobFor([{ change: 'add', link: onVat30 }]), retryContext: { retryCount: 0 } }, w.deps);
+  assert.equal(result?._retry, true, 'Forge redelivers it after the migration');
+  assert.equal(w.calls.released[0].state, 'DRIFTED');
+  assert.equal(w.calls.cleared, undefined, 'the decision is still coming, so its pending marker stays');
+  const notRecorded = () => w.calls.ledger.filter(e => e.eventType === 'LINK_DECISION_NOT_RECORDED');
+  assert.deepEqual(notRecorded(), [], 'a retry is not yet a decision left unrecorded');
+  await assert.rejects(() => runLinkWorker({ body: jobFor([{ change: 'add', link: onVat30 }]), retryContext: { retryCount: 4 } }, w.deps),
+    error => error === pending);
+  assert.deepEqual(notRecorded().map(e => [e.issueId, e.payload.reason, e.payload.decidedOn]), [[43903, 'SCHEMA_PENDING', 'VAT-30']],
+    'the other end says why the decision was not recorded there, as for OTHER_END_BUSY');
+});

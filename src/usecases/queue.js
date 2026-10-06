@@ -3,85 +3,237 @@ import { actorFrom, respond, fail } from './panelAccess.js';
 import { grantsFor } from '../lib/reviewer.js';
 import { rowAuthorises } from '../lib/eligibility.js';
 import { gatedReviewStatuses, gatedTransition } from '../db/configStore.js';
-import { driftedInProjects, reviewsByIds } from '../db/itemStateStore.js';
-import { activeBaseline, activeBaselines } from '../db/baselineStore.js';
-import { availableTransitions } from '../lib/transitions.js';
+import { awaitingDecision } from '../db/itemStateStore.js';
+import { activeBaselines } from '../db/baselineStore.js';
+import { latestRestoresFor } from '../db/restoreStore.js';
+import { pendingMovesFor } from '../db/approvalStore.js';
+import { linkDecisionsPendingFor } from '../db/linkPendingStore.js';
+import { transitionsFrom } from '../lib/transitions.js';
 import { resolveActions } from '../lib/journey.js';
-import { getDriftedSubjects } from '../db/confluenceStore.js';
+import { baselinePolicy } from '../lib/baselinePolicy.js';
 
-const DRIFT_QUEUE_STATES = new Set(['DRIFTED', 'ERROR']);
+/**
+ * MY APPROVALS — EVERYTHING WAITING ON THIS PERSON, BY THE ROLES THEY HOLD.
+ *
+ * Three kinds of work, each offered under exactly the rule that would decide
+ * it, so the list never offers what signing would refuse and never hides what
+ * only this person can do:
+ *
+ *   CHANGES     A signed item edited since approval, wherever it now sits.
+ *               Found in the app's own record (va_item_state), and offered to
+ *               whoever holds the role FROZEN INTO ITS BASELINE — the role
+ *               usecases/drift.js prepareApproval checks — not the role today's
+ *               transition settings name. An item signed under a rule since
+ *               removed, or a child approved through its parent, is still held
+ *               by Jira until someone decides it, so it must still reach them.
+ *   RESTORE     The same, where a rejection's restore of the current baseline
+ *               did not finish. Everyone in the role sees it (they may approve
+ *               or reject again); only the reviewer who rejected may retry it
+ *               (usecases/restore.js retry), and `canRetry` says which.
+ *   TRANSITION  A controlled transition this person may sign, read LIVE: one
+ *               issue read carries both its current status and the transitions
+ *               Jira offers this user from it, because the search index can
+ *               still show the status an item has just left.
+ *
+ * Decisions come first, oldest waiting first. An item with a change to decide
+ * is never also offered as a transition: Jira holds it on every move until the
+ * change is decided (gate.js).
+ */
+
+/** A restore in one of these states stopped short of the approved record. */
+const UNFINISHED_RESTORE = new Set(['PARTIAL', 'FAILED', 'QUEUING_FAILED']);
+/** Actionable transitions a page aims for before it stops searching. */
+const PAGE_TARGET = 20;
+const SEARCH_PAGE = 50;
+/** Bounds on filling one page, so a scope full of other people's work cannot run a resolver out of time. */
+const MAX_SEARCH_PAGES = 4;
+const SEARCH_BUDGET_MS = 12_000;
+const READ_CONCURRENCY = 5;
 
 export async function list({ payload = {}, context }) { return respond(async () => {
   const actor = actorFrom(context);
-  const [grants, scopes] = await Promise.all([grantsFor(actor.accountId), gatedReviewStatuses()]);
-  const allowed = scopes.filter(s => grants.some(g => rowAuthorises(g, {
-    projectId: s.projectId, issueTypeId: scopeIssueTypeForGrant(s, g), role: s.role })));
-  const projects = [...new Set(allowed.map(s => Number(s.projectId)).filter(Number.isFinite))];
-
-  let jiraItems = [];
-  let nextPageToken = null;
-  if (projects.length) {
-    const drifted = await driftedInProjects(projects);
-    const clauses = [...new Set(allowed.map(jqlForScope).filter(Boolean))];
-    const ids = drifted.map(r => Number(r.issue_id)).filter(Number.isFinite);
-    if (ids.length) clauses.push(`id in (${ids.join(',')})`);
-
-    if (clauses.length) {
-      const response = await api.asUser().requestJira(route`/rest/api/3/search/jql`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
-          jql: `(${clauses.join(' OR ')}) ORDER BY updated DESC`, fields: ['summary', 'status', 'project', 'issuetype'],
-          maxResults: 50, ...(payload.nextPageToken ? { nextPageToken: String(payload.nextPageToken) } : {}) }) });
-      if (!response.ok) fail('QUEUE_UNAVAILABLE');
-      const page = await response.json();
-      nextPageToken = page.nextPageToken ?? null;
-      const issueIds = (page.issues ?? []).map(i => i.id);
-      const [rows, activeMap] = await Promise.all([
-        reviewsByIds(issueIds),
-        activeBaselines(issueIds).catch(() => new Map())
-      ]);
-      const byId = new Map(rows.map(r => [String(r.issue_id), r]));
-      const resolveOne = async issue => {
-        let liveIssue = issue;
-        try {
-          const liveRes = await api.asUser().requestJira(
-            route`/rest/api/3/issue/${issue.key}?fields=summary,status,project,issuetype`
-          );
-          if (liveRes.ok) {
-            liveIssue = await liveRes.json();
-          }
-        } catch {
-          liveIssue = issue;
-        }
-
-        const actions = await actionsForIssue(liveIssue, grants);
-        const row = byId.get(String(issue.id));
-        const active = activeMap.get(Number(issue.id));
-        const canReviewDrift = Boolean(row) && DRIFT_QUEUE_STATES.has(row.state)
-          && await authorisedForDrift(liveIssue, grants);
-        if (!canReviewDrift && actions.length === 0) return null;
-        const baselineVersion = active?.version ?? row?.baseline_version ?? 0;
-        return { issueId: liveIssue.id, issueKey: liveIssue.key, issue_id: liveIssue.id, issue_key: liveIssue.key,
-          summary: liveIssue.fields.summary, status: liveIssue.fields.status.name,
-          state: row?.state ?? 'UNAPPROVED', baselineVersion,
-          driftCount: Number(row?.drift_count ?? 0), materialCount: Number(row?.drifted_field_count ?? 0),
-          maxMateriality: row?.max_materiality ?? null, lastDriftAt: row?.last_drift_at ?? null,
-          transitionName: actions[0]?.toStatusName ?? actions[0]?.name ?? null,
-          transitionLabel: actions[0]?.label ?? null,
-          transitionCount: actions.length };
-      };
-      const QUEUE_RESOLUTION_CONCURRENCY = 5;
-      const resolved = [];
-      const pageIssues = page.issues ?? [];
-      for (let i = 0; i < pageIssues.length; i += QUEUE_RESOLUTION_CONCURRENCY) {
-        const batch = pageIssues.slice(i, i + QUEUE_RESOLUTION_CONCURRENCY);
-        resolved.push(...await Promise.all(batch.map(resolveOne)));
-      }
-      jiraItems = resolved.filter(Boolean);
-    }
-  }
-
-  return { items: jiraItems, nextPageToken };
+  const grants = await grantsFor(actor.accountId);
+  if (!grants.length) return { items: [], nextPageToken: null };
+  // Every page needs to know which items have a decision waiting, to keep them
+  // out of the transitions; only the first page lists them.
+  const waiting = await decisionsFor(grants);
+  const firstPage = !payload.nextPageToken;
+  const [decisions, transitions] = await Promise.all([
+    firstPage ? decisionItems(waiting, actor) : [],
+    transitionItems({ grants, actor, pageToken: payload.nextPageToken ?? null,
+      skip: new Set(waiting.map(({ row }) => Number(row.issue_id))) })
+  ]);
+  return { items: [...decisions, ...transitions.items], nextPageToken: transitions.nextPageToken };
 }); }
+
+// ── Decisions: changes and unfinished restores ─────────────────────────────
+
+/** The recorded items this person may decide. Storage only; no Jira read. */
+async function decisionsFor(grants) {
+  const siteWide = grants.some(g => g.project_id == null);
+  const projectIds = siteWide ? [] : [...new Set(grants.map(g => Number(g.project_id)).filter(Number.isFinite))];
+  const rows = await awaitingDecision({ projectIds, siteWide });
+  if (!rows.length) return [];
+  const baselines = byIssue(await activeBaselines(rows.map(row => Number(row.issue_id))));
+  return rows.flatMap(row => {
+    const baseline = baselines.get(Number(row.issue_id));
+    const role = frozenRole(baseline);
+    return role && grants.some(g => rowAuthorises(g, { projectId: row.project_id, issueTypeId: row.issue_type_id, role }))
+      ? [{ row, baseline }] : [];
+  });
+}
+
+/** The role a change to this baseline needs, or null when it recorded no complete rule to decide it by. */
+function frozenRole(baseline) {
+  if (!baseline) return null;
+  try { return baselinePolicy(baseline).requiredRole; } catch { return null; }
+}
+
+async function decisionItems(waiting, actor) {
+  if (!waiting.length) return [];
+  const ids = waiting.map(({ row }) => Number(row.issue_id));
+  // The search is what proves this person may see each item: the app's record
+  // of an issue hidden from them by issue security is never shown. It also
+  // brings the status, for display only.
+  const [visible, restores, linkPending] = await Promise.all([
+    searchByIds(ids), latestRestoresFor(ids), linkDecisionsPendingFor(ids)
+  ]);
+  return waiting
+    .filter(({ row }) => visible.has(Number(row.issue_id)))
+    .map(({ row, baseline }) => {
+      const issueId = Number(row.issue_id);
+      const issue = visible.get(issueId);
+      const version = Number(baseline.version);
+      const item = { ...header(issue, row), state: row.state, baselineVersion: version,
+        driftCount: Number(row.drift_count ?? 0), materialCount: Number(row.drifted_field_count ?? 0),
+        maxMateriality: row.max_materiality ?? null, lastDriftAt: numberOrNull(row.last_drift_at) };
+      const restore = restores.get(issueId);
+      if (restore && UNFINISHED_RESTORE.has(restore.state) && Number(restore.baseline_version) === version) {
+        return { ...item, kind: 'RESTORE', note: null, restoreId: restore.restore_id, restoreState: restore.state,
+          canRetry: restore.actor_account_id === actor.accountId,
+          waitingSince: numberOrNull(restore.finished_at ?? restore.started_at) };
+      }
+      return { ...item, kind: 'CHANGES', waitingSince: item.lastDriftAt,
+        note: linkPending.has(issueId) ? 'LINK_RECORDING' : row.state === 'ERROR' ? 'DECISION_INCOMPLETE' : null };
+    })
+    .sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || oldestFirst(a.waitingSince, b.waitingSince));
+}
+
+const KIND_ORDER = { CHANGES: 0, RESTORE: 1, TRANSITION: 2 };
+const oldestFirst = (a, b) => (a ?? Infinity) - (b ?? Infinity);
+
+/** Map(issueId -> issue) of the given ids this person can browse. */
+async function searchByIds(ids) {
+  const visible = new Map();
+  let nextPageToken = null;
+  do {
+    const page = await search({ jql: `id in (${ids.join(',')})`, maxResults: 100, nextPageToken });
+    for (const issue of page.issues ?? []) visible.set(Number(issue.id), issue);
+    nextPageToken = page.nextPageToken ?? null;
+  } while (nextPageToken);
+  return visible;
+}
+
+// ── Transitions ─────────────────────────────────────────────────────────────
+
+async function transitionItems({ grants, actor, pageToken, skip }) {
+  const scopes = await gatedReviewStatuses();
+  const clauses = [...new Set(scopes
+    .filter(s => grants.some(g => rowAuthorises(g, { projectId: s.projectId, issueTypeId: scopeIssueTypeForGrant(s, g), role: s.role })))
+    .map(jqlForScope).filter(Boolean))];
+  if (!clauses.length) return { items: [], nextPageToken: null };
+
+  // A search page is mostly other people's work, so one page can hold nothing
+  // for this person while the next holds plenty. Keep reading until the page
+  // is worth showing, within the bounds above, rather than returning an empty
+  // list with more behind it.
+  const jql = `(${clauses.join(' OR ')}) ORDER BY updated DESC`;
+  const started = Date.now();
+  const found = [];
+  let token = pageToken;
+  let pages = 0;
+  do {
+    const page = await search({ jql, maxResults: SEARCH_PAGE, nextPageToken: token });
+    token = page.nextPageToken ?? null;
+    pages += 1;
+    const candidates = (page.issues ?? []).filter(issue => !skip.has(Number(issue.id)));
+    for (let i = 0; i < candidates.length; i += READ_CONCURRENCY) {
+      const batch = await Promise.all(candidates.slice(i, i + READ_CONCURRENCY).map(issue => liveActions(issue, grants)));
+      found.push(...batch.filter(Boolean));
+    }
+  } while (token && found.length < PAGE_TARGET && pages < MAX_SEARCH_PAGES && Date.now() - started < SEARCH_BUDGET_MS);
+  if (!found.length) return { items: [], nextPageToken: token };
+
+  const ids = found.map(({ issue }) => Number(issue.id));
+  const [baselines, moves] = await Promise.all([
+    activeBaselines(ids).then(byIssue).catch(() => new Map()),
+    pendingMovesFor({ accountId: actor.accountId, issueIds: ids }).catch(() => [])
+  ]);
+  const items = found.map(({ issue, actions }) => {
+    const baseline = baselines.get(Number(issue.id));
+    const statusId = String(issue.fields?.status?.id ?? '');
+    return { ...header(issue), kind: 'TRANSITION', state: baseline ? 'BASELINED' : 'UNAPPROVED',
+      baselineVersion: Number(baseline?.version ?? 0), driftCount: 0, materialCount: 0, maxMateriality: null,
+      lastDriftAt: null, waitingSince: null, note: null,
+      transitionName: actions[0]?.toStatusName ?? actions[0]?.name ?? null,
+      transitionLabel: actions[0]?.label ?? null, transitionCount: actions.length,
+      // Signed already, and Jira refused the move: what is left is to retry it.
+      pendingMove: moves.some(move => Number(move.issue_id) === Number(issue.id)
+        && String(move.from_status_id) === statusId
+        && actions.some(action => String(action.transitionId) === String(move.transition_id))) };
+  });
+  return { items, nextPageToken: token };
+}
+
+/** The transitions this person may sign on this issue now, from one live read. */
+async function liveActions(candidate, grants) {
+  let issue;
+  try {
+    const response = await api.asUser().requestJira(
+      route`/rest/api/3/issue/${candidate.key}?fields=summary,status,project,issuetype&expand=transitions`);
+    if (!response.ok) return null;
+    issue = await response.json();
+  } catch {
+    return null;
+  }
+  const { projectId, issueTypeId, fromStatusId } = issueFacts(issue);
+  if (!Number.isFinite(projectId) || !issueTypeId || !fromStatusId) return null;
+  const offered = transitionsFrom(issue.transitions);
+  const gates = await Promise.all(offered.map(transition =>
+    gatedTransition({ projectId, issueTypeId, fromStatusId, toStatusId: transition.toStatusId, transitionId: transition.id })
+      .catch(() => null)));
+  const eligible = gates.map(gate => gate
+    ? grants.some(g => rowAuthorises(g, { projectId, issueTypeId, role: gate.required_role }))
+    : false);
+  const { actions } = resolveActions({ offered, gates, eligible, surface: 'queue' });
+  return actions.length ? { issue, actions } : null;
+}
+
+// ── Shared ──────────────────────────────────────────────────────────────────
+
+async function search({ jql, maxResults, nextPageToken }) {
+  const response = await api.asUser().requestJira(route`/rest/api/3/search/jql`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jql, fields: ['summary', 'status', 'project', 'issuetype'], maxResults,
+      ...(nextPageToken ? { nextPageToken: String(nextPageToken) } : {}) })
+  });
+  if (!response.ok) fail('QUEUE_UNAVAILABLE');
+  return response.json();
+}
+
+function header(issue, row = null) {
+  return { issueId: String(issue.id), issueKey: issue.key, issue_id: String(issue.id), issue_key: issue.key,
+    summary: issue.fields?.summary ?? row?.summary ?? '', status: issue.fields?.status?.name ?? '' };
+}
+
+/** activeBaselines() keyed by numeric issue id, whatever type storage returned. */
+function byIssue(map) {
+  return new Map([...(map ?? new Map())].map(([issueId, baseline]) => [Number(issueId), baseline]));
+}
+
+function numberOrNull(value) {
+  return value == null ? null : Number(value);
+}
 
 function scopeIssueType(scope) {
   return String(scope.issueTypeId ?? scope.issue_type_id ?? '*');
@@ -113,56 +265,4 @@ function issueFacts(issue) {
     issueTypeId: String(issue.fields?.issuetype?.id ?? ''),
     fromStatusId: String(issue.fields?.status?.id ?? '')
   };
-}
-
-/**
- * May this person decide the outstanding drift on this item?
- *
- * NOT "are they an approver out of the status it is in now". A signed item
- * carries its drift wherever it goes, and the status it sits in after approval
- * is by definition the one the approval MOVED it to — so the current status
- * describes an edge that has already been travelled, and matching on it
- * answered no for precisely the items with a decision outstanding.
- *
- * Authority belongs to the gate on the BASELINE's own edge. That is the same
- * question usecases/panelAccess.js asks when it resolves the gate from
- * `baseline.from_status_id -> baseline.to_status_id` ("drift outlives review
- * status"), and the same one the signing path then enforces — so an item
- * offered here is one the reviewer can actually sign.
- *
- * Asked per item rather than from the bulk scope list because va_item_state
- * does not record which edge the baseline was captured on. It runs only for
- * rows already known to be DRIFTED/ERROR, which is a small minority of a page.
- */
-async function authorisedForDrift(issue, grants) {
-  const { projectId, issueTypeId } = issueFacts(issue);
-  if (!Number.isFinite(projectId) || !issueTypeId) return false;
-  const baseline = await activeBaseline(Number(issue.id)).catch(() => null);
-  if (!baseline) return false;
-  // Wildcards are resolved inside gatedTransition, so a concrete baseline edge
-  // still matches an "any status -> Done" rule.
-  const gate = await gatedTransition({ projectId, issueTypeId,
-    fromStatusId: String(baseline.from_status_id), toStatusId: String(baseline.to_status_id),
-    transitionId: baseline.transition_id }).catch(() => null);
-  if (!gate?.required_role) return false;
-  return grants.some(g => rowAuthorises(g, { projectId, issueTypeId, role: gate.required_role }));
-}
-
-async function actionsForIssue(issue, grants) {
-  const { projectId, issueTypeId, fromStatusId } = issueFacts(issue);
-  if (!Number.isFinite(projectId) || !issueTypeId || !fromStatusId) return [];
-  let offered = [];
-  try {
-    offered = await availableTransitions(api, issue.key);
-  } catch {
-    return [];
-  }
-  const gates = await Promise.all(offered.map((transition) =>
-    gatedTransition({ projectId, issueTypeId, fromStatusId, toStatusId: transition.toStatusId, transitionId: transition.id })
-      .catch(() => null)
-  ));
-  const eligible = gates.map(gate => gate
-    ? grants.some(g => rowAuthorises(g, { projectId, issueTypeId, role: gate.required_role }))
-    : false);
-  return resolveActions({ offered, gates, eligible, surface: 'queue' }).actions;
 }

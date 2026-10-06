@@ -2,6 +2,7 @@ import { executeQuery, toBinaryParam, fromBinaryColumn, limitClause, affectedRow
 import { newId, throwing } from './store.js';
 import { FailClosed } from '../lib/errors.js';
 import { encodeValue, decodeValue } from '../lib/valuestore.js';
+import { writeVersionEvidence, clearVersionEvidence } from './evidenceStore.js';
 
 export { encodeValue, decodeValue };
 
@@ -160,8 +161,12 @@ export async function currentVersion(issueId) {
  * new one is durable would leave a window where an item has NO active baseline
  * and every field reads as un-approved.
  */
-export async function writeBaseline({ baseline, values, raw, writable, resume = null,
-  query = throwing, execute = executeQuery }) {
+export async function writeBaseline({ baseline, values, raw, writable, resume = null, evidence = null,
+  query = throwing, execute = executeQuery, writeEvidence = writeVersionEvidence }) {
+  // EVERY CALLER STATES ITS EVIDENCE, including whether publication requires
+  // it. A call that omits it would otherwise publish ungated, so it is refused
+  // before anything is written.
+  if (!evidence) throw new FailClosed('CAPTURE_INCOMPLETE');
   const baselineId = resume?.baseline_id ?? newId();
   const now = baseline.captured_at;
 
@@ -173,10 +178,15 @@ export async function writeBaseline({ baseline, values, raw, writable, resume = 
   // is a no-op, so any row a key doesn't land on again stays as whatever the
   // crashed attempt wrote. Clearing this issue/version's rows first means the
   // replay always leaves exactly what this read says, never a mix of the two.
-  if (resume) await query(
-    `DELETE FROM va_baseline_value WHERE issue_id = ? AND version = ?`,
-    [baseline.issue_id, baseline.version]
-  );
+  // Its evidence likewise, and first: that also confirms the version is still
+  // CAPTURING before anything of it is cleared (db/evidenceStore.js).
+  if (resume) {
+    await clearVersionEvidence({ baselineId, query });
+    await query(
+      `DELETE FROM va_baseline_value WHERE issue_id = ? AND version = ?`,
+      [baseline.issue_id, baseline.version]
+    );
+  }
 
   // 1. Values first. Retained fields only — `values`/`raw` are already filtered
   // by content.js's project(), which writes nothing for a field whose
@@ -236,6 +246,13 @@ export async function writeBaseline({ baseline, values, raw, writable, resume = 
     );
   }
 
+  // THE VERSION'S EVIDENCE, WHILE IT IS STILL CAPTURING (db/evidenceStore.js).
+  // A new capture requires it at publication, below; a link record whose
+  // source never recorded its policy passes required: false.
+  await writeEvidence({ query, entries: [{ baselineId, evidence: evidence.evidence,
+    links: evidence.links ?? [], cause: evidence.cause }] });
+  const evidenceClause = evidence.required === true ? ' AND policy_recorded = TRUE' : '';
+
   // Publish only after every chunk is durable. CAPTURING reserves the unique
   // issue/version and issue/approval keys so a second writer cannot mix values.
   // Provenance is re-checked at the row: a baseline without its frozen control
@@ -244,7 +261,7 @@ export async function writeBaseline({ baseline, values, raw, writable, resume = 
     `UPDATE va_baseline SET state = 'ACTIVE'
      WHERE baseline_id = FROM_BASE64(?) AND state = 'CAPTURING'
        AND required_role IS NOT NULL AND required_assurance IS NOT NULL
-       AND controlled_fields_hash IS NOT NULL`,
+       AND controlled_fields_hash IS NOT NULL${evidenceClause}`,
     [toBinaryParam(baselineId)]);
   if (Number(activated?.affectedRows) !== 1) throw new FailClosed('CAPTURE_INCOMPLETE');
 

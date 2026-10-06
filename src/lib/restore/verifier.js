@@ -1,7 +1,8 @@
 import { route } from '@forge/api';
-import { project } from '../content.js';
+import { project, digestsEquivalent } from '../content.js';
 import { OUTCOME } from './executor.js';
-import { canonicaliseIssue } from '../attachmentIdentity.js';
+import { canonicaliseIssue, danglingMediaPointers } from '../attachmentIdentity.js';
+import { identityRecords } from '../../db/vaultStore.js';
 
 /**
  * Proving the restore worked.
@@ -37,15 +38,21 @@ import { canonicaliseIssue } from '../attachmentIdentity.js';
  * module exists to prevent, and "we could not confirm" is a fine thing to tell
  * a reviewer.
  */
-export async function verifyRestore({ api, issueKey, controlledFields, baselineDigests, detail, expectedStatusId = null }) {
-  let current, currentStatusId;
+export async function verifyRestore({ api, issueKey, controlledFields, baselineDigests, detail, expectedStatusId = null,
+  readIdentity = identityRecords }) {
+  let current, currentStatusId, raw, issueId;
   try {
     const res = await api.asApp().requestJira(route`/rest/api/3/issue/${issueKey}?fields=*all`);
     if (!res.ok) throw new Error(`status ${res.status}`);
+    const read = await res.json();
+    // Kept as Jira holds it: canonicalisation below builds new objects rather
+    // than changing these, and a broken image is only visible here.
+    raw = read?.fields ?? {};
+    issueId = read?.id;
     // Read under canonical attachment ids: a file this restore re-uploaded is
     // confirmed as the approved original only once its alias is recorded,
     // which happens after its bytes matched the vault's hash.
-    const body = await canonicaliseIssue(await res.json());
+    const body = await canonicaliseIssue(read, { read: readIdentity });
     current = body.fields ?? {};
     currentStatusId = current.status?.id == null ? null : String(current.status.id);
   } catch (e) {
@@ -75,7 +82,7 @@ export async function verifyRestore({ api, issueKey, controlledFields, baselineD
     const expected = baselineDigests?.[d.fieldId] ?? null;
     const actual = Object.hasOwn(current, d.fieldId) && current[d.fieldId] !== undefined
       ? digests?.[d.fieldId] ?? null : null;
-    if (expected != null && actual === expected) return { ...d, verified: true };
+    if (expected != null && digestsEquivalent(d.fieldId, actual, expected)) return { ...d, verified: true };
 
     return {
       ...d, outcome: OUTCOME.FAILED, verified: false,
@@ -106,7 +113,7 @@ export async function verifyRestore({ api, issueKey, controlledFields, baselineD
     const expected = baselineDigests?.[fieldId] ?? null;
     const present = Object.hasOwn(current, fieldId) && current[fieldId] !== undefined;
     const actual = present ? digests?.[fieldId] ?? null : null;
-    if (expected != null && present && actual === expected) continue;
+    if (expected != null && present && digestsEquivalent(fieldId, actual, expected)) continue;
     unmatched.push({
       fieldId,
       fieldName: field.field_name ?? fieldId,
@@ -118,7 +125,37 @@ export async function verifyRestore({ api, issueKey, controlledFields, baselineD
     });
   }
 
+  // ── Images a digest cannot see ────────────────────────────────────────────
+  //
+  // A restored copy's pointer is read as the original's, so text that still
+  // points at the DELETED original has the same digest as text that points at
+  // its live copy — and only one of them shows the image.
+  for (const entry of await brokenImages({ raw, issueId, byId, readIdentity })) {
+    if (unmatched.some(u => u.fieldId === entry.fieldId)) continue;
+    unmatched.push(entry);
+    const written = verified.find(d => d.fieldId === entry.fieldId && d.verified);
+    if (written) Object.assign(written, { outcome: OUTCOME.FAILED, verified: false, reason: entry.reason });
+  }
+
   return { detail: verified, unmatched };
+}
+
+async function brokenImages({ raw, issueId, byId, readIdentity }) {
+  const tracked = Object.fromEntries(Object.entries(raw ?? {}).filter(([fieldId]) => byId.has(fieldId)));
+  if (!Object.values(tracked).some(v => v && typeof v === 'object' && v.type === 'doc')) return [];
+  const live = new Set((Array.isArray(raw?.attachment) ? raw.attachment : []).map(a => String(a?.id ?? '')));
+  let record = null;
+  try {
+    record = (await readIdentity([issueId])).get(Number(issueId)) ?? null;
+  } catch (e) {
+    // The digests above still stand; this extra check is skipped, not faked.
+    console.error('restore: could not read restored copies to check rich-text images', e);
+    return [];
+  }
+  const seen = new Set();
+  return danglingMediaPointers(tracked, record, live).filter(d => !seen.has(d.fieldId) && seen.add(d.fieldId))
+    .map(d => ({ fieldId: d.fieldId, fieldName: byId.get(d.fieldId)?.field_name ?? d.fieldId, expected: null, actual: null,
+      reason: 'This text shows a file that is no longer on the work item, so its image does not display.' }));
 }
 
 /**

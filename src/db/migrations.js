@@ -704,5 +704,224 @@ export const MIGRATIONS = [
     decided_on_key VARCHAR(64) NOT NULL,
     queued_at BIGINT NOT NULL,
     PRIMARY KEY (issue_id, decided_on_issue_id)
-  )` }
+  )` },
+  // When Jira last REFUSED the app's own attachment-delete grant. The hourly
+  // backfill otherwise retried a refused grant every hour for ever; with this
+  // it asks again once a day (db/vaultStore.js projectsNeedingVault).
+  { id: 'v070_vault_space_app_delete_check', sql: `ALTER TABLE va_vault_space ADD COLUMN app_delete_checked_at BIGINT NULL` },
+  // THE VAULT HAS TWO HOMES. A site with Confluence keeps copies in its private
+  // vault space; a Jira-only site keeps them in the Forge Object Store
+  // (lib/vaultTier.js). A copy records where it went, so a restore reads it
+  // back from there: `storage` is CONFLUENCE or OBJECT_STORE, and an Object
+  // Store copy has an `object_key` and no Confluence attachment. Rows written
+  // before this are Confluence copies, which the default says.
+  { id: 'v071_vault_attachment_confluence_optional', sql: `ALTER TABLE va_vault_attachment MODIFY COLUMN confluence_attachment_id VARCHAR(64) NULL` },
+  { id: 'v072_vault_attachment_storage', sql: `ALTER TABLE va_vault_attachment
+    ADD COLUMN storage VARCHAR(16) NOT NULL DEFAULT 'CONFLUENCE',
+    ADD COLUMN object_key VARCHAR(191) NULL` },
+  // A project on a Jira-only site has no vault space, but still needs its row:
+  // the app's attachment-delete grant and the lockdown are recorded on it.
+  { id: 'v073_vault_space_id_optional', sql: `ALTER TABLE va_vault_space MODIFY COLUMN space_id VARCHAR(64) NULL` },
+  { id: 'v074_vault_space_key_optional', sql: `ALTER TABLE va_vault_space MODIFY COLUMN space_key VARCHAR(64) NULL` },
+  { id: 'v075_baseline_field', sql: `CREATE TABLE IF NOT EXISTS va_baseline_field (
+    baseline_id BINARY(16) NOT NULL,
+    field_id VARCHAR(64) NOT NULL,
+    label VARCHAR(255) NOT NULL,
+    kind VARCHAR(24) NOT NULL,
+    schema_type VARCHAR(48) NULL,
+    severity VARCHAR(16) NOT NULL,
+    store_values BOOLEAN NOT NULL,
+    restorable BOOLEAN NOT NULL,
+    digest CHAR(64) NOT NULL,
+    required_by TEXT NOT NULL,
+    PRIMARY KEY (baseline_id, field_id)
+  )` },
+  { id: 'v076_baseline_rule', sql: `CREATE TABLE IF NOT EXISTS va_baseline_rule (
+    baseline_id BINARY(16) NOT NULL,
+    rule_key VARCHAR(64) NOT NULL,
+    project_id BIGINT NOT NULL,
+    issue_type_id VARCHAR(32) NOT NULL,
+    transition_id VARCHAR(32) NULL,
+    role VARCHAR(32) NOT NULL,
+    assurance VARCHAR(24) NOT NULL,
+    controlled_fields_hash CHAR(64) NULL,
+    imposed_by_baseline_id BINARY(16) NULL,
+    PRIMARY KEY (baseline_id, rule_key)
+  )` },
+  { id: 'v077_baseline_signature', sql: `CREATE TABLE IF NOT EXISTS va_baseline_signature (
+    baseline_id BINARY(16) NOT NULL,
+    approval_id BINARY(16) NOT NULL,
+    signer_account_id VARCHAR(128) NOT NULL,
+    signer_name VARCHAR(255) NOT NULL,
+    role VARCHAR(32) NOT NULL,
+    assurance VARCHAR(24) NOT NULL,
+    from_status_id VARCHAR(32) NULL,
+    to_status_id VARCHAR(32) NULL,
+    fields_covered TEXT NOT NULL,
+    cause VARCHAR(32) NOT NULL,
+    PRIMARY KEY (baseline_id, approval_id)
+  )` },
+  { id: 'v078_baseline_node_child', sql: `ALTER TABLE va_baseline_node
+    ADD COLUMN child_baseline_id BINARY(16) NULL,
+    ADD COLUMN child_version INT NULL` },
+  { id: 'v079_baseline_link', sql: `CREATE TABLE IF NOT EXISTS va_baseline_link (
+    baseline_id BINARY(16) NOT NULL,
+    link_id VARCHAR(64) NOT NULL,
+    link_type VARCHAR(64) NOT NULL,
+    direction VARCHAR(16) NOT NULL,
+    other_issue_id BIGINT NOT NULL,
+    other_issue_key VARCHAR(32) NOT NULL,
+    other_baseline_id BINARY(16) NULL,
+    other_baseline_version INT NULL,
+    PRIMARY KEY (baseline_id, link_id)
+  )` },
+  { id: 'v080_baseline_policy_recorded', sql: `ALTER TABLE va_baseline ADD COLUMN policy_recorded BOOLEAN NOT NULL DEFAULT FALSE` },
+  { id: 'v081_capture_lease', sql: `CREATE TABLE IF NOT EXISTS va_capture_lease (
+    issue_id BIGINT NOT NULL,
+    holder VARCHAR(128) NOT NULL,
+    expires_at BIGINT NOT NULL,
+    PRIMARY KEY (issue_id)
+  )` },
+  { id: 'v082_drift_observations', sql: `ALTER TABLE va_drift
+    ADD COLUMN observed_at BIGINT NULL,
+    ADD COLUMN trigger_kind VARCHAR(32) NULL,
+    ADD COLUMN trigger_account_id VARCHAR(128) NULL,
+    ADD COLUMN edit_status VARCHAR(32) NULL,
+    ADD COLUMN editor_account_id VARCHAR(128) NULL,
+    ADD COLUMN edited_at BIGINT NULL,
+    ADD COLUMN decision_id VARCHAR(128) NULL` },
+  { id: 'v083_decisions', sql: `CREATE TABLE IF NOT EXISTS va_decision (
+    decision_id VARCHAR(128) NOT NULL,
+    issue_id BIGINT NOT NULL,
+    scope VARCHAR(16) NOT NULL,
+    state VARCHAR(32) NOT NULL,
+    covered_issues TEXT NULL,
+    covered_baselines TEXT NULL,
+    PRIMARY KEY (decision_id)
+  )` },
+  { id: 'v084_decision_group', sql: `CREATE TABLE IF NOT EXISTS va_decision_group (
+    decision_id VARCHAR(128) NOT NULL,
+    group_id VARCHAR(128) NOT NULL,
+    covered_issues TEXT NOT NULL,
+    covered_fields TEXT NOT NULL,
+    roles TEXT NOT NULL,
+    required_assurance VARCHAR(32) NOT NULL,
+    evidence_hash CHAR(64) NOT NULL,
+    PRIMARY KEY (decision_id, group_id)
+  )` },
+  { id: 'v085_decision_signature', sql: `CREATE TABLE IF NOT EXISTS va_decision_signature (
+    decision_id VARCHAR(128) NOT NULL,
+    group_id VARCHAR(128) NOT NULL,
+    approval_id BINARY(16) NOT NULL,
+    role VARCHAR(64) NOT NULL,
+    decision VARCHAR(16) NOT NULL,
+    PRIMARY KEY (decision_id, group_id, role)
+  )` },
+  { id: 'v086_security_level', sql: `ALTER TABLE va_baseline_node ADD COLUMN security_level_id VARCHAR(64) NULL` },
+  { id: 'v087_baseline_cause', sql: `ALTER TABLE va_baseline ADD COLUMN cause VARCHAR(32) NULL` },
+  // ── THE BASELINE EVIDENCE MODEL (docs/specs/2026-10-03-baseline-evidence-model-design.md §4, §9.1) ──
+  // v075–v087 were an early draft of these tables and may already have run on a
+  // site. Nothing ever wrote to the draft tables, so they are replaced, not
+  // altered: dropped, then created in the spec's shape. Never edit v075–v087.
+  { id: 'v088_drop_draft_baseline_field', sql: `DROP TABLE IF EXISTS va_baseline_field` },
+  // One field as it was signed. History is displayed from these rows, never
+  // from today's va_controlled_field.
+  { id: 'v089_baseline_field', sql: `CREATE TABLE IF NOT EXISTS va_baseline_field (
+    baseline_id BINARY(16) NOT NULL,
+    field_id VARCHAR(64) NOT NULL,
+    label VARCHAR(255) NOT NULL,
+    label_source VARCHAR(16) NOT NULL,
+    kind VARCHAR(24) NOT NULL,
+    schema_type VARCHAR(48) NULL,
+    materiality VARCHAR(16) NOT NULL,
+    store_values BOOLEAN NOT NULL,
+    restorable BOOLEAN NULL,
+    digest CHAR(64) NOT NULL,
+    required_by TEXT NOT NULL,
+    PRIMARY KEY (baseline_id, field_id)
+  )` },
+  { id: 'v090_drop_draft_baseline_rule', sql: `DROP TABLE IF EXISTS va_baseline_rule` },
+  // One rule covering a version: its own, or inherited from the ancestor
+  // version named here. `approvers` is a JSON set of {role, assurance}.
+  { id: 'v091_baseline_rule', sql: `CREATE TABLE IF NOT EXISTS va_baseline_rule (
+    baseline_id BINARY(16) NOT NULL,
+    rule_key CHAR(32) NOT NULL,
+    source VARCHAR(16) NOT NULL,
+    project_id BIGINT NOT NULL,
+    issue_type_id VARCHAR(32) NOT NULL,
+    transition_id VARCHAR(32) NULL,
+    approvers TEXT NOT NULL,
+    controlled_fields_hash CHAR(64) NULL,
+    imposed_by_baseline_id BINARY(16) NULL,
+    imposed_by_version INT NULL,
+    PRIMARY KEY (baseline_id, rule_key)
+  )` },
+  { id: 'v092_drop_draft_baseline_signature', sql: `DROP TABLE IF EXISTS va_baseline_signature` },
+  // One signed act on a version, with the stage it happened at. A second
+  // signature on an unchanged version is a second row, never an update.
+  { id: 'v093_baseline_signature', sql: `CREATE TABLE IF NOT EXISTS va_baseline_signature (
+    baseline_id BINARY(16) NOT NULL,
+    approval_id BINARY(16) NOT NULL,
+    signer_account_id VARCHAR(128) NOT NULL,
+    signer_name VARCHAR(255) NOT NULL,
+    role VARCHAR(32) NOT NULL,
+    assurance VARCHAR(24) NOT NULL,
+    cause VARCHAR(32) NOT NULL,
+    cause_baseline_id BINARY(16) NULL,
+    decision_id BINARY(16) NULL,
+    transition_id VARCHAR(32) NULL,
+    from_status_id VARCHAR(32) NULL,
+    to_status_id VARCHAR(32) NULL,
+    transition_at BIGINT NULL,
+    status_at_capture VARCHAR(32) NULL,
+    fields_covered TEXT NOT NULL,
+    signed_at BIGINT NOT NULL,
+    PRIMARY KEY (baseline_id, approval_id)
+  )` },
+  // The editor of a confirmed edit stays in actor_account_id/actor_name (§7.1);
+  // the draft's separate column would let two columns disagree.
+  { id: 'v094_drift_drop_draft_editor', sql: `ALTER TABLE va_drift DROP COLUMN IF EXISTS editor_account_id` },
+  // The draft typed decision_id as text; every id in this schema is BINARY(16).
+  { id: 'v095_drift_drop_draft_decision', sql: `ALTER TABLE va_drift DROP COLUMN IF EXISTS decision_id` },
+  { id: 'v096_drift_decision', sql: `ALTER TABLE va_drift ADD COLUMN IF NOT EXISTS decision_id BINARY(16) NULL` },
+  // Observations are read and settled by the version they were recorded against.
+  { id: 'v097_drift_by_baseline', sql: `ALTER TABLE va_drift ADD INDEX IF NOT EXISTS idx_drift_baseline (baseline_id, field_id)` },
+  { id: 'v098_drop_draft_decision', sql: `DROP TABLE IF EXISTS va_decision` },
+  { id: 'v099_drop_draft_decision_group', sql: `DROP TABLE IF EXISTS va_decision_group` },
+  { id: 'v100_drop_draft_decision_signature', sql: `DROP TABLE IF EXISTS va_decision_signature` },
+  { id: 'v101_decision', sql: `CREATE TABLE IF NOT EXISTS va_decision (
+    decision_id BINARY(16) NOT NULL,
+    opened_on_issue_id BIGINT NOT NULL,
+    scope VARCHAR(16) NOT NULL,
+    state VARCHAR(16) NOT NULL,
+    covers TEXT NOT NULL,
+    opened_by VARCHAR(128) NOT NULL,
+    opened_at BIGINT NOT NULL,
+    PRIMARY KEY (decision_id),
+    KEY idx_decision_issue (opened_on_issue_id, state)
+  )` },
+  // A group's evidence hash is computed from live digests when needed; each
+  // signature stores the hash it signed (v103).
+  { id: 'v102_decision_group', sql: `CREATE TABLE IF NOT EXISTS va_decision_group (
+    decision_id BINARY(16) NOT NULL,
+    group_key CHAR(64) NOT NULL,
+    covers TEXT NOT NULL,
+    roles TEXT NOT NULL,
+    required_assurance VARCHAR(24) NOT NULL,
+    PRIMARY KEY (decision_id, group_key)
+  )` },
+  { id: 'v103_decision_signature', sql: `CREATE TABLE IF NOT EXISTS va_decision_signature (
+    decision_id BINARY(16) NOT NULL,
+    group_key CHAR(64) NOT NULL,
+    approval_id BINARY(16) NOT NULL,
+    role VARCHAR(32) NOT NULL,
+    outcome VARCHAR(16) NOT NULL,
+    evidence_hash CHAR(64) NOT NULL,
+    signed_at BIGINT NOT NULL,
+    PRIMARY KEY (decision_id, group_key, approval_id)
+  )` },
+  { id: 'v104_capture_lease_acquired', sql: `ALTER TABLE va_capture_lease ADD COLUMN IF NOT EXISTS acquired_at BIGINT NULL` },
+  // Set only by the step-2 job on a child version materialised from its
+  // parent's stored node: when that content was read, not when it was written.
+  { id: 'v105_baseline_content_as_of', sql: `ALTER TABLE va_baseline ADD COLUMN IF NOT EXISTS content_as_of BIGINT NULL` }
 ];

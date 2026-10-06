@@ -211,6 +211,28 @@ export async function restoresForIssue(issueId, limit = 20) {
   return rows.map(decode);
 }
 
+/**
+ * The latest restore of each item, in one read: Map(issueId -> row), for the
+ * worklist. Only what it shows is selected — never the detail blob.
+ */
+export async function latestRestoresFor(issueIds) {
+  const ids = [...new Set((issueIds ?? []).map(Number).filter(Number.isFinite))];
+  if (ids.length === 0) return new Map();
+  const rows = await throwing(
+    `SELECT TO_BASE64(restore_id) AS restore_id, issue_id, baseline_version, actor_account_id, state,
+            started_at, finished_at
+     FROM va_restore WHERE issue_id IN (${ids.map(() => '?').join(', ')})
+     ORDER BY started_at DESC LIMIT ${limitClause(ids.length * 20)}`,
+    ids
+  );
+  const latest = new Map();
+  for (const row of rows) {
+    const issueId = Number(row.issue_id);
+    if (!latest.has(issueId)) latest.set(issueId, { ...row, issue_id: issueId, restore_id: fromBinaryColumn(row.restore_id) });
+  }
+  return latest;
+}
+
 /** Everything that did not fully succeed, for the admin console. */
 export async function restoresNeedingAttention(projectId, limit = 100) {
   const rows = await throwing(

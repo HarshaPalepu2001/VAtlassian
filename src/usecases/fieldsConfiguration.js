@@ -63,6 +63,9 @@ export async function saveConfig(req, overrides) {
       : null;
     const key = pid ? `project:${pid}` : 'site';
     const patch = validateConfig(payload.config ?? {});
+    // The lockdown edits ONE project's permission scheme; a site default would
+    // edit every project's without anyone choosing it for them.
+    if (!pid && patch.vault !== undefined) throw new Error('Attachment protection is set per project, not for the whole site.');
     const current = await deps.readConfigRecord(key);
     if (Object.hasOwn(payload, 'expectedRevision') && payload.expectedRevision !== current.revision) {
       throw new Error('Settings changed since you loaded this page. Reload and review the latest values before saving.');
@@ -73,9 +76,6 @@ export async function saveConfig(req, overrides) {
     // written before a key was retired must not make every later save fail.
     const config = validateConfig(merge(stripRetiredConfig(current.config), patch));
     if (config.policy?.mode === 'STRICT') {
-      if (await deps.hasUnresolvedDrift(pid)) {
-        throw new Error('Cannot enable STRICT mode: there is unresolved drift. Approve or reject all pending drift first.');
-      }
       throw new Error('STRICT mode is not supported. Approval is enforced by configured Jira workflow validators; content changes are detected after they occur.');
     }
     await deps.tryAppend({ actorAccountId: req.context.accountId, eventType: deps.EVENT.CONFIG_CHANGED,
@@ -83,8 +83,39 @@ export async function saveConfig(req, overrides) {
     if (!await deps.setConfigIfCurrent(key, config, req.context.accountId, Date.now(), current.revision)) {
       throw new Error('Settings changed during this save. Reload and review the latest values before trying again.');
     }
+    const wasLocking = current.config?.vault?.lockAttachmentDeletion === true;
+    const nowLocking = config.vault?.lockAttachmentDeletion === true;
+    if (pid && wasLocking !== nowLocking) {
+      return { ok: true, note: await applyLockdownChange(deps, Number(pid), nowLocking, req.context.accountId) };
+    }
     return { ok: true };
   }, overrides, 'fields');
+}
+
+/**
+ * Makes the saved lockdown setting true of the project's permission scheme.
+ * The setting is saved first and stays saved whatever happens here: turning it
+ * ON that cannot apply yet (no capturing rule, Jira refusing) is picked up by
+ * the hourly backfill; turning it OFF never puts the removed grants back, and
+ * says so. Who held each removed grant is in the ATTACHMENT_DELETE_LOCKED
+ * ledger entry, so an administrator can re-add them by hand.
+ */
+async function applyLockdownChange(deps, projectId, enabled, accountId) {
+  if (!enabled) {
+    const markPermissionUnlocked = deps.markPermissionUnlocked ?? (await import('../db/vaultStore.js')).markPermissionUnlocked;
+    await markPermissionUnlocked({ projectId });
+    await deps.tryAppend({ actorAccountId: accountId, eventType: deps.EVENT.ATTACHMENT_DELETE_LOCK_DISABLED,
+      payload: { projectId, grantsRestored: false } });
+    return 'Attachment deletion is no longer locked by VAtlassian. Grants it removed earlier are not put back: re-add Delete own attachments and Delete all attachments in the project\'s permission scheme if people should have them.';
+  }
+  const provisionVault = deps.provisionVault ?? (await import('../lib/vaultProvision.js')).provisionVault;
+  const result = await provisionVault(projectId, { lockdownEnabled: true, forceLock: true, actorAccountId: accountId });
+  const lock = result?.lockdown;
+  if (!lock) {
+    return 'Saved. The lockdown could not be applied yet and will be retried every hour; it needs a controlled transition that captures a baseline in this project.';
+  }
+  const shared = lock.otherProjectKeys?.length ? ` The scheme is shared, so ${lock.otherProjectKeys.join(', ')} lost these grants too.` : '';
+  return `Attachment deletion is locked: ${lock.grantsRemoved} grant${lock.grantsRemoved === 1 ? '' : 's'} removed from the permission scheme.${shared}`;
 }
 
 export async function getConfig(req, overrides) {

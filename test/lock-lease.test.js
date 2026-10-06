@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { canDecide, REFUSE, LOCK_TTL_MS } from '../src/lib/decision.js';
+import { canDecide, REFUSE, LOCK_TTL_MS, RESTORE_LEASE_MS, lockLeaseMs } from '../src/lib/decision.js';
 import { REVIEW_STATE, observe, OUTCOME } from '../src/lib/interception.js';
 import { createApprovalUsecases } from '../src/usecases/approval.js';
 
@@ -34,17 +34,33 @@ test('an active DECIDING or RESTORING lock (< 60s) refuses decisions', () => {
   }
 });
 
-test('a stale DECIDING or RESTORING lock (> 60s) allows decisions to proceed', () => {
-  const now = 100000;
+test('a stale DECIDING or RESTORING lock (past its lease) allows decisions to proceed', () => {
+  const now = 10_000_000;
   for (const state of [REVIEW_STATE.DECIDING, REVIEW_STATE.RESTORING]) {
     const staleResult = canDecide({
-      review: { state, last_checked_at: now - (LOCK_TTL_MS + 1000) },
+      review: { state, last_checked_at: now - (lockLeaseMs(state) + 1000) },
       baseline,
       isEligible: true,
       now
     });
     assert.equal(staleResult.allow, true);
   }
+});
+
+test('a RESTORING lock outlives the decision TTL: a queued restore is not abandoned after a minute', () => {
+  // The queued worker may wait for delivery and runs up to 600 s per batch.
+  // Treating it as abandoned at 60 s let a collector overwrite RESTORING with
+  // DRIFTED, and a second reviewer decide, while it was still writing.
+  const now = 10_000_000;
+  const restoring = { state: REVIEW_STATE.RESTORING, last_checked_at: now - (LOCK_TTL_MS + 1000) };
+  assert.ok(RESTORE_LEASE_MS > 600_000, 'the lease covers a whole worker invocation');
+  assert.equal(canDecide({ review: restoring, baseline, isEligible: true, now }).allow, false);
+  const observed = observe({ prior: { issue_id: 1, baseline_id: 'b'.repeat(16), ...restoring,
+    field_digests: JSON.stringify({ summary: 'digest1' }) }, baselineDigests: { summary: 'digest1' },
+  issueFields: { summary: 'x' }, controlledFields: [{ field_id: 'summary', field_kind: 'TEXT' }], now });
+  assert.equal(observed.outcome, OUTCOME.BUSY);
+  assert.equal(canDecide({ review: { ...restoring, state: REVIEW_STATE.DECIDING }, baseline, isEligible: true, now }).allow, true,
+    'a DECIDING lock keeps its one-minute lease');
 });
 
 test('a durable record lock does not expire as an operation lease', () => {
@@ -67,7 +83,7 @@ test('observe() does not return BUSY when lock is stale', () => {
       issue_id: 1,
       baseline_id: 'b'.repeat(16),
       state: REVIEW_STATE.RESTORING,
-      last_checked_at: now - 70000,
+      last_checked_at: now - (RESTORE_LEASE_MS + 1000),
       field_digests: JSON.stringify({ summary: 'digest1' })
     },
     baselineDigests: { summary: 'digest1' },

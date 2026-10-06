@@ -15,7 +15,7 @@ import { logicalNodeId } from '../lib/tree/model.js';
 import { diffTree } from '../lib/tree/diff.js';
 import { treeReviewDiff } from '../lib/tree/reviewDiff.js';
 import { groupReview } from '../lib/tree/groupedReview.js';
-import { readTreeWithNodeFields, fieldsForItem } from '../lib/tree/nodeFields.js';
+import { readTreeWithNodeFields, fieldScope } from '../lib/tree/nodeFields.js';
 import { withChildBaselines } from '../lib/tree/childBaselines.js';
 import { readBaselineTree, activeRootsForNode } from '../db/baselineTreeStore.js';
 import { maxMateriality } from '../lib/materiality.js';
@@ -41,12 +41,13 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
   const projectId = Number(issue.fields.project.id);
   const issueTypeId = String(issue.fields.issuetype.id);
   const fromStatusId = String(issue.fields.status?.id ?? '');
-  const [declared, config, baseline, review, edge, editResponse] = await Promise.all([
-    fieldsForItem({ issueId, projectId, issueTypeId }, { activeRootsForNode, controlledFields }),
+  const [scoped, config, baseline, review, edge, editResponse] = await Promise.all([
+    fieldScope({ issueId, projectId, issueTypeId }, { activeRootsForNode, controlledFields }),
     projectConfig(projectId), activeBaseline(issueId),
     getReview(issueId), gateActiveOutOf({ projectId, issueTypeId, fromStatusId }),
     api.asUser().requestJira(route`/rest/api/3/issue/${issue.key}/editmeta`)
   ]);
+  const declared = scoped.fields;
   const editmeta = editResponse.ok ? (await editResponse.json()).fields ?? {} : {};
   const { fields } = scopeFromIssue({ declared, issueFields: issue.fields, editmetaFields: editmeta });
   let gate = authorityPolicy;
@@ -93,7 +94,7 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
     : editmeta;
   const projection = project(issue.fields, fields);
   const diff = baseline && !baseline.tree_hash ? diffIssue({ baseline, baselineValues, currentFields: issue.fields,
-    controlledFields: fields, driftRows, changelogEntries: changelog.entries, queueThreshold: config.queueThreshold }) : null;
+    controlledFields: fields, driftRows, changelogEntries: changelog.entries }) : null;
   if (diff) {
     diff.historyTruncated = changelog.truncated === true;
     diff.historyUnavailable = changelog.failed === true;
@@ -168,7 +169,7 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
   if (expectedEvidenceHash != null && expectedEvidenceHash !== (useTree ? treeHash : evidenceHash)) fail('STALE_EVIDENCE');
   const reviewDriftCount = reviewDiff?.changedFieldCount ?? treeDiff?.changes?.length ?? 0;
   return { issue, actor, issueId, projectId, issueTypeId, config, baseline, review, gate,
-    coveredBy, eligible, fields, editmeta, restoreEditmeta, baselineValues, driftRows, diff,
+    coveredBy, eligible, fields, ruleScope: scoped.ruleScope, editmeta, restoreEditmeta, baselineValues, driftRows, diff,
     contentHash: useTree ? treeHash : projection.contentHash, digests: projection.digests,
     evidenceHash: useTree ? treeHash : evidenceHash, baselineVersion: baseline?.version ?? 0,
     tree, currentTree, baselineTree, treeDiff, treeHash, fieldsFor,

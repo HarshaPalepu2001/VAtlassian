@@ -207,3 +207,32 @@ test('a root that has its own Jira parent is read as the tree root, so capture d
   assert.equal(plan.nodeCount, 2);
   assert.equal(plan.edgeCount, 1);
 });
+
+test('a node Jira returns without its security level is read with the level left absent; a missing controlled field still fails', async () => {
+  const base = { summary: 'x', project: { id: '10' }, issuetype: { id: '20' }, status: { id: '30' } };
+  const apiFor = (rootFields, childFields) => ({ asApp: () => ({ requestJira: async (request, options) => {
+    if (request.path.includes('/issue/')) {
+      return { status: 200, json: async () => ({ id: '1', key: 'ROOT-1', fields: { ...rootFields, parent: null } }) };
+    }
+    const body = JSON.parse(options.body);
+    return { status: 200, json: async () => ({ issues: body.jql === 'parent IN ("ROOT-1")'
+      ? [{ id: '2', key: 'CHILD-1', fields: { ...childFields, parent: { id: '1', key: 'ROOT-1' } } }] : [] }) };
+  } }) });
+  const route = (strings, ...values) => {
+    const path = strings.reduce((out, part, index) => out + part + encodeURIComponent(values[index] ?? ''), '');
+    return { path, toString: () => path };
+  };
+  const read = (rootFields, childFields) => createTreeReader({ api: apiFor(rootFields, childFields), route })
+    .read('ROOT-1', ['summary', 'security']);
+
+  const tree = await read({ ...base, security: { id: '7' } }, base);
+  assert.equal(tree.nodes.length, 2);
+  assert.deepEqual(tree.nodes[0].fields.security, { id: '7' });
+  assert.equal('security' in tree.nodes[1].fields, false, 'an omitted level is not invented');
+  const bare = await read(base, base);
+  assert.equal('security' in bare.nodes[0].fields, false, 'the root may omit it too');
+
+  const { summary, ...noSummary } = base;
+  await assert.rejects(() => read(base, noSummary), /Jira omitted requested field: summary/);
+  await assert.rejects(() => read(noSummary, base), /Jira omitted requested field: summary/);
+});

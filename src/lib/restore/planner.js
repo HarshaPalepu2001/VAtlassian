@@ -1,6 +1,7 @@
 import { FIELD_KIND } from '../content.js';
 import { RESTORABLE, specialHandlerFor, restorability, restorabilityReason } from '../diff/fields.js';
 import { shapeFor, ADAPTER_VERSION } from './adapters.js';
+import { adfMediaIds } from '../attachmentIdentity.js';
 
 export { ADAPTER_VERSION };
 
@@ -153,6 +154,10 @@ export function planRestore({ diff, baselineValues = {}, controlledFields = [], 
     willRestore.push(fieldDiff.fieldName);
   }
 
+  const repoint = attachments.willRestore.length > 0
+    ? repointCandidates({ byId, baselineValues, editmeta, planned: new Set(steps.map(step => step.fieldId)) })
+    : [];
+
   return {
     issueId: diff.issueId,
     baselineId: diff.baselineId,
@@ -160,9 +165,39 @@ export function planRestore({ diff, baselineValues = {}, controlledFields = [], 
     adapterVersion: ADAPTER_VERSION,
     steps,
     fieldWrites,
-    preflight: { willRestore, needsHandler, cannotRestore, formattingOnly, attachments },
+    repoint,
+    preflight: { willRestore, needsHandler, cannotRestore, formattingOnly, attachments,
+      richTextRepoint: repoint.map(candidate => candidate.fieldName) },
     summary: describePlan(willRestore, needsHandler, cannotRestore, formattingOnly)
   };
+}
+
+/**
+ * RICH TEXT THAT DID NOT CHANGE, BUT WILL SHOW A RESTORED FILE.
+ *
+ * Deleting an attachment does not edit the description that shows it: the
+ * description still points at the deleted file, reads exactly as approved, and
+ * so is not in the diff. When the restore puts that file back, Jira gives the
+ * copy a new media id, and a description left alone would keep showing a
+ * broken image while every digest said it matched.
+ *
+ * So when files will be restored, each unchanged tracked rich-text value that
+ * shows a file is a CANDIDATE: the executor writes it only if one of its
+ * pointers is actually re-pointed at a restored copy, and never otherwise.
+ * Named in the preflight so the reviewer knows the field is written.
+ */
+function repointCandidates({ byId, baselineValues, editmeta, planned }) {
+  const candidates = [];
+  for (const [fieldId, field] of byId) {
+    if (planned.has(fieldId) || !Object.hasOwn(baselineValues, fieldId)) continue;
+    const value = baselineValues[fieldId];
+    if (!value || typeof value !== 'object' || value.type !== 'doc' || adfMediaIds(value).length === 0) continue;
+    if (!Object.hasOwn(editmeta, fieldId) || (editmeta[fieldId]?.operations && !editmeta[fieldId].operations.includes('set'))) continue;
+    const shaped = shapeFor({ field: { ...field, writable: true }, value, editmeta });
+    if (!shaped.ok) continue;
+    candidates.push({ fieldId, fieldName: field.field_name ?? fieldId, targetValue: shaped.value });
+  }
+  return candidates;
 }
 
 function describePlan(willRestore, needsHandler, cannotRestore, formattingOnly = []) {

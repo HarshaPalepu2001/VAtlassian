@@ -215,6 +215,17 @@ export async function executeTreeRestore({
           if (typeof adapters.restoreLinks !== 'function') throw new Error('Link restore adapter is unavailable');
           await adapters.restoreLinks(target, legacyLinks);
         }
+      } else if (step.kind === 'REPOINT_RICH_TEXT') {
+        if (target == null) throw new Error('Rich-text restore target is unavailable');
+        // Written only where a pointer actually moves to a restored copy: text
+        // whose file survived goes untouched, and there is no edit to make.
+        if (typeof adapters.pointAtLiveFiles === 'function') {
+          const liveIssueId = replacementsByLogical.get(step.logicalNodeId)?.newIssueId ?? identity.issueId;
+          const approved = step.fields ?? {};
+          const pointed = await adapters.pointAtLiveFiles(liveIssueId, approved);
+          const moved = Object.fromEntries(Object.entries(pointed ?? {}).filter(([fieldId, value]) => value !== approved[fieldId]));
+          if (Object.keys(moved).length > 0) await adapters.editIssue(target, moved);
+        }
       } else if (step.kind === 'RESTORE_LINKS') {
         if (target == null) throw new Error('Link restore target is unavailable');
         await adapters.restoreLinks(target, step.links ?? []);

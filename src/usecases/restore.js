@@ -10,6 +10,8 @@ import { isEligible } from '../lib/reviewer.js';
 import { baselinePolicy } from '../lib/baselinePolicy.js';
 
 const idBase64 = value => Buffer.isBuffer(value) ? value.toString('base64') : String(value);
+/** Restore states with a worker (or the synchronous path) still acting on the item. */
+const IN_FLIGHT = new Set(['RUNNING', 'RESTORING', 'QUEUING', 'VERIFYING']);
 
 export async function getState(args) { return respond(async () => {
   const prepared = await load(args);
@@ -26,6 +28,8 @@ export async function getState(args) { return respond(async () => {
       progress: { totalSteps: Number(row.total_steps ?? 0), completedSteps: Number(row.completed_steps ?? 0),
         remainingSteps: Math.max(0, Number(row.total_steps ?? 0) - Number(row.completed_steps ?? 0)) },
       actorName: approval?.printed_name ?? approval?.actor_name ?? null,
+      // retry() below resumes the rejecter's own signature, so only they may.
+      canRetry: Boolean(prepared.actor?.accountId) && row.actor_account_id === prepared.actor.accountId,
       startedAt: at(row.started_at),
       finishedAt: at(row.finished_at),
       baselineVersion: at(row.baseline_version)
@@ -36,7 +40,14 @@ export async function retry(args) { return respond(async () => {
   const prepared = await load(args);
   const restore = await restoreById(args.payload?.restoreId);
   if (!restore || Number(restore.issue_id) !== prepared.issueId) fail('RESTORE_NOT_FOUND');
-  if (restore.state === 'RUNNING' || restore.state === 'RESTORING' || restore.state === 'QUEUING') fail('ALREADY_RESTORING');
+  if (IN_FLIGHT.has(restore.state)) fail('ALREADY_RESTORING');
+  // The lock below admits a RESTORING item, because a restore whose own queue
+  // push failed may still hold it. It must not admit one held by a DIFFERENT
+  // restore that is still writing, or the two would run over each other.
+  const sameRestore = row => Buffer.from(row.restore_id ?? []).equals(Buffer.from(restore.restore_id ?? []));
+  if ((await restoresForIssue(prepared.issueId)).some(row => !sameRestore(row) && IN_FLIGHT.has(row.state))) {
+    fail('ALREADY_RESTORING');
+  }
   if (restore.state === 'COMPLETE' || restore.state === 'COMPLETE_WITH_REPLACEMENTS') return { success: true, restore };
   if (Number(restore.baseline_version) !== prepared.baselineVersion) fail('STALE_BASELINE');
   if (!prepared.baseline?.baseline_id || !restore.baseline_id
@@ -62,16 +73,17 @@ export async function retry(args) { return respond(async () => {
   });
   if (!check.ok) fail(check.reason);
 
-  // A refusal is settled so that a requeue does not retry it for ever. A
-  // reviewer pressing Retry is saying the opposite — that something about the
-  // refusal may have changed, usually a field configuration an administrator
-  // has just corrected — so those steps are reopened for this attempt.
-  await clearRefusedRestoreActions(restore.restore_id).catch(error =>
-    console.error('restore: could not reopen refused actions', error));
-
   const locked = await acquire({ issueId: prepared.issueId, expectedVersion: prepared.review?.version,
     state: 'RESTORING', allowedStates: ['ERROR', 'DRIFTED', 'RESTORING'], now: Date.now() });
   if (!locked?.acquired) fail('ALREADY_DECIDING');
+
+  // A refusal is settled so that a requeue does not retry it for ever. A
+  // reviewer pressing Retry is saying the opposite — that something about the
+  // refusal may have changed, usually a field configuration an administrator
+  // has just corrected — so those steps are reopened for this attempt, once
+  // this retry holds the lock and no other restore can be reading them.
+  await clearRefusedRestoreActions(restore.restore_id).catch(error =>
+    console.error('restore: could not reopen refused actions', error));
   const restoreId = restore.restore_id;
   const body = { restoreId: idBase64(restoreId), issueId: prepared.issueId,
     baselineId: idBase64(restore.baseline_id), baselineVersion: Number(restore.baseline_version) };

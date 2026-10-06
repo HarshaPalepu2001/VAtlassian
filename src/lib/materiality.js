@@ -33,10 +33,6 @@ export function maxMateriality(values) {
   return hi;
 }
 
-export function atLeast(m, threshold) {
-  return rank(m) >= rank(threshold);
-}
-
 /**
  * The out-of-the-box ladder, applied to any field an admin has not given an
  * explicit materiality.
@@ -168,16 +164,15 @@ function numeric(v) {
 }
 
 /**
- * Does this change belong in a reviewer's queue?
+ * Does this change need a reviewer's decision, or is it formatting only?
  *
- * Cosmetic changes never do. Everything else is compared against the project's
- * configured threshold, which defaults to MINOR — that is, everything
- * non-cosmetic — because a customer who installs an app called Baseline
- * expects to be told when their approved work changes.
+ * This is a label, not a filter: every drifted item enters the queue and is
+ * held by the validator whatever its materiality (lib/collect.js). It decides
+ * only whether the queue row says "N changes need a decision" or "Formatting
+ * only", by the same rule the panel counts with (usecases/panelSummary.js).
  */
-export function shouldQueue(materiality, threshold = MATERIALITY.MINOR) {
-  if (materiality === MATERIALITY.COSMETIC) return false;
-  return atLeast(materiality, threshold);
+export function needsDecision(materiality) {
+  return materiality !== MATERIALITY.COSMETIC;
 }
 
 /** Human label for the panel and the queue. */

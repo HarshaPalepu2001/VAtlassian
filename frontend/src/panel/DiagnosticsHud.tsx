@@ -19,10 +19,15 @@ interface ServerDiagnosticsResult {
     projectDisabled: boolean;
     itemState: string;
     driftCount: number;
+    storedDriftCount?: number;
+    driftSource?: 'LIVE' | 'STORED_COUNTER';
+    counterDisagrees?: boolean;
     workitemHeld: boolean;
     holdReason: string | null;
     activeControlledTransitions: number;
     applicableTransitions?: Array<{
+      issueTypeId?: string | null;
+      appliesToThisIssue?: boolean;
       transitionId: string;
       fromStatusId: string;
       toStatusId: string;
@@ -31,9 +36,38 @@ interface ServerDiagnosticsResult {
       captureBaseline: boolean;
     }>;
   };
+  liveDrift?: {
+    checked: boolean;
+    reason?: string | null;
+    error?: string;
+    changedCount?: number;
+    changed?: string[];
+    scope?: { source: string; issueTypeId: string; rootIssueId: number | null } | null;
+    diagnostics?: {
+      cause: 'BASELINE_UNREADABLE' | 'DIGEST_MISMATCH' | null;
+      digestSource?: string;
+      rootDigestError?: string | null;
+      baselineReadable?: boolean;
+      baselineKeyCount?: number;
+      currentKeyCount?: number;
+      scopeFieldCount?: number;
+      baselineVersion?: number | null;
+      baselineIssueTypeId?: string | null;
+      fields?: Array<{ field: string; baseline: string | null; current: string | null }>;
+    } | null;
+  };
+  typeCheck?: {
+    issueTypeId: string | null;
+    issueTypeName: string | null;
+    baselineIssueTypeId: string | null;
+    typeChangedSinceBaseline: boolean;
+  };
   baseline?: {
     baselineId: string;
     version: number;
+    issueTypeId?: string | null;
+    requiredAssurance?: string | null;
+    transitionId?: string | null;
     approverName: string;
     treeHash: string;
     edgeCount: number;
@@ -42,12 +76,12 @@ interface ServerDiagnosticsResult {
   } | null;
   childBaselines?: Array<{
     issueId: number;
-    issueKey: string;
     version: number;
     contentHash: string;
     capturedAt: number;
   }>;
   vault?: {
+    tier?: { tier?: string; reason?: string } | null;
     confluencePageId: string | null;
     pageCreatedAt: number | null;
     attachmentCount: number;
@@ -55,7 +89,10 @@ interface ServerDiagnosticsResult {
       jiraAttachmentId: string;
       filename: string;
       contentHash: string;
-      confluenceAttachmentId: string;
+      confluenceAttachmentId: string | null;
+      storage?: string;
+      objectKey?: string | null;
+      mediaId?: string | null;
       vaultedAt: number;
     }>;
   };
@@ -223,6 +260,7 @@ export default function DiagnosticsHud({
 
   const verdictColor: Record<string, { bg: string; text: string; border: string }> = {
     HEALTHY: { bg: '#e3fcef', text: '#006644', border: '#abf5d1' },
+    BASELINE_UNREADABLE: { bg: '#ffebe6', text: '#de350b', border: '#ffbdad' },
     DRIFT_PENDING_REVIEW: { bg: '#fffae6', text: '#ff8b00', border: '#ffe380' },
     BUSY_RESTORING: { bg: '#deebff', text: '#0747a6', border: '#b3d4ff' },
     RECORD_LOCKED: { bg: '#ffebe6', text: '#de350b', border: '#ffbdad' },
@@ -547,9 +585,9 @@ export default function DiagnosticsHud({
                     >
                       <div>
                         <strong>Verdict:</strong> {serverDiag.verdict}
-                        {serverDiag.remediations?.[0] && (
-                          <div style={{ fontSize: 10, marginTop: 2 }}>{serverDiag.remediations[0]}</div>
-                        )}
+                        {(serverDiag.remediations ?? []).map(text => (
+                          <div key={text} style={{ fontSize: 10, marginTop: 2 }}>{text}</div>
+                        ))}
                       </div>
                     </div>
                   )}
@@ -564,6 +602,7 @@ export default function DiagnosticsHud({
                           <div>Version: <strong>v{serverDiag.baseline.version}</strong></div>
                           <div>Approver: {serverDiag.baseline.approverName || 'N/A'}</div>
                           <div>Nodes: {serverDiag.baseline.nodeCount} | Edges: {serverDiag.baseline.edgeCount}</div>
+                          <div>Captured as type: {serverDiag.baseline.issueTypeId ?? 'N/A'}{serverDiag.baseline.requiredAssurance ? ` · ${serverDiag.baseline.requiredAssurance}` : ''}</div>
                         </div>
                       ) : (
                         <div style={{ color: '#6b778c', marginTop: 2 }}>None captured</div>
@@ -580,20 +619,43 @@ export default function DiagnosticsHud({
                           ) : (
                             <span style={{ color: '#006644', fontWeight: 600 }}>CLEAR</span>
                           )}</div>
+                          <div>
+                            Drift: <strong>{serverDiag.gateSimulation.driftCount}</strong>{' '}
+                            ({serverDiag.gateSimulation.driftSource === 'LIVE' ? 'live check' : 'stored counter only'}
+                            {serverDiag.gateSimulation.storedDriftCount != null ? `, stored ${serverDiag.gateSimulation.storedDriftCount}` : ''})
+                          </div>
+                          {serverDiag.gateSimulation.counterDisagrees && (
+                            <div style={{ color: '#de350b', fontWeight: 600 }}>Stored counter and live check disagree</div>
+                          )}
                           <div>Controlled Transitions: {serverDiag.gateSimulation.activeControlledTransitions}</div>
+                          {(serverDiag.gateSimulation.applicableTransitions ?? []).map(rule => (
+                            <div
+                              key={`${rule.issueTypeId}-${rule.transitionId}-${rule.fromStatusId}`}
+                              style={{ color: rule.appliesToThisIssue ? '#172b4d' : '#6b778c', fontWeight: rule.appliesToThisIssue ? 600 : 400 }}
+                            >
+                              {rule.appliesToThisIssue ? '▶ ' : '· '}type {rule.issueTypeId ?? '?'} · t{rule.transitionId} · {rule.requiredAssurance}
+                              {rule.appliesToThisIssue ? ' (applies to this item)' : ''}
+                            </div>
+                          ))}
                         </div>
                       ) : (
                         <div style={{ color: '#6b778c', marginTop: 2 }}>Not evaluated</div>
                       )}
                     </div>
 
-                    {/* Vault Confluence */}
+                    {/* Vault: Confluence or Forge Object Store */}
                     <div style={{ padding: 6, background: '#fff', border: '1px solid #dfe1e6', borderRadius: 3 }}>
-                      <strong>Confluence Vault:</strong>
+                      <strong>Vault:</strong>
                       {serverDiag.vault ? (
                         <div style={{ marginTop: 2 }}>
-                          <div>Page: {serverDiag.vault.confluencePageId ? `Linked (${serverDiag.vault.confluencePageId})` : 'Not provisioned'}</div>
+                          <div>Site storage: {serverDiag.vault.tier?.tier ?? 'Not decided'}{serverDiag.vault.tier?.reason ? ` (${serverDiag.vault.tier.reason})` : ''}</div>
+                          <div>Page: {serverDiag.vault.confluencePageId ? `Linked (${serverDiag.vault.confluencePageId})` : 'None'}</div>
                           <div>Vaulted Files: {serverDiag.vault.attachmentCount}</div>
+                          {(serverDiag.vault.attachments ?? []).slice(0, 5).map(a => (
+                            <div key={`${a.jiraAttachmentId}-${a.vaultedAt}`} style={{ color: '#6b778c' }}>
+                              {a.filename}: {a.storage ?? 'CONFLUENCE'}{a.mediaId ? '' : ', no media id'}
+                            </div>
+                          ))}
                         </div>
                       ) : (
                         <div style={{ color: '#6b778c', marginTop: 2 }}>Not vaulted</div>
@@ -608,6 +670,49 @@ export default function DiagnosticsHud({
                         <div>Child Baselines: {serverDiag.childBaselines?.length ?? 0} children</div>
                       </div>
                     </div>
+                  </div>
+
+                  {/* The live check the validator, signing form and panel header hold on */}
+                  <div style={{ padding: 6, background: '#fff', border: '1px solid #dfe1e6', borderRadius: 3 }}>
+                    <strong>Live drift check</strong>
+                    {serverDiag.typeCheck && (
+                      <div style={{ marginTop: 2, color: serverDiag.typeCheck.typeChangedSinceBaseline ? '#de350b' : '#172b4d', fontWeight: serverDiag.typeCheck.typeChangedSinceBaseline ? 600 : 400 }}>
+                        Type now: {serverDiag.typeCheck.issueTypeName ?? serverDiag.typeCheck.issueTypeId} ({serverDiag.typeCheck.issueTypeId})
+                        {' · '}baseline captured as: {serverDiag.typeCheck.baselineIssueTypeId ?? 'N/A'}
+                        {serverDiag.typeCheck.typeChangedSinceBaseline ? ' — TYPE CHANGED SINCE BASELINE' : ''}
+                      </div>
+                    )}
+                    {serverDiag.liveDrift?.checked ? (
+                      <div style={{ marginTop: 2 }}>
+                        <div>
+                          Flagged: <strong>{serverDiag.liveDrift.changedCount}</strong> field(s)
+                          {serverDiag.liveDrift.diagnostics?.cause ? ` · cause ${serverDiag.liveDrift.diagnostics.cause}` : ''}
+                        </div>
+                        <div style={{ color: '#6b778c' }}>
+                          Baseline digests: {serverDiag.liveDrift.diagnostics?.digestSource ?? 'N/A'}
+                          {' · '}{serverDiag.liveDrift.diagnostics?.baselineKeyCount ?? 0} baseline keys vs {serverDiag.liveDrift.diagnostics?.currentKeyCount ?? 0} live
+                          {' · '}{serverDiag.liveDrift.diagnostics?.scopeFieldCount ?? 0} in scope
+                        </div>
+                        {serverDiag.liveDrift.scope && (
+                          <div style={{ color: '#6b778c' }}>
+                            Fields checked against: {serverDiag.liveDrift.scope.source === 'own' ? 'its own type' : `covering root ${serverDiag.liveDrift.scope.rootIssueId}`}
+                            {' '}(type {serverDiag.liveDrift.scope.issueTypeId})
+                          </div>
+                        )}
+                        {serverDiag.liveDrift.diagnostics?.rootDigestError && (
+                          <div style={{ color: '#de350b' }}>Root digest read failed: {serverDiag.liveDrift.diagnostics.rootDigestError}</div>
+                        )}
+                        {(serverDiag.liveDrift.diagnostics?.fields ?? []).slice(0, 15).map(entry => (
+                          <div key={entry.field} style={{ fontFamily: 'monospace', fontSize: 10 }}>
+                            {entry.field}: {entry.baseline ?? 'none'} → {entry.current ?? 'none'}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ color: '#6b778c', marginTop: 2 }}>
+                        Not run: {serverDiag.liveDrift?.reason ?? 'unknown'}{serverDiag.liveDrift?.error ? ` (${serverDiag.liveDrift.error})` : ''}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

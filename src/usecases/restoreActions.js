@@ -3,7 +3,7 @@ import { FailClosed } from '../lib/errors.js';
 import { executeRestore } from '../lib/restore/executor.js';
 import { verifyRestore, describeResult } from '../lib/restore/verifier.js';
 import { tally } from '../lib/restore/outcome.js';
-import { stateAfter } from '../lib/decision.js';
+import { stateAfter, undecidedCounters } from '../lib/decision.js';
 import { planRestore } from '../lib/restore/planner.js';
 import { startRestore, finishRestore } from '../db/restoreStore.js';
 import { markDecided } from '../db/driftStore.js';
@@ -53,6 +53,14 @@ export async function queueRestore({ prepared, actor, approval, stores = restore
   } catch (error) {
     await stores.markRestoreQueueFailure({ restoreId, error: String(error?.message ?? error), now }).catch(failure =>
       console.error('restore: could not persist queue failure', failure));
+    // Nothing is running, so the reject's RESTORING lock is let go: left in
+    // place, the gate would call every transition "restore in progress" until
+    // the lease ran out. ERROR is what lib/decision.js calls a restore that
+    // could not run; Retry resumes it from there.
+    const counters = undecidedCounters(prepared.reviewDiff ?? prepared.diff);
+    await (stores.release ?? release)({ issueId: prepared.issueId, state: 'ERROR', now,
+      counters: { ...counters, driftCount: prepared.driftCount ?? counters.driftCount } })
+      .catch(failure => console.error('restore: could not release the lock after a queue failure', failure));
     return { success: false, state: 'QUEUING_FAILED', restoreId,
       progress: { totalSteps: plan.steps.length, completedSteps: 0, remainingSteps: plan.steps.length },
       error: String(error?.message ?? error) };

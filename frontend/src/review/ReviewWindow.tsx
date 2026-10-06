@@ -86,8 +86,8 @@ export default function ReviewWindow({ issueKey, tab: initialTab = 'changes', no
   const signedAt = baseline?.transitionAt ?? baseline?.capturedAt ?? null;
 
   const close = () => { void view.close({ decided: decided.current }).catch(() => {}); };
-  const edits = fields.reduce((n, f) => n + Math.max(f.occurrences ?? 0, f.attribution?.length ?? 0), 0);
-  const people = [...new Set(fields.flatMap(f => (f.attribution ?? []).map(a => a.authorName).filter(Boolean)))] as string[];
+  const edits = fields.reduce((n, f) => n + Math.max(f.occurrences ?? 0, f.attribution?.filter(a => !a.detected).length ?? 0), 0);
+  const people = [...new Set(fields.flatMap(f => (f.attribution ?? []).filter(a => !a.detected).map(a => a.authorName).filter(Boolean)))] as string[];
   const driftCount = authoritativeSummary?.drift.count ?? 0;
   const history = shownEvidence?.drift as { historyTruncated?: boolean; historyUnavailable?: boolean } | undefined;
   const split = Boolean(summary && tab === 'changes' && shownEvidence && fields.length > 0);
@@ -121,10 +121,10 @@ export default function ReviewWindow({ issueKey, tab: initialTab = 'changes', no
         <div className="va-window__compare">
           <Seal hash={shownEvidence?.record?.contentHash ?? baseline.treeHash ?? baseline.baselineId} size={22} tone={driftCount ? 'warning' : 'brand'} />
           <span className="va-grow">
-            Compared with <strong>version {baseline.version}</strong>, signed by <strong>{baseline.approvedName ?? 'an unrecorded reviewer'}</strong>
+            {tab === 'record' ? <>Current signed baseline <strong>version {baseline.version}</strong></> : <>Compared with <strong>version {baseline.version}</strong></>}, signed by <strong>{baseline.approvedName ?? 'an unrecorded reviewer'}</strong>
             {signedAt ? <> on <time>{formatTimestamp(signedAt)}</time>{daysBetween(signedAt, now) ? ` — ${plural(daysBetween(signedAt, now)!, 'day')} ago` : ''}</> : null}
           </span>
-          {fields.length > 0 && (
+          {tab !== 'record' && fields.length > 0 && (
             <span className="va-secondary">
               {plural(fields.length, 'change')}{edits ? ` · ${plural(edits, 'edit')}` : ''}{people.length ? ` · ${people.slice(0, 3).join(', ')}${people.length > 3 ? ` and ${people.length - 3} more` : ''}` : ''}
             </span>
@@ -142,7 +142,7 @@ export default function ReviewWindow({ issueKey, tab: initialTab = 'changes', no
             {!shownEvidence && evidenceLoading && <Loading label="Comparing approved and current values…" />}
             {!shownEvidence && evidenceError && <Notice>Change details could not be loaded. {evidenceError} <button type="button" className="va-link-button" onClick={retryEvidence}>Reload evidence</button></Notice>}
             {(history?.historyTruncated || history?.historyUnavailable) && (
-              <Notice>Some Jira history could not be loaded. The value comparison is current; the list of who changed it and when may be incomplete.</Notice>
+              <Notice>Some change history could not be loaded. The value comparison is current; the list of who changed it and when may be incomplete.</Notice>
             )}
             {shownEvidence && fields.length > 0 && (
               <ChangeTimeline fields={fields} baselineAt={signedAt} now={now} onPick={fieldId => setFocus(f => ({ fieldId, n: f.n + 1 }))} />
@@ -178,6 +178,7 @@ export default function ReviewWindow({ issueKey, tab: initialTab = 'changes', no
         )}
         {summary && tab === 'record' && (
           <BaselineRecord
+            issueKey={key}
             baseline={baseline}
             latestApproval={summary.latestApproval}
             record={shownEvidence?.record ?? null}

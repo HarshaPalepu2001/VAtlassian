@@ -1,7 +1,7 @@
 # Attachments: tracked, held, and restored from the vault
 
 **Date:** 2026-09-24
-**Status:** Built 2026-09-24; live checks in section 7 outstanding
+**Status:** Built 2026-09-24; revised 2026-09-30 (section 9); live checks in section 7 outstanding
 **Extends:** `docs/specs/2026-09-22-confluence-attachment-vault-design.md`
 (this is its "Phase 3"), `docs/specs/2026-09-24-child-baselines-design.md`.
 
@@ -111,14 +111,28 @@ Migrations `v063`–`v065`.
    returns the bytes, not a redirect Forge will not follow.
 2. Jira upload (`POST /issue/{key}/attachments`) as the app, and the read-back
    hash matches.
-3. `POST /permissionscheme/{id}/permission` with a `user` holder for the app
-   account is accepted, and the app can then `DELETE /attachment/{id}` on a
-   locked project.
+3. The app keeps Delete all attachments through the
+   `atlassian-addons-project-access` role (Jira refused a `user` holder for the
+   app account, 400), and `DELETE /attachment/{id}` as the app succeeds. Test
+   with the lockdown OFF on the working project; test it ON only on a scratch
+   project with its own permission scheme.
 4. `/search/jql` returns `attachment` for every node when it is requested; the
    tree reader fails closed if Jira omits a requested field.
 5. End to end on `mgtechdemo`: approve an item with a file, remove it, add
    another, reject; confirm both are back to the baseline, the item is clean,
    and the ledger shows both entries.
+6. Rich text: approve an item whose description shows an inline image of its
+   attachment; delete only the attachment; reject. The file is re-uploaded,
+   the raw description points at the copy's media id, the image renders,
+   verification is clean, and `ATTACHMENT_RESTORED.mediaId` is set. Then
+   delete the restored copy and reject again: the description points at the
+   newest copy. (Also confirms, or not, the assumption in 9.2 that deleting a
+   file leaves the description unedited.)
+7. Object Store tier: set Vault storage to Forge Object Store (Settings →
+   Attachment protection), approve an item with a file, remove it, reject.
+   The vault row has `storage = OBJECT_STORE` and an `object_key`; the file
+   comes back and its hash matches; the probe's `vault` entry reads
+   `from: OBJECT_STORE, matchesRecord: true`. Set storage back to Automatic.
 
 ## 8. Known limits
 
@@ -130,3 +144,53 @@ Migrations `v063`–`v065`.
 - A retry of an approval already captured queues the vault without the
   recorded list, so the worker copies the current files (the previous
   behaviour).
+- Files over 250 MB are not vaulted (`MAX_VAULT_BYTES`): the worker holds a
+  whole file in memory. Each such file is `ATTACHMENT_VAULT_FAILED` with
+  `TOO_LARGE`, and cannot be restored.
+- Rich text that shows a restored file whose media id Jira never reported is
+  not written; the field is named as failed, and the reject dialog warns about
+  such files beforehand (`mediaUnknownFiles`).
+
+## 9. Revision 2026-09-30
+
+### 9.1 The attachment-delete lockdown is opt-in, per project
+
+`vault.lockAttachmentDeletion`, project scope only, **off by default**
+(Settings → Attachment protection). Off: the permission scheme is never
+edited, anyone permitted may delete a file, and a rejection restores it from
+the vault. The app always keeps its own right to delete
+(`ensureAppDeleteGrant`), because a rejection removes files added after
+approval. On: grants are removed as before, and `ATTACHMENT_DELETE_LOCKED`
+now records who held each (`removedGrants`) so they can be re-added by hand;
+turning it off (`ATTACHMENT_DELETE_LOCK_DISABLED`) does not put them back.
+The card warns that a shared scheme loses the grants in every project on it.
+A refused app grant is retried daily, not hourly (`v070`).
+
+### 9.2 Rich text follows the restored file
+
+- **Unchanged text is re-pointed.** Deleting a file does not edit the
+  description that shows it, so the description is not in the diff. When a
+  rejection restores files, each tracked rich-text value that shows a file is a
+  candidate (`planner.js` `repoint`, tree `REPOINT_RICH_TEXT`), written only if
+  a pointer actually moves to a restored copy.
+- **The newest live copy wins.** Aliases are read oldest first with the copy
+  that owns each media id; of two copies of one original, the one still on the
+  item is shown (`liveCopyMedia`).
+- **Verification sees broken images.** A digest cannot tell a pointer to the
+  deleted original from one to its live copy, so `verifyRestore` also reports
+  tracked text showing a file no longer on the item (`danglingMediaPointers`).
+- A restored copy's media id is asked for three times before it is unknown.
+
+### 9.3 Two vault homes
+
+A site with Confluence vaults to its private space; a Jira-only site vaults
+to the Forge Object Store (`lib/vaultTier.js`, remembered in `vault:tier`).
+Objects are keyed `vault/sha256/<hex>`, uploaded with a base64 SHA-256
+checksum, and never expire. On a Confluence site, a file Confluence refuses —
+or every file, when the vault space cannot be made — goes to the Object Store
+and the ledger says why (`fallbackFrom`). Each copy records `storage` and
+`object_key` (`v071`–`v072`); restore reads each from where it went, and a
+copy missing from its store is named, not retried. A project on an Object
+Store site still gets its `va_vault_space` row (`v073`–`v074`). An
+administrator can pin the storage or hand it back to detection
+(`admin:setVaultTier`).

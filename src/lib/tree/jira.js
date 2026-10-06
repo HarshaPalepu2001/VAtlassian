@@ -2,6 +2,13 @@ import { FailClosed } from '../errors.js';
 import { TREE_LIMIT } from './model.js';
 import { canonicaliseItems } from '../attachmentIdentity.js';
 
+// Jira leaves `security` out of a response when the app cannot see the
+// level. That is not "no level" (Jira gives null for that), so the node is
+// read with it left absent, never invented, and capture records it as
+// UNKNOWN (../evidence/treeEvidence.js). Every other requested field is required.
+const OPTIONAL_FIELDS = new Set(['security']);
+const omitted = (fields, f) => !OPTIONAL_FIELDS.has(f) && !(f in fields);
+
 /**
  * `canonicalise` reads each node's attachments under the ids they stand for
  * (../attachmentIdentity.js), so every tree comparison — capture, drift, the
@@ -31,7 +38,7 @@ export function createTreeReader({ api, route, canonicalise = canonicaliseItems 
       rootIssue.fields.parent = null;
 
       for (const f of requestedFieldIds) {
-        if (!(f in rootIssue.fields)) {
+        if (omitted(rootIssue.fields, f)) {
           throw new Error(`Jira omitted requested field: ${f}`);
         }
       }
@@ -73,7 +80,7 @@ export function createTreeReader({ api, route, canonicalise = canonicaliseItems 
             if (!('parent' in child.fields)) child.fields.parent = null;
 
             for (const f of requestedFieldIds) {
-              if (!(f in child.fields)) {
+              if (omitted(child.fields, f)) {
                 throw new Error(`Jira omitted requested field: ${f}`);
               }
             }

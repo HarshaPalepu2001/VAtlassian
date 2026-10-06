@@ -1,10 +1,11 @@
 import api, { route } from '@forge/api';
-import { observe, OUTCOME, REVIEW_STATE } from './interception.js';
+import { observe, OUTCOME, REVIEW_STATE, isStaleLock } from './interception.js';
 import { fetchChangelog, lastTouchByField, highestChangelogId, SOURCE } from './changelog.js';
-import { classify, maxMateriality, MATERIALITY, shouldQueue } from './materiality.js';
+import { observationColumns } from './observation.js';
+import { classify, maxMateriality, MATERIALITY, needsDecision } from './materiality.js';
 import { summarise } from './valuestore.js';
 import { normaliseField } from './content.js';
-import { controlledFields, projectConfig, reviewStatusIds } from '../db/configStore.js';
+import { controlledFields, projectConfig } from '../db/configStore.js';
 import { scopeFromIssue } from './trackedFields.js';
 import { fieldsForItem } from './tree/nodeFields.js';
 import { activeRootsForNode } from '../db/baselineTreeStore.js';
@@ -19,6 +20,7 @@ import { recordObservation } from '../db/observationStore.js';
 import { DETECTED_VIA } from './detectedVia.js';
 import { recordScopeMove } from './scopeMove.js';
 import { canonicaliseIssue } from './attachmentIdentity.js';
+import { collectTree } from './treeCollect.js';
 export { DETECTED_VIA };
 export { discoverActiveRootsByAncestor, affectedTreeRoots, collectTree, collectAffectedTrees, ownFlatBaseline } from './treeCollect.js';
 
@@ -75,8 +77,7 @@ async function run({ issueId, issueKey, detectedVia, actorAccountId, eventId, ev
 
   // A decision or restore is in flight. observe() would return BUSY anyway, but
   // returning here avoids reading the issue at all — and during a restore that
-  const isStaleLock = review.last_checked_at != null && now != null && (Number(now) - Number(review.last_checked_at) > 60000);
-  if ((review.state === REVIEW_STATE.DECIDING || review.state === REVIEW_STATE.RESTORING) && !isStaleLock) {
+  if ((review.state === REVIEW_STATE.DECIDING || review.state === REVIEW_STATE.RESTORING) && !isStaleLock(review, now)) {
     return { outcome: OUTCOME.BUSY };
   }
 
@@ -90,19 +91,26 @@ async function run({ issueId, issueKey, detectedVia, actorAccountId, eventId, ev
   const key = issue.key;
   const projectId = Number(issue.fields.project.id);
   const issueTypeId = String(issue.fields.issuetype.id);
-  const currentStatusId = String(issue.fields.status?.id ?? '');
 
   // readJiraFields() is gone from this path deliberately. It was fetched only to
   // be expanded into "every field Jira has" — a full field-catalogue read on
   // every issue update, to produce a tracked set nobody asked for.
-  const [declared, config, reviewStatuses, baseline] = await Promise.all([
+  const [declared, config, baseline] = await Promise.all([
     // A child of an approved tree is measured over its root's fields — the
     // ones its baseline was captured with (lib/tree/nodeFields.js).
     fieldsForItem({ issueId, projectId, issueTypeId }, { activeRootsForNode, controlledFields }),
     projectConfig(projectId),
-    reviewStatusIds(projectId),
     activeBaseline(issueId)
   ]);
+
+  // A TREE BASELINE IS MEASURED AS A TREE. Its digests live on the root node
+  // and the row's field_digests is '{}', which observe() below would read as
+  // "every field drifted". Callers that cannot tell the two apart (the
+  // transition trigger) are routed here rather than trusted to choose.
+  if (baseline?.tree_hash) {
+    return collectTree({ rootIssueId: issueId, rootIssueKey: key, detectedVia, actorAccountId,
+      eventId, eventAt, now });
+  }
 
   // ONE DEFINITION OF SCOPE, shared with capture.js and resolvers/panel.js.
   // These three used to hold three copies of this filter, which is how the set
@@ -140,8 +148,6 @@ async function run({ issueId, issueKey, detectedVia, actorAccountId, eventId, ev
     baselineDigests: baseline ? safeParse(baseline.field_digests) : null,
     issueFields: issue.fields,
     controlledFields: fields,
-    reviewStatusIds: reviewStatuses,
-    currentStatusId,
     now
   });
   // Even an untracked-field update verifies and records the full projection.
@@ -171,21 +177,6 @@ async function run({ issueId, issueKey, detectedVia, actorAccountId, eventId, ev
       await touch(issueId, now);
       return { outcome: OUTCOME.NO_CHANGE };
 
-    case OUTCOME.BASELINE_DISARMED:
-      await applyObservation({
-        issueId,
-        expectedVersion: review.version,
-        review: result.review,
-        counters: { driftCount: 0, driftedFieldCount: 0, maxMateriality: null }
-      });
-      await tryAppend({
-        actorAccountId: actorAccountId ?? 'system',
-        eventType: EVENT.BASELINE_DISARMED,
-        issueId,
-        payload: { reason: 'RE_ENTERED_REVIEW', statusId: currentStatusId, baselineVersion: review.baseline_version }
-      });
-      return { outcome: OUTCOME.BASELINE_DISARMED };
-
     case OUTCOME.SELF_REVERTED:
       await applyObservation({
         issueId,
@@ -214,6 +205,30 @@ async function run({ issueId, issueKey, detectedVia, actorAccountId, eventId, ev
 }
 
 /**
+ * Compute the provenance columns for one drift observation.
+ * Extracted so collectors passing different field values can be tested.
+ */
+export function observationFor({ changelogId, attribution, failed, truncated, detectedVia, actorAccountId, now }) {
+  return observationColumns({ changelogId, attributionAt: attribution?.at ?? null,
+    historyComplete: !failed && !truncated, detectedVia, actorAccountId, now });
+}
+
+/**
+ * Who a drift row names as its actor. A matched history item makes the row a
+ * CONFIRMED edit, and its actor is then read as the editor (observation.js), so
+ * it names only the item's own author: one Jira gave without an author names
+ * nobody, never the event user, who only triggered the check. An unmatched
+ * change keeps the legacy fallback to the event user, which is read as the
+ * trigger, not the editor.
+ */
+export function actorFor({ changelogId, attribution, actorAccountId }) {
+  if (changelogId) {
+    return { actor_account_id: attribution?.authorId ?? null, actor_name: attribution?.authorName ?? null };
+  }
+  return { actor_account_id: attribution?.authorId ?? actorAccountId ?? null, actor_name: attribution?.authorName ?? null };
+}
+
+/**
  * Turn an observation into attributed drift rows.
  */
 async function recordAll({
@@ -230,7 +245,10 @@ async function recordAll({
   // whole sequence — "raised, lowered by automation, raised again" is a
   // different story from "raised".
   const since = baseline?.transition_at ?? review.last_checked_at ?? 0;
-  const { entries, failed } = await fetchChangelog(
+  // `truncated` matters as much as `failed`: Jira's changelog pages oldest
+  // first, so a bounded read stops before the NEWEST edits, which are the ones
+  // an unmatched observation would need.
+  const { entries, failed, truncated } = await fetchChangelog(
     ({ startAt, maxResults }) => api.asApp().requestJira(
       route`/rest/api/3/issue/${issueKey}/changelog?startAt=${startAt}&maxResults=${maxResults}`
     ),
@@ -282,7 +300,7 @@ async function recordAll({
     // or not a row gets written for it. The counters below are the comparison's
     // answer; the rows are its evidence trail.
     driftedNow.push(fieldId);
-    if (shouldQueue(materiality, config.queueThreshold)) derivedMaterialities.push(materiality);
+    if (needsDecision(materiality)) derivedMaterialities.push(materiality);
 
     // Already recorded by the other path. The UNIQUE index would reject it
     // anyway; checking first saves a round trip on the reconcile pass, which
@@ -300,18 +318,18 @@ async function recordAll({
       to_digest: result.toDigests?.[fieldId] ?? null,
       from_repr: field.store_values ? summarise(before, field.field_kind) : null,
       to_repr: field.store_values ? summarise(after, field.field_kind) : null,
-      actor_account_id: attribution?.authorId ?? actorAccountId ?? null,
-      actor_name: attribution?.authorName ?? null,
+      ...actorFor({ changelogId, attribution, actorAccountId }),
       occurred_at: attribution?.at ?? now,
       changelog_id: changelogId,
       detected_via: detectedVia,
       source: isOurs ? SOURCE.BASELINE : (attribution?.source ?? SOURCE.UNKNOWN),
-      materiality
+      materiality,
+      ...observationFor({ changelogId, attribution, failed, truncated, detectedVia, actorAccountId, now })
     });
 
     if (didInsert) {
       inserted++;
-      if (shouldQueue(materiality, config.queueThreshold)) materialities.push(materiality);
+      if (needsDecision(materiality)) materialities.push(materiality);
     }
   }
 

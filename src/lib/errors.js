@@ -40,6 +40,7 @@ export const DENY = {
   TREE_CHANGED_DURING_CAPTURE: 'The work item hierarchy changed while it was being read. Wait a moment and try again.',
   BASELINE_VALUES_REQUIRED: 'Required baseline field values could not be captured for all items in the hierarchy. The transition was blocked.',
   CAPTURE_INCOMPLETE: 'The baseline could not be captured completely, so the transition was blocked. Try again; if it persists, contact your VAtlassian administrator.',
+  SCHEMA_PENDING: 'VAtlassian is finishing an update, so nothing was changed. Try again in a few minutes.',
 };
 export const DENY_DETAIL = {
   ITEM_NEVER_OBSERVED: 'No electronic signature has been recorded for this work item, so this transition was blocked. If you just entered a code in this dialog and it did not confirm "Signed as …", the signature field is not collecting it — sign from the Electronic Signature panel on the work item instead.',

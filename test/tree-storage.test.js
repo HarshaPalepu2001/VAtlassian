@@ -152,13 +152,24 @@ test('beginTreeBaseline resumes the capturing row without inserting another, aft
   const result = await beginTreeBaseline({
     baseline: { version: 3 },
     resume: { baseline_id: baselineId, version: 3, state: 'CAPTURING' },
-    query: async (sql, params) => { queries.push({ sql, params }); }
+    query: async (sql, params) => { queries.push({ sql, params }); return /^\s*SELECT state/.test(sql) ? [{ state: 'CAPTURING' }] : []; }
   });
   assert.deepEqual(result, { baselineId, version: 3 });
-  assert.equal(queries.length, 2);
-  assert.match(queries[0].sql, /DELETE FROM va_baseline_node_value WHERE baseline_id/);
-  assert.match(queries[1].sql, /DELETE FROM va_baseline_node WHERE baseline_id/);
+  // The row is confirmed CAPTURING before anything is cleared, and the earlier
+  // attempt's evidence goes too, so this attempt's never mixes with it.
+  assert.match(queries[0].sql, /^SELECT state FROM va_baseline WHERE baseline_id = FROM_BASE64\(\?\)$/);
+  const deletes = queries.filter(q => /^\s*DELETE/.test(q.sql)).map(q => q.sql.match(/DELETE FROM (\w+)/)[1]);
+  assert.deepEqual(deletes, ['va_baseline_field', 'va_baseline_rule', 'va_baseline_signature', 'va_baseline_link',
+    'va_baseline_node_value', 'va_baseline_node']);
+  assert.ok(queries.every(q => q.params.every(p => p === baselineId.toString('base64'))));
   assert.ok(queries.every(q => !/INSERT/.test(q.sql)), 'resume must not insert a fresh baseline row');
+
+  const published = [];
+  await assert.rejects(() => beginTreeBaseline({ baseline: { version: 3 },
+    resume: { baseline_id: baselineId, version: 3, state: 'CAPTURING' },
+    query: async sql => { published.push(sql); return /^\s*SELECT state/.test(sql) ? [{ state: 'ACTIVE' }] : []; } }),
+  error => error.reason === 'CAPTURE_INCOMPLETE');
+  assert.equal(published.filter(sql => /DELETE/.test(sql)).length, 0, 'a published version is never cleared');
 });
 
 test('writeTreeCapture executes proper queries with treeHash and calculated edgeCount', async () => {
@@ -420,4 +431,17 @@ test('encodeValue and decodeValue handle values exceeding 64KB across chunks', a
   const decoded = decodeValue(rows);
   assert.equal(decoded.present, true);
   assert.deepEqual(decoded.value, largeObject);
+});
+
+test('tree publication can require the version\'s evidence', async () => {
+  const writes = [];
+  await publishTreeBaseline({ baselineId: Buffer.alloc(16, 1), issueId: 1, version: 2, requireEvidence: true,
+    write: async sql => { writes.push(sql); return { result: true, data: { affectedRows: 1 } }; },
+    query: async () => [] });
+  assert.match(writes[0], /controlled_fields_hash IS NOT NULL AND policy_recorded = TRUE/);
+  const legacy = [];
+  await publishTreeBaseline({ baselineId: Buffer.alloc(16, 1), issueId: 1, version: 2,
+    write: async sql => { legacy.push(sql); return { result: true, data: { affectedRows: 1 } }; },
+    query: async () => [] });
+  assert.doesNotMatch(legacy[0], /policy_recorded/);
 });

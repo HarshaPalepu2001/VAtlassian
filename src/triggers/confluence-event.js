@@ -1,6 +1,15 @@
 import { executeQuery } from '../lib/db.js';
 
-export async function run(event, context) {
+/**
+ * Every page, blog post and attachment event on the site arrives here, and
+ * almost none concern content this app governs — so that is checked first,
+ * and nothing is written or queued for the rest.
+ *
+ * Governed content is reconciled off this trigger, by jobs/confluenceReconcile.js,
+ * whatever made the change (the app's own writes included): the consumer reads
+ * as the app and re-measures the page against its baseline either way.
+ */
+export async function run(event) {
   const accountId = event.atlassianId || event.context?.accountId;
   if (!accountId) return;
 
@@ -10,23 +19,17 @@ export async function run(event, context) {
 
   if (!contentId) return;
 
-  const isApp = event.context?.appId === context?.appId || accountId === context?.accountId;
-
-  if (isApp) {
-    const { ConfluenceAdapter } = await import('../lib/confluenceAdapter.js');
-    const { GovernedObjectRef } = await import('../lib/governanceCore.js');
-    const adapter = new ConfluenceAdapter();
-    const ref = new GovernedObjectRef('confluence', context?.workspaceId, content?.spaceId, contentType, contentId, content?.version?.number);
-    await adapter.reconcile(ref);
-    return;
-  }
+  const { getSubjectState } = await import('../db/confluenceStore.js');
+  if (!await getSubjectState(String(contentId))) return;
 
   await executeQuery(
     `INSERT INTO va_events (id, product, type, content_id, timestamp) VALUES (?, ?, ?, ?, ?)`,
     [event.eventType + '_' + Date.now(), 'confluence', contentType, contentId, Date.now()]
   );
-  
+
   const { Queue } = await import('@forge/events');
   const queue = new Queue({ key: 'confluence-reconcile' });
-  await queue.push({ contentId, contentType, eventType: event.eventType });
+  // A Forge queue event carries its payload under `body`; anything else is
+  // refused by the queue before it is sent.
+  await queue.push({ body: { contentId: String(contentId), contentType, eventType: event.eventType } });
 }

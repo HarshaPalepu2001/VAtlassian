@@ -3,6 +3,7 @@ import { route } from '@forge/api';
 import { declareWrite } from '../../db/restoreStore.js';
 import { OUTCOME, RESTORE_STATE, digestOf, tally } from './outcome.js';
 import { restoreAttachments, pointAtLiveFiles, explainRichTextRefusal } from './attachments.js';
+import { adfMediaIds } from '../attachmentIdentity.js';
 
 // Re-exported so callers keep importing the executor as one thing. The pure
 // definitions live in ./outcome.js because this file imports @forge/api and is
@@ -79,7 +80,7 @@ export async function executeRestore({
   }
 
   const writes = { ...plan.fieldWrites };
-  const writeIds = Object.keys(writes);
+  let writeIds = Object.keys(writes);
 
   // ── Declare our own writes BEFORE making them ─────────────────────────────
   //
@@ -89,23 +90,26 @@ export async function executeRestore({
   // being restored — with the reviewer's own reversion sitting in their queue.
   // A loop, and an embarrassing one. Declared first so the window opens before
   // the event can possibly fire.
-  const CONCURRENCY_LIMIT = 5;
-  for (let i = 0; i < writeIds.length; i += CONCURRENCY_LIMIT) {
-    const batch = writeIds.slice(i, i + CONCURRENCY_LIMIT).map(async (fieldId) => {
-      const field = byId.get(fieldId);
-      if (!field) return;
-      const digest = digestOf(field, writes[fieldId]);
-      try {
-        await declareWrite({ issueId, fieldId, digest, now });
-      } catch (e) {
-        // Best-effort. A missed suppression costs one spurious drift row that a
-        // reviewer can dismiss; refusing to restore because bookkeeping failed
-        // would cost them the thing they actually asked for.
-        console.error('restore: could not declare write for', fieldId, e);
-      }
-    });
-    await Promise.all(batch);
-  }
+  const declare = async (ids, valueOf) => {
+    const CONCURRENCY_LIMIT = 5;
+    for (let i = 0; i < ids.length; i += CONCURRENCY_LIMIT) {
+      const batch = ids.slice(i, i + CONCURRENCY_LIMIT).map(async (fieldId) => {
+        const field = byId.get(fieldId);
+        if (!field) return;
+        const digest = digestOf(field, valueOf(fieldId));
+        try {
+          await declareWrite({ issueId, fieldId, digest, now });
+        } catch (e) {
+          // Best-effort. A missed suppression costs one spurious drift row that a
+          // reviewer can dismiss; refusing to restore because bookkeeping failed
+          // would cost them the thing they actually asked for.
+          console.error('restore: could not declare write for', fieldId, e);
+        }
+      });
+      await Promise.all(batch);
+    }
+  };
+  await declare(writeIds, fieldId => writes[fieldId]);
 
   const client = actAs === 'user' ? api.asUser() : api.asApp();
   const write = { notifyUsers, override: actAs !== 'user' };
@@ -121,19 +125,60 @@ export async function executeRestore({
   const attachments = async () => attachmentDeps
     ?? (await import('./attachmentAdapters.js')).createAttachmentRestoreDeps({ api, route, actorAccountId, approvalId });
   const fileStep = plan.steps.find((s) => s.strategy === 'attachments');
+  let unpointable = [];
   if (fileStep) {
     const result = await runHandler(client, { strategy: 'attachments', issueKey, issueId, step: fileStep, write, attachments });
+    unpointable = result.unpointable ?? [];
     detail.set(fileStep.fieldId, { fieldId: fileStep.fieldId, fieldName: fileStep.fieldName,
       outcome: result.ok ? OUTCOME.SUCCEEDED : OUTCOME.FAILED, reason: result.reason ?? null, verified: false });
   }
-  if (writeIds.length > 0 && (fileStep || Object.values(writes).some(v => v && typeof v === 'object' && v.type === 'doc'))) {
+  // Rich text the diff did not include but which shows a file just put back
+  // (planner.js repointCandidates): written only if a pointer really moves.
+  const candidates = (plan.repoint ?? []).filter(c => !Object.hasOwn(writes, c.fieldId));
+  const isDoc = v => v && typeof v === 'object' && v.type === 'doc';
+  if ((writeIds.length > 0 || candidates.length > 0) && (fileStep || candidates.length > 0 || Object.values(writes).some(isDoc))) {
     try {
       const deps = await attachments();
-      Object.assign(writes, pointAtLiveFiles(writes, deps.identity ? await deps.identity(issueId) : null));
+      const record = deps.identity ? await deps.identity(issueId) : null;
+      // Which copies are on the item NOW: of two copies of one original, the
+      // description must show the one that was not deleted since.
+      let liveJiraIds = null;
+      if (record?.media?.size && deps.readCurrent) {
+        try {
+          liveJiraIds = new Set((await deps.readCurrent(issueKey)).map(a => String(a?.id ?? '')));
+        } catch (e) {
+          console.error('restore: could not read the files on the item; the newest restored copy is shown', e);
+        }
+      }
+      const repointed = [];
+      for (const candidate of candidates) {
+        const pointed = pointAtLiveFiles({ [candidate.fieldId]: candidate.targetValue }, record, { liveJiraIds })[candidate.fieldId];
+        if (pointed !== candidate.targetValue) {
+          writes[candidate.fieldId] = candidate.targetValue;
+          repointed.push(candidate.fieldId);
+        }
+      }
+      // Declared as the APPROVED value, which is what a canonical read of the
+      // re-pointed text compares equal to.
+      await declare(repointed, fieldId => candidates.find(c => c.fieldId === fieldId).targetValue);
+      Object.assign(writes, pointAtLiveFiles(writes, record, { liveJiraIds }));
     } catch (e) {
       console.error('restore: could not read restored copies; rich text is written as approved', e);
     }
   }
+  // A file restored without a known media id cannot be shown by the text that
+  // showed it. Such a field is named here, not sent: Jira would refuse it, and
+  // a guessed pointer is worse than a named failure.
+  const lost = new Map(unpointable.map(u => [String(u.originalMediaId), u]));
+  if (lost.size) {
+    for (const fieldId of Object.keys(writes)) {
+      if (!adfMediaIds(writes[fieldId]).some(mediaId => lost.has(mediaId))) continue;
+      delete writes[fieldId];
+      detail.set(fieldId, { fieldId, fieldName: nameOf(byId, fieldId), outcome: OUTCOME.FAILED, verified: false,
+        reason: 'A file this text shows was put back, but Jira did not say which media file the copy is, so the text could not be pointed at it. Restore this field again once the file shows in Jira.' });
+    }
+  }
+  writeIds = Object.keys(writes);
 
   // ── Phase 1: one bulk PUT ─────────────────────────────────────────────────
   //
@@ -296,10 +341,10 @@ async function runHandler(client, { strategy, issueKey, issueId, step, write, at
       // Always as the app: the vault is private to it, and on a project whose
       // attachment deletion is locked only the app's own account may delete.
       try {
-        await restoreAttachments({ issueKey, issueId, target: step.targetValue, deps: await attachments() });
-        return { ok: true };
+        const result = await restoreAttachments({ issueKey, issueId, target: step.targetValue, deps: await attachments() });
+        return { ok: true, unpointable: result?.unpointable ?? [] };
       } catch (error) {
-        return { ok: false, reason: String(error?.detail ?? error?.message ?? error) };
+        return { ok: false, reason: String(error?.detail ?? error?.message ?? error), unpointable: error?.unpointable ?? [] };
       }
 
     case 'parent': {

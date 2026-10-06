@@ -69,8 +69,7 @@ export function enrolmentExpired(credential, now = Date.now()) {
   if (credential.state !== CREDENTIAL_STATE.PENDING_CONFIRM) return false;
   // `Number(null)` is 0, not NaN, so an unset enrolled_at would read as the
   // epoch and expire every such row instantly — locking the owner out of their
-  // own setup with no way back. Absence must mean "unknown, do not expire",
-  // the same stance supersede() takes on a NULL baseline_status_id.
+  // own setup with no way back. Absence must mean "unknown, do not expire".
   if (credential.enrolled_at == null) return false;
   const enrolledAt = Number(credential.enrolled_at);
   if (!Number.isFinite(enrolledAt)) return false;

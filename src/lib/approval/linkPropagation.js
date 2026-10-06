@@ -60,7 +60,7 @@ export function linkDecisionJobs({ issue, tracksLinks, before, after, approval }
   return [...byOther].map(([otherIssueId, changes]) => ({
     issueId: Number(issue.id), issueKey: String(issue.key), otherIssueId, changes,
     approvalId: approval.approvalId, approvedBy: approval.accountId, approvedName: approval.displayName,
-    assuranceLevel: approval.assuranceLevel
+    assuranceLevel: approval.assuranceLevel, signerRole: approval.signerRole ?? null
   }));
 }
 

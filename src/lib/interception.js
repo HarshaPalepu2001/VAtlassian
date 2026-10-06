@@ -11,6 +11,27 @@ export const REVIEW_STATE = {
   ARCHIVED: 'ARCHIVED'
 };
 
+/**
+ * HOW LONG AN OPERATION LOCK IS TRUSTED WITHOUT A HEARTBEAT. The one
+ * definition; every reader of a DECIDING or RESTORING row asks this.
+ *
+ * A decision runs inside one resolver call, so a minute is generous. A restore
+ * does not: it is queued, waits for delivery, and its worker may spend up to
+ * its 600 s timeout on one batch (jobs/restoreWorker.js heartbeats the row
+ * between batches). A minute there declared a running restore abandoned, and
+ * the collectors and a second reviewer then acted underneath it.
+ */
+export const LOCK_TTL_MS = 60 * 1000;
+export const RESTORE_LEASE_MS = 11 * 60 * 1000;
+export function lockLeaseMs(state) {
+  return state === REVIEW_STATE.RESTORING ? RESTORE_LEASE_MS : LOCK_TTL_MS;
+}
+/** A DECIDING/RESTORING row whose last heartbeat is older than its lease. Null is never stale. */
+export function isStaleLock(review, now) {
+  return review?.last_checked_at != null && now != null
+    && Number(now) - Number(review.last_checked_at) > lockLeaseMs(review.state);
+}
+
 export const OUTCOME = {
   NOT_CONTROLLED: 'NOT_CONTROLLED',
   NO_BASELINE: 'NO_BASELINE',
@@ -19,24 +40,6 @@ export const OUTCOME = {
   SELF_REVERTED: 'SELF_REVERTED',
   BUSY: 'BUSY'
 };
-
-export function supersedeOnReviewEntry({ prior, currentStatusId, reviewStatusIds, now }) {
-  if (!prior || !currentStatusId || !reviewStatusIds?.includes(currentStatusId)) {
-    return { superseded: false, review: prior };
-  }
-  if ([REVIEW_STATE.DRIFTED, REVIEW_STATE.DECIDING, REVIEW_STATE.RESTORING, REVIEW_STATE.LOCKED].includes(prior.state)) {
-    return { superseded: false, review: prior };
-  }
-  return {
-    superseded: true,
-    review: {
-      ...prior,
-      baseline_id: null,
-      state: REVIEW_STATE.ARCHIVED,
-      version: (prior.version || 0) + 1
-    }
-  };
-}
 
 /**
  * WHICH TRACKED FIELDS NO LONGER MATCH THE SIGNATURE — the whole definition of
@@ -79,11 +82,10 @@ export function driftedFields({ baselineDigests, issueFields, controlledFields }
   }
 }
 
-export function observe({ prior, baselineDigests, issueFields, controlledFields, reviewStatusIds, currentStatusId, now }) {
+export function observe({ prior, baselineDigests, issueFields, controlledFields, now }) {
   if (controlledFields.length === 0) return { outcome: OUTCOME.NOT_CONTROLLED, review: prior };
   if (!prior?.baseline_id) return { outcome: OUTCOME.NO_BASELINE, review: prior };
-  const isStaleLock = prior.last_checked_at != null && now != null && (Number(now) - Number(prior.last_checked_at) > 60000);
-  if ((prior.state === REVIEW_STATE.RESTORING || prior.state === REVIEW_STATE.DECIDING) && !isStaleLock) return { outcome: OUTCOME.BUSY, review: prior };
+  if ((prior.state === REVIEW_STATE.RESTORING || prior.state === REVIEW_STATE.DECIDING) && !isStaleLock(prior, now)) return { outcome: OUTCOME.BUSY, review: prior };
 
   let bDigests = baselineDigests;
   if (!bDigests || typeof bDigests !== 'object') {
@@ -143,10 +145,6 @@ export function observe({ prior, baselineDigests, issueFields, controlledFields,
 
 export const ITEM_STATE = REVIEW_STATE;
 export const SIGN_MODE = { SIGN_CURRENT: 'SIGN_CURRENT', APPROVE_DELTA: 'APPROVE_DELTA', GATE_TRANSITION: 'GATE_TRANSITION', DECLINE: 'DECLINE' };
-export function supersede(args) {
-  const result = supersedeOnReviewEntry(args);
-  return { ...result, item: result.review };
-}
 export function coverage({ item, mode }) {
   const from = item?.baseline_hash ?? GENESIS_CONTENT;
   const to = item?.content_hash;

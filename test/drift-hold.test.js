@@ -230,3 +230,37 @@ test('the saved transition id is read from the validator configuration, however 
     assert.equal(configuredTransitionId(none), null, JSON.stringify(none));
   }
 });
+
+test('a drift hold says which fields the live check flagged, in the log and in the ledger', async () => {
+  const f = await gateFixture({ driftCount: 2, ct: policy(), snapshot: {
+    driftedFields: ['description', 'issuetype'],
+    driftDiagnostics: { cause: 'DIGEST_MISMATCH', digestSource: 'root-node', baselineVersion: 5, baselineIssueTypeId: '10004' } } });
+  const logged = [];
+  const audited = [];
+  const originalWarn = console.warn;
+  const originalError = console.error;
+  console.warn = line => logged.push(String(line));
+  console.error = line => logged.push(String(line));
+  try {
+    const deps = { now: () => 200, log: event => logged.push(JSON.stringify(event)),
+      load: async () => ({ issueId: 10, projectId: 1, issueTypeId: '10007', item: { state: 'BASELINED' }, driftCount: 2,
+        ct: policy(), driftedFields: ['description', 'issuetype'],
+        driftDiagnostics: { cause: 'DIGEST_MISMATCH', digestSource: 'root-node', baselineVersion: 5, baselineIssueTypeId: '10004' } }),
+      audit: async event => { audited.push(event); } };
+    const { createGate: make } = await import('../src/gate.js');
+    const result = await make(deps)(f.payload);
+    assert.equal(result.result, false);
+  } finally {
+    console.warn = originalWarn;
+    console.error = originalError;
+  }
+  const harness = logged.find(line => line.includes('[HARNESS:GATE] gate:deny'));
+  assert.ok(harness, 'the GATE deny line is emitted');
+  const deny = JSON.parse(harness.slice(harness.indexOf('{')));
+  assert.deepEqual(deny.drift.changed, ['description', 'issuetype']);
+  assert.equal(deny.drift.cause, 'DIGEST_MISMATCH');
+  assert.equal(deny.drift.baselineIssueTypeId, '10004');
+  assert.equal(deny.drift.issueTypeId, '10007');
+  const blocked = audited.find(event => event.eventType === 'TRANSITION_BLOCKED');
+  assert.deepEqual(blocked.payload.drift.changed, ['description', 'issuetype']);
+});

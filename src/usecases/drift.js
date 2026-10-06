@@ -1,6 +1,7 @@
 import { readableIssue, snapshot, actorFrom, load, fail, respond } from './panelAccess.js';
 import { acquire, release } from '../db/itemStateStore.js';
 import { writeCapturedBaseline } from '../lib/capture.js';
+import { CAUSE } from '../lib/evidence/versionEvidence.js';
 import { markDecided } from '../db/driftStore.js';
 import { canDecide, decide, undecidedCounters } from '../lib/decision.js';
 import { planRestore } from '../lib/restore/planner.js';
@@ -39,6 +40,18 @@ function withTimeout(promise, ms, message) {
     }, ms);
   });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * The comment a rejection leaves on the work item. It is posted BEFORE the
+ * restore runs — a tree restore is only queued at that point, and may yet end
+ * PARTIAL or FAILED — so it says a restore has started, never that it is done.
+ * The outcome is on the panel and in the ledger.
+ */
+export function rejectionComment(actorName) {
+  const text = `Electronic signature review rejected by ${actorName}. The approved content is being restored; `
+    + 'the VAtlassian panel on this work item shows the result.';
+  return { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] };
 }
 
 export async function releaseFailedApproval({ locked, issueId, diff, driftCount, error, release, now = Date.now() }) {
@@ -155,7 +168,7 @@ async function queueLinkDecisions({ checked, approval, actor }) {
     after: checked.issue?.fields?.issuelinks ?? [],
     approval: { approvalId: Buffer.from(approval.approval_id).toString('base64'), accountId: actor.accountId,
       displayName: approval.actor_name ?? approval.printed_name ?? actor.displayName,
-      assuranceLevel: approval.assurance_level }
+      assuranceLevel: approval.assurance_level, signerRole: approval.signer_role ?? null }
   });
   if (!jobs.length) return;
   // Marked before queueing, so the other issue explains itself from the first
@@ -263,19 +276,10 @@ export async function applyApproval({ issue, actor, approval, prepared, resuming
     if (!resuming && checked.contentHash !== approval.content_hash) fail('STALE_EVIDENCE');
     if (approval.decision === 'REJECT') {
       if (checked.baseline && checked.issue.fields.status?.id && String(checked.issue.fields.status.id) !== checked.baseline.from_status_id) {
-        
-        
-        const commentBody = `Electronic signature review rejected by ${actor.displayName}. The baseline content has been automatically restored.`;
         await api.asUser().requestJira(route`/rest/api/3/issue/${checked.issue.key}/comment`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            body: {
-              type: 'doc',
-              version: 1,
-              content: [{ type: 'paragraph', content: [{ type: 'text', text: commentBody }] }]
-            }
-          })
+          body: JSON.stringify({ body: rejectionComment(actor.displayName) })
         }).catch(e => console.error('Failed to post comment', e));
       }
       console.log('Starting withTimeout performRestore');
@@ -286,6 +290,9 @@ export async function applyApproval({ issue, actor, approval, prepared, resuming
       );
     }
     let capture = { captured: false, reason: 'CAPTURE_DISABLED' };
+    // A workflow transition approved here is the item's own transition; an
+    // approval bound to its baseline is a drift decision.
+    const cause = forTransition ? CAUSE.OWN_TRANSITION : CAUSE.DRIFT_DECISION;
     const capturesBaseline = [true, 1, '1'].includes(checked.gate?.capture_baseline);
     if (!transition || capturesBaseline) {
       if (capturesBaseline) {
@@ -308,7 +315,7 @@ export async function applyApproval({ issue, actor, approval, prepared, resuming
             assuranceLevel: approval.assurance_level,
             content_hash: approval.content_hash,
           },
-          controlledFields: checked.fields,
+          controlledFields: checked.fields, ruleScope: checked.ruleScope, cause,
           transitionAt: approval.decided_at ?? approval.signed_at ?? Date.now(),
           deps: {
             readTree: createTreeReader({ api: api.default, route: api.route }).read,
@@ -323,7 +330,7 @@ export async function applyApproval({ issue, actor, approval, prepared, resuming
       } else {
         capture = await writeCapturedBaseline({ issueId: checked.issueId, issueKey: checked.issue.key,
           projectId: checked.projectId, issueTypeId: checked.issueTypeId, controlledFields: checked.fields,
-          issueFields: checked.issue.fields, editmetaFields: checked.editmeta,
+          ruleScope: checked.ruleScope, cause, issueFields: checked.issue.fields, editmetaFields: checked.editmeta,
           transitionAt: approval.decided_at ?? approval.signed_at ?? Date.now(), capturedAt: Date.now(),
           approver: { accountId: actor.accountId, displayName: approval.actor_name ?? approval.printed_name ?? actor.displayName,
             approvalId: approval.approval_id, assuranceLevel: approval.assurance_level, contentHash: approval.content_hash },
@@ -333,7 +340,8 @@ export async function applyApproval({ issue, actor, approval, prepared, resuming
           transitionId: transition ? approval.transition_id : checked.baseline?.transition_id ?? null,
           fromStatusId: transition ? approval.from_status_id : checked.baseline?.from_status_id ?? checked.gate?.from_status_id ?? approval.from_status_id,
           toStatusId: transition ? approval.to_status_id : checked.baseline?.to_status_id ?? checked.gate?.to_status_id ?? approval.to_status_id,
-          requiredRole: checked.gate?.required_role, reviewerFieldId: checked.config.reviewerFieldId });
+          requiredRole: checked.gate?.required_role, requiredAssurance: checked.gate?.required_assurance,
+          reviewerFieldId: checked.config.reviewerFieldId });
       }
       if (!capture.captured) fail(capture.reason ?? 'CAPTURE_FAILED');
       await queueVaulting({ capture, checked, actor });

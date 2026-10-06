@@ -195,6 +195,30 @@ function flatFixture() {
   return f;
 }
 
+test('the single-issue collector hands a tree baseline to the tree collector, never comparing its empty digest map', async () => {
+  // triggers/issue-transitioned.js runs collect() after every transition. A
+  // tree baseline keeps its digests on the root node and leaves the row's
+  // field_digests as '{}'; compared against that, every tracked field drifted.
+  const f = baseFixture();
+  const flatBaseline = await f.activeBaseline();
+  f.activeBaseline = async () => ({ ...flatBaseline, tree_hash: 't'.repeat(64), field_digests: '{}', transition_at: 0 });
+  const base = f.request;
+  f.request = async (...args) => ({ ok: true, ...(await base(...args)) });
+  const drifted = [];
+  Object.assign(f, {
+    projectConfig: async () => ({ enabled: true }), reviewStatusIds: async () => [], recordObservation: async () => {},
+    refreshHeader: async () => {}, touch: async () => {}, moveScope: async () => true,
+    readAllValues: async () => ({}), existingChangelogKeys: async () => new Set(), suppressedFields: async () => new Set(),
+    recordDrift: async row => { drifted.push(row.field_id); return { inserted: true }; }
+  });
+
+  const result = await collect({ issueId: 1, issueKey: 'FEAT-1', now: 1000 });
+
+  assert.equal(result.outcome, 'NO_CHANGE');
+  assert.deepEqual(drifted, [], 'no field is recorded as drift on an unchanged tree');
+  assert.equal(f.review.state, 'BASELINED');
+});
+
 test('no active baseline for the root: NO_BASELINE, nothing read or written', async () => {
   const f = baseFixture();
   f.review = null;

@@ -55,9 +55,13 @@ export function createGate(deps) {
     harnessLog('GATE', 'gate:enter', facts);
     const deny = async (reason, detail, extra = {}) => {
       const elapsedMs = deps.now() - startedAt;
-      deps.log({ event: 'gate:deny', ...facts, reason, detail, elapsedMs });
-      harnessLog('GATE', 'gate:deny', { ...facts, reason, detail, elapsedMs }, 'WARN');
-      try { await deps.audit({ eventType: 'TRANSITION_BLOCKED', actorAccountId: 'system', payload: { ...facts, reason, detail: detail ?? null, elapsedMs } }, { deadlineMs: 1200 }); } catch { /* refusal remains closed even if evidence storage is down */ }
+      // WHAT THE LIVE CHECK FLAGGED, when drift is why. Field ids and the cause
+      // only: the full per-field digests are in the DRIFT log line, and the
+      // ledger should not carry them.
+      const drift = extra.drift ?? null;
+      deps.log({ event: 'gate:deny', ...facts, reason, detail, elapsedMs, ...(drift ? { drift } : {}) });
+      harnessLog('GATE', 'gate:deny', { ...facts, reason, detail, elapsedMs, ...(drift ? { drift } : {}) }, 'WARN');
+      try { await deps.audit({ eventType: 'TRANSITION_BLOCKED', actorAccountId: 'system', payload: { ...facts, reason, detail: detail ?? null, elapsedMs, ...(drift ? { drift } : {}) } }, { deadlineMs: 1200 }); } catch { /* refusal remains closed even if evidence storage is down */ }
       const assurance = extra.required ? ` Obtained: ${extra.obtained ?? 'none'}. Required: ${extra.required}.` : '';
       return { result: false, errorMessage: (DENY[reason] ?? DENY.SERVICE_UNAVAILABLE) + assurance };
     };
@@ -99,7 +103,13 @@ export function createGate(deps) {
       // A link approved on the other end and not yet recorded here is still
       // drift until it is (jobs/linkWorker.js); the refusal says it is coming.
       if (!projectDisabled && driftCount > 0) {
-        return deny(snapshot.linkPending ? 'LINK_DECISION_PENDING' : 'UNDECIDED_DRIFT', 'DRIFT_OUTSTANDING');
+        return deny(snapshot.linkPending ? 'LINK_DECISION_PENDING' : 'UNDECIDED_DRIFT', 'DRIFT_OUTSTANDING', {
+          drift: { count: driftCount, changed: (snapshot.driftedFields ?? []).slice(0, 40),
+            cause: snapshot.driftDiagnostics?.cause ?? null, digestSource: snapshot.driftDiagnostics?.digestSource ?? null,
+            baselineVersion: snapshot.driftDiagnostics?.baselineVersion ?? null,
+            baselineIssueTypeId: snapshot.driftDiagnostics?.baselineIssueTypeId ?? null, issueTypeId: issueTypeId ?? null,
+            scopeSource: snapshot.driftScope?.source ?? null, scopeIssueTypeId: snapshot.driftScope?.issueTypeId ?? null }
+        });
       }
 
       // ── The edge: a signature only where VAtlassian controls it ──────────

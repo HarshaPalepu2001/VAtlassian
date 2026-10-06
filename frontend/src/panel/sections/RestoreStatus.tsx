@@ -17,6 +17,8 @@ import { recordHarnessEvent } from '../../lib/harness';
 export type RestoreRow = {
   restore_id: string; state: string; field_name?: string; error?: string | null; last_error?: string | null; report?: unknown; detail?: any;
   actorName?: string | null; startedAt?: number | null; finishedAt?: number | null; baselineVersion?: number | null;
+  /** False when the server says this viewer may not retry it (only the reviewer who rejected may). */
+  canRetry?: boolean;
   progress?: { totalSteps: number; completedSteps: number; remainingSteps: number };
 };
 
@@ -206,9 +208,18 @@ export default function RestoreStatus({ issueKey, restore, onDone }: { issueKey?
   );
 
   if (restoreFinished(restore.state)) {
+    // A retry resumes the rejecter's own signature, so the server refuses
+    // anyone else. They still see the outcome, and are told what they can do.
+    const othersRestore = latest.canRetry === false;
     return <div className="va-base__restore va-stack va-stack--tight">
       {error && <Notice danger>{error}</Notice>}
-      <RestoreLine restore={latest} action={UNSUCCESSFUL.includes(latest.state) ? retryButton : undefined} />
+      <RestoreLine restore={latest} action={UNSUCCESSFUL.includes(latest.state) && !othersRestore ? retryButton : undefined} />
+      {UNSUCCESSFUL.includes(latest.state) && othersRestore && (
+        <p className="va-secondary">
+          Only {latest.actorName ?? 'the reviewer'}, who rejected these changes, can retry this restore.
+          {' '}You can still approve or reject the changes.
+        </p>
+      )}
     </div>;
   }
 

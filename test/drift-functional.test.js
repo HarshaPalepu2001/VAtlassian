@@ -19,6 +19,7 @@ const modules = {
   'db/store.js': ['tryAppend','newId','throwing','isDuplicateKey'],
   'lib/reviewer.js': ['isEligible','assignReviewer'],
   'db/baselineTreeStore.js': ['readBaselineTree','beginTreeBaseline','writeTreeCapture','verifyTreeCapture','publishTreeBaseline','activeRootsForNode'],
+  'db/evidenceStore.js': ['writeVersionEvidence','pinChildVersions','recordNodeSecurity'],
   'db/treeDriftStore.js': ['replaceTreeDrift'],
   'lib/vaultQueue.js': ['enqueueVaultJobs']
 };
@@ -54,12 +55,12 @@ function fixture() {
     ['assignee','SCALAR','user'], ['customfield_cascade','SCALAR','option-with-child'],
     ...Array.from({length: 100}, (_,i) => [`customfield_${i}`,'SCALAR','number'])
   ];
-  const fields = defs.map(([id,kind]) => ({ field_id:id, field_name:id, field_kind:kind, store_values:true, writable:id !== 'customfield_cascade' }));
+  const fields = defs.map(([id,kind]) => ({ field_id:id, field_name:id, field_kind:kind, materiality:'MAJOR', store_values:true, writable:id !== 'customfield_cascade' }));
   const editmeta = Object.fromEntries(defs.map(([id,,type]) => [id,{schema:{type,...(id==='labels'?{items:'string'}:{})},operations:['set']} ]));
   const values = { summary:'v1 approved', description:doc('original rich text'), labels:[], assignee:null,
     customfield_cascade:{id:'1',child:{id:'2'}},
     ...Object.fromEntries(Array.from({length:100},(_,i)=>[`customfield_${i}`,i])) };
-  const issue = { id:'10',key:'T-10',fields:{...clone(values),parent:null,project:{id:'1'},issuetype:{id:'1'},status:{id:'1'}} };
+  const issue = { id:'10',key:'T-10',fields:{...clone(values),parent:null,security:null,project:{id:'1'},issuetype:{id:'1'},status:{id:'1'}} };
   const projected = project(values, fields);
   const baseline = { baseline_id:Buffer.alloc(16,1), issue_id:10, project_id:1, issue_type_id:'1', version:1,
     state:'ACTIVE',content_hash:projected.contentHash,field_digests:JSON.stringify(projected.digests),
@@ -158,6 +159,10 @@ function fixture() {
       return {baselineId,valueBytes:0};
     },
     verifyTreeCapture:async()=>true,
+    evidence:[],
+    writeVersionEvidence:async({entries})=>{f.evidence.push(...entries);},
+    pinChildVersions:async()=>{},
+    recordNodeSecurity:async()=>{},
     publishTreeBaseline:async({baselineId,version})=>{
       for(const b of f.baselines){
         if(b.baseline_id.equals(baselineId))b.state='ACTIVE';
@@ -370,6 +375,7 @@ test('a delayed duplicate capture cannot erase new drift after v2',async()=>{
   const f=fixture();await f.sign();const row=f.rows[0];
   f.issue.fields.summary='new unreviewed edit';f.review.state='DRIFTED';
   const result=await writeCapturedBaseline({issueId:10,issueKey:'T-10',projectId:1,issueTypeId:'1',controlledFields:f.fields,
+    ruleScope:{source:'OWN',projectId:1,issueTypeId:'1',imposedByBaselineId:null,imposedByVersion:null},
     issueFields:f.issue.fields,transitionAt:now(),capturedAt:now(),approver:{approvalId:row.approval_id,assuranceLevel:row.assurance_level,contentHash:row.content_hash}});
   assert.equal(result.alreadyCaptured,true);assert.equal(f.baselines.length,2);assert.equal(f.review.state,'DRIFTED');
   assert.equal(f.saved.get(2).summary,'reviewed drift');
@@ -627,7 +633,7 @@ test('a signer with no reviewer role cannot decide drift, even with the row dele
 
 test('a captured baseline that tracks files tells the vault exactly which files it recorded',async()=>{
   const f=fixture();
-  f.fields.push({field_id:'attachment',field_name:'Attachment',field_kind:'ATTACHMENTS',store_values:true});
+  f.fields.push({field_id:'attachment',field_name:'Attachment',field_kind:'ATTACHMENTS',materiality:'MAJOR',store_values:true});
   f.issue.fields.attachment=[{id:'100',filename:'spec.pdf',size:3,mimeType:'application/pdf',content:'https://x/100'}];
   const result=await f.sign();
   assert.equal(result.success,true,JSON.stringify(result));

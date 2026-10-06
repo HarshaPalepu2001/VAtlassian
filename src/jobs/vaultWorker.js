@@ -26,6 +26,12 @@
  * baseline is skipped, and a page left behind by an earlier failed run is found
  * by title rather than created again. One attachment failing never stops the
  * rest — each failure is audited, and the next baseline re-sends the whole set.
+ *
+ * WHERE. A site with Confluence vaults to its private space; a site without it
+ * vaults to the Forge Object Store (lib/vaultTier.js). On a Confluence site, a
+ * file Confluence will not take — or every file, when the vault space cannot
+ * be made — goes to the Object Store instead, and the ledger says why: a copy
+ * somewhere beats no copy. Each row records where its copy went.
  */
 import api, { route } from '@forge/api';
 import { createHash } from 'node:crypto';
@@ -36,6 +42,9 @@ import { readMediaId } from '../lib/mediaIdentity.js';
 import { canonicalAttachments, jiraIdOf } from '../lib/attachmentIdentity.js';
 import { findPageByTitle, createVaultPage, uploadAttachmentToPage } from '../lib/vaultConfluence.js';
 import { tryAppend } from '../db/store.js';
+import { STORAGE } from '../lib/vaultLocation.js';
+import { resolveVaultTier, vaultTierDeps } from '../lib/vaultTier.js';
+import { defaultVaultObjectStore, tooLarge, MAX_VAULT_BYTES } from '../lib/vaultObjectStore.js';
 import { EVENT } from '../lib/ledger.js';
 import { withRequestCache } from '../lib/cache.js';
 import { harnessLog } from '../lib/harnessLogger.js';
@@ -62,6 +71,8 @@ export async function runVaultWorker(eventOrBody, overrides = {}) {
     mediaIdOf: attachment => readMediaId({ api, route, attachmentId: jiraIdOf(attachment) }),
     readIssueAttachments: defaultReadIssueAttachments,
     downloadAttachment: defaultDownloadAttachment,
+    resolveTier: async () => resolveVaultTier(await vaultTierDeps()),
+    putContent: async args => (await defaultVaultObjectStore()).putContent(args),
     tryAppend, now: Date.now,
     ...overrides
   };
@@ -69,14 +80,26 @@ export async function runVaultWorker(eventOrBody, overrides = {}) {
     return { state: 'FAILED', reason: 'INVALID_BODY' };
   }
 
-  const vault = await deps.ensureVaultSpace(body.projectId);
-
-  let page = await deps.getVaultPage(body.issueId);
-  if (!page) {
-    const found = await deps.findPageByTitle({ spaceId: vault.spaceId, title: body.issueKey })
-      ?? await deps.createVaultPage({ spaceId: vault.spaceId, parentId: vault.projectPageId, issueKey: body.issueKey });
-    await deps.insertVaultPage({ issueId: body.issueId, projectId: body.projectId, confluencePageId: String(found.id), now: deps.now() });
-    page = { confluence_page_id: String(found.id) };
+  const tier = await deps.resolveTier();
+  // The issue's Confluence page, when this site vaults to Confluence and the
+  // page can be had; null means every file of this job goes to the Object Store.
+  let page = null;
+  let noPage = null;
+  if (tier.tier === STORAGE.CONFLUENCE) {
+    try {
+      page = await deps.getVaultPage(body.issueId);
+      if (!page) {
+        const vault = await deps.ensureVaultSpace(body.projectId);
+        const found = await deps.findPageByTitle({ spaceId: vault.spaceId, title: body.issueKey })
+          ?? await deps.createVaultPage({ spaceId: vault.spaceId, parentId: vault.projectPageId, issueKey: body.issueKey });
+        await deps.insertVaultPage({ issueId: body.issueId, projectId: body.projectId, confluencePageId: String(found.id), now: deps.now() });
+        page = { confluence_page_id: String(found.id) };
+      }
+    } catch (error) {
+      console.error('vaultWorker: no Confluence vault page; vaulting to the Object Store', body.issueKey, error);
+      noPage = String(error?.message ?? error);
+      page = null;
+    }
   }
 
   const record = await deps.identityRecords([Number(body.issueId)])
@@ -98,39 +121,61 @@ export async function runVaultWorker(eventOrBody, overrides = {}) {
       continue;
     }
     try {
-      let contentHash, confluenceAttachmentId, mediaId = null, carriedForward = false;
+      let contentHash, mediaId = null, carriedForward = false, fallbackFrom = null;
+      let location = null;
       if (current) {
+        // Checked from Jira's own size, before the bytes are pulled into memory.
+        if (tooLarge(current.size)) throw new Error(`TOO_LARGE: ${current.size} bytes; the vault takes files up to ${MAX_VAULT_BYTES} bytes`);
         const buffer = await deps.downloadAttachment(current);
         contentHash = createHash('sha256').update(buffer).digest('hex');
         const liveMedia = await deps.mediaIdOf(current);
         mediaId = liveMedia ? record?.media?.get(liveMedia) ?? liveMedia : null;
-        // Prefixed with the Jira attachment id: two different files may share a
-        // name on one issue, and on the page they must stay two attachments.
-        const uploaded = await deps.uploadAttachmentToPage({
-          pageId: page.confluence_page_id, filename: `${jiraAttachmentId}-${filename}`, buffer
-        });
-        confluenceAttachmentId = String(uploaded.id);
+        if (page) {
+          try {
+            // Prefixed with the Jira attachment id: two different files may share a
+            // name on one issue, and on the page they must stay two attachments.
+            const uploaded = await deps.uploadAttachmentToPage({
+              pageId: page.confluence_page_id, filename: `${jiraAttachmentId}-${filename}`, buffer
+            });
+            location = { storage: STORAGE.CONFLUENCE, confluenceAttachmentId: String(uploaded.id),
+              confluencePageId: page.confluence_page_id };
+          } catch (error) {
+            fallbackFrom = { storage: STORAGE.CONFLUENCE, error: String(error?.message ?? error) };
+          }
+        } else if (tier.tier === STORAGE.CONFLUENCE) {
+          fallbackFrom = { storage: STORAGE.CONFLUENCE, error: noPage };
+        }
+        if (!location) {
+          const put = await deps.putContent({ buffer, hash: contentHash });
+          location = { storage: STORAGE.OBJECT_STORE, objectKey: put.objectKey };
+        }
       } else {
         // Recorded by the baseline, gone from the issue before this ran.
         const copy = (await deps.vaultedCopies({ issueId: body.issueId, attachmentIds: [jiraAttachmentId] }))
           .get(jiraAttachmentId);
         if (!copy) throw new Error('The file was removed from the work item before it could be vaulted, and no earlier copy exists');
         contentHash = copy.content_hash;
-        confluenceAttachmentId = String(copy.confluence_attachment_id);
         mediaId = copy.media_id ?? null;
+        location = (copy.storage ?? STORAGE.CONFLUENCE) === STORAGE.OBJECT_STORE
+          ? { storage: STORAGE.OBJECT_STORE, objectKey: copy.object_key }
+          : { storage: STORAGE.CONFLUENCE, confluenceAttachmentId: String(copy.confluence_attachment_id),
+            confluencePageId: copy.confluence_page_id ?? null };
         carriedForward = true;
       }
+      const { storage, objectKey = null, confluenceAttachmentId = null, confluencePageId = null } = location;
       await deps.insertVaultAttachment({
         baselineId: body.baselineId, issueId: body.issueId, jiraAttachmentId,
-        filename, contentHash, confluenceAttachmentId, mediaId, now: deps.now()
+        filename, contentHash, confluenceAttachmentId, mediaId, storage, objectKey, now: deps.now()
       });
       await deps.tryAppend({ actorAccountId: 'system', issueId: body.issueId, eventType: EVENT.ATTACHMENT_VAULTED,
-        payload: { baselineId: body.baselineId, jiraAttachmentId, filename, contentHash, mediaId,
-          confluenceAttachmentId, confluencePageId: page.confluence_page_id,
+        payload: { baselineId: body.baselineId, jiraAttachmentId, filename, contentHash, mediaId, storage,
+          ...(objectKey ? { objectKey } : { confluenceAttachmentId, confluencePageId }),
+          ...(fallbackFrom ? { fallbackFrom } : {}),
           ...(current && current.jiraId !== jiraAttachmentId ? { restoredCopyId: current.jiraId } : {}),
           ...(carriedForward ? { carriedForward: true } : {}) } });
       harnessLog('VAULT', 'vault:copied', { issueKey: body.issueKey, baselineId: body.baselineId, jiraAttachmentId,
-        filename, contentHash, mediaId, confluencePageId: page.confluence_page_id, confluenceAttachmentId, carriedForward });
+        filename, contentHash, mediaId, storage, objectKey, confluencePageId, confluenceAttachmentId, carriedForward,
+        fallback: Boolean(fallbackFrom) });
       results.vaulted += 1;
     } catch (error) {
       console.error('vaultWorker: failed to vault attachment', jiraAttachmentId, error);
@@ -140,7 +185,7 @@ export async function runVaultWorker(eventOrBody, overrides = {}) {
     }
   }
 
-  return { state: 'COMPLETE', ...results };
+  return { state: 'COMPLETE', storage: tier.tier, ...results };
 }
 
 export async function handler(event) {

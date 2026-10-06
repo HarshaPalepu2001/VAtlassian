@@ -3,6 +3,7 @@ import { diffTree } from './diff.js';
 import { FailClosed } from './stableRead.js';
 import { FIELD_KIND } from '../content.js';
 import { contentFieldIds, isStructuralField } from './structure.js';
+import { adfMediaIds } from '../attachmentIdentity.js';
 
 const parentOf = node => node?.parentLogicalNodeId ?? node?.parentLogicalId ?? node?.parent ?? null;
 const idOf = node => String(node?.logicalNodeId ?? '');
@@ -101,6 +102,7 @@ export function planTreeRestore({ baselineTree, currentTree, controlledFields, f
         : (changedById.get(idOf(node)) ?? []).filter(fieldId => !isStructuralField(fieldId));
       const regularFieldIds = fieldIds.filter(fieldId => !linkFieldIds.has(fieldId) && !attachmentFieldIds.has(fieldId));
       const steps = [];
+      let filesComeBack = false;
       const nodeAttachmentIds = fieldIds.filter(fieldId => attachmentFieldIds.has(fieldId));
       if (nodeAttachmentIds.length > 1) throw new FailClosed('MULTI_ATTACHMENT_FIELD_UNSUPPORTED');
       if (nodeAttachmentIds.length === 1) {
@@ -111,16 +113,32 @@ export function planTreeRestore({ baselineTree, currentTree, controlledFields, f
         // one that had some needs the step, and its files come from the
         // ORIGINAL item's vault page.
         if (!removedIds.has(idOf(node)) || (Array.isArray(target) && target.length > 0)) {
-          steps.push(action('RESTORE_ATTACHMENTS', idOf(node), parentOf(node), [fieldId], {
-            attachments: target,
-            current: removedIds.has(idOf(node)) ? [] : (currentValuesOf(idOf(node))[fieldId] ?? [])
-          }));
+          const current = removedIds.has(idOf(node)) ? [] : (currentValuesOf(idOf(node))[fieldId] ?? []);
+          const have = new Set((Array.isArray(current) ? current : []).map(a => String(a?.id)));
+          filesComeBack = Array.isArray(target) && target.some(a => !have.has(String(a?.id)));
+          steps.push(action('RESTORE_ATTACHMENTS', idOf(node), parentOf(node), [fieldId], { attachments: target, current }));
         }
       }
       if (regularFieldIds.length > 0) {
         steps.push(action('RESTORE_FIELDS', idOf(node), parentOf(node), regularFieldIds, {
           fields: retainedFields(baselineTree, idOf(node), regularFieldIds)
         }));
+      }
+      // Rich text nobody edited that shows a file this step puts back: the
+      // deleted file's pointer is still in it, and the restored copy has a new
+      // media id (../restore/planner.js repointCandidates says why). A
+      // recreated node is not included: it writes every field anyway.
+      if (filesComeBack && !removedIds.has(idOf(node))) {
+        const retained = baselineTree?.values?.[idOf(node)] ?? {};
+        const written = new Set(fieldIds);
+        const repointIds = (fieldsFor(node) ?? []).map(field => String(field.field_id))
+          .filter(fieldId => !written.has(fieldId) && !isStructuralField(fieldId) && !attachmentFieldIds.has(fieldId)
+            && retained[fieldId]?.type === 'doc' && adfMediaIds(retained[fieldId]).length > 0);
+        if (repointIds.length > 0) {
+          steps.push(action('REPOINT_RICH_TEXT', idOf(node), parentOf(node), repointIds, {
+            fields: retainedFields(baselineTree, idOf(node), repointIds)
+          }));
+        }
       }
       // Existing nodes can reconcile links against their current identity.
       // Removed descendants are intentionally left to the existing replacement
@@ -174,12 +192,19 @@ export function planTreeRestore({ baselineTree, currentTree, controlledFields, f
     attachments.willRestore.push(...(step.attachments ?? []).filter(a => !current.has(String(a?.id))).map(file));
     delete step.current;
   }
+  const richTextRepoint = fieldSteps.filter(step => step.kind === 'REPOINT_RICH_TEXT').map(step => ({
+    logicalNodeId: step.logicalNodeId,
+    issueKey: (currentById.get(step.logicalNodeId) ?? baselineById.get(step.logicalNodeId))?.issueKey ?? null,
+    fieldIds: step.fieldIds
+  }));
 
   return {
     steps: [...createSteps, ...moveSteps, ...fieldSteps, ...deleteSteps],
     preflight: {
       willDelete,
       attachments,
+      // Written only if a pointer in it really moves to a restored copy.
+      richTextRepoint,
       // Recreation is not destruction, but it is not invisible either: the
       // recreated work item gets a NEW Jira key, and anything outside the tree
       // that referenced the old one will not follow it.

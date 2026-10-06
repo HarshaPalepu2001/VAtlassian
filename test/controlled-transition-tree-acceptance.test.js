@@ -66,10 +66,13 @@ test('Acceptance: Auth Methods × Surfaces', async (t) => {
 
 test('Acceptance: Capture Baseline ON vs OFF', async (t) => {
   await t.test('7. capture_baseline: true records tree', async () => {
+    // A capture records each field's materiality and digest with the version (lib/evidence/versionEvidence.js).
+    const fields = SIXTEEN_FIELDS.map(field => ({ ...field, materiality: 'MAJOR' }));
     const rootNode = {
       logicalNodeId: 'root', originalIssueId: 1, currentIssueId: 1,
       issueKey: 'KEY-1', parentLogicalNodeId: null, projectId: 100,
-      issueTypeId: '200', contentHash: 'node-hash', fieldDigests: '{}', nodeOrder: 0
+      issueTypeId: '200', contentHash: 'node-hash', nodeOrder: 0,
+      fieldDigests: JSON.stringify(Object.fromEntries(fields.map(field => [field.field_id, 'd'.repeat(64)])))
     };
     const mockDeps = {
       readStableTree: async () => ({
@@ -84,6 +87,10 @@ test('Acceptance: Capture Baseline ON vs OFF', async (t) => {
       beginTreeBaseline: async () => ({ baselineId: 'base-1', version: 1 }),
       writeTreeCapture: async () => ({ baselineId: 'base-1', valueBytes: 0 }),
       verifyTreeCapture: async () => true,
+      writeVersionEvidence: async () => {},
+      pinChildVersions: async () => {},
+      recordNodeSecurity: async () => {},
+      activeBaselines: async () => new Map(),
       publishTreeBaseline: async () => {},
       upsertBaselined: async () => {},
       tryAppend: async () => {}
@@ -98,8 +105,9 @@ test('Acceptance: Capture Baseline ON vs OFF', async (t) => {
         approvalId: 'approval-1', accountId: 'user-1', displayName: 'Reviewer',
         assuranceLevel: 'ESIGNATURE', content_hash: 'abc'
       },
-      controlledFields: SIXTEEN_FIELDS,
+      controlledFields: fields,
       transitionAt: Date.now(),
+      ruleScope: { source: 'OWN', projectId: 100, issueTypeId: '200', imposedByBaselineId: null, imposedByVersion: null },
       deps: mockDeps
     });
     assert.equal(res.captured, true);

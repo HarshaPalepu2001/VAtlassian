@@ -1,3 +1,5 @@
+import { RULE_SOURCE } from '../evidence/versionEvidence.js';
+
 /**
  * EVERY NODE IS TRACKED WITH THE ROOT'S FIELDS.
  *
@@ -49,15 +51,44 @@ export async function readTreeWithNodeFields({ readStableTree, readTree, rootIss
  * A root row with no scope (read before its columns existed) falls back to the
  * item's own fields rather than guessing.
  */
-export async function fieldsForItem({ issueId, projectId, issueTypeId }, deps) {
-  const own = () => deps.controlledFields({ projectId, issueTypeId });
+export async function scopeForItem({ issueId, projectId, issueTypeId }, deps) {
   const roots = await deps.activeRootsForNode(Number(issueId));
-  if (roots.some(root => Number(root.rootIssueId) === Number(issueId))) return own();
+  if (roots.some(root => Number(root.rootIssueId) === Number(issueId))) {
+    return { projectId, issueTypeId, source: 'own', rootIssueId: Number(issueId) };
+  }
   const governing = roots
     .filter(root => root.projectId != null && root.issueTypeId != null)
     .sort((a, b) => Number(b.capturedAt ?? 0) - Number(a.capturedAt ?? 0))[0];
-  if (!governing) return own();
-  return deps.controlledFields({ projectId: Number(governing.projectId), issueTypeId: String(governing.issueTypeId) });
+  if (!governing) return { projectId, issueTypeId, source: 'own', rootIssueId: null };
+  return { projectId: Number(governing.projectId), issueTypeId: String(governing.issueTypeId),
+    source: 'governing-root', rootIssueId: Number(governing.rootIssueId),
+    rootBaselineId: governing.baselineId ?? null, rootVersion: governing.version ?? null };
+}
+
+/**
+ * The fields an item tracks AND the rule scope they came from, from one
+ * lookup: a capture records which rule required its fields
+ * (docs/specs/2026-10-03-baseline-evidence-model-design.md §4). Fields held to
+ * a governing root are recorded as INHERITED from that root's version.
+ */
+export async function fieldScope(item, deps) {
+  const scope = await scopeForItem(item, deps);
+  const fields = await deps.controlledFields({ projectId: scope.projectId, issueTypeId: scope.issueTypeId });
+  const inherited = scope.source === 'governing-root';
+  return {
+    fields,
+    ruleScope: {
+      source: inherited ? RULE_SOURCE.INHERITED : RULE_SOURCE.OWN,
+      projectId: Number(scope.projectId),
+      issueTypeId: String(scope.issueTypeId),
+      imposedByBaselineId: inherited ? scope.rootBaselineId : null,
+      imposedByVersion: inherited && scope.rootVersion != null ? Number(scope.rootVersion) : null
+    }
+  };
+}
+
+export async function fieldsForItem(item, deps) {
+  return (await fieldScope(item, deps)).fields;
 }
 
 /** Field ids a set of nodes tracks between them: what a verification read must fetch. */

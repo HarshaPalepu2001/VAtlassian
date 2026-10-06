@@ -94,6 +94,56 @@ export function rewriteAdfMedia(value, map) {
   return out;
 }
 
+/**
+ * original media id -> the media id rich text should show it by now: the
+ * NEWEST restored copy still on the item. `record` is one work item's
+ * identityRecords() entry, oldest first; a copy whose Jira id is not in
+ * `liveJiraIds` (deleted since it was restored) is passed over. Without
+ * `liveJiraIds`, or for a copy whose owner was never recorded, every copy
+ * counts as live and the newest wins. Pure.
+ */
+export function liveCopyMedia(record, liveJiraIds = null) {
+  const forward = new Map();
+  for (const [copy, original] of record?.media ?? new Map()) {
+    const owner = record?.mediaOwner?.get(copy);
+    if (liveJiraIds && owner != null && !liveJiraIds.has(String(owner))) continue;
+    forward.set(original, copy);
+  }
+  return forward;
+}
+
+/**
+ * Media ids that `fields` (as Jira holds them, NOT canonicalised) show but whose
+ * file is no longer on the work item — so the image renders broken — limited to
+ * the files this app knows: restored copies, and the originals they stand for.
+ * A pointer to anything else (an image from another item, a file never
+ * restored) is not judged here; the digest comparison already covers it.
+ *
+ * This is what a digest cannot see. Canonicalisation maps a copy's pointer back
+ * to the original's, so "points at the deleted original" and "points at its
+ * live copy" have the same digest; only one of them shows the image. Pure.
+ */
+export function danglingMediaPointers(fields, record, liveJiraIds) {
+  if (!record?.media?.size || !liveJiraIds) return [];
+  const jiraIdOfMedia = new Map();
+  for (const [copy, original] of record.media) {
+    const owner = record.mediaOwner?.get(copy);
+    if (owner == null) continue;
+    jiraIdOfMedia.set(copy, String(owner));
+    const originalJiraId = record.files?.get(String(owner));
+    if (originalJiraId != null && !jiraIdOfMedia.has(original)) jiraIdOfMedia.set(original, String(originalJiraId));
+  }
+  const dangling = [];
+  for (const [fieldId, value] of Object.entries(fields ?? {})) {
+    if (!isAdfDoc(value)) continue;
+    for (const mediaId of adfMediaIds(value)) {
+      const jiraId = jiraIdOfMedia.get(mediaId);
+      if (jiraId != null && !liveJiraIds.has(jiraId)) dangling.push({ fieldId, mediaId, jiraId });
+    }
+  }
+  return dangling;
+}
+
 async function recordsFor(issueIds, read) {
   if (issueIds.length === 0) return new Map();
   try {

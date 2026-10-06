@@ -38,6 +38,10 @@ const IconAdd = () => <span aria-hidden>+</span>;
 type Props = {
   fields: DiffField[];
   groups?: ReviewGroup[];
+  mode?: 'drift' | 'versions';
+  fromVersion?: number;
+  toVersion?: number;
+  incomplete?: boolean;
   focusDriftId?: string;
   /** A field picked from the timeline: selected and highlighted like a citation. */
   focusFieldId?: string;
@@ -57,7 +61,7 @@ const severity = (field: DiffField) => {
   return rank < 0 ? SEVERITY.length : rank;
 };
 
-export default function DiffView({ fields, groups, focusDriftId, focusFieldId, focusKey, baselineAt, now }: Props) {
+export default function DiffView({ fields, groups, mode = 'drift', fromVersion, toVersion, incomplete = false, focusDriftId, focusFieldId, focusKey, baselineAt, now }: Props) {
   // A parent's review covers its children: one section per work item, each
   // child compared with its own latest baseline. The groups hold the same
   // fields as the flat list, so nothing is shown twice or left out.
@@ -96,7 +100,9 @@ export default function DiffView({ fields, groups, focusDriftId, focusFieldId, f
   }, [selected?.fieldId]);
 
   if (!selected) {
-    return <div className="va-muted">No fields have changed since this work item was approved.</div>;
+    return <div className="va-muted">{mode === 'versions'
+      ? incomplete ? 'No visible differences. This comparison is incomplete.' : 'These signed versions have the same tracked content.'
+      : 'No fields have changed since this work item was approved.'}</div>;
   }
 
   const pick = (field: DiffField) => { setSelectedId(field.fieldId); setFlashId(null); };
@@ -113,7 +119,7 @@ export default function DiffView({ fields, groups, focusDriftId, focusFieldId, f
 
   return (
     <div className="va-review">
-      <div ref={listRef} className="va-review__list" role="listbox" aria-label="Changes" onKeyDown={onKeyDown}>
+      <div ref={listRef} className="va-review__list" role="listbox" aria-label={mode === 'versions' ? 'Changes between signed versions' : 'Changes'} onKeyDown={onKeyDown}>
         {sections.map(section => (
           <div key={section.key} role="group" aria-label={section.title ?? 'Changes'} className="va-diff-group">
             {section.title && (
@@ -126,13 +132,14 @@ export default function DiffView({ fields, groups, focusDriftId, focusFieldId, f
               <ChangeRow key={`${field.issueKey ?? ''}:${field.fieldId}`} field={field}
                 // Inside its work item's section a field is named plainly.
                 name={grouped ? field.label ?? field.fieldName : field.fieldName}
-                selected={field === selected} onSelect={() => pick(field)} now={now} />
+                selected={field === selected} onSelect={() => pick(field)} now={now} historical={mode === 'versions'} />
             ))}
           </div>
         ))}
       </div>
       <section className="va-review__detail" aria-label="Selected change">
-        <FieldDetail key={selected.fieldId} field={selected} flash={flashId === selected.fieldId} baselineAt={baselineAt} now={now} />
+        <FieldDetail key={selected.fieldId} field={selected} flash={flashId === selected.fieldId} baselineAt={baselineAt} now={now}
+          historical={mode === 'versions'} fromVersion={fromVersion} toVersion={toVersion} />
       </section>
     </div>
   );
@@ -148,7 +155,7 @@ function groupTitle(group: ReviewGroup): string {
 function whoLine(field: DiffField, now?: number): { text: string; title?: string } | null {
   const last = lastEdit(field);
   if (!last) return null;
-  const edits = Math.max(field.occurrences ?? 0, (field.attribution ?? []).length);
+  const edits = Math.max(field.occurrences ?? 0, (field.attribution ?? []).filter(step => !step.detected).length);
   return {
     text: `${last.by ?? 'Someone'}${last.at ? ` · ${relativeTime(last.at, now)}` : ''}${edits > 1 ? ` · ${edits} edits` : ''}`,
     title: formatTimestamp(last.at) ?? undefined
@@ -156,8 +163,8 @@ function whoLine(field: DiffField, now?: number): { text: string; title?: string
 }
 
 /** One line in the list: name, the change in a line, and who last touched it. */
-function ChangeRow({ field, name, selected, onSelect, now }: { field: DiffField; name: string; selected: boolean; onSelect: () => void; now?: number }) {
-  const who = whoLine(field, now);
+function ChangeRow({ field, name, selected, onSelect, now, historical }: { field: DiffField; name: string; selected: boolean; onSelect: () => void; now?: number; historical?: boolean }) {
+  const who = historical ? null : whoLine(field, now);
   return (
     <div role="option" aria-selected={selected} tabIndex={selected ? 0 : -1} onClick={onSelect}
       className={`va-review__row va-review__row--${field.materiality ?? 'COSMETIC'}`}>
@@ -169,8 +176,8 @@ function ChangeRow({ field, name, selected, onSelect, now }: { field: DiffField;
 }
 
 /** The selected change in full: its values, then every edit that got it here. */
-function FieldDetail({ field, flash, baselineAt, now }: { field: DiffField; flash: boolean; baselineAt?: number | null; now?: number }) {
-  const who = whoLine(field, now);
+function FieldDetail({ field, flash, baselineAt, now, historical, fromVersion, toVersion }: { field: DiffField; flash: boolean; baselineAt?: number | null; now?: number; historical?: boolean; fromVersion?: number; toVersion?: number }) {
+  const who = historical ? null : whoLine(field, now);
   return (
     <article id={`field-${field.fieldId}`} className={flash ? 'va-review__field va-highlight' : 'va-review__field'}>
       <header className="va-review__field-head">
@@ -180,8 +187,10 @@ function FieldDetail({ field, flash, baselineAt, now }: { field: DiffField; flas
         <MaterialityBadge level={field.materiality} />
       </header>
       {who && <div className="va-review__row-who" title={who.title}>Last changed by {who.text}</div>}
-      <Body field={field} />
-      <Attribution field={field} baselineAt={baselineAt} />
+      {historical && field.scopeChange === 'ADDED' && <p className="va-secondary">First tracked in version {toVersion}. Version {fromVersion} has no signed value for this field.</p>}
+      {historical && field.scopeChange === 'REMOVED' && <p className="va-secondary">Tracked in version {fromVersion}, then left the signed field set in version {toVersion}.</p>}
+      <Body field={field} historical={historical} fromVersion={fromVersion} toVersion={toVersion} />
+      {!historical && <Attribution field={field} baselineAt={baselineAt} />}
     </article>
   );
 }
@@ -189,7 +198,7 @@ function FieldDetail({ field, flash, baselineAt, now }: { field: DiffField; flas
 
 /** The latest edit — the backend's own figure first, the trail's last step otherwise. */
 function lastEdit(field: DiffField): { at: number | null; by: string | null } | null {
-  const trail = field.attribution ?? [];
+  const trail = (field.attribution ?? []).filter(step => !step.detected);
   const tail = trail[trail.length - 1];
   const at = field.lastChangedAt ?? tail?.at ?? null;
   const by = field.lastChangedBy ?? tail?.authorName ?? null;
@@ -199,6 +208,9 @@ function lastEdit(field: DiffField): { at: number | null; by: string | null } | 
 
 /** The collapsed row's single line: the change itself, in the reader's words. */
 export function headline(field: DiffField): string {
+  if (field.scopeChange === 'ADDED') return field.retained === false ? 'Tracking added; value not retained' : 'Tracking added; first signed value shown';
+  if (field.scopeChange === 'REMOVED') return 'Tracking ended after this version';
+  if (field.scopeChange?.startsWith('NODE_')) return field.summary ?? 'Tree structure changed';
   if (field.retained === false) return 'Changed — approved value was not kept';
   if (field.kind === 'multi' || field.kind === 'links' || field.kind === 'attachments') {
     const added = (field.added ?? []).length;
@@ -239,7 +251,7 @@ function blockSummary(blocks?: DiffBlock[]): string | null {
   }).join(', ');
 }
 
-function Body({ field }: {field: DiffField}) {
+function Body({ field, historical, fromVersion, toVersion }: {field: DiffField; historical?: boolean; fromVersion?: number; toVersion?: number}) {
   // THE HONEST DEGRADATION. The digest proves this field changed, but its
   // contents were never stored, so there is no before to show. Saying so is the
   // truthful consequence of per-field retention — rendering an empty diff would
@@ -247,9 +259,9 @@ function Body({ field }: {field: DiffField}) {
   if (field.retained === false) {
     return (
       <div className="va-banner va-banner-warn">
-        This field changed, but VAtlassian does not retain its contents, so the previous
-        value cannot be shown or written back. An administrator can turn retention on
-        for it — that applies from the next approval onward.
+        {historical
+          ? 'One or both signed versions kept only a digest for this field. Its contents cannot be compared here.'
+          : 'This field changed, but VAtlassian does not retain its contents, so the previous value cannot be shown or written back. An administrator can turn retention on for it — that applies from the next approval onward.'}
       </div>
     );
   }
@@ -258,9 +270,9 @@ function Body({ field }: {field: DiffField}) {
     case 'adf': return <AdfDiff blocks={field.blocks} />;
     case 'text': return <InlineDiff ops={field.ops} />;
     case 'multi': return <SetDiff field={field} added={field.added} removed={field.removed} />;
-    case 'links': return <LinkDiff field={field} />;
-    case 'attachments': return <AttachmentDiff field={field} />;
-    default: return <ScalarDiff field={field} />;
+    case 'links': return <LinkDiff field={field} historical={historical} />;
+    case 'attachments': return <AttachmentDiff field={field} historical={historical} />;
+    default: return <ScalarDiff field={field} beforeLabel={historical ? `Version ${fromVersion}` : undefined} afterLabel={historical ? `Version ${toVersion}` : undefined} />;
   }
 }
 
@@ -494,22 +506,22 @@ function InlineDiff({ ops }: {ops?:DiffOp[]}) {
  * an auditor is actually looking at. Showing the name alone would be a nicer
  * screen making a weaker claim.
  */
-function ScalarDiff({ field }: {field: DiffField}) {
+function ScalarDiff({ field, beforeLabel = 'Approved', afterLabel = 'Now' }: {field: DiffField; beforeLabel?: string; afterLabel?: string}) {
   const before = display(field, field.before);
   const after = display(field, field.after);
   return (
     <div className="va-change">
-      <Chip side="was" value={before} />
+      <Chip side="was" value={before} label={beforeLabel} />
       <span className="va-flow" aria-hidden><IconArrowRight /></span>
-      <Chip side="now" value={after} />
+      <Chip side="now" value={after} label={afterLabel} />
     </div>
   );
 }
 
-function Chip({ side, value }: {side:'was'|'now'; value:{text:string;id?:string}}) {
+function Chip({ side, value, label }: {side:'was'|'now'; value:{text:string;id?:string}; label:string}) {
   return (
     <span className={`va-chip va-chip--${side === 'was' ? 'before' : 'after'}`}>
-      <span className="va-chip__side">{side === 'was' ? 'Approved' : 'Now'}</span>
+      <span className="va-chip__side">{label}</span>
       <span className="va-chip__value">{value.text}</span>
       {value.id && <span className="va-chip__id">id {value.id}</span>}
     </span>
@@ -530,7 +542,7 @@ function SetDiff({ field, added = [], removed = [] }: {field:DiffField;added?:Di
   );
 }
 
-function LinkDiff({ field }: {field:DiffField}) {
+function LinkDiff({ field, historical = false }: {field:DiffField; historical?: boolean}) {
   return (
     <>
       <div className="va-pill-change">
@@ -541,28 +553,40 @@ function LinkDiff({ field }: {field:DiffField}) {
           <span key={`a${i}`} className="va-pill va-pill-after"><IconAdd /> {describeLink(l, field)}</span>
         ))}
       </div>
-      <div className="va-subtlest" style={{ marginTop: 8 }}>
+      {!historical && <div className="va-subtlest" style={{ marginTop: 8 }}>
         Rejecting these changes restores the approved links, subject to Jira permissions.
         The restore result verifies the complete set afterward.
-      </div>
+      </div>}
     </>
   );
 }
 
-function AttachmentDiff({ field }: {field:DiffField}) {
+function AttachmentDiff({ field, historical = false }: {field:DiffField; historical?: boolean}) {
+  const file = (item: DiffItem, action: 'Added' | 'Removed', index: number) => {
+    const details = typeof item === 'string' ? null : item;
+    const name = details?.filename || details?.id || (typeof item === 'string' ? item : 'Unnamed file');
+    const size = typeof details?.size === 'number' ? `${details.size < 1024 ? `${details.size} bytes` : `${Math.round(details.size / 1024)} KB`} (${new Intl.NumberFormat().format(details.size)} bytes)` : null;
+    return <div key={`${action}-${details?.id ?? index}`} className={`va-file-change va-file-change--${action.toLowerCase()}`}>
+      <div className="va-file-change__title"><strong>{action}: {name}</strong></div>
+      <div className="va-file-change__facts">
+        {size && <span>{size}</span>}
+        {details?.mimeType && <span>{details.mimeType}</span>}
+        {details?.authorName && <span>Uploaded by {details.authorName}</span>}
+        {details?.created && <span>Uploaded {formatTimestamp(details.created) ?? details.created}</span>}
+        {details?.id && <span>Audit ID {details.id}</span>}
+        {details?.jiraId && <span>Current Jira ID {details.jiraId}</span>}
+      </div>
+    </div>;
+  };
   return (
     <>
-      <div className="va-pill-change">
-        {(field.removed ?? []).map((a, i) => (
-          <span key={`r${i}`} className="va-pill va-pill-before"><IconRemove /> {typeof a === 'string' ? a : a.filename}</span>
-        ))}
-        {(field.added ?? []).map((a, i) => (
-          <span key={`a${i}`} className="va-pill va-pill-after"><IconAdd /> {typeof a === 'string' ? a : a.filename}</span>
-        ))}
+      <div className="va-file-changes">
+        {(field.removed ?? []).map((a, i) => file(a, 'Removed', i))}
+        {(field.added ?? []).map((a, i) => file(a, 'Added', i))}
       </div>
-      {((field.removed ?? []).length > 0 || (field.added ?? []).length > 0) && (
+      {!historical && ((field.removed ?? []).length > 0 || (field.added ?? []).length > 0) && (
         <div className="va-subtlest" style={{ marginTop: 8 }}>
-          Rejecting uploads removed files again from the vault and permanently deletes added ones.
+          Rejection can restore removed files from the vault and delete added files. The rejection review checks vault availability before any action.
         </div>
       )}
     </>
@@ -604,15 +628,14 @@ function Attribution({ field, baselineAt }: {field:DiffField; baselineAt?: numbe
   return (
     <div className="va-trace">
       <div className="va-row" style={{ marginBottom: 2 }}>
-        <span className="va-trace__title">
-          How it got here · changed {trail.length === 1 ? 'once' : `${trail.length} times`} since approval
-        </span>
+        <span className="va-trace__title">How it got here · {trail.length} recorded {trail.length === 1 ? 'event' : 'events'} since approval</span>
         {field.churned && <Badge tone="neutral">ended where it started</Badge>}
       </div>
       <ol className="va-steps">
         {trail.map((t, i) => (
           <li className="va-step" key={`${t.at}-${i}`}>
             <span className="va-step__when">
+              {t.detected && <span>Detected</span>}
               <When ms={t.at} />
               {sinceLabel(baselineAt, t.at) && <span className="va-step__since">{sinceLabel(baselineAt, t.at)}</span>}
             </span>

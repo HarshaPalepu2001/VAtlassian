@@ -375,7 +375,10 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
                 <span className="va-warning-text"><strong>Permanently delete files:</strong> {fileList(evidence.rejection.attachments.deleteFiles)}</span>
               )}
               {!!evidence?.rejection?.attachments?.restoreFiles?.length && (
-                <span><strong>Upload again from the vault:</strong> {fileList(evidence.rejection.attachments.restoreFiles)}</span>
+                <span><strong>Upload again from the vault:</strong> {fileList(evidence.rejection.attachments.restoreFiles)}. Text that shows these files is pointed at the restored copies.</span>
+              )}
+              {!!evidence?.rejection?.attachments?.mediaUnknownFiles?.length && (
+                <span className="va-warning-text"><strong>Restored, but text that shows them may not be:</strong> {fileList(evidence.rejection.attachments.mediaUnknownFiles)}. The vault does not know which media file each is, so an image of them in a description cannot be re-pointed.</span>
               )}
               {!!evidence?.rejection?.attachments?.unrestorableFiles?.length && (
                 <span className="va-warning-text"><strong>Cannot be restored, no copy in the vault:</strong> {fileList(evidence.rejection.attachments.unrestorableFiles)}</span>

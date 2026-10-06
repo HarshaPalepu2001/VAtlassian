@@ -18,6 +18,8 @@ const ACCOUNT = 'trusted-actor';
 const BINDING = { accountId: ACCOUNT, issueId: 10, decision: 'APPROVE', contentHash: 'a'.repeat(64) };
 const APPROVAL_CHALLENGE_ID = 'b'.repeat(32);
 const WEBAUTHN_CHALLENGE_ID = Buffer.alloc(16, 7).toString('base64');
+// The approval challenge the device check was started for (assertStart).
+const APPROVAL = Buffer.from(APPROVAL_CHALLENGE_ID, 'hex');
 
 test('an assertion is accepted only when the signature, the user and the binding all hold', () => {
   const good = {
@@ -79,7 +81,7 @@ function fixture(overrides = {}) {
     challengeRow: {
       challenge_id: WEBAUTHN_CHALLENGE_ID, account_id: ACCOUNT, purpose: 'ASSERT',
       challenge: 'server-challenge', binding_hash: webauthnBindingHash(BINDING),
-      issue_id: 10, rp_id: RP_ID, consumed_at: null, expires_at: 10_000
+      issue_id: 10, rp_id: RP_ID, consumed_at: null, expires_at: 10_000, approval_challenge_id: APPROVAL
     },
     approvalChallenge: {
       challenge_id: Buffer.from(APPROVAL_CHALLENGE_ID, 'hex'), signer_account_id: ACCOUNT,
@@ -116,7 +118,7 @@ const context = { accountId: ACCOUNT, environmentType: 'PRODUCTION' };
 
 test('a verified assertion binds to the open approval and advances the signature counter', async () => {
   const { api, state } = fixture();
-  const result = await api.verifyAssertion({ binding: BINDING, payload: assertPayload, context });
+  const result = await api.verifyAssertion({ approvalChallengeId: APPROVAL, binding: BINDING, payload: assertPayload, context });
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(result.credentialId, 'credential-1');
   assert.equal(result.rpId, RP_ID);
@@ -127,8 +129,8 @@ test('a verified assertion binds to the open approval and advances the signature
 
 test('the same device check cannot be spent twice', async () => {
   const { api } = fixture();
-  assert.equal((await api.verifyAssertion({ binding: BINDING, payload: assertPayload, context })).ok, true);
-  const replay = await api.verifyAssertion({ binding: BINDING, payload: assertPayload, context });
+  assert.equal((await api.verifyAssertion({ approvalChallengeId: APPROVAL, binding: BINDING, payload: assertPayload, context })).ok, true);
+  const replay = await api.verifyAssertion({ approvalChallengeId: APPROVAL, binding: BINDING, payload: assertPayload, context });
   assert.equal(replay.ok, false);
   assert.equal(replay.reason, WEBAUTHN_FAIL.CHALLENGE_SPENT);
 });
@@ -136,16 +138,29 @@ test('the same device check cannot be spent twice', async () => {
 test('a device check refuses an approval it was not collected for', async () => {
   for (const change of [{ issueId: 11 }, { decision: 'REJECT' }, { contentHash: 'f'.repeat(64) }]) {
     const { api, state } = fixture();
-    const result = await api.verifyAssertion({ binding: { ...BINDING, ...change }, payload: assertPayload, context });
+    const result = await api.verifyAssertion({ approvalChallengeId: APPROVAL, binding: { ...BINDING, ...change }, payload: assertPayload, context });
     assert.equal(result.ok, false);
     assert.equal(result.reason, WEBAUTHN_FAIL.BINDING_MISMATCH);
     assert.equal(state.touched, null);
   }
 });
 
+test('a device check completes only the approval challenge it was started for', async () => {
+  // The binding hash names issue, decision and content — not the transition or
+  // the meaning the signer was shown. Two challenges on one item can share all
+  // three, so the check must name its own challenge.
+  for (const approvalChallengeId of [Buffer.alloc(16, 0xc), undefined]) {
+    const { api, state } = fixture();
+    const result = await api.verifyAssertion({ approvalChallengeId, binding: BINDING, payload: assertPayload, context });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, WEBAUTHN_FAIL.BINDING_MISMATCH);
+    assert.equal(state.consumed, false, 'a check offered to the wrong approval is not spent');
+  }
+});
+
 test('a device check refuses an actor other than the signer the approval names', async () => {
   const { api } = fixture();
-  const result = await api.verifyAssertion({ binding: { ...BINDING, accountId: 'someone-else' }, payload: assertPayload, context });
+  const result = await api.verifyAssertion({ approvalChallengeId: APPROVAL, binding: { ...BINDING, accountId: 'someone-else' }, payload: assertPayload, context });
   assert.equal(result.ok, false);
   assert.equal(result.reason, WEBAUTHN_FAIL.BINDING_MISMATCH);
 });
@@ -153,38 +168,38 @@ test('a device check refuses an actor other than the signer the approval names',
 test('an expired, unknown, or wrong-purpose check is refused before any credential is read', async () => {
   const expired = fixture();
   expired.state.challengeRow = { ...expired.state.challengeRow, expires_at: 500 };
-  assert.equal((await expired.api.verifyAssertion({ binding: BINDING, payload: assertPayload, context })).reason, WEBAUTHN_FAIL.CHALLENGE_EXPIRED);
+  assert.equal((await expired.api.verifyAssertion({ approvalChallengeId: APPROVAL, binding: BINDING, payload: assertPayload, context })).reason, WEBAUTHN_FAIL.CHALLENGE_EXPIRED);
 
   const missing = fixture({ webAuthnChallengeById: async () => null });
-  assert.equal((await missing.api.verifyAssertion({ binding: BINDING, payload: assertPayload, context })).reason, WEBAUTHN_FAIL.CHALLENGE_EXPIRED);
+  assert.equal((await missing.api.verifyAssertion({ approvalChallengeId: APPROVAL, binding: BINDING, payload: assertPayload, context })).reason, WEBAUTHN_FAIL.CHALLENGE_EXPIRED);
 
   // An enrolment challenge must never be redeemable as an approval.
   const enrolPurpose = fixture();
   enrolPurpose.state.challengeRow = { ...enrolPurpose.state.challengeRow, purpose: 'ENROL' };
-  assert.equal((await enrolPurpose.api.verifyAssertion({ binding: BINDING, payload: assertPayload, context })).reason, WEBAUTHN_FAIL.BINDING_MISMATCH);
+  assert.equal((await enrolPurpose.api.verifyAssertion({ approvalChallengeId: APPROVAL, binding: BINDING, payload: assertPayload, context })).reason, WEBAUTHN_FAIL.BINDING_MISMATCH);
 });
 
 test('an unrecognised credential, a moved installation, and a bad signature are all refused', async () => {
   const unknown = fixture({ credentialFor: async () => null });
-  assert.equal((await unknown.api.verifyAssertion({ binding: BINDING, payload: assertPayload, context })).reason, WEBAUTHN_FAIL.UNKNOWN_CREDENTIAL);
+  assert.equal((await unknown.api.verifyAssertion({ approvalChallengeId: APPROVAL, binding: BINDING, payload: assertPayload, context })).reason, WEBAUTHN_FAIL.UNKNOWN_CREDENTIAL);
 
   const moved = fixture();
   moved.state.credential = { ...moved.state.credential, rp_id: 'other.atlassian.net' };
-  assert.equal((await moved.api.verifyAssertion({ binding: BINDING, payload: assertPayload, context })).reason, WEBAUTHN_FAIL.RP_CHANGED);
+  assert.equal((await moved.api.verifyAssertion({ approvalChallengeId: APPROVAL, binding: BINDING, payload: assertPayload, context })).reason, WEBAUTHN_FAIL.RP_CHANGED);
 
   const forged = fixture({ verifyAuthenticationResponse: async () => ({ verified: false, authenticationInfo: null }) });
-  const result = await forged.api.verifyAssertion({ binding: BINDING, payload: assertPayload, context });
+  const result = await forged.api.verifyAssertion({ approvalChallengeId: APPROVAL, binding: BINDING, payload: assertPayload, context });
   assert.equal(result.reason, WEBAUTHN_FAIL.BAD_SIGNATURE);
   assert.equal(forged.state.touched, null);
   assert.equal(forged.state.audits.at(-1)?.eventType, 'WEBAUTHN_AUTH_FAILED');
 
   const thrown = fixture({ verifyAuthenticationResponse: async () => { throw new Error('malformed'); } });
-  assert.equal((await thrown.api.verifyAssertion({ binding: BINDING, payload: assertPayload, context })).reason, WEBAUTHN_FAIL.BAD_SIGNATURE);
+  assert.equal((await thrown.api.verifyAssertion({ approvalChallengeId: APPROVAL, binding: BINDING, payload: assertPayload, context })).reason, WEBAUTHN_FAIL.BAD_SIGNATURE);
 });
 
 test('an untrusted address cannot host a device check for any account', async () => {
   const { api, state } = fixture();
-  const result = await api.verifyAssertion({ binding: BINDING, payload: { ...assertPayload, origin: 'https://evil.example' }, context });
+  const result = await api.verifyAssertion({ approvalChallengeId: APPROVAL, binding: BINDING, payload: { ...assertPayload, origin: 'https://evil.example' }, context });
   assert.equal(result.ok, false);
   assert.equal(result.reason, WEBAUTHN_FAIL.ORIGIN_REFUSED);
   assert.equal(state.consumed, false);

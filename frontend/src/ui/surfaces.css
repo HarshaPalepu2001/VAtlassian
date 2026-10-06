@@ -307,7 +307,7 @@
 
 /* ── My approvals ────────────────────────────────────────────────────────── */
 
-.va-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+.va-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin-bottom: 16px; }
 @media (max-width: 720px) { .va-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .va-tile { border: 1px solid var(--va-border); border-radius: var(--va-radius-lg); padding: 10px 14px; display: flex; flex-direction: column; }
 .va-tile__label { font-size: var(--va-size-meta); color: var(--va-text-subtle); }

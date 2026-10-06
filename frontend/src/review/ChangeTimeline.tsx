@@ -1,7 +1,7 @@
 import { formatDate, formatTimestamp } from '../ui/format';
 import type { DiffField } from './types';
 
-type Mark = { at: number; fieldId: string; fieldName: string; author: string; materiality: string };
+type Mark = { at: number; fieldId: string; fieldName: string; author: string; materiality: string; detected: boolean };
 
 /**
  * WHEN, AT A GLANCE.
@@ -18,7 +18,8 @@ type Mark = { at: number; fieldId: string; fieldName: string; author: string; ma
 export default function ChangeTimeline({ fields, baselineAt, now = Date.now(), onPick }: { fields: DiffField[]; baselineAt?: number | null; now?: number; onPick?: (fieldId: string) => void }) {
   const marks: Mark[] = fields.flatMap(field => (field.attribution ?? [])
     .filter(step => Number.isFinite(Number(step.at)) && Number(step.at) > 0)
-    .map(step => ({ at: Number(step.at), fieldId: field.fieldId, fieldName: field.label ?? field.fieldName, author: step.authorName ?? 'Unknown', materiality: field.materiality ?? 'COSMETIC' })));
+    .map(step => ({ at: Number(step.at), fieldId: field.fieldId, fieldName: field.label ?? field.fieldName,
+      author: step.authorName ?? 'Unknown', materiality: field.materiality ?? 'COSMETIC', detected: step.detected === true })));
   if (marks.length === 0) return null;
 
   const start = baselineAt && Number(baselineAt) > 0 ? Number(baselineAt) : Math.min(...marks.map(m => m.at));
@@ -37,7 +38,7 @@ export default function ChangeTimeline({ fields, baselineAt, now = Date.now(), o
         <span className="va-timeline__signed" style={{ left: '0%' }} title={formatTimestamp(start) ?? undefined} />
         {[...moments.entries()].map(([at, group]) => {
           const worst = group.map(m => m.materiality).sort((a, b) => rank(a) - rank(b))[0];
-          const label = `${formatTimestamp(at)} · ${[...new Set(group.map(m => m.author))].join(', ')} · ${group.map(m => m.fieldName).join(', ')}`;
+          const label = `${formatTimestamp(at)} · ${group.every(m => m.detected) ? 'Detected by VAtlassian' : [...new Set(group.filter(m => !m.detected).map(m => m.author))].join(', ')} · ${group.map(m => m.fieldName).join(', ')}`;
           return (
             <button key={at} type="button" className={`va-timeline__dot va-timeline__dot--${worst}`} style={{ left: position(at) }}
               title={label} aria-label={label} onClick={() => onPick?.(group[0].fieldId)}>

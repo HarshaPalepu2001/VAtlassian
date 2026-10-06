@@ -164,16 +164,25 @@ export async function writeChildBaselines({ rows, parentBaselineId, query = stor
  * provenance is complete, then retire each child's older ACTIVE versions.
  * Safe to call again; returns the child baselines now ACTIVE from this parent.
  */
-export async function publishChildBaselines({ parentBaselineId, query = store.throwing, write = executeQuery }) {
+export async function publishChildBaselines({ parentBaselineId, requireEvidence = false, query = store.throwing, write = executeQuery }) {
   const parentId = toBinaryParam(Buffer.from(parentBaselineId));
+  // A capture that requires evidence must publish EVERY child it wrote: a child
+  // left CAPTURING without its evidence would otherwise be skipped silently by
+  // the update below, and the capture would report a child baseline that is not
+  // standing. Counted first, compared after.
+  const capturing = requireEvidence
+    ? Number((await query(`SELECT COUNT(*) AS n FROM va_baseline
+        WHERE captured_by_baseline_id = FROM_BASE64(?) AND state = 'CAPTURING'`, [parentId]))?.[0]?.n)
+    : null;
   const activated = await write(
     `UPDATE va_baseline SET state = 'ACTIVE'
      WHERE captured_by_baseline_id = FROM_BASE64(?) AND state = 'CAPTURING'
        AND required_role IS NOT NULL AND required_assurance IS NOT NULL
-       AND controlled_fields_hash IS NOT NULL`,
+       AND controlled_fields_hash IS NOT NULL${requireEvidence ? ' AND policy_recorded = TRUE' : ''}`,
     [parentId]
   );
   if (!activated?.result) throw new FailClosed('CAPTURE_INCOMPLETE');
+  if (requireEvidence && affectedRows(activated) !== capturing) throw new FailClosed('CAPTURE_INCOMPLETE');
   const published = await query(
     `SELECT TO_BASE64(b.baseline_id) AS baseline_id, b.issue_id, b.project_id, b.issue_type_id, b.version,
             b.content_hash, b.field_digests, b.captured_at, n.issue_key

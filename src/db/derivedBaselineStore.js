@@ -1,7 +1,10 @@
 import * as store from './store.js';
 import { executeQuery, toBinaryParam, isUnknownColumn } from '../lib/db.js';
-import { writeBaseline, currentVersion } from './baselineStore.js';
+import { writeBaseline, currentVersion, activeBaselines } from './baselineStore.js';
 import { beginTreeBaseline, writeTreeCapture, verifyTreeCapture, publishTreeBaseline } from './baselineTreeStore.js';
+import { readVersionEvidence, writeVersionEvidence, copyNodePins } from './evidenceStore.js';
+import { derivedEvidence, linkRows, linkedIssueIds, CAUSE, UNRECORDED_ROLE, parseDigests } from '../lib/evidence/versionEvidence.js';
+import { FailClosed } from '../lib/errors.js';
 
 /**
  * A BASELINE VERSION THAT RE-RECORDS ONE LINK, ON ANOTHER ISSUE'S APPROVAL.
@@ -53,13 +56,38 @@ function rowFor(source, approval, now, version) {
   };
 }
 
+/**
+ * THE EVIDENCE OF A LINK RECORD: the source version's signed definitions and
+ * rules with the derived digests, the deciding approval as a LINK_RECORD
+ * signature, and the links it now records. A source whose policy was never
+ * recorded gives only the signature, and its record publishes without the
+ * evidence gate (`required: false`), exactly as recorded as the source was.
+ */
+async function linkRecordEvidence({ source, digests, links, approval, now }, { readEvidence, activeBaselines: versions }) {
+  const signed = await readEvidence(source.baseline_id);
+  const others = linkedIssueIds(links);
+  const otherVersions = others.length ? await versions(others) : new Map();
+  const evidence = derivedEvidence({ source: signed, digests, signature: {
+    approvalId: approval.approvalId, signerAccountId: approval.accountId, signerName: approval.displayName,
+    role: approval.signerRole ?? UNRECORDED_ROLE, assurance: approval.assuranceLevel, cause: CAUSE.LINK_RECORD,
+    transitionId: source.transition_id ?? null, fromStatusId: source.from_status_id ?? null,
+    toStatusId: source.to_status_id ?? null, transitionAt: now, statusAtCapture: null, signedAt: now,
+    fieldsCovered: ['issuelinks'] } });
+  return { evidence: { fields: evidence.fields, rules: evidence.rules, signatures: evidence.signatures },
+    links: linkRows({ links, otherVersions }), cause: CAUSE.LINK_RECORD, required: evidence.recorded };
+}
+
 /** A single-issue record: values and digests already derived. */
-export async function writeDerivedFlat({ source, values, digests, contentHash, approval, now }) {
+export async function writeDerivedFlat({ source, values, digests, contentHash, approval, now },
+  deps = {}) {
+  const d = { readEvidence: readVersionEvidence, activeBaselines, write: writeBaseline,
+    nextVersion: attempt => withNextVersion(Number(source.issue_id), attempt), ...deps };
+  const evidence = await linkRecordEvidence({ source, digests, links: values?.issuelinks ?? [], approval, now }, d);
   let written;
-  await withNextVersion(Number(source.issue_id), async version => {
+  await d.nextVersion(async version => {
     const baseline = { ...rowFor(source, approval, now, version), content_hash: contentHash,
       field_digests: JSON.stringify(digests), field_count: Object.keys(digests).length };
-    written = { ...(await writeBaseline({ baseline, raw: values })), version };
+    written = { ...(await d.write({ baseline, raw: values, evidence })), version };
   });
   return written;
 }
@@ -69,10 +97,20 @@ export async function writeDerivedFlat({ source, values, digests, contentHash, a
  * Its children were read at the source version's capture, and it says so, so
  * they keep owning their content (../lib/tree/childBaselines.js).
  */
-export async function writeDerivedTree({ source, derived, approval, now, query = store.throwing, write = executeQuery }) {
+export async function writeDerivedTree({ source, derived, approval, now, query = store.throwing, write = executeQuery },
+  deps = {}) {
+  const d = { readEvidence: readVersionEvidence, activeBaselines, writeEvidence: writeVersionEvidence,
+    copyPins: copyNodePins, nextVersion: attempt => withNextVersion(Number(source.issue_id), attempt), ...deps };
+  // The evidence is worked out before any row is reserved: a schema that is
+  // not there yet, or a source that cannot be derived from, refuses here and
+  // leaves nothing half-written behind to wait for the retry.
+  const root = derived.nodes.find(node => node.parentLogicalNodeId == null);
+  if (!root) throw new FailClosed('CAPTURE_INCOMPLETE');
+  const evidence = await linkRecordEvidence({ source, digests: parseDigests(root.fieldDigests),
+    links: derived.values?.[root.logicalNodeId]?.issuelinks ?? [], approval, now }, d);
   const fieldCount = derived.nodes.reduce((n, node) => n + Object.keys(derived.values?.[node.logicalNodeId] ?? {}).length, 0);
   let reserved;
-  await withNextVersion(Number(source.issue_id), async version => {
+  await d.nextVersion(async version => {
     const baseline = { ...rowFor(source, approval, now, version), content_hash: derived.treeHash,
       field_digests: '{}', field_count: fieldCount, tree_hash: derived.treeHash };
     reserved = await beginTreeBaseline({ baseline, query });
@@ -91,7 +129,10 @@ export async function writeDerivedTree({ source, derived, approval, now, query =
     // none to lose.
     if (!isUnknownColumn(error) || derived.nodes.length > 1) throw error;
   }
+  await d.copyPins({ fromBaselineId: source.baseline_id, toBaselineId: reserved.baselineId, query });
+  await d.writeEvidence({ query, entries: [{ baselineId: reserved.baselineId, evidence: evidence.evidence,
+    links: evidence.links, cause: evidence.cause }] });
   await publishTreeBaseline({ baselineId: reserved.baselineId, issueId: Number(source.issue_id),
-    version: Number(reserved.version), query, write });
+    version: Number(reserved.version), requireEvidence: evidence.required, query, write });
   return { baselineId: reserved.baselineId, version: Number(reserved.version) };
 }

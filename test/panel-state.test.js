@@ -21,10 +21,10 @@ import { logicalNodeId } from '../src/lib/tree/model.js';
 const modules = {
   'db/configStore.js': ['controlledFields', 'projectConfig', 'gateActiveOutOf', 'gatedTransition',
     'listGatedTransitions', 'declaredFieldRows', 'seedControlledFields', 'countControlledFields'],
-  'db/baselineStore.js': ['activeBaseline', 'activeBaselines', 'readAllValues', 'baselineHistory'],
+  'db/baselineStore.js': ['activeBaseline', 'activeBaselines', 'readAllValues', 'baselineHistory', 'baselineByVersion'],
   'db/baselineTreeStore.js': ['readBaselineTree', 'activeRootsForNode', 'rootNodeDigests', 'driftedDescendants', 'capturingParent'],
   'db/itemStateStore.js': ['getReview'],
-  'db/driftStore.js': ['driftForIssue'],
+  'db/driftStore.js': ['driftForIssue', 'driftForIssueVersions'],
   'db/approvalStore.js': ['approvalById', 'pendingApprovalForActor', 'latestApproval'],
   'db/incidentStore.js': ['issueControlStatus', 'adminIncidentCount'],
   'db/credentialStore.js': ['credentialState'],
@@ -54,7 +54,7 @@ const hooks = registerHooks({
   }
 });
 const { getState, getGlanceState } = await import('../src/usecases/panel.js');
-const { getEvidence } = await import('../src/usecases/panelEvidence.js');
+const { getEvidence, compareVersions } = await import('../src/usecases/panelEvidence.js');
 const { filterViewableReviewDiff } = await import('../src/usecases/panelAccess.js');
 hooks.deregister();
 
@@ -90,8 +90,10 @@ function fixture(overrides = {}) {
     // No child carries a baseline of its own unless a test says so.
     activeBaselines: async () => new Map(),
     baselineHistory: async () => [],
+    baselineByVersion: async () => null,
     getReview: async () => ({ state: 'BASELINED', version: 1, baseline_version: 1 }),
     driftForIssue: async () => [],
+    driftForIssueVersions: async () => ({ rows: [], truncated: false }),
     approvalById: async () => null,
     pendingApprovalForActor: async () => f.pendingRow,
     latestApproval: async () => null,
@@ -416,7 +418,7 @@ test('evidence returns the retained-value record, live diff fields, and tree rej
   assert.ok(Array.isArray(evidence.drift.fields));
   assert.ok(evidence.drift.fields.some(field => field.fieldId === 'summary'));
   assert.deepEqual(evidence.rejection, { deleteIssueKeys: [], recreateCount: 0,
-    attachments: { deleteFiles: [], restoreFiles: [], unrestorableFiles: [], vaultChecked: true } });
+    attachments: { deleteFiles: [], restoreFiles: [], unrestorableFiles: [], mediaUnknownFiles: [], vaultChecked: true } });
   assert.deepEqual(evidence.restoreHistory, []);
 });
 
@@ -584,12 +586,16 @@ test('evidence and panel state hide a hidden descendant\'s changed-field content
     'the hidden descendant\'s key and retained content must never reach evidence');
   assert.ok(evidence.drift.fields.some(field => String(field.fieldId).startsWith(visibleId)),
     'a visible descendant\'s changed field must still reach evidence.drift.fields');
+  assert.equal(evidence.drift.count, evidence.drift.fields.length,
+    'the visible count must not include hidden descendant changes');
 
   const state = await getState(args);
   assert.ok(!state.drift.fields.some(field => String(field.fieldId).startsWith(hiddenId)),
     'a hidden descendant\'s changed field must not reach panel:getState either');
   assert.ok(!JSON.stringify(state).includes('secret'),
     'the hidden descendant\'s key and retained content must never reach panel state');
+  assert.equal(state.drift.count, state.drift.fields.length,
+    'panel state must count only changes visible to this reviewer');
 });
 
 // ── Child baselines (2026-09-24): the parent's review, grouped by issue ───────
@@ -657,6 +663,20 @@ test('a parent\'s review shows a drifted child against the child\'s OWN latest b
   assert.deepEqual(state.drift.groups.map(g => g.issueKey), ['NEW-10']);
 });
 
+test('a changed descendant carries its stored actor and edit time into the Changes evidence', async () => {
+  const { f } = familyFixture({ liveChild: 'live edit' });
+  f.driftForIssueVersions = async pairs => {
+    assert.deepEqual(pairs, [{ issueId: 100, version: 6 }]);
+    return { rows: [{ issue_id: 100, baseline_version: 6, field_id: 'summary',
+      actor_name: 'Sam', actor_account_id: 'sam', occurred_at: NOW - 100, source: 'USER', detected_via: 'EVENT', key: 'd1' }], truncated: false };
+  };
+  const result = await getEvidence(args);
+  const child = result.drift.fields.find(field => field.issueKey === 'NEW-10');
+  assert.equal(child.lastChangedBy, 'Sam');
+  assert.equal(child.lastChangedAt, NOW - 100);
+  assert.equal(child.attribution[0].detected, false);
+});
+
 test('a child matching its own newer baseline is not a change in the parent\'s review', async () => {
   familyFixture({ liveChild: 'child own v6' });
   const evidence = await getEvidence(args);
@@ -676,4 +696,113 @@ test('a child baselined only before its parent\'s capture is compared with the p
   familyFixture({ liveChild: 'captured by parent', childOwn: { version: 2, summary: 'older own', after: false } });
   const evidence = await getEvidence(args);
   assert.equal(evidence.drift.count, 0, 'matches what the parent captured; the older own baseline does not win');
+});
+
+test('tree baseline record reads signed root values and does not present fields added later as approved', async () => {
+  const { f, rootId } = familyFixture({ liveChild: 'captured by parent' });
+  f.fields.push({ field_id: 'customfield_5', field_name: 'Added later', field_kind: 'TEXT', store_values: true });
+  f.controlledFields = async () => f.fields;
+  const readTree = f.readBaselineTree;
+  f.readBaselineTree = async (...params) => {
+    const tree = await readTree(...params);
+    for (const node of tree.nodes) {
+      const historical = JSON.parse(node.fieldDigests);
+      delete historical.customfield_5;
+      node.fieldDigests = JSON.stringify(historical);
+    }
+    return tree;
+  };
+  const read = f.request;
+  f.request = async (...request) => {
+    const response = await read(...request);
+    if (!response.ok) return response;
+    return { ...response, json: async () => {
+      const body = await response.json();
+      if (body?.fields?.summary != null) body.fields.customfield_5 = null;
+      if (Array.isArray(body?.issues)) for (const item of body.issues) item.fields.customfield_5 = null;
+      return body;
+    } };
+  };
+  const result = await getEvidence(args);
+  assert.equal(result.error, undefined, JSON.stringify(result));
+  assert.deepEqual(result.record.fields.map(field => field.fieldId), ['summary']);
+  assert.equal(result.record.fields[0].preview.text, 'approved text');
+  assert.ok(rootId);
+});
+
+test('version comparison reads two saved versions, while refusing unpublished versions and an unreadable root', async () => {
+  const { f, rootId } = familyFixture({ liveChild: 'captured by parent' });
+  const first = { ...await f.activeBaseline(), version: 1, baseline_id: Buffer.alloc(16, 4) };
+  const latest = await f.activeBaseline();
+  f.baselineByVersion = async (_issueId, version) => Number(version) === 1 ? first : Number(version) === 3 ? latest : null;
+  f.readBaselineTree = async id => ({
+    nodes: [{ logicalNodeId: rootId, issueKey: 'T-10', originalIssueId: 10, currentIssueId: 10,
+      parentLogicalNodeId: null, fieldDigests: JSON.stringify(project({ summary: Buffer.from(id).equals(first.baseline_id) ? 'first' : 'latest' }, f.fields.slice(0, 1)).digests) }],
+    values: { [rootId]: { summary: Buffer.from(id).equals(first.baseline_id) ? 'first' : 'latest' } }
+  });
+  const result = await compareVersions({ payload: { issueKey: 'T-10', fromVersion: 1, toVersion: 3 }, context: { accountId: 'reviewer-1' } });
+  assert.equal(result.error, undefined, JSON.stringify(result));
+  assert.equal(result.fields.length, 1);
+  assert.equal(result.fields[0].before, 'first');
+  assert.equal(result.fields[0].after, 'latest');
+  const unpublished = await compareVersions({ payload: { issueKey: 'T-10', fromVersion: 2, toVersion: 3 }, context: { accountId: 'reviewer-1' } });
+  assert.ok(unpublished.error);
+  const oldRequest = f.request;
+  f.request = async (...request) => String(request[1]).includes('/issue/T-10?fields=')
+    ? { ok: false, status: 403 } : oldRequest(...request);
+  const denied = await compareVersions({ payload: { issueKey: 'T-10', fromVersion: 1, toVersion: 3 }, context: { accountId: 'reviewer-1' } });
+  assert.equal(denied.reason, 'ISSUE_ACCESS_DENIED');
+});
+
+test('version comparison hides historical descendants the viewer cannot browse', async () => {
+  const { f, rootId, childId } = familyFixture({ liveChild: 'captured by parent' });
+  const latest = await f.activeBaseline();
+  const first = { ...latest, version: 1, baseline_id: Buffer.alloc(16, 4) };
+  f.baselineByVersion = async (_issueId, version) => Number(version) === 1 ? first : latest;
+  f.readBaselineTree = async id => {
+    const secret = Buffer.from(id).equals(first.baseline_id) ? 'before secret' : 'after secret';
+    const digests = value => JSON.stringify(project({ summary: value }, f.fields).digests);
+    return { nodes: [
+      { logicalNodeId: rootId, issueKey: 'T-10', originalIssueId: 10, currentIssueId: 10,
+        parentLogicalNodeId: null, projectId: 1, issueTypeId: '1', fieldDigests: digests('root') },
+      { logicalNodeId: childId, issueKey: 'SECRET-11', originalIssueId: 100, currentIssueId: 100,
+        parentLogicalNodeId: rootId, projectId: 1, issueTypeId: '1', fieldDigests: digests(secret) }
+    ], values: { [rootId]: { summary: 'root' }, [childId]: { summary: secret } } };
+  };
+  const read = f.request;
+  f.request = async (...request) => String(request[1]).includes('/permissions/check')
+    ? { ok: true, json: async () => ({ projectPermissions: [{ permission: 'BROWSE_PROJECTS', issues: [10] }] }) }
+    : read(...request);
+  const result = await compareVersions({ payload: { issueKey: 'T-10', fromVersion: 1, toVersion: 3 }, context: { accountId: 'reviewer-1' } });
+  assert.equal(result.error, undefined, JSON.stringify(result));
+  assert.equal(result.fields.length, 0);
+  assert.equal(result.incomplete, true, 'unreadable historical nodes must not look like an exact match');
+  assert.doesNotMatch(JSON.stringify(result), /SECRET-11|before secret|after secret/);
+});
+
+test('a deleted historical child makes the comparison incomplete without disclosing its saved content', async () => {
+  const { f, rootId, childId } = familyFixture({ liveChild: 'captured by parent' });
+  const latest = await f.activeBaseline();
+  const first = { ...latest, version: 1, baseline_id: Buffer.alloc(16, 4) };
+  f.baselineByVersion = async (_issueId, version) => Number(version) === 1 ? first : latest;
+  f.readBaselineTree = async id => {
+    const nodes = [{ logicalNodeId: rootId, issueKey: 'T-10', originalIssueId: 10, currentIssueId: 10,
+      parentLogicalNodeId: null, projectId: 1, issueTypeId: '1', fieldDigests: JSON.stringify(project({ summary: 'root' }, f.fields).digests) }];
+    const values = { [rootId]: { summary: 'root' } };
+    if (Buffer.from(id).equals(first.baseline_id)) {
+      nodes.push({ logicalNodeId: childId, issueKey: 'DELETED-11', originalIssueId: 100, currentIssueId: 100,
+        parentLogicalNodeId: rootId, projectId: 1, issueTypeId: '1', fieldDigests: JSON.stringify(project({ summary: 'old secret' }, f.fields).digests) });
+      values[childId] = { summary: 'old secret' };
+    }
+    return { nodes, values };
+  };
+  const read = f.request;
+  f.request = async (...request) => String(request[1]).includes('/permissions/check')
+    ? { ok: true, json: async () => ({ projectPermissions: [{ permission: 'BROWSE_PROJECTS', issues: [10] }] }) }
+    : read(...request);
+  const result = await compareVersions({ payload: { issueKey: 'T-10', fromVersion: 1, toVersion: 3 }, context: { accountId: 'reviewer-1' } });
+  assert.equal(result.error, undefined, JSON.stringify(result));
+  assert.equal(result.incomplete, true);
+  assert.equal(result.fields.length, 0);
+  assert.doesNotMatch(JSON.stringify(result), /DELETED-11|old secret/);
 });

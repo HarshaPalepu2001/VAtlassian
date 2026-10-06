@@ -4,9 +4,10 @@ import { planTreeCapture } from '../src/lib/tree/capturePlan.js';
 import { nodeScope } from '../src/lib/tree/nodeFields.js';
 import { planChildBaselines, writeChildBaselines, publishChildBaselines, nextVersions } from '../src/db/childBaselineStore.js';
 import { writeCapturedTreeBaseline } from '../src/lib/capture.js';
+import { nodeSecurityLevels } from '../src/lib/evidence/treeEvidence.js';
 import { project } from '../src/lib/content.js';
 
-const F = id => ({ field_id: id, field_kind: 'TEXT', store_values: true });
+const F = id => ({ field_id: id, field_kind: 'TEXT', store_values: true, materiality: 'MAJOR' });
 const nodes = [
   { id: '1', key: 'P-1', fields: { summary: 'parent', project: { id: '1' }, issuetype: { id: 'S' }, parent: null } },
   { id: '2', key: 'P-2', fields: { summary: 'sub a', project: { id: '1' }, issuetype: { id: 'T' }, parent: { id: '1' } } },
@@ -123,20 +124,24 @@ function captureFixture() {
   const calls = [];
   const rootFields = [F('summary'), F('description')];
   const tree = [
-    { id: '1', key: 'P-1', fields: { summary: 'parent', description: 'd', project: { id: '1' }, issuetype: { id: 'S' }, status: { id: '3' }, parent: null } },
-    { id: '2', key: 'P-2', fields: { summary: 'sub', description: 'not tracked here', project: { id: '1' }, issuetype: { id: 'T' }, status: { id: '1' }, parent: { id: '1' } } }
+    // `security: null` is Jira saying the node has no level (see nodeSecurityLevels).
+    { id: '1', key: 'P-1', fields: { summary: 'parent', description: 'd', project: { id: '1' }, issuetype: { id: 'S' }, status: { id: '3' }, parent: null, security: null } },
+    { id: '2', key: 'P-2', fields: { summary: 'sub', description: 'not tracked here', project: { id: '1' }, issuetype: { id: 'T' }, status: { id: '1' }, parent: { id: '1' }, security: null } }
   ];
   const treeHash = planTreeCapture({ rootIssueId: '1', nodes: tree, controlledFields: rootFields }).treeHash;
   const itemStates = [];
   const ledger = [];
+  const evidenceEntries = [];
   return {
-    calls, itemStates, ledger,
+    calls, itemStates, ledger, evidenceEntries,
     args: {
       rootIssue: { id: '1', key: 'P-1', fields: tree[0].fields },
       policy: parent.policy,
       approval: { approvalId: parent.approvalId, accountId: 'signer', displayName: 'Signer', assuranceLevel: 'ESIGNATURE', content_hash: treeHash },
       controlledFields: rootFields,
       transitionAt: 10,
+      ruleScope: { source: 'OWN', projectId: 1, issueTypeId: 'S', imposedByBaselineId: null, imposedByVersion: null },
+      cause: 'DRIFT_DECISION',
       deps: {
         readStableTree: async () => ({ tree: { nodes: structuredClone(tree) } }),
         readTree: null,
@@ -149,8 +154,12 @@ function captureFixture() {
         nextVersions: async ids => { calls.push(['next-versions', ids.map(Number).sort()]); return id => (Number(id) === 2 ? 5 : 1); },
         writeChildBaselines: async ({ rows }) => { calls.push(['write-children', rows.map(r => [r.issue_id, r.version])]);
           return rows.map(r => ({ ...r, baseline_id: Buffer.alloc(16, 4) })); },
-        publishTreeBaseline: async () => { calls.push('publish-tree'); },
-        publishChildBaselines: async () => { calls.push('publish-children'); return { children: [] }; },
+        writeVersionEvidence: async ({ entries }) => { calls.push(['evidence', entries.map(e => [e.cause, e.evidence.rules[0].source])]); evidenceEntries.push(...entries); },
+        pinChildVersions: async ({ pins }) => { calls.push(['pins', pins.map(p => [p.issueId, p.version])]); },
+        recordNodeSecurity: async ({ levels }) => { calls.push(['security', levels.length]); },
+        activeBaselines: async () => new Map(),
+        publishTreeBaseline: async ({ requireEvidence }) => { calls.push(['publish-tree', requireEvidence]); },
+        publishChildBaselines: async ({ requireEvidence }) => { calls.push(['publish-children', requireEvidence]); return { children: [] }; },
         upsertBaselined: async state => { calls.push(['item-state', state.issueId]); itemStates.push(state); },
         tryAppend: async event => { ledger.push(event); }
       }
@@ -163,7 +172,8 @@ test('a parent capture writes each child\'s baseline before it publishes and pub
   const result = await writeCapturedTreeBaseline(f.args);
   assert.equal(result.captured, true);
   assert.deepEqual(f.calls, ['begin', 'write-tree', 'verify-tree', ['next-versions', [1, 2]], ['write-children', [[2, 5]]],
-    'publish-tree', 'publish-children', ['item-state', 1], ['item-state', 2]]);
+    ['evidence', [['DRIFT_DECISION', 'OWN'], ['PARENT_CAPTURE', 'INHERITED']]], ['pins', [[2, 5]]], ['security', 0],
+    ['publish-tree', true], ['publish-children', true], ['item-state', 1], ['item-state', 2]]);
   // The child's key and project let the vault copy its files too; `attachments`
   // is null because the child tracks no attachment field.
   assert.deepEqual(result.children, [{ issueId: 2, version: 5, baselineId: Buffer.alloc(16, 4),
@@ -193,7 +203,7 @@ test('a parent with no children writes no child baselines and reads no versions'
   assert.equal(result.captured, true);
   assert.deepEqual(result.children, []);
   assert.ok(!f.calls.some(c => Array.isArray(c) && ['next-versions', 'write-children'].includes(c[0])));
-  assert.ok(!f.calls.includes('publish-children'));
+  assert.ok(!f.calls.some(c => Array.isArray(c) && c[0] === 'publish-children'));
 });
 
 test('a retry of a published parent repairs its children\'s publication', async () => {
@@ -210,4 +220,128 @@ test('a retry of a published parent repairs its children\'s publication', async 
   const child = f.itemStates.find(s => s.issueId === 2);
   assert.equal(child.baselineVersion, 5);
   assert.equal(child.summary, 'kept');
+});
+
+test('each child\'s version records the parent\'s rule as inherited from this capture, and the parent\'s signature', async () => {
+  const f = captureFixture();
+  await writeCapturedTreeBaseline(f.args);
+  const [root, child] = f.evidenceEntries;
+  assert.ok(root.baselineId.equals(parent.baselineId));
+  assert.equal(root.evidence.rules[0].source, 'OWN');
+  assert.equal(root.evidence.signatures[0].status_at_capture, '3');
+  assert.ok(child.baselineId.equals(Buffer.alloc(16, 4)));
+  const [rule] = child.evidence.rules;
+  assert.equal(rule.source, 'INHERITED');
+  assert.ok(rule.imposed_by_baseline_id.equals(parent.baselineId));
+  assert.equal(rule.imposed_by_version, 3);
+  assert.deepEqual(child.evidence.fields.map(field => field.field_id).sort(), ['description', 'summary']);
+  const [signature] = child.evidence.signatures;
+  assert.equal(signature.cause, 'PARENT_CAPTURE');
+  assert.ok(signature.cause_baseline_id.equals(parent.baselineId));
+  assert.equal(signature.status_at_capture, '1', 'the child\'s own status when it was captured');
+});
+
+test('a node\'s security level is recorded with the parent capture', async () => {
+  const f = captureFixture();
+  const tree = await f.args.deps.readStableTree();
+  tree.tree.nodes[1].fields.security = { id: '10000' };
+  f.args.deps.readStableTree = async () => tree;
+  const levels = [];
+  f.args.deps.recordNodeSecurity = async ({ levels: given }) => { levels.push(...given); };
+  await writeCapturedTreeBaseline(f.args);
+  assert.deepEqual(levels, [{ issueId: 2, securityLevelId: '10000' }]);
+});
+
+test('a node Jira returned without its security level is recorded with the level UNKNOWN', async () => {
+  const f = captureFixture();
+  const tree = await f.args.deps.readStableTree();
+  delete tree.tree.nodes[1].fields.security;
+  f.args.deps.readStableTree = async () => tree;
+  const levels = [];
+  f.args.deps.recordNodeSecurity = async ({ levels: given }) => { levels.push(...given); };
+  await writeCapturedTreeBaseline(f.args);
+  assert.deepEqual(levels, [{ issueId: 2, securityLevelId: 'UNKNOWN' }]);
+});
+
+test('security levels: absent is UNKNOWN, null is no level, otherwise the level\'s id', () => {
+  assert.deepEqual(nodeSecurityLevels([
+    { id: '1', fields: { security: { id: 10000 } } },
+    { id: '2', fields: { security: null } },
+    { id: '3', fields: { summary: 'no security key' } },
+    { id: '4' }
+  ]), [{ issueId: 1, securityLevelId: '10000' }, { issueId: 3, securityLevelId: 'UNKNOWN' },
+    { issueId: 4, securityLevelId: 'UNKNOWN' }]);
+  assert.deepEqual(nodeSecurityLevels([]), []);
+});
+
+test('a parent capture without its rule scope is refused before anything is written', async () => {
+  const f = captureFixture();
+  f.args.ruleScope = null;
+  assert.equal((await writeCapturedTreeBaseline(f.args)).reason, 'BASELINE_POLICY_INCOMPLETE');
+  assert.deepEqual(f.calls, []);
+});
+
+test('child publication can require each child\'s evidence', async () => {
+  const writes = [];
+  await publishChildBaselines({ parentBaselineId: parent.baselineId, requireEvidence: true,
+    write: async (sql, params) => { writes.push(sql); return { result: true, data: { affectedRows: 0 } }; },
+    query: async sql => (/COUNT\(\*\)/.test(sql) ? [{ n: 0 }] : []) });
+  assert.match(writes[0], /controlled_fields_hash IS NOT NULL AND policy_recorded = TRUE/);
+});
+
+test('child publication that requires evidence refuses unless every capturing child of this parent published', async () => {
+  const run = (capturing, activated) => {
+    const log = [];
+    const published = publishChildBaselines({ parentBaselineId: parent.baselineId, requireEvidence: true,
+      write: async sql => { log.push(['activate', sql]); return { result: true, data: { affectedRows: activated } }; },
+      query: async (sql, params) => {
+        log.push(['query', sql.replace(/\s+/g, ' ').trim(), params]);
+        return /COUNT\(\*\)/.test(sql) ? [{ n: capturing }] : [];
+      } });
+    return { log, published };
+  };
+  const short = run(2, 1);
+  await assert.rejects(() => short.published, error => error.reason === 'CAPTURE_INCOMPLETE');
+  assert.equal(short.log[0][0], 'query', 'the capturing children are counted before any is activated');
+  assert.equal(short.log[0][1], 'SELECT COUNT(*) AS n FROM va_baseline '
+    + 'WHERE captured_by_baseline_id = FROM_BASE64(?) AND state = \'CAPTURING\'');
+  assert.deepEqual(short.log[0][2], [parent.baselineId.toString('base64')]);
+  assert.equal(short.log[1][0], 'activate');
+  assert.equal(short.log.length, 2, 'a short publication retires no older version');
+  const unread = run(undefined, 0);
+  await assert.rejects(() => unread.published, error => error.reason === 'CAPTURE_INCOMPLETE', 'an unreadable count refuses');
+  const whole = run(2, 2);
+  assert.equal((await whole.published).published, 2);
+});
+
+test('child publication without the evidence requirement counts nothing (a retry of a published parent)', async () => {
+  const queries = [];
+  await publishChildBaselines({ parentBaselineId: parent.baselineId,
+    write: async () => ({ result: true, data: { affectedRows: 0 } }),
+    query: async sql => { queries.push(sql); return []; } });
+  assert.ok(!queries.some(sql => /COUNT\(\*\)/.test(sql)));
+});
+
+test('a tracked link field records each version\'s links with the version of the issue it points at', async () => {
+  const f = captureFixture();
+  const links = { field_id: 'issuelinks', field_kind: 'LINKS', store_values: true, materiality: 'MAJOR' };
+  const fields = [...f.args.controlledFields, links];
+  const tree = await f.args.deps.readStableTree();
+  tree.tree.nodes[0].fields.issuelinks = [{ id: '700', type: { id: '10', name: 'Blocks' },
+    outwardIssue: { id: '9', key: 'P-9' } }];
+  tree.tree.nodes[1].fields.issuelinks = [];
+  f.args.controlledFields = fields;
+  f.args.approval.content_hash = planTreeCapture({ rootIssueId: '1', nodes: tree.tree.nodes, controlledFields: fields }).treeHash;
+  f.args.deps.readStableTree = async () => tree;
+  f.args.deps.beginTreeBaseline = async () => ({ baselineId: parent.baselineId, version: 3 });
+  f.args.deps.verifyTreeCapture = async () => {};
+  const asked = [];
+  f.args.deps.activeBaselines = async ids => { asked.push(ids); return new Map([[9, { baseline_id: Buffer.alloc(16, 6), version: 4 }]]); };
+  await writeCapturedTreeBaseline(f.args);
+  assert.deepEqual(asked, [[9]], 'one lookup for every linked issue in the tree');
+  const [root, child] = f.evidenceEntries;
+  assert.equal(root.links.length, 1);
+  assert.equal(root.links[0].other_issue_key, 'P-9');
+  assert.equal(root.links[0].other_baseline_version, 4);
+  assert.deepEqual(child.links, [], 'a tracked link field with no links records none');
 });

@@ -103,10 +103,6 @@ export async function projectConfig(projectId) {
 
 export const DEFAULT_PROJECT_CONFIG = {
   enabled: true,
-  /** Status ids that count as "in review". Transitions OUT of these are gated. */
-  reviewStatusIds: [],
-  /** Materiality at or above which drift enters a reviewer's queue. */
-  queueThreshold: 'MINOR',
   ai: {
     enabled: true,
     models: {
@@ -125,8 +121,34 @@ export const DEFAULT_PROJECT_CONFIG = {
   },
   policy: {
     mode: 'DETECT'
+  },
+  vault: {
+    /** Remove every person's Delete attachments grant from the project's
+     *  permission scheme (lib/vaultProvision.js lockAttachmentDeletion). OFF by
+     *  default: the scheme is often shared, the removal is not undone by
+     *  turning this off, and a removed file is put back from the vault on
+     *  rejection anyway. Project scope only; saveConfig refuses it for the site. */
+    lockAttachmentDeletion: false
   }
 };
+
+/**
+ * Project ids whose administrator turned the attachment-delete lockdown on.
+ * One row per configured project, read whole and parsed here: the flag lives
+ * inside the JSON value, and the set of configured projects is small.
+ */
+export async function projectsWantingLockdown() {
+  const rows = await throwing(`SELECT cfg_key, cfg_value FROM va_config WHERE cfg_key LIKE 'project:%'`, []);
+  const ids = [];
+  for (const row of rows) {
+    try {
+      if (JSON.parse(row.cfg_value)?.vault?.lockAttachmentDeletion === true) ids.push(Number(row.cfg_key.slice('project:'.length)));
+    } catch {
+      console.error('config: unparseable value for', row.cfg_key);
+    }
+  }
+  return ids.filter(Number.isSafeInteger);
+}
 
 
 function deepMerge(base, over) {
@@ -262,16 +284,6 @@ export async function gateActiveOutOf({ projectId, issueTypeId, fromStatusId }) 
 export async function requireAuthFor(scope) {
   const { gated } = await gateActiveOutOf(scope);
   return gated;
-}
-
-/** Every review status configured for a project, for supersedeOnReviewEntry. */
-export async function reviewStatusIds(projectId) {
-  const rows = await throwing(
-    `SELECT DISTINCT from_status_id FROM va_controlled_transition
-     WHERE project_id = ? AND state = ? AND from_status_id <> '*'`,
-    [projectId, ACTIVE]
-  );
-  return rows.map((r) => String(r.from_status_id));
 }
 
 // A recall's destination used to be looked up here — "whichever gate a project

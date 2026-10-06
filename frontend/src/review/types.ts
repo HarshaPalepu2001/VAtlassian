@@ -9,9 +9,10 @@ export type StructureChange = { kind?: string; text: string };
 export type DiffBlock = { op: string; before?: DiffBlockSide; after?: DiffBlockSide; ops?: DiffOp[]; cells?: DiffCell[]; markChange?: MarkChange | null; structureChange?: StructureChange[] };
 /** One edit in a field's history. `fromString`/`toString` are Jira's own rendering of that edit. */
 export type Attribution = {at: number; authorName?: string | null; authorId?: string | null; source?: string; detected?: boolean; fromString?: string | null; toString?: string | null};
-export type DiffItem =string | { id?: string; filename?: string; type?: string; inward?: string; outward?: string };
+export type DiffItem =string | { id?: string; jiraId?: string; filename?: string; size?: number | null; mimeType?: string; created?: string; authorName?: string; type?: string; inward?: string; outward?: string };
 export type DiffField = {
  fieldId: string; fieldName: string; summary?: string; driftIds?: string[]; semanticChange?: boolean; materiality?: string;
+ rawFieldId?: string;
  attributionStatus?: 'AVAILABLE' | 'UNAVAILABLE' | 'NOT_COLLECTED';
  retained?: boolean; restorable?: string; kind: string; blocks?: DiffBlock[]; ops?: DiffOp[]; added?: DiffItem[]; removed?: DiffItem[]; replaced?: DiffItem[];
  before?: unknown; after?: unknown; churned?: boolean; attribution?: Attribution[];
@@ -23,6 +24,8 @@ export type DiffField = {
  label?: string;
  /** The work item this change belongs to, in a tree review. */
  issueKey?: string;
+ /** Historical comparison: the field entered or left tracking between signatures. */
+ scopeChange?: 'ADDED' | 'REMOVED' | 'NODE_ADDED' | 'NODE_REMOVED' | 'NODE_MOVED' | null;
 };
 /** One section of a parent's review: the parent, the structure, or one drifted child
  *  (compared with that child's own latest baseline, `baselineVersion`). */

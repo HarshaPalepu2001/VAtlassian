@@ -17,23 +17,26 @@ type RestoreConfig = { actAs?: string; notifyUsers?: boolean; perFieldRetries?: 
 type ConfigData = Result & {
   config: {
     enabled?: boolean;
-    queueThreshold?: string;
-    reviewStatusIds?: string[];
     ai?: { enabled: boolean; maxCompletionTokens?: number; models?: Record<string, string> };
     restore?: RestoreConfig;
     policy?: { mode?: string };
+    vault?: { lockAttachmentDeletion?: boolean };
   };
   revision: string | null;
 };
-type Status = { id: string; name: string; category?: string };
-
-const THRESHOLDS = ['COSMETIC', 'MINOR', 'MAJOR', 'CRITICAL'];
-const THRESHOLD_HINT: Record<string, string> = {
-  COSMETIC: 'Every detected change reaches a reviewer, including formatting-only edits.',
-  MINOR: 'Formatting-only changes stay out of the queue.',
-  MAJOR: 'Only substantive and critical changes reach the queue.',
-  CRITICAL: 'Only critical changes reach the queue. Major changes are recorded but not queued.'
+/** src/usecases/vaultStatus.js getVaultStatus */
+type VaultStatus = Result & {
+  vault: { storage: string | null; storageReason?: string | null; storageChosen?: boolean; siteSpaceKey: string | null; projectPageId: string | null };
+  lockdown: { enabled: boolean; lockedAt: number | null; lockedSchemeId: string | null };
+  appDelete: { grantedAt: number | null; refusedAt: number | null };
+  scheme: { id: number | string | null; name: string | null } | null;
+  schemeError: string | null;
+  sharedWith: string[] | null;
 };
+/** src/usecases/vaultStatus.js getVaultTier */
+type VaultTier = Result & { storage: string | null; storageChosen: boolean; siteSpaceKey: string | null };
+const when = (ms: number) => new Date(ms).toLocaleString();
+const STORAGE_LABEL: Record<string, string> = { AUTO: 'Automatic', CONFLUENCE: 'Confluence', OBJECT_STORE: 'Forge Object Store' };
 
 export default function SettingsPage({ projects }: { projects: Project[] }) {
   const [projectId, setProject] = useState('');
@@ -44,30 +47,34 @@ export default function SettingsPage({ projects }: { projects: Project[] }) {
 
   // Form state, one entry per saved setting.
   const [enabled, setEnabled] = useState(true);
-  const [threshold, setThreshold] = useState('MINOR');
-  const [statusIds, setStatusIds] = useState<string[]>([]);
   const [aiEnabled, setAiEnabled] = useState(true);
   const [tokens, setTokens] = useState('4096');
   const [actAs, setActAs] = useState('app');
   const [notifyUsers, setNotify] = useState(false);
   const [retries, setRetries] = useState('2');
+  const [lockDeletion, setLockDeletion] = useState(false);
 
-  const [statuses, setStatuses] = useState<Status[]>([]);
-  const [statusError, setStatusError] = useState('');
-  const [loadingStatuses, setLoadingStatuses] = useState(false);
+  const [vaultStatus, setVaultStatus] = useState<VaultStatus | null>(null);
+  const [vaultError, setVaultError] = useState('');
+  const [checkingShare, setCheckingShare] = useState(false);
+  const vaultSequence = useRef(0);
+
+  const [tier, setTier] = useState<VaultTier | null>(null);
+  const [tierChoice, setTierChoice] = useState('AUTO');
+  const [tierError, setTierError] = useState('');
+  const [tierBusy, setTierBusy] = useState(false);
+
   const sequence = useRef(0);
-  const statusSequence = useRef(0);
 
   function syncForm(data: ConfigData) {
     const c = data.config;
     setEnabled(c.enabled !== false);
-    setThreshold(THRESHOLDS.includes(c.queueThreshold ?? '') ? c.queueThreshold! : 'MINOR');
-    setStatusIds((c.reviewStatusIds ?? []).map(String));
     setAiEnabled(c.ai?.enabled !== false);
     setTokens(String(c.ai?.maxCompletionTokens ?? 4096));
     setActAs(c.restore?.actAs === 'user' ? 'user' : 'app');
     setNotify(c.restore?.notifyUsers === true);
     setRetries(String(c.restore?.perFieldRetries ?? 2));
+    setLockDeletion(c.vault?.lockAttachmentDeletion === true);
   }
 
   const load = useCallback(async () => {
@@ -82,50 +89,66 @@ export default function SettingsPage({ projects }: { projects: Project[] }) {
   }, [projectId]);
   useEffect(() => { void load(); return () => { ++sequence.current; }; }, [load]);
 
-  // Review statuses are Jira ids, so they can only be chosen against a real
-  // project. A late reply from a previously selected project is discarded.
-  useEffect(() => {
-    const seq = ++statusSequence.current;
-    setStatuses([]); setStatusError('');
-    if (!projectId) { setLoadingStatuses(false); return; }
-    setLoadingStatuses(true);
-    invoke<Result & { statuses: Status[] }>('admin:listStatusesForProject', { projectId, issueTypeId: '*' })
-      .then(assertResult)
-      .then(r => { if (seq === statusSequence.current) setStatuses(r.statuses ?? []); })
-      // Kept separate from the page-level error: a failed status lookup must
-      // not read as "this project has no statuses", and it does not stop the
-      // other settings on this page from being edited and saved.
-      .catch(e => { if (seq === statusSequence.current) setStatusError(errorMessage(e)); })
-      .finally(() => { if (seq === statusSequence.current) setLoadingStatuses(false); });
-    return () => { ++statusSequence.current; };
+  // Attachment protection is per project: the lockdown edits one project's
+  // permission scheme, so there is nothing to show for the site defaults.
+  const loadVault = useCallback(async (checkSharing = false) => {
+    const seq = ++vaultSequence.current;
+    setVaultError('');
+    if (!projectId) { setVaultStatus(null); return; }
+    if (checkSharing) setCheckingShare(true);
+    try {
+      const r = assertResult(await invoke<VaultStatus>('admin:getVaultStatus', { projectId, checkSharing }));
+      if (!r.vault || !r.lockdown || !r.appDelete) throw new Error('The vault status is incomplete.');
+      if (seq === vaultSequence.current) setVaultStatus(r);
+    } catch (e) { if (seq === vaultSequence.current) setVaultError(errorMessage(e)); }
+    finally { if (seq === vaultSequence.current) setCheckingShare(false); }
   }, [projectId]);
+  useEffect(() => { setVaultStatus(null); void loadVault(); return () => { ++vaultSequence.current; }; }, [loadVault]);
+
+  // Vault storage is one choice for the whole site, so it is read once and
+  // shown at every scope rather than inside a project's card.
+  const loadTier = useCallback(async () => {
+    setTierError('');
+    try {
+      const r = assertResult(await invoke<VaultTier>('admin:getVaultTier', {}));
+      setTier(r); setTierChoice(r.storageChosen ? r.storage ?? 'AUTO' : 'AUTO');
+    } catch (e) { setTierError(errorMessage(e)); }
+  }, []);
+  useEffect(() => { void loadTier(); }, [loadTier]);
+
+  // lib/vaultTier.js: where the whole site's new vault copies go.
+  async function saveStorage() {
+    setTierBusy(true); setTierError(''); setMessage('');
+    try {
+      const r = assertResult(await invoke<Result & { note?: string }>('admin:setVaultTier', { tier: tierChoice }));
+      if (r.note) setMessage(r.note);
+      await Promise.all([loadTier(), loadVault()]);
+    } catch (e) { setTierError(errorMessage(e)); }
+    finally { setTierBusy(false); }
+  }
+  const savedTierChoice = tier?.storageChosen ? tier.storage ?? 'AUTO' : 'AUTO';
 
   const c = saved?.config;
   const was = {
     enabled: c?.enabled !== false,
-    threshold: THRESHOLDS.includes(c?.queueThreshold ?? '') ? c!.queueThreshold! : 'MINOR',
-    statusIds: (c?.reviewStatusIds ?? []).map(String),
     aiEnabled: c?.ai?.enabled !== false,
     tokens: c?.ai?.maxCompletionTokens ?? 4096,
     actAs: c?.restore?.actAs === 'user' ? 'user' : 'app',
     notifyUsers: c?.restore?.notifyUsers === true,
-    retries: c?.restore?.perFieldRetries ?? 2
+    retries: c?.restore?.perFieldRetries ?? 2,
+    lockDeletion: c?.vault?.lockAttachmentDeletion === true
   };
 
   // Mirrors the resolver's own bounds (fieldsValidation.js) so an unsavable
   // value is refused here rather than after a round trip.
   const validTokens = /^\d+$/.test(tokens) && Number(tokens) >= 256 && Number(tokens) <= 16384;
   const validRetries = /^\d+$/.test(retries) && Number(retries) >= 0 && Number(retries) <= 10;
-  const sameStatuses = statusIds.length === was.statusIds.length && statusIds.every(id => was.statusIds.includes(id));
-  // Stored review statuses the project no longer lists. They still drive
-  // collect.js, so they are shown and preserved rather than quietly dropped.
-  const orphanStatusIds = statuses.length ? statusIds.filter(id => !statuses.some(s => s.id === id)) : [];
   const legacyStrict = c?.policy?.mode === 'STRICT';
   const dirty = !!saved && (
-    enabled !== was.enabled || threshold !== was.threshold || !sameStatuses ||
+    enabled !== was.enabled ||
     aiEnabled !== was.aiEnabled || Number(tokens) !== was.tokens ||
     actAs !== was.actAs || notifyUsers !== was.notifyUsers || Number(retries) !== was.retries ||
-    legacyStrict
+    (!!projectId && lockDeletion !== was.lockDeletion) || legacyStrict
   );
   const touch = () => setMessage('');
 
@@ -136,8 +159,6 @@ export default function SettingsPage({ projects }: { projects: Project[] }) {
     // project would silently stop that project inheriting later changes.
     const config: Record<string, unknown> = {};
     if (enabled !== was.enabled) config.enabled = enabled;
-    if (threshold !== was.threshold) config.queueThreshold = threshold;
-    if (!sameStatuses) config.reviewStatusIds = statusIds;
     const ai: { enabled?: boolean; maxCompletionTokens?: number } = {};
     if (aiEnabled !== was.aiEnabled) ai.enabled = aiEnabled;
     if (Number(tokens) !== was.tokens) ai.maxCompletionTokens = Number(tokens);
@@ -150,9 +171,12 @@ export default function SettingsPage({ projects }: { projects: Project[] }) {
     // A STRICT value stored by an older build is replaced with the mode the
     // runtime actually implements; saveConfig refuses STRICT outright.
     if (legacyStrict) config.policy = { mode: 'DETECT' };
+    if (projectId && lockDeletion !== was.lockDeletion) config.vault = { lockAttachmentDeletion: lockDeletion };
     try {
-      assertResult(await invoke<Result>('admin:saveConfig', { projectId: projectId || undefined, expectedRevision: saved.revision, config }));
-      if (await load()) setMessage(projectId ? 'Project settings saved. The latest values are shown.' : 'Site-wide default settings saved. The latest values are shown.');
+      const r = assertResult(await invoke<Result & { note?: string }>('admin:saveConfig', { projectId: projectId || undefined, expectedRevision: saved.revision, config }));
+      const done = projectId ? 'Project settings saved. The latest values are shown.' : 'Site-wide default settings saved. The latest values are shown.';
+      if (await load()) setMessage(r.note ? `${done} ${r.note}` : done);
+      if (config.vault) void loadVault();
     } catch (e) { setError(errorMessage(e)); }
     finally { setBusy(false); }
   }
@@ -162,7 +186,7 @@ export default function SettingsPage({ projects }: { projects: Project[] }) {
     {dirty && <Button isDisabled={busy} onClick={() => { syncForm(saved!); setMessage('Unsaved changes discarded.'); }}>Discard changes</Button>}
   </div>;
 
-  return <Page eyebrow="Operations" title="Settings" lead="Preferences that change how this app captures baselines, queues drift and restores content." actions={<Button isDisabled={busy} onClick={load}>Reload settings</Button>}>
+  return <Page eyebrow="Operations" title="Settings" lead="Preferences that change how this app captures baselines, detects changes and restores content." actions={<Button isDisabled={busy} onClick={load}>Reload settings</Button>}>
     <div className="va-stack">
       <Field label="Scope" hint={projectId ? 'Changes override only the edited preferences for this project.' : 'Site defaults apply wherever a project has no override.'}>
         <Select value={projectId} disabled={busy} onChange={setProject} placeholder="Site-wide default settings (All projects)" options={projects.map(p => ({ value: p.id, label: `${p.name} (${p.key})` }))} />
@@ -171,61 +195,79 @@ export default function SettingsPage({ projects }: { projects: Project[] }) {
       {message && !error && <Notice>{message}</Notice>}
       {!saved && !error && <Loading label="Loading configuration…" />}
       {saved && <>
-        {/* src/lib/collect.js:119, capture.js:77, panelAccess.js:69 */}
-        <Card title="Content processing" subtitle="Baseline capture and drift detection">
+        {/* src/lib/capture.js, collect.js, gate.js (drift hold), panelAccess.js */}
+        <Card title="Content processing" subtitle="Baseline capture and change detection">
           <div className="va-stack">
             <label><input type="checkbox" disabled={busy} checked={enabled} onChange={e => { setEnabled(e.target.checked); touch(); }} /> Capture baselines and detect content changes</label>
-            {!enabled && <Notice danger>Turned off, no new baselines are captured and content changes are not detected. Controlled transitions still require approval: their Jira workflow validators are unaffected by this setting.</Notice>}
-            {/* src/lib/collect.js:293 shouldQueue(), diff/index.js, panelAccess.js:91 */}
-            <Field label="Queue threshold" hint={THRESHOLD_HINT[threshold]}>
-              <Select value={threshold} disabled={busy || !enabled} onChange={v => { setThreshold(v); touch(); }} placeholder="Choose a threshold" options={THRESHOLDS.map(t => ({ value: t, label: t.charAt(0) + t.slice(1).toLowerCase() }))} />
-            </Field>
-            <p className="va-muted">Changes below the threshold are still recorded as evidence. The threshold decides what enters a reviewer's queue, not what is detected.</p>
+            {!enabled && <Notice danger>
+              Turned off, signing a controlled transition no longer captures a baseline, and content changes are not detected.
+              Items with changes are no longer held at transitions, and the panel refuses change decisions and change reports.
+              Controlled transitions still require a signature: their Jira workflow validators are unaffected.
+            </Notice>}
           </div>
         </Card>
 
-        {/* src/lib/collect.js:97, transitionPlan.js, interception.js */}
-        <Card title="Review statuses" subtitle="Statuses that count as under review">
-          {!projectId ? <p className="va-muted">Review statuses are Jira status ids, so they are chosen per project. Select a project above to set them.</p>
-            : loadingStatuses ? <Loading label="Loading project statuses…" />
-              : statusError ? <Notice danger>Project statuses could not be loaded, so they cannot be edited here: {statusError} The stored review statuses are unchanged, and the other settings on this page can still be saved.</Notice>
-                : !statuses.length ? <p className="va-muted">No statuses were returned for this project.</p>
-                  : <div className="va-stack">
-                    {statuses.map(s => <label key={s.id}>
-                      <input type="checkbox" disabled={busy} checked={statusIds.includes(s.id)}
-                        onChange={e => { setStatusIds(prev => e.target.checked ? [...prev, s.id] : prev.filter(id => id !== s.id)); touch(); }} /> {s.name}
-                    </label>)}
-                    {/* A stored id the project no longer lists is still used by
-                        the runtime, so it is disclosed rather than hidden — and
-                        preserved on save rather than silently dropped. */}
-                    {orphanStatusIds.length > 0 && <Notice danger>
-                      {orphanStatusIds.length} stored {orphanStatusIds.length === 1 ? 'status is' : 'statuses are'} not in this project's current status list ({orphanStatusIds.join(', ')}).
-                      {' '}They are still treated as under review. Saving keeps them; remove them below if they are obsolete.
-                      <Button isDisabled={busy} onClick={() => { setStatusIds(prev => prev.filter(id => !orphanStatusIds.includes(id))); touch(); }}>Remove unlisted statuses</Button>
-                    </Notice>}
-                    <p className="va-muted">Leaving every status unselected means no status is treated as under review, so a prior approval is never superseded on re-entry.</p>
-                  </div>}
-        </Card>
-
-        {/* src/lib/restore/executor.js:99, :100, :159 */}
+        {/* src/lib/restore/executor.js (single-issue restores only) */}
         <Card title="Restoration" subtitle="How rejected changes are written back to Jira">
           <div className="va-stack">
-            <Field label="Restore as" hint={actAs === 'app' ? 'Writes are attributed to the app: one clean audit line, and no per-user permission surprises mid-rejection.' : 'Writes are attributed to the acting user, who must be able to edit every restored field.'}>
+            <p className="va-muted">These apply when the rejected baseline covers one work item. A baseline that includes child work items is always restored as the app, notifies watchers, and is not retried field by field.</p>
+            <Field label="Restore as" hint={actAs === 'app' ? 'Writes are attributed to the app, which can also write fields hidden from the edit screen.' : 'Writes are attributed to the acting user, who must be able to edit every restored field.'}>
               <Select value={actAs} disabled={busy} onChange={v => { setActAs(v); touch(); }} placeholder="Choose an identity" options={[{ value: 'app', label: 'The app' }, { value: 'user', label: 'The acting user' }]} />
             </Field>
             <label><input type="checkbox" disabled={busy} checked={notifyUsers} onChange={e => { setNotify(e.target.checked); touch(); }} /> Notify watchers of restored fields</label>
-            <Field label="Retries per field" hint="A whole number from 0 to 10. Each restored field is retried this many times before it is reported as unrestored.">
+            <Field label="Retries per field" hint="A whole number from 0 to 10. A field Jira refuses with a server error or rate limit is retried this many times before it is reported as unrestored. Any other refusal is reported at once.">
               <input className="va-input" type="number" min="0" max="10" step="1" disabled={busy} value={retries} onChange={e => { setRetries(e.target.value); touch(); }} />
             </Field>
             {!validRetries && <Notice danger>Enter a whole number from 0 to 10.</Notice>}
           </div>
         </Card>
 
-        {/* src/lib/aiClassification.js:331, report.js:238 */}
+        {/* src/lib/vaultProvision.js provisionVault, usecases/vaultStatus.js */}
+        <Card title="Attachment protection" subtitle="This project's vaulted files, and who may delete them">
+          {!projectId ? <p className="va-muted">Attachment protection is set per project, because the lockdown edits that project's Jira permission scheme. Select a project above.</p>
+            : <div className="va-stack">
+              {vaultError && <Notice danger>The vault status could not be read: {vaultError} <Button isDisabled={busy} onClick={() => void loadVault()}>Retry</Button></Notice>}
+              {!vaultStatus && !vaultError && <Loading label="Loading attachment protection…" />}
+              {vaultStatus && <>
+                <p>
+                  {vaultStatus.vault.storage === 'OBJECT_STORE'
+                    ? <>Approved files are copied to the Forge Object Store{vaultStatus.vault.storageChosen ? ', as chosen for this site' : ', because this site has no Confluence vault'}.</>
+                    : vaultStatus.vault.storage === 'CONFLUENCE'
+                      ? vaultStatus.vault.siteSpaceKey
+                        ? <>Approved files are copied to the Confluence vault space <code>{vaultStatus.vault.siteSpaceKey}</code>{vaultStatus.vault.projectPageId ? '.' : '; this project\'s page there is not created yet.'}</>
+                        : 'Approved files are copied to Confluence; the vault space is created with the first copy.'
+                      : 'No vault has been provisioned yet. Where it goes is decided when a controlled transition first captures a baseline: Confluence when the site has it, otherwise the Forge Object Store.'}
+                  {' '}A rejection puts a removed file back from its vaulted copy.
+                </p>
+                <p className="va-muted">{vaultStatus.appDelete.grantedAt
+                  ? 'The app can delete attachments here, so a rejection can remove files added after approval.'
+                  : vaultStatus.appDelete.refusedAt
+                    ? `Jira refused the app the right to delete attachments (${when(vaultStatus.appDelete.refusedAt)}). A rejection cannot remove files added after approval until it is granted.`
+                    : 'The app\'s right to delete attachments is not confirmed yet.'}</p>
+              </>}
+              <label><input type="checkbox" disabled={busy} checked={lockDeletion} onChange={e => { setLockDeletion(e.target.checked); touch(); }} /> Lock attachment deletion for people in this project</label>
+              <p className="va-muted">Removes Delete own attachments and Delete all attachments from every person and group on the project's permission scheme{vaultStatus?.scheme?.name ? <> (<strong>{vaultStatus.scheme.name}</strong>)</> : ''}. The app keeps its own. Off by default: with it off, anyone permitted can delete a file, and a rejection restores it from the vault.</p>
+              {lockDeletion && !was.lockDeletion && <Notice danger>
+                Permission schemes are often shared. Every project on this scheme loses these grants, not only this one.
+                {vaultStatus?.sharedWith == null
+                  ? <> <Button isDisabled={busy || checkingShare || !vaultStatus?.scheme} onClick={() => void loadVault(true)}>{checkingShare ? 'Checking…' : 'Check which projects share it'}</Button></>
+                  : vaultStatus.sharedWith.length ? <> Shared with: {vaultStatus.sharedWith.join(', ')}.</> : <> No other project uses it.</>}
+              </Notice>}
+              {!lockDeletion && was.lockDeletion && <Notice danger>Turning this off does not put removed grants back. Re-add them in the project's permission scheme if people should delete attachments again. The audit ledger names who held each removed grant.</Notice>}
+              {vaultStatus?.lockdown.lockedAt != null && !vaultStatus.lockdown.enabled && <Notice>
+                Delete grants were removed from this project's scheme on {when(vaultStatus.lockdown.lockedAt)}, when the lockdown was applied. They stay removed until someone re-adds them in Jira.
+              </Notice>}
+              {vaultStatus?.lockdown.enabled && vaultStatus.lockdown.lockedAt != null && <p className="va-muted">Locked since {when(vaultStatus.lockdown.lockedAt)}.</p>}
+              {vaultStatus?.lockdown.enabled && vaultStatus.lockdown.lockedAt == null && <p className="va-muted">Not applied yet: it is applied once this project has a controlled transition that captures a baseline, and retried every hour.</p>}
+              {vaultStatus?.schemeError && <p className="va-muted">The permission scheme could not be read: {vaultStatus.schemeError}</p>}
+            </div>}
+        </Card>
+
+        {/* src/lib/aiClassification.js classifyFields, report.js generateReport */}
         <Card title="AI assistance" subtitle="Field-classification suggestions and change reports">
           <div className="va-stack">
             <label><input type="checkbox" disabled={busy} checked={aiEnabled} onChange={e => { setAiEnabled(e.target.checked); touch(); }} /> Enable AI assistance</label>
-            <p>When disabled, rule-based results remain available. Approval and baseline decisions still require the configured reviewer and authentication.</p>
+            <p className="va-muted">When disabled, field classification suggestions and change reports are rule-based.</p>
             <Field label="Maximum response tokens" hint="A whole number from 256 to 16,384. This limit applies to AI classification and report requests.">
               <input className="va-input" type="number" min="256" max="16384" step="1" disabled={busy || !aiEnabled} value={tokens} onChange={e => { setTokens(e.target.value); touch(); }} />
             </Field>
@@ -242,12 +284,35 @@ export default function SettingsPage({ projects }: { projects: Project[] }) {
 
         {saveRow}
 
-        <Card title="Configured elsewhere">
-          <p>Approval rules are set in Controlled transitions, signer access in Approver roles, baseline contents in Controlled fields, and security alert delivery in Control health.</p>
-          <p className="va-muted">Content changes are detected after they occur. Transition approval is enforced by the exact rules in Controlled transitions and their enabled Jira workflow validators.</p>
-          {legacyStrict && <Notice danger>A STRICT policy value stored by an earlier build is present. It does not lock content: the locking architecture it refers to is not implemented, and saving replaces it with DETECT, the mode this runtime enforces.</Notice>}
-        </Card>
+        {legacyStrict && <Notice danger>A STRICT policy value stored by an earlier build is present. It does not lock content: the locking it refers to is not implemented, and saving replaces it with DETECT, the mode this runtime enforces.</Notice>}
       </>}
+
+      {/* lib/vaultTier.js, usecases/vaultStatus.js getVaultTier / setVaultTier */}
+      <Card title="Vault storage" subtitle="Where new vaulted copies go, for the whole site">
+        <div className="va-stack">
+          {tierError && <Notice danger>Vault storage could not be read or saved: {tierError} <Button isDisabled={tierBusy} onClick={() => void loadTier()}>Retry</Button></Notice>}
+          {!tier && !tierError && <Loading label="Loading vault storage…" />}
+          {tier && <>
+            <p className="va-muted">
+              {tier.storage === 'OBJECT_STORE' ? 'New copies go to the Forge Object Store.'
+                : tier.storage === 'CONFLUENCE' ? <>New copies go to Confluence{tier.siteSpaceKey ? <> (space <code>{tier.siteSpaceKey}</code>)</> : ''}.</>
+                  : 'Not decided yet: the first vault job chooses.'}
+              {' '}This applies to every project, whichever scope is selected above. Existing copies stay where they are; a restore reads each from where it was kept.
+            </p>
+            <Field label="Storage" hint="Automatic uses Confluence when the site has it and the Forge Object Store otherwise.">
+              <Select value={tierChoice} disabled={tierBusy} onChange={v => { setTierChoice(v); touch(); }} placeholder="Choose where copies go"
+                options={Object.entries(STORAGE_LABEL).map(([value, label]) => ({ value, label }))} />
+            </Field>
+            <div className="va-row">
+              <Button isDisabled={tierBusy || tierChoice === savedTierChoice} onClick={() => void saveStorage()}>{tierBusy ? 'Saving…' : 'Save vault storage'}</Button>
+            </div>
+          </>}
+        </div>
+      </Card>
+
+      <Card title="Configured elsewhere">
+        <p>Approval rules are set in Controlled transitions, signer access in Approver roles, baseline contents in Controlled fields, and security alert delivery in Control health.</p>
+      </Card>
     </div>
   </Page>;
 }

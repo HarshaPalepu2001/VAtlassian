@@ -2,6 +2,7 @@ import * as store from './store.js';
 import { executeQuery, affectedRows, toBinaryParam, fromBinaryColumn } from '../lib/db.js';
 import { encodeValue, decodeValue } from '../lib/valuestore.js';
 import { FailClosed } from '../lib/errors.js';
+import { clearVersionEvidence } from './evidenceStore.js';
 
 export async function beginTreeBaseline({ baseline, resume = null, query = store.throwing }) {
   if (resume) {
@@ -14,6 +15,9 @@ export async function beginTreeBaseline({ baseline, resume = null, query = store
     // baseline's rows first means the replay always leaves exactly what the
     // current read says, never a mix of this attempt's rows and a prior
     // attempt's leftovers that happened to share a key.
+    // Its evidence likewise, and first: that also confirms at the row that the
+    // version is still CAPTURING before anything of it is cleared.
+    await clearVersionEvidence({ baselineId: resume.baseline_id, query });
     const bId = toBinaryParam(resume.baseline_id);
     await query('DELETE FROM va_baseline_node_value WHERE baseline_id = FROM_BASE64(?)', [bId]);
     await query('DELETE FROM va_baseline_node WHERE baseline_id = FROM_BASE64(?)', [bId]);
@@ -168,14 +172,14 @@ export async function verifyTreeCapture({ baselineId, expectedNodeCount, expecte
   return true;
 }
 
-export async function publishTreeBaseline({ baselineId, issueId, version, query = store.throwing, write = executeQuery }) {
+export async function publishTreeBaseline({ baselineId, issueId, version, requireEvidence = false, query = store.throwing, write = executeQuery }) {
   // Provenance is re-checked at the row itself: a baseline without its frozen
   // control policy must never become the standing evidence.
   const activated = await write(
     `UPDATE va_baseline SET state = 'ACTIVE'
      WHERE baseline_id = FROM_BASE64(?) AND state = 'CAPTURING'
        AND required_role IS NOT NULL AND required_assurance IS NOT NULL
-       AND controlled_fields_hash IS NOT NULL`,
+       AND controlled_fields_hash IS NOT NULL${requireEvidence ? ' AND policy_recorded = TRUE' : ''}`,
     [toBinaryParam(baselineId)]
   );
   if (!activated?.result || affectedRows(activated) !== 1) throw new FailClosed('CAPTURE_INCOMPLETE');

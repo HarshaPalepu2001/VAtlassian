@@ -1,6 +1,4 @@
 import { runAdmin } from './adminRuntime.js';
-const ACTIVE = 'ACTIVE';
-const REVOKED = 'REVOKED';
 
 export async function issueCredentialResetGrant(req, overrides) {
   return runAdmin(req, async (deps) => {

@@ -54,6 +54,7 @@ export function treeReviewDiff({ baseline, baselineTree, currentTree, treeDiff, 
         fields.push({
           ...field,
           fieldId: `${change.logicalNodeId}:${field.fieldId}`,
+          rawFieldId: field.fieldId,
           fieldName: `${nodeName} · ${field.fieldName}`,
           // The field's own name, for a view already headed by its issue.
           label: field.fieldName,

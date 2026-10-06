@@ -57,6 +57,14 @@ function fixture() {
   return { deps, rows, events, request, challenges };
 }
 
+/** Sign as every client does: open a challenge for the request, then answer it. */
+async function signed(deps, request) {
+  const api = createApprovalUsecases(deps);
+  const challenge = await api.challenge(request);
+  assert.equal(challenge.success, true, JSON.stringify(challenge));
+  return api.submit({ context: request.context, payload: { ...request.payload, challengeId: challenge.challengeId } });
+}
+
 function baselineDecisionPrepared(overrides = {}) {
   const baselineId = Buffer.alloc(16, 9);
   return {
@@ -117,12 +125,13 @@ test('biometric challenge records a WebAuthn-backed approval through the same ap
   let totpSpent = false;
   f.deps.totpDeps.consume = async () => { totpSpent = true; return true; };
   f.deps.webauthnDeps = {
-    verifyAssertion: async ({ binding, payload }) => {
+    verifyAssertion: async ({ binding, payload, approvalChallengeId }) => {
       assert.equal(binding.accountId, 'trusted');
       assert.equal(binding.issueId, 10);
       assert.equal(binding.decision, 'APPROVE');
       assert.equal(binding.contentHash, 'a'.repeat(64));
       assert.equal(payload.challengeId, 'webauthn-challenge');
+      assert.deepEqual(approvalChallengeId, Buffer.alloc(16, 4), 'the device check names the challenge it answers');
       return {
         ok: true,
         credentialId: 'credential-1',
@@ -308,7 +317,7 @@ test('a refused Jira transition invalidates the approval of an item that has a b
     return { transitioned: false, transitionError: 'Jira refused the transition.' };
   };
 
-  const result = await createApprovalUsecases(f.deps).submit(f.request);
+  const result = await signed(f.deps, f.request);
 
   assert.equal(result.success, true, JSON.stringify(result));
   assert.equal(result.baselinePublished, true);
@@ -388,7 +397,7 @@ test('baseline publication and capability audit finish before the exact Jira tra
   };
   f.deps.performTransition = async () => { order.push('jira'); return { transitioned: true }; };
 
-  const result = await createApprovalUsecases(f.deps).submit(f.request);
+  const result = await signed(f.deps, f.request);
 
   assert.equal(result.success, true, JSON.stringify(result));
   assert.equal(result.baselinePublished, true);
@@ -404,7 +413,7 @@ test('failed N+1 publication never calls Jira and leaves the approval unusable',
   let jiraCalled = false;
   f.deps.performTransition = async () => { jiraCalled = true; return { transitioned: true }; };
 
-  const result = await createApprovalUsecases(f.deps).submit(f.request);
+  const result = await signed(f.deps, f.request);
 
   assert.equal(result.success, false);
   assert.equal(jiraCalled, false);
@@ -464,7 +473,7 @@ test('challenge submit accepts an expired operation lock after challenge prepara
 test('approval notes allow the same four thousand characters the panel accepts', async () => {
   const f = fixture();
   f.request.payload.note = 'x'.repeat(4000);
-  const result = await createApprovalUsecases(f.deps).submit(f.request);
+  const result = await signed(f.deps, f.request);
   assert.equal(result.success, true);
   assert.equal(f.rows[0].note.length, 4000);
 });
@@ -479,45 +488,47 @@ test('challenge submit refuses notes longer than the panel limit before recordin
 test('only resolver identity enters the persisted approval and audit precedes usable capability', async () => {
   const f = fixture();
   f.deps.audit = async () => assert.equal(f.rows[0].state, 'VOID');
-  const result = await createApprovalUsecases(f.deps).submit(f.request);
+  const result = await signed(f.deps, f.request);
   assert.equal(result.success, true);
   assert.equal(f.rows[0].account_id, 'trusted');
   assert.equal(f.rows[0].state, 'PENDING');
 });
 test('failed approval audit leaves only an unusable record', async () => {
   const f = fixture(); f.deps.audit = async () => { throw new Error('audit down'); };
-  assert.equal((await createApprovalUsecases(f.deps).submit(f.request)).success, false);
+  assert.equal((await signed(f.deps, f.request)).success, false);
   assert.equal(f.rows[0].state, 'VOID');
 });
 test('capture failure cannot complete ratification or publish a pending capability', async () => {
   const f = fixture(); delete f.request.payload.transitionId;
   f.deps.apply = async () => ({ success: false, captured: false });
-  assert.equal((await createApprovalUsecases(f.deps).submit(f.request)).success, false);
+  assert.equal((await signed(f.deps, f.request)).success, false);
   assert.equal(f.rows[0].state, 'VOID');
 });
 test('stale reviewed evidence is rejected before recording', async () => {
   const f = fixture(); f.request.payload.expectedEvidenceHash = 'f'.repeat(64);
-  assert.equal((await createApprovalUsecases(f.deps).submit(f.request)).success, false);
+  const challenge = await createApprovalUsecases(f.deps).challenge(f.request);
+  assert.equal(challenge.success, false);
+  assert.equal(challenge.reason, 'CONTENT_CHANGED');
   assert.equal(f.rows.length, 0);
 });
 test('rejection applies baseline restoration then becomes consumed, never pending', async () => {
   const f = fixture(); f.request.payload.decision = 'REJECT';
   let applied = false; f.deps.apply = async ({ approval }) => { assert.equal(approval.state, 'VOID'); applied = true; return { success: true }; };
-  assert.equal((await createApprovalUsecases(f.deps).submit(f.request)).success, true);
+  assert.equal((await signed(f.deps, f.request)).success, true);
   assert.equal(applied, true); assert.equal(f.rows[0].state, 'CONSUMED');
 });
 test('a busy restore returns a recovery message instead of the raw lock code', async () => {
   const f = fixture();
   f.request.payload.decision = 'REJECT';
   f.deps.apply = async () => { const error = new Error('ALREADY_DECIDING'); error.reason = 'ALREADY_DECIDING'; throw error; };
-  const result = await createApprovalUsecases(f.deps).submit(f.request);
+  const result = await signed(f.deps, f.request);
   assert.equal(result.success, false);
   assert.match(result.error, /another decision.*already in progress/i);
 
 });
 test('retry cannot use another actor approval or mint new capability', async () => {
   const f = fixture(), api = createApprovalUsecases(f.deps);
-  const result = await api.submit(f.request);
+  const result = await signed(f.deps, f.request);
   assert.equal(result.success, true);
   const retry = await api.retryTransition({ context: { accountId: 'intruder' }, payload: { issueKey: 'T-10', approvalId: result.approvalId, transitionId: '5' } });
   assert.equal(retry.success, false); assert.equal(f.rows.length, 1);
@@ -544,7 +555,7 @@ test('initial transition makes the audited approval available to the real gate b
     voidOthers: async () => {}
   });
   f.deps.performTransition = async () => ({ transitioned: (await gate({ issue: { key: 'T-10' }, transition: { id: '5', from: { id: '1' }, to: { id: '2' } } })).result });
-  const result = await createApprovalUsecases(f.deps).submit(f.request);
+  const result = await signed(f.deps, f.request);
   assert.equal(result.success, true);
   assert.equal(result.transitioned, true);
   assert.equal(f.rows[0].state, 'CONSUMED');
@@ -584,32 +595,45 @@ test('electronic signature requires explicit affirmation before spending the cod
   const f = fixture();
   f.request.payload.confirmed = false;
   f.request.payload.preauthorize = false;
-  const result = await createApprovalUsecases(f.deps).submit(f.request);
+  const result = await signed(f.deps, f.request);
   assert.equal(result.success, false);
   assert.equal(f.rows.length, 0);
 });
 
-for (const viaChallenge of [true, false]) {
-  test(`signed drift approval reaches baseline capture (${viaChallenge ? 'panel challenge' : 'direct resolver'})`, async () => {
-    const f = fixture();
-    const prepared = await f.deps.prepare();
-    f.deps.prepare = async () => ({ ...prepared, driftCount: 3, review: { state: 'DRIFTED' } });
-    const api = createApprovalUsecases(f.deps);
-    const payload = { ...f.request.payload, preauthorize: false };
-    if (viaChallenge) payload.challengeId = (await api.challenge(f.request)).challengeId;
-    const result = await api.submit({ context: f.request.context, payload });
-    assert.equal(result.success, true, JSON.stringify(result));
-    assert.equal(result.transitioned, true);
-    assert.equal(f.rows[0].drift_count, 3);
-  });
-}
+test('signed drift approval reaches baseline capture through the panel challenge', async () => {
+  const f = fixture();
+  const prepared = await f.deps.prepare();
+  f.deps.prepare = async () => ({ ...prepared, driftCount: 3, review: { state: 'DRIFTED' } });
+  const api = createApprovalUsecases(f.deps);
+  const payload = { ...f.request.payload, preauthorize: false };
+  payload.challengeId = (await api.challenge(f.request)).challengeId;
+  const result = await api.submit({ context: f.request.context, payload });
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(result.transitioned, true);
+  assert.equal(f.rows[0].drift_count, 3);
+});
+
+test('a submit with no challenge is refused before any code is spent or anything recorded', async () => {
+  // A challenge fixes the meaning shown, the candidate content and the exact
+  // edge, once. Without one, a direct call chose its own transition and could
+  // leave out the evidence hash — approving content the signer never saw.
+  const f = fixture();
+  let spent = false;
+  f.deps.totpDeps.consume = async () => { spent = true; return true; };
+  const result = await createApprovalUsecases(f.deps).submit({ context: f.request.context,
+    payload: { ...f.request.payload, preauthorize: false } });
+  assert.equal(result.success, false);
+  assert.equal(result.reason, 'NO_DECISION');
+  assert.equal(spent, false);
+  assert.equal(f.rows.length, 0);
+});
 test('Jira preauthorization cannot substitute for the signer affirming the declaration', async () => {
   const f = fixture();
   f.request.payload.confirmed = false;
   f.request.payload.preauthorize = true;
   let spentCode = false;
   f.deps.totpDeps.consume = async () => { spentCode = true; return true; };
-  const result = await createApprovalUsecases(f.deps).submit(f.request);
+  const result = await signed(f.deps, f.request);
   assert.equal(result.success, false);
   assert.equal(f.rows.length, 0);
   assert.equal(spentCode, false);

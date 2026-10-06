@@ -1,21 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  classify, shouldQueue, maxMateriality, MATERIALITY, DEFAULT_LADDER
+  classify, needsDecision, maxMateriality, MATERIALITY, DEFAULT_LADDER
 } from '../src/lib/materiality.js';
 
 // ─── Cosmetic suppression: the thing that stops the app being muted ──────────
 
-test('a formatting-only change is COSMETIC and never queues a review', () => {
+test('a formatting-only change is COSMETIC and needs no decision', () => {
   const level = classify('description', null, 'x', 'x', { semanticChange: false });
   assert.equal(level, MATERIALITY.COSMETIC);
-  assert.equal(shouldQueue(level, MATERIALITY.MINOR), false);
-});
-
-test('cosmetic never queues, whatever the threshold', () => {
-  for (const threshold of ['COSMETIC', 'MINOR', 'MAJOR', 'CRITICAL']) {
-    assert.equal(shouldQueue(MATERIALITY.COSMETIC, threshold), false);
-  }
+  assert.equal(needsDecision(level), false);
 });
 
 // ─── The ladder ──────────────────────────────────────────────────────────────
@@ -82,8 +76,8 @@ test('maxMateriality picks the highest level present', () => {
   assert.equal(maxMateriality([]), MATERIALITY.COSMETIC);
 });
 
-test('the queue threshold gates what reaches a reviewer', () => {
-  assert.equal(shouldQueue(MATERIALITY.MINOR, MATERIALITY.MAJOR), false);
-  assert.equal(shouldQueue(MATERIALITY.MAJOR, MATERIALITY.MAJOR), true);
-  assert.equal(shouldQueue(MATERIALITY.CRITICAL, MATERIALITY.MAJOR), true);
+test('every non-cosmetic change needs a decision, whatever its level', () => {
+  for (const level of [MATERIALITY.MINOR, MATERIALITY.MAJOR, MATERIALITY.CRITICAL]) {
+    assert.equal(needsDecision(level), true, level);
+  }
 });

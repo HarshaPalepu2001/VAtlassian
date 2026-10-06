@@ -22,6 +22,8 @@ function baseOverrides(overrides = {}) {
     identityRecords: async () => new Map(),
     mediaIdOf: async () => null,
     vaultedCopies: async () => new Map(),
+    resolveTier: async () => ({ tier: 'CONFLUENCE' }),
+    putContent: async () => { throw new Error('a Confluence site must not reach the Object Store here'); },
     tryAppend: async () => {},
     now: () => 1000,
     ...overrides
@@ -104,9 +106,16 @@ test('one failed attachment does not stop the rest and is recorded as failed', a
 
 test('provisions the project into the vault lazily when the eager attempt never happened', async () => {
   const calls = [];
-  const overrides = baseOverrides({ ensureVaultSpace: async (projectId) => { calls.push(projectId); return { spaceId: 's1', projectPageId: 'pp1' }; } });
+  const overrides = baseOverrides({ getVaultPage: async () => null,
+    ensureVaultSpace: async (projectId) => { calls.push(projectId); return { spaceId: 's1', projectPageId: 'pp1' }; } });
   await runVaultWorker({ body: baseBody() }, overrides);
   assert.deepEqual(calls, [7]);
+});
+
+test('an issue whose vault page exists costs no provisioning call', async () => {
+  let provisioned = false;
+  await runVaultWorker({ body: baseBody() }, baseOverrides({ ensureVaultSpace: async () => { provisioned = true; return {}; } }));
+  assert.equal(provisioned, false);
 });
 
 test('an issue with no attachments still gets its page and completes', async () => {
@@ -125,7 +134,7 @@ test('a baseline that recorded its files vaults exactly those, not whatever is o
     insertVaultAttachment: async (args) => recorded.push(args)
   });
   const result = await runVaultWorker({ body: { ...baseBody(), attachments: [{ id: 'a1', jiraId: 'a1', filename: 'spec.pdf' }] } }, overrides);
-  assert.deepEqual(result, { state: 'COMPLETE', vaulted: 1, skipped: 0, failed: 0 });
+  assert.deepEqual(result, { state: 'COMPLETE', storage: 'CONFLUENCE', vaulted: 1, skipped: 0, failed: 0 });
   assert.deepEqual(uploaded, ['a1-spec.pdf']);
   assert.deepEqual(recorded.map(r => r.jiraAttachmentId), ['a1']);
 });
@@ -169,4 +178,85 @@ test('a restored copy is vaulted under the id of the original it stands for, dow
   assert.deepEqual(downloads, ['900']);
   assert.equal(recorded[0].jiraAttachmentId, 'a1');
   assert.equal(recorded[0].mediaId, 'm-a1', 'recorded under the media id the approved rich text points at');
+});
+
+// ── Where the copy goes: Confluence, or the Forge Object Store ─────────────
+
+test('a site without Confluence vaults to the Object Store and never asks Confluence for a page', async () => {
+  const rows = [];
+  const puts = [];
+  const events = [];
+  const overrides = baseOverrides({
+    resolveTier: async () => ({ tier: 'OBJECT_STORE' }),
+    ensureVaultSpace: async () => { throw new Error('must not provision Confluence'); },
+    getVaultPage: async () => { throw new Error('must not read a Confluence page'); },
+    uploadAttachmentToPage: async () => { throw new Error('must not upload to Confluence'); },
+    putContent: async args => { puts.push(args); return { storage: 'OBJECT_STORE', objectKey: `vault/sha256/${args.hash}` }; },
+    insertVaultAttachment: async row => rows.push(row),
+    tryAppend: async event => events.push(event)
+  });
+  const result = await runVaultWorker({ body: baseBody() }, overrides);
+  const hash = createHash('sha256').update(Buffer.from('bytes')).digest('hex');
+  assert.deepEqual({ state: result.state, storage: result.storage, vaulted: result.vaulted }, { state: 'COMPLETE', storage: 'OBJECT_STORE', vaulted: 1 });
+  assert.equal(puts[0].hash, hash);
+  assert.equal(rows[0].storage, 'OBJECT_STORE');
+  assert.equal(rows[0].objectKey, `vault/sha256/${hash}`);
+  assert.equal(rows[0].confluenceAttachmentId, null);
+  assert.equal(events[0].payload.fallbackFrom, undefined, 'the chosen home, not a fallback');
+});
+
+test('a file Confluence refuses goes to the Object Store instead, and the ledger says why', async () => {
+  const rows = [];
+  const events = [];
+  const overrides = baseOverrides({
+    uploadAttachmentToPage: async () => { throw new Error('413 too large for Confluence'); },
+    putContent: async ({ hash }) => ({ storage: 'OBJECT_STORE', objectKey: `vault/sha256/${hash}` }),
+    insertVaultAttachment: async row => rows.push(row),
+    tryAppend: async event => events.push(event)
+  });
+  const result = await runVaultWorker({ body: baseBody() }, overrides);
+  assert.equal(result.vaulted, 1);
+  assert.equal(rows[0].storage, 'OBJECT_STORE');
+  assert.equal(events[0].payload.fallbackFrom.storage, 'CONFLUENCE');
+  assert.match(events[0].payload.fallbackFrom.error, /413/);
+});
+
+test('a Confluence site whose vault space cannot be made still vaults every file', async () => {
+  const rows = [];
+  const overrides = baseOverrides({
+    getVaultPage: async () => null,
+    ensureVaultSpace: async () => { throw new Error('space permissions unavailable'); },
+    putContent: async ({ hash }) => ({ storage: 'OBJECT_STORE', objectKey: `vault/sha256/${hash}` }),
+    insertVaultAttachment: async row => rows.push(row)
+  });
+  const result = await runVaultWorker({ body: baseBody() }, overrides);
+  assert.equal(result.state, 'COMPLETE');
+  assert.equal(rows[0].storage, 'OBJECT_STORE');
+});
+
+test('a file carried forward keeps the home of its earlier copy', async () => {
+  const rows = [];
+  const overrides = baseOverrides({
+    readIssueAttachments: async () => [],
+    vaultedCopies: async () => new Map([['a1', { content_hash: 'h', storage: 'OBJECT_STORE', object_key: 'vault/sha256/h', media_id: 'm' }]]),
+    insertVaultAttachment: async row => rows.push(row)
+  });
+  await runVaultWorker({ body: { ...baseBody(), attachments: [{ id: 'a1', filename: 'x.png' }] } }, overrides);
+  assert.deepEqual({ storage: rows[0].storage, objectKey: rows[0].objectKey, confluenceAttachmentId: rows[0].confluenceAttachmentId },
+    { storage: 'OBJECT_STORE', objectKey: 'vault/sha256/h', confluenceAttachmentId: null });
+});
+
+test('a file larger than the vault takes is refused from its reported size, before it is downloaded', async () => {
+  let downloaded = false;
+  const events = [];
+  const overrides = baseOverrides({
+    readIssueAttachments: async () => [{ id: 'a1', filename: 'huge.iso', size: 2 * 1024 * 1024 * 1024 }],
+    downloadAttachment: async () => { downloaded = true; return Buffer.from('x'); },
+    tryAppend: async event => events.push(event)
+  });
+  const result = await runVaultWorker({ body: baseBody() }, overrides);
+  assert.equal(downloaded, false);
+  assert.equal(result.failed, 1);
+  assert.equal(events[0].eventType, 'ATTACHMENT_VAULT_FAILED');
+  assert.match(events[0].payload.error, /TOO_LARGE/);
 });

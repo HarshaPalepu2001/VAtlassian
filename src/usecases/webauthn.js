@@ -329,7 +329,7 @@ export function createWebAuthnUsecases(deps = {}) {
     }
   }
 
-  async function verifyAssertion({ binding, payload = {}, context = {} } = {}) {
+  async function verifyAssertion({ binding, approvalChallengeId = null, payload = {}, context = {} } = {}) {
     try {
       const accountId = binding?.accountId ?? accountIdOf(context);
       if (!accountId || binding?.accountId !== accountId) return fail(WEBAUTHN_FAIL.BINDING_MISMATCH);
@@ -346,6 +346,14 @@ export function createWebAuthnUsecases(deps = {}) {
 
       const presentedBinding = webauthnBindingHash(binding);
       if (row.binding_hash !== presentedBinding) return fail(WEBAUTHN_FAIL.BINDING_MISMATCH);
+      // The binding hash covers issue, decision and content but not the
+      // transition or meaning the signer was shown; two approval challenges on
+      // one item can share all three. assertStart recorded which challenge this
+      // check was collected for, and only that one may spend it.
+      if (!approvalChallengeId || !row.approval_challenge_id
+          || !Buffer.from(row.approval_challenge_id).equals(Buffer.from(approvalChallengeId))) {
+        return fail(WEBAUTHN_FAIL.BINDING_MISMATCH);
+      }
 
       const { consumed } = await store.consumeChallenge({ challengeId, accountId, now: now() });
       if (!consumed) return fail(WEBAUTHN_FAIL.CHALLENGE_SPENT);

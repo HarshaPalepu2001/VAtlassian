@@ -1,4 +1,5 @@
 import { vaultedCopies } from '../../db/vaultStore.js';
+import { isReadableCopy } from '../vaultLocation.js';
 
 /**
  * WHAT A REJECTION WILL DO TO FILES, SAID BEFORE IT IS SIGNED.
@@ -45,6 +46,9 @@ export async function attachmentRejection({ reviewFields = [], issue = {}, remov
   let vaultChecked = true;
   const restoreFiles = [];
   const unrestorableFiles = [];
+  // Restorable, but the vault never learned which media file it is: text that
+  // shows it cannot be pointed at the restored copy (./attachments.js).
+  const mediaUnknownFiles = [];
   for (const [issueId, files] of byIssue) {
     let copies = null;
     try {
@@ -54,13 +58,16 @@ export async function attachmentRejection({ reviewFields = [], issue = {}, remov
       vaultChecked = false;
     }
     for (const entry of files) {
-      if (copies && !copies.has(entry.id)) {
+      if (copies && !isReadableCopy(copies.get(entry.id))) {
         unrestorableFiles.push({ ...entry,
           reason: 'No copy of this file is in the vault, so a rejection cannot put it back.' });
-      } else restoreFiles.push(entry);
+      } else {
+        restoreFiles.push(entry);
+        if (copies && !copies.get(entry.id)?.media_id) mediaUnknownFiles.push(entry);
+      }
     }
   }
-  return { deleteFiles, restoreFiles, unrestorableFiles, vaultChecked };
+  return { deleteFiles, restoreFiles, unrestorableFiles, mediaUnknownFiles, vaultChecked };
 }
 
 /** Removed work items' recorded files, from a parent's baseline tree and its diff. */

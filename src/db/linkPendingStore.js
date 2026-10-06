@@ -27,6 +27,15 @@ export async function clearLinkDecisionPending({ issueId, decidedOnIssueId }, qu
     [Number(issueId), Number(decidedOnIssueId)]);
 }
 
+/** Which of these issues have a link decision on its way: Set(issueId). */
+export async function linkDecisionsPendingFor(issueIds, now = Date.now(), query = store.throwing) {
+  const ids = [...new Set((issueIds ?? []).map(Number).filter(Number.isFinite))];
+  if (ids.length === 0) return new Set();
+  const rows = await query(`SELECT DISTINCT issue_id FROM va_link_pending
+    WHERE issue_id IN (${ids.map(() => '?').join(', ')}) AND queued_at >= ?`, [...ids, now - LINK_PENDING_TTL_MS]);
+  return new Set((rows ?? []).map(row => Number(row.issue_id)));
+}
+
 /** The decisions still expected on this issue: [{ decidedOnKey, queuedAt }]. */
 export async function linkDecisionsPending(issueId, now = Date.now(), query = store.throwing) {
   const rows = await query(`SELECT decided_on_key AS decidedOnKey, queued_at AS queuedAt FROM va_link_pending

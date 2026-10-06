@@ -133,8 +133,8 @@ export async function getState(args) { return respond(async () => {
       treeHash: state.baseline.tree_hash ?? null
     } : undefined,
     drift: {
-      count: state.baseline ? (state.reviewDiff?.changedFieldCount ?? state.diff?.changedFieldCount ?? state.treeDiff?.changes?.length ?? 0) : 0,
-      materialCount: state.baseline ? (state.reviewDiff?.materialFieldCount ?? state.diff?.materialFieldCount ?? state.treeDiff?.changes?.length ?? 0) : 0,
+      count: state.baseline ? (viewableReviewDiff?.changedFieldCount ?? state.diff?.changedFieldCount ?? viewableTreeDiff?.changes?.length ?? 0) : 0,
+      materialCount: state.baseline ? (viewableReviewDiff?.materialFieldCount ?? state.diff?.materialFieldCount ?? viewableTreeDiff?.changes?.length ?? 0) : 0,
       evidenceHash: state.evidenceHash,
       ...groupedDrift
     },

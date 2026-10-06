@@ -31,6 +31,7 @@ function storeFixture() {
     approvalById: async () => ({ decision: 'REJECT', approval_id: id(3) }),
     claimRestore: async () => { calls.push('claim'); return true; },
     heartbeatRestore: async args => { calls.push(['heartbeat', args]); },
+    refreshItemLock: async args => { calls.push(['lock', args]); },
     beginRestoreVerification: async () => { calls.push('verify-claim'); return true; },
     updateRestoreProgress: async args => { calls.push(['progress', args]); },
     finishRestore: async args => { calls.push(['finish', args]); restore.state = args.state; },
@@ -78,12 +79,33 @@ test('queue failure leaves a resumable QUEUING_FAILED restore', async () => {
     stores: {
       startRestore: async () => id(1),
       markRestoreQueued: async () => calls.push('queued'),
-      markRestoreQueueFailure: async args => calls.push(args)
+      markRestoreQueueFailure: async args => calls.push(args),
+      release: async () => {}
     },
     enqueue: async () => { throw new Error('queue unavailable'); }, now: 100
   });
   assert.equal(result.state, 'QUEUING_FAILED');
   assert.deepEqual(calls.map(value => value === 'queued' ? value : value.error), ['queue unavailable']);
+});
+
+test('a restore that could not be queued releases the item lock into ERROR', async () => {
+  // Nothing is running, so the item must not stay RESTORING: the gate refuses
+  // every transition of a RESTORING item as "restore in progress".
+  const released = [];
+  await queueRestore({
+    prepared: prepared(), actor: { accountId: 'reviewer' },
+    approval: { approval_id: id(3), actor_account_id: 'reviewer' },
+    stores: {
+      startRestore: async () => id(1),
+      markRestoreQueued: async () => {},
+      markRestoreQueueFailure: async () => true,
+      release: async args => { released.push(args); }
+    },
+    enqueue: async () => { throw new Error('queue unavailable'); }, now: 100
+  });
+  assert.equal(released.length, 1);
+  assert.equal(released[0].issueId, 10);
+  assert.equal(released[0].state, 'ERROR');
 });
 
 test('duplicate delivery does not replay a completed restore or terminal verification', async () => {
@@ -94,6 +116,29 @@ test('duplicate delivery does not replay a completed restore or terminal verific
   assert.equal(second.state, 'COMPLETE');
   assert.equal(f.calls.filter(x => x === 'execute').length, 1);
   assert.equal(f.calls.filter(x => x === 'verify').length, 1);
+});
+
+test('the worker keeps the work item lock alive while it restores', async () => {
+  // va_item_state.last_checked_at is what every stale-lock check reads. Only
+  // va_restore was heartbeated, so the item lock aged from the moment the
+  // reject took it, however long the worker then ran.
+  const f = storeFixture();
+  f.executeBatch = async () => { f.calls.push('execute'); return { state: 'PARTIAL', completed: 1, remaining: 2, attempted: 1 }; };
+  await runRestoreWorker(body, { ...f, now: 500 });
+  const refreshed = f.calls.filter(call => call?.[0] === 'lock');
+  assert.ok(refreshed.length >= 2, 'refreshed on claim and after the batch');
+  assert.ok(refreshed.every(([, args]) => args.issueId === 10));
+});
+
+test('a batch whose requeue fails releases the item lock into ERROR', async () => {
+  const f = storeFixture();
+  const released = [];
+  f.release = async args => { released.push(args); };
+  f.executeBatch = async () => { f.calls.push('execute'); return { state: 'PARTIAL', completed: 1, remaining: 2, attempted: 1 }; };
+  f.enqueue = async () => { throw new Error('queue unavailable'); };
+  const result = await runRestoreWorker(body, f);
+  assert.equal(result.state, 'QUEUING_FAILED');
+  assert.deepEqual(released.map(r => [r.issueId, r.state]), [[10, 'ERROR']]);
 });
 
 test('a stale baseline exits before any Jira restore mutation', async () => {

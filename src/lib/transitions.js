@@ -48,8 +48,17 @@ export async function availableTransitions(api, issueKey, { asApp = false } = {}
   if (!res.ok) {
     throw new Error(`transitions: could not read transitions for ${issueKey} (status ${res.status})`);
   }
-  const body = await res.json();
-  return (body.transitions ?? []).map((t) => ({
+  return transitionsFrom((await res.json()).transitions);
+}
+
+/**
+ * Jira's transition list in the shape every caller reads. Shared with the
+ * worklist, which gets the same list inline from one issue read
+ * (`expand=transitions` returns exactly what the endpoint above does, less the
+ * screen fields the worklist does not need).
+ */
+export function transitionsFrom(transitions) {
+  return (transitions ?? []).map((t) => ({
     id: String(t.id),
     name: t.name,
     toStatusId: String(t.to?.id ?? ''),

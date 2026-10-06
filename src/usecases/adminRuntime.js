@@ -9,7 +9,6 @@ export async function adminDependencies(overrides, profile = '') {
   const workflowSource = await import('../lib/workflowSource.js');
   const deps = { ...db, ...store, ...ledger, ...directory,
     asApp: () => api.asApp(), asUser: () => api.asUser(), route: forge.route,
-    hasUnresolvedDrift: (await import('../db/driftStore.js')).hasUnresolvedDrift,
     listGatedTransitions: (await import('../db/configStore.js')).listGatedTransitions,
     declaredFieldRows: (await import('../db/configStore.js')).declaredFieldRows,
     // The live Jira workflow read and this app's own runtime identity — shared

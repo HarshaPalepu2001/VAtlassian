@@ -18,6 +18,7 @@ const resolver = new Resolver();
 resolver.define('panel:getState', ({ payload, context }) => panel.getState({ payload, context }));
 resolver.define('panel:getSummary', ({ payload, context }) => panelSummary.getSummary({ payload, context }));
 resolver.define('panel:getEvidence', ({ payload, context }) => panelEvidence.getEvidence({ payload, context }));
+resolver.define('panel:compareVersions', ({ payload, context }) => panelEvidence.compareVersions({ payload, context }));
 resolver.define('panel:getGlanceState', ({ payload, context }) => panel.getGlanceState({ payload, context }));
 resolver.define('signature:challenge', ({ payload, context }) => approval.challenge({ payload, context }));
 resolver.define('approval:challenge', ({ payload, context }) => approval.challenge({ payload, context }));
@@ -45,4 +46,3 @@ defineWebAuthnResolvers(resolver);
 const definitions = resolver.getDefinitions();
 
 export const handler = wrapWithHarness(definitions, { resolverName: 'panel' });
-

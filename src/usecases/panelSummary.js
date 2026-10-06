@@ -13,7 +13,7 @@ import { activeRootsForNode, rootNodeDigests, driftedDescendants, capturingParen
 import { isEligible } from '../lib/reviewer.js';
 import { baselinePolicy } from '../lib/baselinePolicy.js';
 import { baselineDecisionMeaning } from '../lib/approval/challenge.js';
-import { baselineDrift } from '../lib/liveDrift.js';
+import { baselineDrift, logLiveDrift } from '../lib/liveDrift.js';
 import { linkDecisionsPending } from '../db/linkPendingStore.js';
 import { controlledFields } from '../db/configStore.js';
 import { fieldsForItem } from '../lib/tree/nodeFields.js';
@@ -178,6 +178,7 @@ export async function getSummary(args) { return respond(async () => {
     readRootDigests: rootNodeDigests });
   const drifted = comparison.changed;
   const driftCount = drifted.length;
+  logLiveDrift('panel-summary', { issueKey: issue.key, issueTypeId: issue.fields?.issuetype?.id, comparison });
   // Materiality comes from the declared rows, which is all this path has —
   // classifying by value would need the retained baseline values, and reading
   // those is exactly what panel:getSummary must not do.

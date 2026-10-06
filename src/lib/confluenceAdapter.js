@@ -2,8 +2,14 @@ import api, { route, routeFromAbsolute } from '@forge/api';
 import { GovernedObjectRef, ContentSnapshot } from './governanceCore.js';
 
 export class ConfluenceAdapter {
-  constructor() {
+  /**
+   * `asApp` for a trigger or queue consumer, which has no user to act as:
+   * Forge's asUser() throws there. Screens keep acting as the viewer, so a
+   * page they cannot see or restrict stays out of their reach.
+   */
+  constructor({ asApp = false } = {}) {
     this.product = 'confluence';
+    this.client = () => asApp ? api.asApp() : api.asUser();
   }
 
   getContentRoute(ref) {
@@ -26,7 +32,7 @@ export class ConfluenceAdapter {
 
   async read(ref) {
     const contentRoute = this.getContentRoute(ref);
-    const response = await api.asUser().requestConfluence(
+    const response = await this.client().requestConfluence(
       route`${contentRoute}?body-format=storage`
     );
     if (!response.ok) return null;
@@ -36,7 +42,7 @@ export class ConfluenceAdapter {
     let restrictions = [];
     if (['page', 'blogpost', 'live-doc'].includes(ref.contentType)) {
       try {
-        const restRes = await api.asUser().requestConfluence(route`/wiki/rest/api/content/${ref.contentId}/restriction/byOperation`);
+        const restRes = await this.client().requestConfluence(route`/wiki/rest/api/content/${ref.contentId}/restriction/byOperation`);
         if (restRes.ok) {
           restrictions = (await restRes.json()).results || [];
         }
@@ -61,7 +67,7 @@ export class ConfluenceAdapter {
     const restrictions = item1._restrictions || [];
     
     if (ref.contentType === 'attachment') {
-      const downloadRes = await api.asUser().requestConfluence(item1.downloadLink || item1._links?.download || route`/wiki${item1._links?.download}`);
+      const downloadRes = await this.client().requestConfluence(item1.downloadLink || item1._links?.download || route`/wiki${item1._links?.download}`);
       if (!downloadRes.ok) throw new Error("Failed to fetch attachment blob");
       const buffer = await downloadRes.arrayBuffer();
       
@@ -104,7 +110,7 @@ export class ConfluenceAdapter {
     }
 
     if (ref.contentType === 'attachment') {
-      const downloadRes = await api.asUser().requestConfluence(item.downloadLink || item._links?.download || route`/wiki${item._links?.download}`);
+      const downloadRes = await this.client().requestConfluence(item.downloadLink || item._links?.download || route`/wiki${item._links?.download}`);
       if (downloadRes.ok) {
         const buffer = await downloadRes.arrayBuffer();
         const { createHash } = await import('crypto');
@@ -128,7 +134,7 @@ export class ConfluenceAdapter {
 
   async lock(ref) {
     if (['attachment', 'whiteboard', 'database', 'folder'].includes(ref.contentType)) return true;
-    const res = await api.asUser().requestConfluence(route`/wiki/rest/api/content/${ref.contentId}/restriction`, {
+    const res = await this.client().requestConfluence(route`/wiki/rest/api/content/${ref.contentId}/restriction`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify([
@@ -154,7 +160,7 @@ export class ConfluenceAdapter {
       }
     };
     
-    const res = await api.asUser().requestConfluence(this.getCreateRoute(ref), {
+    const res = await this.client().requestConfluence(this.getCreateRoute(ref), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -170,7 +176,7 @@ export class ConfluenceAdapter {
     const canonical = await this.read(canonicalRef);
     if (!wc || !canonical) throw new Error('Missing content');
     
-    const updateRes = await api.asUser().requestConfluence(this.getContentRoute(canonicalRef), {
+    const updateRes = await this.client().requestConfluence(this.getContentRoute(canonicalRef), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -189,7 +195,7 @@ export class ConfluenceAdapter {
     });
     
     if (updateRes.ok) {
-      await api.asUser().requestConfluence(this.getContentRoute(workingCopyRef), { method: 'DELETE' });
+      await this.client().requestConfluence(this.getContentRoute(workingCopyRef), { method: 'DELETE' });
       return true;
     }
     return false;
@@ -215,7 +221,7 @@ export class ConfluenceAdapter {
        const footerBuf = Buffer.from(footer, 'utf8');
        const bodyBuffer = Buffer.concat([headerBuf, Buffer.from(buffer), footerBuf]);
 
-       const updateRes = await api.asUser().requestConfluence(route`/wiki/api/v2/attachments/${item.id}/data`, {
+       const updateRes = await this.client().requestConfluence(route`/wiki/api/v2/attachments/${item.id}/data`, {
          method: 'POST',
          headers: {
            'Content-Type': `multipart/form-data; boundary=${boundary}`,
@@ -227,7 +233,7 @@ export class ConfluenceAdapter {
        return updateRes.ok;
     }
 
-    const updateRes = await api.asUser().requestConfluence(this.getContentRoute(ref), {
+    const updateRes = await this.client().requestConfluence(this.getContentRoute(ref), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -256,7 +262,7 @@ export class ConfluenceAdapter {
     }
 
     if (ref.contentType === 'attachment') {
-      const downloadRes = await api.asUser().requestConfluence(item.downloadLink || item._links?.download || route`/wiki${item._links?.download}`);
+      const downloadRes = await this.client().requestConfluence(item.downloadLink || item._links?.download || route`/wiki${item._links?.download}`);
       if (!downloadRes.ok) return false;
       const buffer = await downloadRes.arrayBuffer();
       const { createHash } = await import('crypto');
@@ -323,7 +329,7 @@ export class ConfluenceAdapter {
           ? `/wiki/api/v2/folders/${current.contentId}/children${nextCursor ? `?cursor=${nextCursor}` : ''}`
           : `/wiki/api/v2/pages/${current.contentId}/children${nextCursor ? `?cursor=${nextCursor}` : ''}`;
         
-        const res = await api.asUser().requestConfluence(routeFromAbsolute(url));
+        const res = await this.client().requestConfluence(routeFromAbsolute(url));
         if (!res.ok) throw new Error('Unreadable descendants fail capture');
         const data = await res.json();
         
@@ -344,7 +350,7 @@ export class ConfluenceAdapter {
           ? `/wiki/api/v2/folders/${current.contentId}/attachments${nextCursor ? `?cursor=${nextCursor}` : ''}`
           : `/wiki/api/v2/pages/${current.contentId}/attachments${nextCursor ? `?cursor=${nextCursor}` : ''}`;
 
-        const res = await api.asUser().requestConfluence(routeFromAbsolute(url));
+        const res = await this.client().requestConfluence(routeFromAbsolute(url));
         if (!res.ok) {
            if (res.status === 404) break;
            throw new Error('Unreadable descendants fail capture');

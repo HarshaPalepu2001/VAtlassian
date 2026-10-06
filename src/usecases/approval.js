@@ -4,7 +4,7 @@ import { makeApproval, validEvidence } from '../lib/approval/record.js';
 import { FailClosed, DENY } from '../lib/errors.js';
 import { createChallengePayload, challengeContextHash } from '../lib/approval/challenge.js';
 import { writeChallenge, getChallenge, markChallengeConsumed } from '../db/challengeStore.js';
-import { LOCK_TTL_MS } from '../lib/decision.js';
+import { lockLeaseMs } from '../lib/decision.js';
 import { REVIEW_STATE } from '../lib/interception.js';
 
 const fail = reason => { throw new FailClosed(reason); };
@@ -53,7 +53,7 @@ function activeOperationLock(review, now) {
   if (review?.state === REVIEW_STATE.LOCKED) return true;
   if (![REVIEW_STATE.RESTORING, REVIEW_STATE.DECIDING].includes(review?.state)) return false;
   const checkedAt = Number(review.last_checked_at);
-  return review.last_checked_at == null || !Number.isFinite(checkedAt) || now - checkedAt <= LOCK_TTL_MS;
+  return review.last_checked_at == null || !Number.isFinite(checkedAt) || now - checkedAt <= lockLeaseMs(review.state);
 }
 
 export function createApprovalUsecases(deps) {
@@ -166,54 +166,40 @@ export function createApprovalUsecases(deps) {
   async function submit({ payload = {}, context }) {
     try {
       const accountId = actorId(context);
-      let issue, actor, ct, prepared, hasTransition, workflowTransition, transition, required, binding;
-      let challengeRow = null;
 
-      if (payload.challengeId) {
-        const approvalNote = note(payload);
-        if (typeof payload.challengeId !== 'string' || !/^[a-f0-9]{32}$/.test(payload.challengeId)) fail('NO_DECISION');
-        challengeRow = await challenges.get(Buffer.from(payload.challengeId, 'hex'));
-        if (!challengeRow || challengeRow.state !== 'PENDING' || challengeRow.signer_account_id !== accountId || Number(challengeRow.expires_at) <= deps.now()) {
-          fail('NO_DECISION');
-        }
-
-        issue = await deps.issue({ payload: { issueKey: payload.issueKey }, context });
-        if (issue.issueId !== challengeRow.issue_id) fail('NOT_CONFIGURED');
-        actor = await deps.actor(accountId);
-        ({ prepared, transition, ct, hasTransition, workflowTransition } = await decisionContext({ issue, actor,
-          decision: challengeRow.decision,
-          requested: challengeRow.transition_id != null
-            ? { intent: 'WORKFLOW', transitionId: challengeRow.transition_id }
-            : { intent: 'DRIFT' } }));
-        if (challengeRow.transition_id != null && String(challengeRow.transition_id) !== String(transition?.id ?? '')) fail('TRANSITION_MISMATCH');
-        if (challengeRow.transition_id == null && workflowTransition) fail('TRANSITION_MISMATCH');
-        if (prepared.contentHash !== challengeRow.candidate_hash) fail('CONTENT_CHANGED');
-        if (activeOperationLock(prepared.review, deps.now())) fail('RESTORE_IN_PROGRESS');
-        // A signed capture resolves this drift in apply(), before a pending
-        // transition capability is published. Non-capturing edges still block.
-        if (hasTransition && !yes(ct.capture_baseline) && prepared.driftCount > 0) fail('UNDECIDED_DRIFT');
-        if (challengeRow.operation_plan_hash !== challengeContextHash({ issue, transition, prepared, policy: ct })) fail('CONTENT_CHANGED');
-
-        required = controlledAuthenticationMethod(ct.required_assurance);
-        binding = { accountId, issueId: issue.issueId, fromStatusId: issue.statusId,
-          toStatusId: transition?.toStatusId ?? issue.statusId, contentHash: prepared.contentHash, decision: challengeRow.decision };
-        payload = { ...payload, decision: challengeRow.decision, note: approvalNote };
-
-      } else {
-        if (!['APPROVE', 'REJECT'].includes(payload.decision)) fail('NOT_CONFIGURED');
-        const approvalNote = note(payload);
-        issue = await deps.issue({ payload, context });
-        actor = await deps.actor(accountId);
-        ({ prepared, transition, ct, hasTransition, workflowTransition } = await decisionContext({ issue, actor,
-          decision: payload.decision, requested: payload, expectedEvidenceHash: payload.expectedEvidenceHash }));
-        if (payload.expectedEvidenceHash != null && payload.expectedEvidenceHash !== prepared.evidenceHash) fail('CONTENT_CHANGED');
-        if (activeOperationLock(prepared.review, deps.now())) fail('RESTORE_IN_PROGRESS');
-        if (hasTransition && !yes(ct.capture_baseline) && prepared.driftCount > 0) fail('UNDECIDED_DRIFT');
-        binding = { accountId, issueId: issue.issueId, fromStatusId: issue.statusId,
-          toStatusId: transition?.toStatusId ?? issue.statusId, contentHash: prepared.contentHash, decision: payload.decision };
-        required = controlledAuthenticationMethod(ct.required_assurance);
-        payload = { ...payload, note: approvalNote };
+      // EVERY SIGNATURE ANSWERS A CHALLENGE. The challenge fixed, once, the
+      // meaning the signer was shown, the candidate content and the exact edge;
+      // a submit without one would choose its own transition and could leave
+      // the evidence hash out, approving content nobody reviewed. Every client
+      // (panel, review window, both transition-screen fields) signs this way.
+      const approvalNote = note(payload);
+      if (typeof payload.challengeId !== 'string' || !/^[a-f0-9]{32}$/.test(payload.challengeId)) fail('NO_DECISION');
+      const challengeRow = await challenges.get(Buffer.from(payload.challengeId, 'hex'));
+      if (!challengeRow || challengeRow.state !== 'PENDING' || challengeRow.signer_account_id !== accountId || Number(challengeRow.expires_at) <= deps.now()) {
+        fail('NO_DECISION');
       }
+
+      const issue = await deps.issue({ payload: { issueKey: payload.issueKey }, context });
+      if (issue.issueId !== challengeRow.issue_id) fail('NOT_CONFIGURED');
+      const actor = await deps.actor(accountId);
+      const { prepared, transition, ct, hasTransition, workflowTransition } = await decisionContext({ issue, actor,
+        decision: challengeRow.decision,
+        requested: challengeRow.transition_id != null
+          ? { intent: 'WORKFLOW', transitionId: challengeRow.transition_id }
+          : { intent: 'DRIFT' } });
+      if (challengeRow.transition_id != null && String(challengeRow.transition_id) !== String(transition?.id ?? '')) fail('TRANSITION_MISMATCH');
+      if (challengeRow.transition_id == null && workflowTransition) fail('TRANSITION_MISMATCH');
+      if (prepared.contentHash !== challengeRow.candidate_hash) fail('CONTENT_CHANGED');
+      if (activeOperationLock(prepared.review, deps.now())) fail('RESTORE_IN_PROGRESS');
+      // A signed capture resolves this drift in apply(), before a pending
+      // transition capability is published. Non-capturing edges still block.
+      if (hasTransition && !yes(ct.capture_baseline) && prepared.driftCount > 0) fail('UNDECIDED_DRIFT');
+      if (challengeRow.operation_plan_hash !== challengeContextHash({ issue, transition, prepared, policy: ct })) fail('CONTENT_CHANGED');
+
+      const required = controlledAuthenticationMethod(ct.required_assurance);
+      const binding = { accountId, issueId: issue.issueId, fromStatusId: issue.statusId,
+        toStatusId: transition?.toStatusId ?? issue.statusId, contentHash: prepared.contentHash, decision: challengeRow.decision };
+      payload = { ...payload, decision: challengeRow.decision, note: approvalNote };
 
       // Preauthorization only defers Jira's transition; it is not affirmation.
       if (payload.confirmed !== true) fail('NO_DECISION');
@@ -222,6 +208,7 @@ export function createApprovalUsecases(deps) {
       // provider code runs (so no OTP attempt or WebAuthn challenge is spent).
       const proof = await providerFor(required).verify({
         binding: { ...binding, transitionId: transition?.id ?? null },
+        approvalChallengeId: challengeRow.challenge_id,
         confirmed: payload.confirmed,
         ...providerInput(required, payload),
         totpDeps: deps.totpDeps,
@@ -235,7 +222,7 @@ export function createApprovalUsecases(deps) {
         return { success: false, reason, error: proof.error ?? DENY[reason] ?? DENY.SERVICE_UNAVAILABLE };
       }
 
-      if (challengeRow && !await challenges.consume(challengeRow.challenge_id)) fail('NO_DECISION');
+      if (!await challenges.consume(challengeRow.challenge_id)) fail('NO_DECISION');
 
       const row = makeApproval({ ...binding, issueKey: issue.issueKey, projectId: issue.projectId, issueTypeId: issue.issueTypeId,
         actorName: actor.displayName, signerRole: ct.required_role, meaning: ct.meaning, transitionId: transition?.id,

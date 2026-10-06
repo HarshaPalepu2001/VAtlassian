@@ -36,6 +36,13 @@ export const RESTORABLE = {
   NOT_RETAINED: 'NOT_RETAINED'
 };
 
+/** Jira can return an ADF document for a field whose saved admin kind is TEXT. */
+export function presentationKind(configuredKind, before, after) {
+  const values = [before, after].filter(value => value != null);
+  if (values.length && values.every(value => value?.type === 'doc' && Array.isArray(value.content))) return FIELD_KIND.ADF;
+  return configuredKind;
+}
+
 /**
  * Fields that a PUT can never restore, with the reason a reviewer is shown.
  *
@@ -273,6 +280,24 @@ function diffAttachmentsField(base, before, after) {
     summary: changed ? parts.join('; ') : 'unchanged',
     magnitude: changed ? 1 : 0
   };
+}
+
+/** Add display metadata from retained Jira values without changing canonical file equality. */
+export function withAttachmentDetails(diff, beforeRaw, afterRaw) {
+  if (diff?.kind !== DIFF_KIND.ATTACHMENTS) return diff;
+  const details = (items, raw) => {
+    const originals = new Map((Array.isArray(raw) ? raw : []).map(file => [String(file.id), file]));
+    return (items ?? []).map(item => {
+      const file = originals.get(String(item.id)) ?? {};
+      return { ...item,
+        ...(file.mimeType ? { mimeType: file.mimeType } : {}),
+        ...(file.created ? { created: file.created } : {}),
+        ...(file.author?.displayName ? { authorName: file.author.displayName } : {}),
+        ...(file.jiraId && String(file.jiraId) !== String(item.id) ? { jiraId: String(file.jiraId) } : {})
+      };
+    });
+  };
+  return { ...diff, added: details(diff.added, afterRaw), removed: details(diff.removed, beforeRaw) };
 }
 
 /**

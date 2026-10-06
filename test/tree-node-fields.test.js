@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { planTreeCapture } from '../src/lib/tree/capturePlan.js';
 import { diffTree } from '../src/lib/tree/diff.js';
-import { readTreeWithNodeFields, scopeKey, nodeScope } from '../src/lib/tree/nodeFields.js';
+import { readTreeWithNodeFields, scopeKey, nodeScope, fieldScope } from '../src/lib/tree/nodeFields.js';
 
 const F = id => ({ field_id: id, field_kind: 'TEXT', store_values: true });
 const story = [F('summary'), F('customfield_1')];
@@ -78,4 +78,20 @@ test('a child field the root does not track is not a child change', () => {
   const now = planTreeCapture({ rootIssueId: '1', nodes: [nodes[0], node('2', 'T', '1', { summary: 'c', customfield_9: 'b' })],
     controlledFields: story, fieldsFor: rootOnly });
   assert.deepEqual(diffTree({ baselineTree: base, currentTree: now, controlledFields: story, scopeFor: rootOnly }).changes, []);
+});
+
+test('an item\'s fields come with the rule scope they came from, and the version that imposed it', async () => {
+  const controlledFields = async ({ projectId, issueTypeId }) => [{ field_id: `${projectId}:${issueTypeId}` }];
+  const own = await fieldScope({ issueId: 7, projectId: 1, issueTypeId: 'T' },
+    { activeRootsForNode: async () => [], controlledFields });
+  assert.deepEqual(own.fields, [{ field_id: '1:T' }]);
+  assert.deepEqual(own.ruleScope, { source: 'OWN', projectId: 1, issueTypeId: 'T', imposedByBaselineId: null, imposedByVersion: null });
+  const root = { rootIssueId: 1, baselineId: Buffer.alloc(16, 2), version: 4, projectId: 1, issueTypeId: 'E', capturedAt: 10 };
+  const child = await fieldScope({ issueId: 7, projectId: 1, issueTypeId: 'T' },
+    { activeRootsForNode: async () => [root], controlledFields });
+  assert.deepEqual(child.fields, [{ field_id: '1:E' }]);
+  assert.equal(child.ruleScope.source, 'INHERITED');
+  assert.deepEqual([child.ruleScope.projectId, child.ruleScope.issueTypeId], [1, 'E']);
+  assert.ok(child.ruleScope.imposedByBaselineId.equals(Buffer.alloc(16, 2)));
+  assert.equal(child.ruleScope.imposedByVersion, 4);
 });

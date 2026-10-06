@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { diffText, isWhitespaceOnly, similarity, tokenise } from '../src/lib/diff/text.js';
 import { diffAdf, flatten, BLOCK_OP } from '../src/lib/diff/adf.js';
 import { diffField, RESTORABLE } from '../src/lib/diff/fields.js';
-import { FIELD_KIND } from '../src/lib/content.js';
+import { FIELD_KIND, project } from '../src/lib/content.js';
 
 const para = (text) => ({ type: 'paragraph', content: [{ type: 'text', text }] });
 const doc = (...paras) => ({ type: 'doc', version: 1, content: paras });
@@ -188,6 +188,41 @@ test('a file swapped under the same name is an add and a remove, never a change 
   assert.deepEqual(result.replaced, []);
 });
 
+test('current drift includes saved attachment identity and Jira upload details', () => {
+  const before = [{ id: '1', filename: 'proof.pdf', size: 4096, mimeType: 'application/pdf',
+    created: '2026-09-20T10:00:00.000Z', author: { displayName: 'Priya', accountId: 'p' } }];
+  const after = [{ id: '2', filename: 'proof.pdf', size: 8192, mimeType: 'application/pdf',
+    created: '2026-09-21T11:00:00.000Z', author: { displayName: 'Sam', accountId: 's' } }];
+  const { digests } = project({ attachment: before }, [{ field_id: 'attachment', field_kind: FIELD_KIND.ATTACHMENTS, store_values: true }]);
+  const result = diffIssue({ baseline: { version: 1, field_digests: JSON.stringify(digests) },
+    baselineValues: { attachment: before }, currentFields: { attachment: after },
+    controlledFields: [{ field_id: 'attachment', field_name: 'Attachments', field_kind: FIELD_KIND.ATTACHMENTS, store_values: true }] });
+  assert.deepEqual(result.fields[0].removed[0], { id: '1', filename: 'proof.pdf', size: 4096,
+    mimeType: 'application/pdf', created: '2026-09-20T10:00:00.000Z', authorName: 'Priya' });
+  assert.deepEqual(result.fields[0].added[0], { id: '2', filename: 'proof.pdf', size: 8192,
+    mimeType: 'application/pdf', created: '2026-09-21T11:00:00.000Z', authorName: 'Sam' });
+});
+
+test('saved values remain visible in drift after the current retention setting changes', () => {
+  const field = { field_id: 'summary', field_name: 'Summary', field_kind: FIELD_KIND.TEXT, store_values: false };
+  const { digests } = project({ summary: 'Signed' }, [{ ...field, store_values: true }]);
+  const result = diffIssue({ baseline: { version: 1, field_digests: JSON.stringify(digests) },
+    baselineValues: { summary: 'Signed' }, currentFields: { summary: 'Changed' }, controlledFields: [field] });
+  assert.equal(result.fields[0].retained, true);
+  assert.equal(result.fields[0].before, 'Signed');
+});
+
+test('a tracked custom text field containing ADF gets a block diff', () => {
+  const field = { field_id: 'customfield_rich', field_name: 'Acceptance criteria', field_kind: FIELD_KIND.TEXT, store_values: true };
+  const before = doc(para('First step'), para('Second step'));
+  const after = doc(para('First step'), para('Second step changed'));
+  const { digests } = project({ customfield_rich: before }, [field]);
+  const result = diffIssue({ baseline: { version: 1, field_digests: JSON.stringify(digests) },
+    baselineValues: { customfield_rich: before }, currentFields: { customfield_rich: after }, controlledFields: [field] });
+  assert.equal(result.fields[0].kind, 'adf');
+  assert.equal(result.fields[0].blocks.filter(block => block.op !== 'equal').length, 1);
+});
+
 test('labels diff as a set, reported as added and removed', () => {
   const result = diffField({
     field: { field_id: 'labels', field_name: 'Labels', field_kind: FIELD_KIND.MULTI, store_values: true },
@@ -250,6 +285,14 @@ test('reconcile collection attribution is marked as detected', () => {
     { key: 'reconcile-1', field_id: 'summary', occurred_at: 200, source: 'SYSTEM', detected_via: 'RECONCILE' }
   ] }));
   assert.equal(result.fields[0].attribution[0]?.detected, true);
+});
+test('reconcile collection with a Jira changelog preserves the edit time', () => {
+  const result = diffIssue(evidenceFixture({ summary: 'Edited', labels: ['a'] }, { driftRows: [
+    { key: 'reconcile-2', field_id: 'summary', actor_name: 'Priya', occurred_at: 200,
+      source: 'USER', detected_via: 'RECONCILE', changelog_id: 'history-2' }
+  ] }));
+  assert.equal(result.fields[0].attribution[0]?.detected, false);
+  assert.equal(result.fields[0].lastChangedBy, 'Priya');
 });
 test('subtask drift carries work item labels instead of bare Jira ids', () => {
   const result = diffIssue({
