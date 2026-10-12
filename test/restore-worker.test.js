@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { queueRestore } from '../src/usecases/restoreActions.js';
+import { queueRestore, restoresSubtree } from '../src/usecases/restoreActions.js';
 import { runRestoreWorker } from '../src/jobs/restoreWorker.js';
 
 const id = n => Buffer.alloc(16, n);
@@ -274,4 +274,33 @@ test('a verification that cannot say which item is wrong releases no child', asy
     unmatched: [{ logicalNodeId: null, issueKey: 'T-10', kind: 'READ_FAILED', fieldId: null }] });
   await runRestoreWorker(body, f);
   assert.equal(released.some(args => args.issueId === 11 || args.issueId === 12), false);
+});
+
+// Found live 2026-10-12: a reject at VAT-73 (a Story baselined by its Epic's
+// capture) restored the Story's own description but not its sub-task's label.
+// A child baseline written by its parent covers its subtree like a tree does.
+test('a reject on a child its parent captured restores its subtree, not only itself', async () => {
+  assert.equal(restoresSubtree({ tree_hash: 't'.repeat(64) }), true);
+  assert.equal(restoresSubtree({ tree_hash: null, captured_by_baseline_id: id(9) }), true);
+  assert.equal(restoresSubtree({ tree_hash: null, captured_by_baseline_id: null }), false);
+  assert.equal(restoresSubtree(null), false);
+
+  const child = { logicalNodeId: 'c1', currentIssueId: 10, issueKey: 'T-10', parentLogicalNodeId: null,
+    parentLogicalId: null, digests: { labels: 'c1' } };
+  const sub = { logicalNodeId: 's1', currentIssueId: 11, issueKey: 'T-11', parentLogicalNodeId: 'c1',
+    parentLogicalId: 'c1', digests: { labels: 's1-approved' } };
+  const p = {
+    issue: { id: '10', key: 'T-10' }, issueId: 10, projectId: 1,
+    baseline: { baseline_id: id(2), version: 1, tree_hash: null, captured_by_baseline_id: id(9), from_status_id: '1' },
+    baselineTree: { nodes: [child, sub], values: { c1: { labels: ['c1'] }, s1: { labels: ['s1'] } } },
+    currentTree: { nodes: [child, { ...sub, digests: { labels: 's1-changed' } }],
+      values: { c1: { labels: ['c1'] }, s1: { labels: ['s1', 'extra'] } } },
+    fields: [{ field_id: 'labels' }], config: {}
+  };
+  let plan = null;
+  await queueRestore({ prepared: p, actor: { accountId: 'reviewer' }, approval: { approval_id: id(3) },
+    stores: { startRestore: async args => { plan = args.actionPlan; return id(1); }, markRestoreQueued: async () => {} },
+    enqueue: async () => ({ jobId: 'j' }), now: 1 });
+  assert.deepEqual(plan.map(step => [step.kind, step.logicalNodeId, step.fieldIds]), [['RESTORE_FIELDS', 's1', ['labels']]],
+    'the sub-task\'s changed field is restored');
 });

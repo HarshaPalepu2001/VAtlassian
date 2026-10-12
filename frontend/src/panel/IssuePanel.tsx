@@ -132,6 +132,12 @@ function IssuePanelBody({ issueKey: issueKeyProp, onDone }: Props) {
   // Drift is decided on the Baseline card; a clean record is decided in
   // Approvals. One set of controls either way, so one signing session.
   const reviewingDrift = resolveSelectedAction(authoritativeSummary, selectedTransitionId).reviewingDrift;
+  // HELD IS THE VALIDATOR'S VERDICT, not the review's. The review counts every
+  // change its decision would cover, children included, but drift is held only
+  // downward (lib/ancestorHold.js): this item is held by its OWN change (the
+  // server's live count, the same one the validator holds on) or by one above
+  // it. A change below only asks this item for a decision.
+  const heldHere = (summary?.drift?.count ?? 0) > 0 || Boolean(summary?.drift?.heldBy);
   const review = (tab: 'changes' | 'summary' | 'record') => {
     void openReview({ issueKey, tab, onClose: () => { void refresh(); onDone?.(); } }).catch(() => {});
   };
@@ -197,9 +203,12 @@ function IssuePanelBody({ issueKey: issueKeyProp, onDone }: Props) {
               record: what was signed, and — flagged on the same card — what has
               changed since. Nothing in either expands; reading at length
               happens in the review window. */}
-          <PanelSection title="Approvals" subtitle={reviewingDrift ? 'Held while changes to the baseline are undecided' : 'Your decision is recorded against your name and cannot be edited afterwards.'}>
+          <PanelSection title="Approvals" subtitle={reviewingDrift
+            ? (heldHere ? 'Held while changes to the baseline are undecided'
+              : 'Changes below this work item await a decision. It is not held: only they are')
+            : 'Your decision is recorded against your name and cannot be edited afterwards.'}>
             {reviewingDrift
-              ? <ControlFacts summary={authoritativeSummary!} fromStatusName={summary.issue?.status?.name} held
+              ? <ControlFacts summary={authoritativeSummary!} fromStatusName={summary.issue?.status?.name} held={heldHere}
                   authoritativeReady={hasAuthoritativeEvidence || Boolean(evidenceError) || Boolean(heldEvidence)} />
               : controls}
             <LatestApproval approval={summary.latestApproval} />

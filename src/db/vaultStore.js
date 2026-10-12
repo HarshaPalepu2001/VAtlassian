@@ -205,13 +205,36 @@ export async function identityRecords(issueIds, query = executeQuery) {
   if (!rows?.result) throw rows?.error ?? new Error('Attachment identity storage is unavailable');
   for (const row of rows.data ?? []) {
     const issueId = Number(row.issue_id);
-    if (!out.has(issueId)) out.set(issueId, { files: new Map(), media: new Map(), mediaOwner: new Map() });
+    if (!out.has(issueId)) out.set(issueId, { files: new Map(), media: new Map(), mediaOwner: new Map(), attachmentMedia: new Map() });
     const entry = out.get(issueId);
     entry.files.set(String(row.attachment_id), String(row.stands_for_id));
     if (row.media_id && row.stands_for_media_id) {
       entry.media.set(String(row.media_id), String(row.stands_for_media_id));
       entry.mediaOwner.set(String(row.media_id), String(row.attachment_id));
+      entry.attachmentMedia.set(String(row.attachment_id), String(row.media_id));
     }
+  }
+  return out;
+}
+
+export async function vaultedAttachmentMedia(issueIds, query = executeQuery) {
+  const ids = [...new Set((issueIds ?? []).map(Number).filter(Number.isSafeInteger))];
+  const out = new Map();
+  if (ids.length === 0) return out;
+  try {
+    const rows = await query(
+      `SELECT issue_id, jira_attachment_id, media_id FROM va_vault_attachment
+        WHERE issue_id IN (${ids.map(() => '?').join(', ')}) AND media_id IS NOT NULL`,
+      ids
+    );
+    if (!rows?.result) return out;
+    for (const row of rows.data ?? []) {
+      const issueId = Number(row.issue_id);
+      if (!out.has(issueId)) out.set(issueId, new Map());
+      out.get(issueId).set(String(row.jira_attachment_id), String(row.media_id));
+    }
+  } catch {
+    return out;
   }
   return out;
 }

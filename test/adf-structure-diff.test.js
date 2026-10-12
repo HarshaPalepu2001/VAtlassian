@@ -147,3 +147,25 @@ test('whenever the hashed bytes differ, the diff reports a change — never "equ
   }
   assert.equal(changedBlocks(diffAdf(base, structuredClone(base))).length, 0);
 });
+
+test('media blocks resolve media UUIDs to filenames when mediaMap is provided', () => {
+  const mediaDoc = doc({
+    type: 'mediaSingle',
+    content: [{ type: 'media', attrs: { id: '369ed59c-f385-4a4a-b1d9-535cfd9b4575', type: 'file' } }]
+  });
+  const emptyDoc = doc(para('No media'));
+
+  // Without mediaMap: fallback to UUID
+  const unmappedBlocks = flatten(mediaDoc);
+  assert.equal(unmappedBlocks[0].text, '[attachment 369ed59c-f385-4a4a-b1d9-535cfd9b4575]');
+
+  // With mediaMap: resolves to filename
+  const mediaMap = new Map([['369ed59c-f385-4a4a-b1d9-535cfd9b4575', 'Salesforce CDC POC.png']]);
+  const mappedBlocks = flatten(mediaDoc, { mediaMap });
+  assert.equal(mappedBlocks[0].text, '[attachment: Salesforce CDC POC.png]');
+
+  // In diffField:
+  const field = { field_id: 'description', field_name: 'Description', field_kind: FIELD_KIND.ADF, store_values: true };
+  const diff = diffField({ field, before: mediaDoc, after: emptyDoc, retained: true, mediaMap });
+  assert.equal(diff.blocks[0].before.text, '[attachment: Salesforce CDC POC.png]');
+});

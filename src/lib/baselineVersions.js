@@ -1,5 +1,6 @@
 import { FIELD_KIND, normaliseField } from './content.js';
-import { diffField, presentationKind, withAttachmentDetails } from './diff/fields.js';
+import { diffField, presentationKind, withAttachmentDetails, extractMediaMap } from './diff/fields.js';
+import { valueLabels } from './diff/index.js';
 import { buildRecord } from './record.js';
 import { groupReview } from './tree/groupedReview.js';
 import { isStructuralField } from './tree/structure.js';
@@ -98,9 +99,17 @@ export function compareBaselineSnapshots(beforeSnapshot, afterSnapshot, currentF
     const newDigests = digestsOf(newNode);
     const oldValues = valueOf(beforeSnapshot, oldNode);
     const newValues = valueOf(afterSnapshot, newNode);
+    const mediaMap = extractMediaMap(oldValues, newValues);
+    const nodeLabels = valueLabels(Object.values(oldValues), Object.values(newValues));
     const group = { kind: 'ISSUE', logicalNodeId: nodeId, issueKey, summary: null,
       isRoot: String((newNode ?? oldNode)?.originalIssueId) === String(afterSnapshot.baseline.issue_id),
       baselineVersion: Number(beforeSnapshot.baseline.version) };
+    const FRIENDLY_NAMES = {
+      summary: 'Summary', description: 'Description', priority: 'Priority', issuetype: 'Issue Type',
+      status: 'Status', assignee: 'Assignee', reporter: 'Reporter', attachment: 'Attachments',
+      issuelinks: 'Linked Issues', subtasks: 'Subtasks', labels: 'Labels', components: 'Components',
+      fixVersions: 'Fix Versions', versions: 'Affects Versions'
+    };
     for (const id of new Set([...Object.keys(oldDigests), ...Object.keys(newDigests)])) {
       if (isStructuralField(id)) continue;
       const wasTracked = Object.hasOwn(oldDigests, id);
@@ -110,14 +119,14 @@ export function compareBaselineSnapshots(beforeSnapshot, afterSnapshot, currentF
       const newRetained = Object.hasOwn(newValues, id);
       const definition = definitions.get(id) ?? {};
       const kind = presentationKind(definition.field_kind ?? inferKind(newRetained ? newValues[id] : oldValues[id]), oldValues[id], newValues[id]);
-      const field = { ...definition, field_id: id, field_name: definition.field_name ?? id,
-        field_kind: kind };
+      const fieldName = definition.field_name ?? FRIENDLY_NAMES[id] ?? id;
+      const field = { ...definition, field_id: id, field_name: fieldName, field_kind: kind };
       const retained = (!wasTracked || oldRetained) && (!nowTracked || newRetained)
         && (oldRetained || newRetained);
       const before = wasTracked ? normalise(kind, oldValues[id]) : emptyFor(kind);
       const after = nowTracked ? normalise(kind, newValues[id]) : emptyFor(kind);
       const diff = withAttachmentDetails(diffField({ field, before, after, retained,
-        digestChanged: oldDigests[id] !== newDigests[id] }), oldValues[id], newValues[id]);
+        digestChanged: oldDigests[id] !== newDigests[id], mediaMap }), oldValues[id], newValues[id]);
       fields.push({ ...diff,
         fieldId: `${nodeId}:${id}`, rawFieldId: id,
         fieldName: `${issueKey} · ${field.field_name}`, label: field.field_name, issueKey,
@@ -127,7 +136,11 @@ export function compareBaselineSnapshots(beforeSnapshot, afterSnapshot, currentF
         before: retained && wasTracked ? diff.before : null,
         after: retained && nowTracked ? diff.after : null,
         attribution: [], attributionStatus: 'NOT_COLLECTED', group,
-        valueLabels: {}
+        valueLabels: {
+          ...Object.fromEntries(mediaMap.entries()),
+          ...nodeLabels,
+          ...valueLabels(oldValues[id], newValues[id])
+        }
       });
     }
   }

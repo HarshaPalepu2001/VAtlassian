@@ -24,6 +24,7 @@ import { resolveActions } from '../lib/journey.js';
 import { extractDescription } from './panelEvidence.js';
 import { baselineDrift, logLiveDrift } from '../lib/liveDrift.js';
 import { rootNodeDigests } from '../db/baselineTreeStore.js';
+import { driftedAncestor, viewerAncestorDeps } from '../lib/ancestorHold.js';
 
 function issueForSigning(issue) {
   return {
@@ -46,6 +47,8 @@ export function createSigningUsecases(deps = {}) {
   const resolveFn = deps.resolveActions ?? resolveActions;
   const driftFn = deps.baselineDrift ?? baselineDrift;
   const rootDigestsFn = deps.rootNodeDigests ?? rootNodeDigests;
+  const ancestorFn = deps.driftedAncestor ?? (async issue => driftedAncestor(issue, await viewerAncestorDeps(),
+    { surface: 'signing-form-ancestor' }));
 
   async function signingContext(args = {}) {
     return respond(async () => {
@@ -71,6 +74,20 @@ export function createSigningUsecases(deps = {}) {
           requiredRole: state.gate?.required_role ?? null,
           issue: issueForSigning(issue), actorName: actor?.displayName ?? null, drift
         };
+      }
+      // Held from above (lib/ancestorHold.js): the validator refuses this item
+      // while an issue above it has undecided drift, so no signature is
+      // offered. An ancestor that cannot be read blocks too, as it does there.
+      if (state.config?.enabled !== false && issue.fields?.parent?.key) {
+        const above = await ancestorFn(issue).catch(() => ({ issueKey: null }));
+        if (above) {
+          return {
+            actions: [], blocker: 'ANCESTOR_DRIFT', heldBy: above.issueKey ?? null, gatedCount: 0,
+            requiredRole: state.gate?.required_role ?? null,
+            issue: issueForSigning(issue), actorName: actor?.displayName ?? null,
+            drift: { ...drift, blocked: true, heldBy: above.issueKey ?? null }
+          };
+        }
       }
       // THE FIELD MUST NAME THE EXACT TRANSITION IT SITS ON. Forge's
       // issue-transition custom field context carries the destination

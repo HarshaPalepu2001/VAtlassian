@@ -2378,6 +2378,16 @@ test('drift is flagged on the Baseline card, one line per change, and Approvals 
  assert.equal(container.querySelector('details, .va-collapse'),null,'nothing in the panel expands');
 });
 
+test('a change only below this work item asks it for a decision but never says it is held',async()=>{
+ setup(async key=>key==='panel:getSummary'?actor([transition()],{baseline:baseline({version:3}),drift:driftOn({count:0,childrenAwaiting:1})})
+  :key==='panel:getEvidence'?evidence({baselineVersion:3,drift:{count:1,materialCount:1,fields:[drifted()]}}):{restores:[]});
+ await act(()=>root.render(h(IssuePanel,{issueKey:'T-1'})));await flush();await flush();
+ assert.ok(clickButton('Approve changes'),'the decision covering the change below is offered here');
+ assert.doesNotMatch(text(),/Held until the changes are decided/);
+ assert.doesNotMatch(text(),/Held while changes to the baseline are undecided/);
+ assert.match(text(),/Changes below this work item await a decision\. It is not held/);
+});
+
 test('See changes, AI summary and View record open the review window on their own tab',async()=>{
  let summaryReads=0;
  setup(async key=>{if(key==='panel:getSummary'){summaryReads++;return actor([],{baseline:baseline(),drift:driftOn()});}
@@ -2659,7 +2669,7 @@ test('frontend harness supports rich categories, active trace propagation, filte
  assert.ok(typeof window.__VA_HARNESS__.export === 'function');
 });
 
-// ── Deciding each change on its own (docs/superpowers/specs/2026-10-07-drift-field-decision-design.md) ──
+// ── Deciding each change on its own (docs/specs/2026-10-07-drift-field-decision-design.md) ──
 
 const decidable=(rawFieldId,extra={})=>({...scalarField(`n1:${rawFieldId}`,rawFieldId,'T-1'),rawFieldId,restorable:'YES',...extra});
 // Holds the choices the way the review window does, so a click's effect is visible in the next render.

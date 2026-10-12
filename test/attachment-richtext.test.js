@@ -236,3 +236,160 @@ test('verification reports a description whose image points at a deleted file, t
   assert.equal(fixed.detail[0].verified, true);
   assert.deepEqual(fixed.unmatched, []);
 });
+
+// ── Rich text embedded media vs standalone attachments ──────────────────────
+
+test('adding an image to Description produces drift ONLY on Description, not on Attachment', async () => {
+  const controlledFields = [
+    { field_id: 'description', field_kind: 'ADF', store_values: true },
+    { field_id: 'attachment', field_kind: 'ATTACHMENTS', store_values: true }
+  ];
+  const baselineDoc = { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Baseline text' }] }] };
+  const baselineIssue = { id: '43903', key: 'VAT-56', fields: { description: baselineDoc, attachment: [] } };
+  const baselineProj = project(baselineIssue.fields, controlledFields);
+
+  const imageDoc = { type: 'doc', version: 1, content: [
+    { type: 'paragraph', content: [{ type: 'text', text: 'Baseline text' }] },
+    { type: 'mediaSingle', attrs: { layout: 'center' }, content: [
+      { type: 'media', attrs: { type: 'file', id: 'img-uuid-1', collection: '' } }
+    ] }
+  ] };
+  const currentIssue = { id: '43903', key: 'VAT-56', fields: { description: imageDoc, attachment: [{ id: '1001', filename: 'image.png', size: 500 }] } };
+
+  await canonicaliseItems([currentIssue], { read: async () => new Map(), mediaIdOf: async () => 'img-uuid-1' });
+  assert.equal(currentIssue.fields.attachment[0].isRichText, true);
+
+  const currentProj = project(currentIssue.fields, controlledFields);
+  assert.notEqual(currentProj.digests.description, baselineProj.digests.description, 'Description drifted');
+  assert.equal(currentProj.digests.attachment, baselineProj.digests.attachment, 'Attachment did NOT drift');
+});
+
+test('rejecting Description restores the ADF and schedules attachment removal for the extra image file', async () => {
+  const { planTreeCapture } = await import('../src/lib/tree/capturePlan.js');
+  const { planTreeRestore } = await import('../src/lib/tree/restorePlan.js');
+  const { planAttachmentChanges } = await import('../src/lib/restore/attachments.js');
+
+  const controlledFields = [
+    { field_id: 'description', field_kind: 'ADF', store_values: true },
+    { field_id: 'attachment', field_kind: 'ATTACHMENTS', store_values: true }
+  ];
+  const baselineDoc = { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Clean state' }] }] };
+  const baselineIssue = { id: '43903', key: 'VAT-56', fields: { description: baselineDoc, attachment: [] } };
+  const baselineTree = planTreeCapture({ rootIssueId: '43903', nodes: [baselineIssue], controlledFields });
+
+  const imageDoc = { type: 'doc', version: 1, content: [
+    { type: 'paragraph', content: [{ type: 'text', text: 'Clean state' }] },
+    { type: 'mediaSingle', attrs: { layout: 'center' }, content: [
+      { type: 'media', attrs: { type: 'file', id: 'img-uuid-1', collection: '' } }
+    ] }
+  ] };
+  const currentIssue = { id: '43903', key: 'VAT-56', fields: { description: imageDoc, attachment: [{ id: '1001', filename: 'image.png', size: 500 }] } };
+  await canonicaliseItems([currentIssue], { read: async () => new Map(), mediaIdOf: async () => 'img-uuid-1' });
+
+  const currentTree = planTreeCapture({ rootIssueId: '43903', nodes: [currentIssue], controlledFields });
+  const restore = planTreeRestore({ baselineTree, currentTree, controlledFields });
+
+  const fieldStep = restore.steps.find(s => s.kind === 'RESTORE_FIELDS');
+  assert.ok(fieldStep, 'RESTORE_FIELDS step present');
+  assert.deepEqual(fieldStep.fields.description, baselineDoc);
+
+  const attStep = restore.steps.find(s => s.kind === 'RESTORE_ATTACHMENTS');
+  assert.ok(attStep, 'RESTORE_ATTACHMENTS step present');
+  assert.deepEqual(restore.preflight.attachments.willDelete, [{
+    logicalNodeId: currentTree.nodes[0].logicalNodeId,
+    issueKey: 'VAT-56',
+    id: '1001',
+    filename: 'image.png'
+  }]);
+  const changes = planAttachmentChanges({ target: attStep.attachments, current: currentIssue.fields.attachment });
+  assert.equal(changes.missing.length, 0);
+  assert.equal(changes.extra.length, 1);
+  assert.equal(changes.extra[0].id, '1001');
+});
+
+test('adding a standalone attachment produces drift on Attachment, not on Description', async () => {
+  const controlledFields = [
+    { field_id: 'description', field_kind: 'ADF', store_values: true },
+    { field_id: 'attachment', field_kind: 'ATTACHMENTS', store_values: true }
+  ];
+  const baselineDoc = { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Clean text' }] }] };
+  const baselineIssue = { id: '43903', key: 'VAT-56', fields: { description: baselineDoc, attachment: [] } };
+  const baselineProj = project(baselineIssue.fields, controlledFields);
+
+  const standaloneIssue = { id: '43903', key: 'VAT-56', fields: { description: baselineDoc, attachment: [{ id: '1002', filename: 'report.pdf', size: 2048 }] } };
+  await canonicaliseItems([standaloneIssue], { read: async () => new Map(), mediaIdOf: async () => 'other-media-uuid' });
+  assert.equal(standaloneIssue.fields.attachment[0].isRichText, false);
+
+  const standaloneProj = project(standaloneIssue.fields, controlledFields);
+  assert.equal(standaloneProj.digests.description, baselineProj.digests.description, 'Description did NOT drift');
+  assert.notEqual(standaloneProj.digests.attachment, baselineProj.digests.attachment, 'Attachment drifted');
+});
+
+test('mixed decision: approving standalone attachment and rejecting description restores description and removes the image file while preserving standalone attachment', async () => {
+  const { planTreeCapture } = await import('../src/lib/tree/capturePlan.js');
+  const { planMixed } = await import('../src/lib/approval/mixedDecision.js');
+  const { planAttachmentChanges } = await import('../src/lib/restore/attachments.js');
+
+  const controlledFields = [
+    { field_id: 'description', field_kind: 'ADF', store_values: true },
+    { field_id: 'attachment', field_kind: 'ATTACHMENTS', store_values: true }
+  ];
+  const baselineDoc = { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Initial description' }] }] };
+  const baselineIssue = { id: '43903', key: 'VAT-56', fields: { description: baselineDoc, attachment: [] } };
+  const baselineTree = planTreeCapture({ rootIssueId: '43903', nodes: [baselineIssue], controlledFields });
+
+  const mixedDoc = { type: 'doc', version: 1, content: [
+    { type: 'paragraph', content: [{ type: 'text', text: 'Initial description with image' }] },
+    { type: 'mediaSingle', attrs: { layout: 'center' }, content: [
+      { type: 'media', attrs: { type: 'file', id: 'img-uuid-1', collection: '' } }
+    ] }
+  ] };
+  const mixedIssue = { id: '43903', key: 'VAT-56', fields: {
+    description: mixedDoc,
+    attachment: [
+      { id: '1001', filename: 'image.png', size: 500 },
+      { id: '1002', filename: 'standalone.pdf', size: 2048 }
+    ]
+  } };
+
+  await canonicaliseItems([mixedIssue], { read: async () => new Map(), mediaIdOf: async id => (id === '1001' ? 'img-uuid-1' : 'pdf-uuid-2') });
+  assert.equal(mixedIssue.fields.attachment.find(a => a.id === '1001').isRichText, true);
+  assert.equal(mixedIssue.fields.attachment.find(a => a.id === '1002').isRichText, false);
+
+  const mixedTree = planTreeCapture({ rootIssueId: '43903', nodes: [mixedIssue], controlledFields });
+  const rootNode = mixedTree.nodes[0];
+  const rootLogicalId = rootNode.logicalNodeId;
+
+  const reviewFields = [
+    { fieldId: `${rootLogicalId}:description`, rawFieldId: 'description', logicalNodeId: rootLogicalId, fieldName: 'Description', group: { kind: 'ISSUE', logicalNodeId: rootLogicalId }, restorable: 'YES', retained: true },
+    { fieldId: `${rootLogicalId}:attachment`, rawFieldId: 'attachment', logicalNodeId: rootLogicalId, fieldName: 'Attachment', group: { kind: 'ISSUE', logicalNodeId: rootLogicalId }, restorable: 'YES', retained: true }
+  ];
+  const decisions = [
+    { fieldId: `${rootLogicalId}:description`, decision: 'REJECT' },
+    { fieldId: `${rootLogicalId}:attachment`, decision: 'APPROVE' }
+  ];
+
+  const planned = planMixed({ decisions, reviewFields, baselineTree, currentTree: mixedTree, controlledFields });
+
+  const fieldStep = planned.restore.steps.find(s => s.kind === 'RESTORE_FIELDS');
+  assert.ok(fieldStep, 'RESTORE_FIELDS step present for rejected description');
+  assert.deepEqual(fieldStep.fields.description, baselineDoc);
+
+  const attStep = planned.restore.steps.find(s => s.kind === 'RESTORE_ATTACHMENTS');
+  assert.ok(attStep, 'RESTORE_ATTACHMENTS step present');
+  assert.deepEqual(planned.restore.preflight.attachments.willDelete, [{
+    logicalNodeId: rootLogicalId,
+    issueKey: 'VAT-56',
+    id: '1001',
+    filename: 'image.png'
+  }]);
+  const changes = planAttachmentChanges({ target: attStep.attachments, current: mixedIssue.fields.attachment });
+  assert.equal(changes.extra.length, 1);
+  assert.equal(changes.extra[0].id, '1001');
+  assert.equal(changes.extra[0].filename, 'image.png');
+  assert.equal(attStep.attachments.length, 1);
+  assert.equal(attStep.attachments[0].id, '1002');
+  assert.equal(attStep.attachments[0].filename, 'standalone.pdf');
+  assert.equal(changes.missing.length, 0);
+});
+

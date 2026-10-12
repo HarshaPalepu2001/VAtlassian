@@ -37,7 +37,7 @@ const modules = {
   'db/restoreStore.js': ['restoresForIssue', 'restoreReaching'],
   'lib/reviewer.js': ['isEligible'],
   'lib/transitions.js': ['availableTransitions'],
-  'db/baselineTreeStore.js': ['activeRootsForNode', 'rootNodeDigests', 'driftedDescendants', 'capturingParent']
+  'db/baselineTreeStore.js': ['activeRootsForNode', 'rootNodeDigests', 'driftedDescendants', 'driftedDescendantsOfNode', 'capturingParent']
 };
 
 const hooks = registerHooks({
@@ -101,6 +101,7 @@ function fixture(overrides = {}) {
     activeRootsForNode: async () => [],
     rootNodeDigests: async () => null,
     driftedDescendants: async () => 0,
+    driftedDescendantsOfNode: async () => 0,
     capturingParent: async () => null,
     availableTransitions: async () => [{ id: '31', name: 'Approve to next', toStatusId: '200', toStatusName: 'Done', isAvailable: true }],
     request: async (_identity, url) => {
@@ -560,6 +561,33 @@ test('a child baselined by its parent names the parent capture it came with', as
   });
   const summary = await getSummary(args);
   assert.deepEqual(summary.baseline.capturedBy, { issueKey: 'PARENT-1', version: 3 });
+});
+
+// The flag climbs to every ancestor, not only the root: a child captured by its
+// parent counts the drifted items under it in the parent's signed tree.
+test('a child baselined by its parent counts the drift below it in the parent\'s tree, and offers the decision', async () => {
+  const asked = [];
+  fixture({
+    activeBaseline: async () => ({ ...treeParent, tree_hash: null, field_digests: digestsFor('a signed item'),
+      captured_by_baseline_id: Buffer.alloc(16, 9) }),
+    driftedDescendants: async () => assert.fail('a field-level child baseline is not a tree'),
+    driftedDescendantsOfNode: async (parentBaselineId, issueId) => { asked.push([Buffer.from(parentBaselineId).toString('hex'), issueId]); return 1; }
+  });
+  const summary = await getSummary(args);
+  assert.deepEqual(asked, [[Buffer.alloc(16, 9).toString('hex'), 10]]);
+  assert.equal(summary.drift.childrenAwaiting, 1);
+  assert.equal(summary.drift.canApprove, true);
+});
+
+test('a failed count of the drift below a child degrades to none rather than failing the panel', async () => {
+  fixture({
+    activeBaseline: async () => ({ ...treeParent, tree_hash: null, field_digests: digestsFor('a signed item'),
+      captured_by_baseline_id: Buffer.alloc(16, 9) }),
+    driftedDescendantsOfNode: () => { throw new Error('db down'); }
+  });
+  const summary = await getSummary(args);
+  assert.equal(summary.error, undefined, `getSummary must not fail: ${summary.error}`);
+  assert.equal(summary.drift.childrenAwaiting, 0);
 });
 
 // A parent's restore rewrites its children under the parent's signature. The

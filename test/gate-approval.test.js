@@ -236,3 +236,17 @@ test('gate emits SIGNATURE_CONSUMED with full denormalised payload on successful
   assert.equal(consumedEvent.payload.transitionId, '50');
   assert.equal(consumedEvent.payload.decision, 'APPROVE');
 });
+test('a content-hash denial logs both hashes and what the recompute covered', async () => {
+  const f = await fixture();
+  f.snapshot.contentHash = 'b'.repeat(64);
+  f.snapshot.hashBasis = () => ({ mode: 'tree', scopeSource: 'own', fieldIds: ['summary'], attachments: [] });
+  const result = await createGate(f.deps)(f.payload);
+  assert.equal(result.result, false);
+  const deny = f.logs.find(entry => entry.event === 'gate:deny');
+  assert.equal(deny.detail, 'CONTENT_OR_EVIDENCE_CHANGED');
+  assert.equal(deny.hashes.approvalHash, 'a'.repeat(64));
+  assert.equal(deny.hashes.recomputedHash, 'b'.repeat(64));
+  assert.equal(deny.hashes.evidenceValid, true);
+  assert.equal(deny.hashes.basis.scopeSource, 'own');
+  assert.equal(f.events.some(event => event.payload?.hashes), false, 'the ledger must not carry the hash detail');
+});

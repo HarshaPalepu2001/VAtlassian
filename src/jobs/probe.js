@@ -283,6 +283,8 @@ export async function handler(request) {
       WHERE project_id = ? AND field_id = 'attachment'`, [Number(issue.fields.project?.id)]),
     vaultLedger: await rows(`SELECT event_type, payload, occurred_at FROM va_audit WHERE issue_id = ?
       AND event_type LIKE 'ATTACHMENT%' ORDER BY occurred_at DESC LIMIT 20`, [issueId]),
+    restoreRows: await rows('SELECT TO_BASE64(restore_id) as restore_id, TO_BASE64(approval_id) as approval_id, state, detail, candidate_digests FROM va_restore WHERE issue_id = ? ORDER BY started_at DESC LIMIT 3', [issueId]),
+    approvalRows: await rows('SELECT TO_BASE64(approval_id) as approval_id, decision, assurance_level, meaning, decision_map FROM va_approval WHERE issue_id = ? ORDER BY decided_at DESC LIMIT 3', [issueId]),
     deletePermission: await deleteGrants(issue.fields.project?.id),
     migrationResult,
     liveRetrievalTest

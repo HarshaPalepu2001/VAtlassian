@@ -101,3 +101,35 @@ test('saved ADF still compares in blocks when current metadata calls the field t
   assert.equal(result.fields[0].kind, 'adf');
   assert.ok(result.fields[0].blocks.some(block => block.op !== 'equal'));
 });
+
+test('comparison populates valueLabels for priority, issue type, attachments and media UUIDs', () => {
+  const customFields = [
+    { field_id: 'priority', field_name: 'Priority', field_kind: FIELD_KIND.SCALAR, store_values: true },
+    { field_id: 'issuetype', field_name: 'Issue Type', field_kind: FIELD_KIND.SCALAR, store_values: true },
+    { field_id: 'attachment', field_name: 'Attachments', field_kind: FIELD_KIND.ATTACHMENTS, store_values: true }
+  ];
+  const old = saved(1, {
+    priority: { id: '3', name: 'Medium' },
+    issuetype: { id: '10001', name: 'Task' },
+    attachment: [{ id: '500', filename: 'Salesforce CDC POC.png', mediaId: 'uuid-1234' }]
+  }, customFields);
+  const next = saved(2, {
+    priority: { id: '1', name: 'Critical' },
+    issuetype: { id: '10002', name: 'Bug' },
+    attachment: [{ id: '501', filename: 'architecture.pdf', mediaId: 'uuid-5678' }]
+  }, customFields);
+  const result = compareBaselineSnapshots(old, next, customFields);
+  const priorityDiff = result.fields.find(f => f.rawFieldId === 'priority');
+  const issueTypeDiff = result.fields.find(f => f.rawFieldId === 'issuetype');
+  const attachmentDiff = result.fields.find(f => f.rawFieldId === 'attachment');
+
+  assert.equal(priorityDiff.valueLabels['3'], 'Medium');
+  assert.equal(priorityDiff.valueLabels['1'], 'Critical');
+  assert.equal(issueTypeDiff.valueLabels['10001'], 'Task');
+  assert.equal(issueTypeDiff.valueLabels['10002'], 'Bug');
+  assert.equal(attachmentDiff.valueLabels['500'], 'Salesforce CDC POC.png');
+  assert.equal(attachmentDiff.valueLabels['uuid-1234'], 'Salesforce CDC POC.png');
+  assert.equal(attachmentDiff.valueLabels['501'], 'architecture.pdf');
+  assert.equal(attachmentDiff.valueLabels['uuid-5678'], 'architecture.pdf');
+});
+

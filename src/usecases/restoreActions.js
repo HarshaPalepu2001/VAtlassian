@@ -78,11 +78,24 @@ export async function queueRestore({ prepared, actor, approval, mixed = null, st
 }
 
 
+/**
+ * DOES THIS REJECT RESTORE A SUBTREE? A tree baseline does, and so does a
+ * child baseline written by its parent's capture: it has no tree_hash of its
+ * own, but its review, its signature and its restore all cover the slice of
+ * the parent's signed tree under it (lib/tree/scopedBaseline.js). Treating it
+ * as a single issue restored the child's own fields and silently left every
+ * descendant drifted (found live 2026-10-12: a reject at VAT-73 restored its
+ * description but not its sub-task VAT-75's label).
+ */
+export function restoresSubtree(baseline) {
+  return Boolean(baseline?.tree_hash || baseline?.captured_by_baseline_id);
+}
+
 /** Restore success is derived only from the post-write verification read. */
 export async function performRestore({ prepared, actor, approval }) {
   const forgeApi = api?.default?.asUser ? api.default : (api?.asUser ? api : api?.default ?? api);
   const { issue, issueId, projectId, baseline, fields, baselineValues, editmeta, restoreEditmeta, diff, config } = prepared;
-  const isTree = Boolean(baseline?.tree_hash);
+  const isTree = restoresSubtree(baseline);
   const baselineTree = isTree ? prepared.baselineTree : null;
   const currentTree = isTree ? prepared.currentTree : null;
   if (isTree && config?.restore?.queue !== false) {
@@ -126,10 +139,11 @@ export async function performRestore({ prepared, actor, approval }) {
         }
       };
 
+      const targetTree = prepared.targetTree ?? baselineTree;
       const executed = await executeTreeRestore({
         restoreId,
         rootIssueKey: issue.key,
-        baselineTree,
+        baselineTree: targetTree,
         currentTree,
         controlledFields: fields,
         fieldsFor: prepared.fieldsFor,
@@ -143,7 +157,7 @@ export async function performRestore({ prepared, actor, approval }) {
           readStableTree,
           readTree: treeReader.read.bind(treeReader),
           rootIssueKey: issue.key,
-          baselineTree,
+          baselineTree: targetTree,
           controlledFields: fields,
           fieldsFor: prepared.fieldsFor,
           replacements,

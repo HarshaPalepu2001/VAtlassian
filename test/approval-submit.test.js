@@ -709,3 +709,60 @@ test('electronic policy refuses WebAuthn substitution', async () => {
   assert.equal(result.success, false);
   assert.equal(result.reason, 'WRONG_AUTHENTICATION_METHOD');
 });
+
+test('a transition of a work item held from above is refused before any challenge or authentication', async () => {
+  const f = fixture();
+  let asked = null;
+  f.deps.ancestorDrift = async issue => { asked = issue.issueKey; return { issueKey: 'E-1', issueId: 1, depth: 1, changed: ['labels'] }; };
+  const result = await createApprovalUsecases(f.deps).challenge(f.request);
+  assert.equal(asked, 'T-10');
+  assert.equal(result.success, false);
+  assert.equal(result.reason, 'ANCESTOR_DRIFT');
+  assert.match(result.error, /E-1, above this work item, has changed since it was approved/);
+  assert.equal(f.challenges.size, 0, 'no challenge row: no authentication can be spent on it');
+});
+
+test('an ancestor that drifts after the challenge refuses the submit, and nothing is recorded', async () => {
+  const f = fixture();
+  const api = createApprovalUsecases(f.deps);
+  const challenge = await api.challenge(f.request);
+  assert.equal(challenge.success, true, JSON.stringify(challenge));
+  f.deps.ancestorDrift = async () => ({ issueKey: 'E-1', issueId: 1, depth: 2, changed: ['description'] });
+  const result = await api.submit({ context: f.request.context, payload: { ...f.request.payload, challengeId: challenge.challengeId } });
+  assert.equal(result.success, false);
+  assert.equal(result.reason, 'ANCESTOR_DRIFT');
+  assert.equal(f.rows.length, 0);
+});
+
+test('a drift decision is about content, not movement: an ancestor\'s drift never refuses it', async () => {
+  const f = fixture();
+  let asked = false;
+  f.deps.ancestorDrift = async () => { asked = true; return { issueKey: 'E-1', issueId: 1, depth: 1, changed: ['labels'] }; };
+  f.deps.prepare = async () => baselineDecisionPrepared();
+  const result = await createApprovalUsecases(f.deps).challenge({ context: f.request.context,
+    payload: { issueKey: 'T-10', decision: 'APPROVE', intent: 'DRIFT' } });
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(asked, false);
+});
+
+test('a parent whose own content is unchanged is not refused a non-capturing transition for a child\'s drift', async () => {
+  const f = fixture();
+  const edge = await f.deps.edge();
+  f.deps.edge = async () => ({ ...edge, capture_baseline: false });
+  f.deps.prepare = async () => ({ contentHash: 'a'.repeat(64), evidenceHash: 'e'.repeat(64), baselineVersion: 1, driftCount: 1 });
+  f.deps.ownDriftCount = async () => 0;
+  const result = await signed(f.deps, f.request);
+  assert.equal(result.success, true, JSON.stringify(result));
+});
+
+test('a work item with drift of its own is still refused a non-capturing transition', async () => {
+  const f = fixture();
+  const edge = await f.deps.edge();
+  f.deps.edge = async () => ({ ...edge, capture_baseline: false });
+  f.deps.ownDriftCount = async () => 2;
+  const api = createApprovalUsecases(f.deps);
+  const challenge = await api.challenge(f.request);
+  const result = await api.submit({ context: f.request.context, payload: { ...f.request.payload, challengeId: challenge.challengeId } });
+  assert.equal(result.success, false);
+  assert.equal(result.reason, 'UNDECIDED_DRIFT');
+});

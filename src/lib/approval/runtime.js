@@ -12,13 +12,15 @@ import { createTreeReader } from '../tree/jira.js';
 import { baselineDrift, logLiveDrift } from '../liveDrift.js';
 import { linkDecisionsPending } from '../../db/linkPendingStore.js';
 import { canonicaliseIssue } from '../attachmentIdentity.js';
+import { hashBasis } from '../hashBasis.js';
+import { driftedAncestor, ownDrift } from '../ancestorHold.js';
 
 export async function approvalContentHash({ issue, declared, modifiedFields = {}, activeBaseline, readTree }) {
   const { fields } = scopeFromIssue({ declared, issueFields: issue.fields, editmetaFields: {} });
   // A child baseline captured by its parent has no tree_hash of its own, but
   // its panel signs the child's recursive subtree (panelAccess.snapshot).
   if (!activeBaseline?.tree_hash && !activeBaseline?.captured_by_baseline_id) {
-    return { fields, contentHash: project({ ...issue.fields, ...modifiedFields }, fields).contentHash };
+    return { fields, mode: 'flat', contentHash: project({ ...issue.fields, ...modifiedFields }, fields).contentHash };
   }
   if (typeof readTree !== 'function') throw new FailClosed('SERVICE_UNAVAILABLE');
   const rootIssueId = issue.issueId ?? issue.id;
@@ -29,7 +31,7 @@ export async function approvalContentHash({ issue, declared, modifiedFields = {}
   const nodes = stable.tree.nodes.map(node => String(node.id) === String(rootIssueId)
     ? { ...node, fields: { ...issue.fields, ...node.fields, ...modifiedFields } }
     : node);
-  return { fields, contentHash: planTreeCapture({ rootIssueId, nodes, controlledFields: fields,
+  return { fields, mode: 'tree', contentHash: planTreeCapture({ rootIssueId, nodes, controlledFields: fields,
     fieldsFor: stable.fieldsFor }).treeHash };
 }
 
@@ -52,11 +54,39 @@ function describeIssue(issue) {
   return { ...issue, issueId: Number(issue.id), issueKey: issue.key, projectId: Number(issue.fields.project.id),
     issueTypeId: String(issue.fields.issuetype.id), statusId: String(issue.fields.status.id) };
 }
+/**
+ * The validator's own read of a work item, and what lib/ancestorHold.js needs
+ * to judge the items above it the same way. As the user first; as the app
+ * only where Forge cannot act as this user (see readAsUserOrApp). A 404 or
+ * 5xx still fails closed.
+ */
+function liveReads({ api, route, config, baselines, rootNodeDigests, activeRootsForNode }) {
+  const readIssue = async key => {
+    const issuePath = route`/rest/api/3/issue/${key}?fields=*all`;
+    const response = await readAsUserOrApp(() => api.asUser().requestJira(issuePath),
+      () => api.asApp().requestJira(issuePath)).catch(() => { throw new FailClosed('SERVICE_UNAVAILABLE'); });
+    if (!response?.ok) throw new FailClosed('SERVICE_UNAVAILABLE');
+    return canonicaliseIssue(await response.json());
+  };
+  const ancestorDeps = { readIssue, projectConfig: config.projectConfig, activeBaseline: baselines.activeBaseline,
+    activeRootsForNode, controlledFields: config.controlledFields, rootNodeDigests };
+  return { readIssue, ancestorDeps };
+}
+
 export async function approvalRuntime() {
-  const { api, route, audit, eligible, approvals, config } = await shared();
-  const [{ readableIssue }, drift] = await Promise.all([import('../../usecases/panelAccess.js'), import('../../usecases/drift.js')]);
+  const { api, route, audit, eligible, approvals, config, baselines } = await shared();
+  const [{ readableIssue }, drift, trees] = await Promise.all([import('../../usecases/panelAccess.js'),
+    import('../../usecases/drift.js'), import('../../db/baselineTreeStore.js')]);
+  const { ancestorDeps } = liveReads({ api, route, config, baselines,
+    rootNodeDigests: trees.rootNodeDigests, activeRootsForNode: trees.activeRootsForNode });
   return {
     now: Date.now, audit, eligible,
+    // Signing a transition the validator will refuse spends an authentication
+    // for nothing: a work item held from above is refused before the challenge.
+    ancestorDrift: issue => driftedAncestor(issue, ancestorDeps, { surface: 'signing-ancestor' }),
+    // The item's OWN drift, as the validator holds it: a change below a parent
+    // asks it for a decision but never holds its transitions.
+    ownDriftCount: async issue => (await ownDrift(issue, ancestorDeps, 'signing-own')).length,
     issue: async args => describeIssue(await readableIssue(args)),
     actor: async accountId => {
       const response = await api.asUser().requestJira(route`/rest/api/3/myself`);
@@ -215,6 +245,8 @@ export async function gateRuntime() {
       })
   }, args);
 
+  const { readIssue, ancestorDeps } = liveReads({ api, route, config, baselines, rootNodeDigests, activeRootsForNode });
+
   return {
     now: Date.now, log: data => console.log('gate', JSON.stringify(data)), audit, eligible,
     pending: approvals.pendingApprovalFor, consume: approvals.casConsume, voidOthers: approvals.voidOthers,
@@ -235,13 +267,7 @@ export async function gateRuntime() {
       };
     },
     load: async ({ issueKey, fromStatusId, toStatusId, transitionId, approvalId, modifiedFields, configuredTransitionId }) => {
-      // As the user first; as the app only where Forge cannot act as this user
-      // (see readAsUserOrApp). A 404 or 5xx still fails closed here.
-      const issuePath = route`/rest/api/3/issue/${issueKey}?fields=*all`;
-      const response = await readAsUserOrApp(() => api.asUser().requestJira(issuePath),
-        () => api.asApp().requestJira(issuePath)).catch(() => { throw new FailClosed('SERVICE_UNAVAILABLE'); });
-      if (!response?.ok) throw new FailClosed('SERVICE_UNAVAILABLE');
-      const issue = describeIssue(await canonicaliseIssue(await response.json()));
+      const issue = describeIssue(await readIssue(issueKey));
       if (issue.statusId !== fromStatusId) throw new FailClosed('STATUS_CHANGED');
 
       // THE ITEM FIRST, THE EDGE SECOND. This validator is attached to every
@@ -276,14 +302,32 @@ export async function gateRuntime() {
       const linkPending = drift.changed.includes('issuelinks')
         && (await linkDecisionsPending(issue.issueId).catch(() => [])).length > 0;
 
+      // Held from above (lib/ancestorHold.js): read only when the item's own
+      // content is unchanged, since its own drift already holds it. A failed
+      // read is reported, not thrown, so gate.js refuses on it after the
+      // item's own checks, like an unresolved edge.
+      let ancestorDrift = null;
+      let ancestorDriftError = null;
+      if (drift.changed.length === 0 && health?.enabled !== false) {
+        ancestorDrift = await driftedAncestor(issue, ancestorDeps, { surface: 'gate-ancestor' })
+          .catch(error => { ancestorDriftError = error?.reason ?? error?.message ?? 'UNREADABLE'; return null; });
+      }
+
       const edge = await resolve({ issue, fromStatusId, toStatusId, transitionId, approvalId, configuredTransitionId });
       // The approval content hash reads the whole tree for a tree baseline, so
       // it is computed only when a signature is actually being checked.
-      const contentHash = async () => (await approvalContentHash({ issue, declared, modifiedFields, activeBaseline: active,
-        readTree: active?.tree_hash || active?.captured_by_baseline_id
-          ? createTreeReader({ api, route }).read : null })).contentHash;
-      return { ...issue, ...edge, health, item, contentHash, driftCount: drift.changed.length, linkPending,
-        driftedFields: drift.changed, driftDiagnostics: drift.diagnostics ?? null, driftScope: scope };
+      let basis = null;
+      const contentHash = async () => {
+        const computed = await approvalContentHash({ issue, declared, modifiedFields, activeBaseline: active,
+          readTree: active?.tree_hash || active?.captured_by_baseline_id
+            ? createTreeReader({ api, route }).read : null });
+        basis = hashBasis({ mode: computed.mode, scopeSource: scope.source, scopeIssueTypeId: scope.issueTypeId,
+          fields: computed.fields, issue });
+        return computed.contentHash;
+      };
+      return { ...issue, ...edge, health, item, contentHash, hashBasis: () => basis, driftCount: drift.changed.length, linkPending,
+        driftedFields: drift.changed, driftDiagnostics: drift.diagnostics ?? null, driftScope: scope,
+        ancestorDrift, ancestorDriftError };
     }
   };
 }

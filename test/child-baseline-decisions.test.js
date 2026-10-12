@@ -9,6 +9,7 @@ import { treeReviewDiff } from '../src/lib/tree/reviewDiff.js';
 import { groupReview } from '../src/lib/tree/groupedReview.js';
 import { withChildBaselines, ownsItsContent } from '../src/lib/tree/childBaselines.js';
 import { nodeScope } from '../src/lib/tree/nodeFields.js';
+import { logicalNodeId as logicalOf } from '../src/lib/tree/model.js';
 
 /**
  * A PARENT DECISION COVERS ITS CHILDREN (spec 2026-09-24 §4.5, §4.7).
@@ -160,4 +161,67 @@ test('a child whose own baseline matches what the parent captured costs no value
   const p2 = tree.nodes.find(n => n.issueKey === 'P-2');
   assert.deepEqual(tree.values[p2.logicalNodeId], { summary: 'captured by parent' });
   assert.equal(p2.ownBaseline.version, 6);
+});
+
+// ─── A child's own signed branch replaces its branch in the parent's tree ─────
+//
+// Live 2026-10-12: VAT-76 was added under VAT-74 and approved there, yet VAT-72
+// kept reporting "Added node", and a reject at VAT-72 would have deleted it.
+
+/** P-2's own capture of its branch: P-2 with a new sub-task P-4. */
+const branchCapture = planTreeCapture({ rootIssueId: '2', controlledFields: childFields, fieldsFor, nodes: [
+  raw('2', 'P-2', 'T', null, { summary: 'two with a child' }),
+  raw('4', 'P-4', 'T', '2', { summary: 'four' })
+] });
+const asStored = capture => ({
+  nodes: capture.nodes.map(n => {
+    const copy = { ...n };
+    Object.defineProperties(copy, { parentLogicalId: { value: n.parentLogicalNodeId, enumerable: false },
+      digests: { value: JSON.parse(n.fieldDigests), enumerable: false } });
+    return copy;
+  }),
+  values: structuredClone(capture.values)
+});
+const branchOwn = { baseline_id: Buffer.alloc(16, 7), issue_id: 2, version: 6, tree_hash: 'b'.repeat(64), captured_at: 2000,
+  captured_by_baseline_id: null, field_digests: '{}' };
+const withBranch = (extra = new Map()) => ({
+  activeBaselines: async ids => new Map([[2, branchOwn], ...extra].filter(([id]) => ids.map(Number).includes(Number(id)))),
+  readAllValues: async () => assert.fail('a tree child keeps its values per node'),
+  readBaselineTree: async id => (Buffer.from(id).equals(branchOwn.baseline_id) ? asStored(branchCapture) : extra.get('tree')?.(id))
+});
+const liveWithFour = () => [
+  raw('1', 'P-1', 'S', null, { summary: 'parent', description: 'd' }),
+  raw('2', 'P-2', 'T', '1', { summary: 'two with a child' }),
+  raw('3', 'P-3', 'T', '1', { summary: 'three' }),
+  raw('4', 'P-4', 'T', '2', { summary: 'four' })
+];
+
+test('a sub-task the child added and signed for is part of the parent\'s tree: no drift, nothing to delete', async () => {
+  const tree = await withChildBaselines({ parentBaseline, baselineTree: baselineTree(), ...withBranch() });
+  const p4 = logicalOf('4');
+  assert.ok(tree.nodes.some(n => n.logicalNodeId === p4), 'the child\'s new sub-task is in the parent\'s effective tree');
+  assert.equal(tree.nodes.find(n => n.logicalNodeId === p4).parentLogicalNodeId, idOf('P-2'));
+  const now = current(liveWithFour());
+  const diff = diffTree({ baselineTree: tree, currentTree: now, controlledFields: parentFields, scopeFor: fieldsFor });
+  assert.deepEqual(diff.changes, [], 'what the child decided is not the parent\'s drift');
+  const plan = planTreeRestore({ baselineTree: tree, currentTree: current([...liveWithFour().slice(0, 3).map(n =>
+    n.key === 'P-1' ? raw('1', 'P-1', 'S', null, { summary: 'parent edited', description: 'd' }) : n), liveWithFour()[3]]),
+    controlledFields: parentFields, fieldsFor });
+  assert.equal(plan.steps.some(s => s.kind === 'DELETE_ADDED_NODE'), false, 'a parent reject never deletes what the child signed');
+});
+
+test('a sub-task the child removed and signed for is not brought back by the parent', async () => {
+  const signedWithFive = planTreeCapture({ rootIssueId: '1', controlledFields: parentFields, fieldsFor, nodes: [
+    ...liveTree({ p2: 'two with a child' }), raw('5', 'P-5', 'T', '2', { summary: 'five' })] });
+  const tree = await withChildBaselines({ parentBaseline, baselineTree: asStored(signedWithFive), ...withBranch() });
+  assert.equal(tree.nodes.some(n => n.logicalNodeId === logicalOf('5')), false, 'P-2 signed a branch without P-5');
+  assert.deepEqual(tree.values[logicalOf('5')], undefined);
+});
+
+test('a grandchild\'s own record older than its parent\'s branch capture does not override that branch', async () => {
+  const oldFour = { baseline_id: Buffer.alloc(16, 8), issue_id: 4, version: 2, tree_hash: null, captured_at: 1500,
+    captured_by_baseline_id: null, field_digests: JSON.stringify(project({ summary: 'four old' }, childFields).digests) };
+  const tree = await withChildBaselines({ parentBaseline, baselineTree: baselineTree(),
+    ...withBranch(new Map([[4, oldFour]])) });
+  assert.deepEqual(tree.values[logicalOf('4')], { summary: 'four' }, 'P-2\'s newer capture of P-4 stands');
 });

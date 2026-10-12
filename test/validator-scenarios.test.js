@@ -54,9 +54,16 @@ async function agree(w, key) {
   const verdicts = Object.values(await w.verdicts(key));
   const enabled = w.projectConfig.get(1)?.enabled !== false;
   const held = verdicts.some(heldFor);
-  assert.equal(held, enabled && panel.drift.count > 0,
-    `validator held=${held} but panel drift count=${panel.drift.count} (enabled=${enabled})`);
-  if (held) assert.equal(panel.drift.canApprove, true, 'a held item must be decidable on the panel');
+  const heldBy = panel.drift.heldBy ?? null;
+  assert.equal(held, enabled && (panel.drift.count > 0 || heldBy != null),
+    `validator held=${held} but panel drift count=${panel.drift.count}, heldBy=${heldBy?.issueKey} (enabled=${enabled})`);
+  // Held for its own change: decided here. Held from above: the panel names
+  // the work item where the decision is made, and that one can make it.
+  if (held && panel.drift.count > 0) assert.equal(panel.drift.canApprove, true, 'a held item must be decidable on the panel');
+  if (held && panel.drift.count === 0) {
+    assert.ok(heldBy?.issueKey, 'a hold from above must name where to decide it');
+    assert.equal((await w.panel(heldBy.issueKey, 'reviewer')).drift.canApprove, true, 'and that work item must be able to decide it');
+  }
   return { panel, held };
 }
 
@@ -1041,12 +1048,91 @@ test('S129 a field the child\'s type does not track is not the child\'s drift', 
   assert.equal((await w.panel('P-1')).drift.childrenAwaiting, 0);
 });
 
-test('S130 the parent\'s own edit holds the parent, not its children', async () => {
-  const { w } = familyWorld();
+// Drift is FLAGGED upward and HELD downward (user, 2026-10-12): a drifted item
+// holds itself and everything below it (Jira's parent field), never an
+// ancestor, a sibling or a linked issue. lib/ancestorHold.js.
+const heldFrom = async (w, key, aboveKey) => {
+  const verdicts = await w.verdicts(key);
+  assert.ok(Object.keys(verdicts).length > 0, 'no transitions to check');
+  for (const [id, r] of Object.entries(verdicts)) {
+    assert.equal(r.result, false, `transition ${id} of ${key} should be held from above`);
+    assert.match(r.errorMessage, new RegExp(`^${aboveKey}, above this work item, has changed since it was approved`),
+      `transition ${id} of ${key} should name ${aboveKey}`);
+  }
+};
+
+test('S130 the parent\'s own edit holds the parent and every child below it, each told where to decide', async () => {
+  const { w } = familyWorld({ grandchild: true });
   w.edit('P-1', { summary: 'parent edited' });
   await heldEverywhere(w, 'P-1');
+  await heldFrom(w, 'P-2', 'P-1');
+  await heldFrom(w, 'P-3', 'P-1');
+  await heldFrom(w, 'P-4', 'P-1');             // a grandchild: the hold runs all the way down
+  for (const key of ['P-1', 'P-2', 'P-3', 'P-4']) await agree(w, key);
+  const child = await w.panel('P-4');
+  assert.equal(child.drift.count, 0, 'nothing changed in the grandchild itself');
+  assert.deepEqual(child.drift.heldBy, { issueKey: 'P-1', issueId: Number(w.issue('P-1').id), depth: 2 });
+  assert.match(child.state, /^Held: P-1, above this work item, has changes awaiting a decision there/);
+});
+
+test('S138 a middle item\'s edit holds its own subtree, never its parent or its sibling', async () => {
+  const { w } = familyWorld({ grandchild: true });
+  w.edit('P-2', { summary: 'middle edited' });
+  await heldEverywhere(w, 'P-2');
+  await heldFrom(w, 'P-4', 'P-2');
+  await freeEverywhere(w, 'P-1');
+  await freeEverywhere(w, 'P-3');
+  for (const key of ['P-1', 'P-2', 'P-3', 'P-4']) await agree(w, key);
+  assert.equal((await w.panel('P-1')).drift.childrenAwaiting, 1, 'the flag still climbs to the top');
+});
+
+test('S139 a grandchild\'s edit flags EVERY ancestor, the middle one included, and holds none of them', async () => {
+  const { w } = familyWorld({ grandchild: true });
+  w.edit('P-4', { labels: ['gamma'] });
+  await heldEverywhere(w, 'P-4');
   await freeEverywhere(w, 'P-2');
-  await agree(w, 'P-1');
+  await freeEverywhere(w, 'P-1');
+  const middle = await w.panel('P-2');
+  assert.equal(middle.drift.count, 0);
+  assert.equal(middle.drift.childrenAwaiting, 1, 'a child captured by its parent still sees the drift under it');
+  assert.equal(middle.drift.canApprove, true, 'and can decide it: its decision covers its subtree');
+  assert.match(middle.state, /1 child work item has changes awaiting a decision/);
+  assert.equal((await w.panel('P-1')).drift.childrenAwaiting, 1);
+});
+
+test('S140 deciding the parent releases everything it held below it', async () => {
+  const { w } = familyWorld({ grandchild: true });
+  w.edit('P-1', { summary: 'parent edited' });
+  await heldFrom(w, 'P-4', 'P-1');
+  w.approveDrift('P-1');
+  for (const key of ['P-1', 'P-2', 'P-3', 'P-4']) await freeEverywhere(w, key);
+});
+
+test('S141 reverting the parent by hand releases its children with no decision', async () => {
+  const { w } = familyWorld();
+  const before = w.issue('P-1').fields.summary;
+  w.edit('P-1', { summary: 'parent edited' });
+  await heldFrom(w, 'P-2', 'P-1');
+  w.edit('P-1', { summary: before });
+  await freeEverywhere(w, 'P-1');
+  await freeEverywhere(w, 'P-2');
+});
+
+test('S142 in a project switched off in VAtlassian, a drifted parent holds no child', async () => {
+  const { w } = familyWorld();
+  w.edit('P-1', { summary: 'parent edited' });
+  w.projectConfig.set(1, { enabled: false });
+  await freeEverywhere(w, 'P-2');
+  assert.equal((await w.panel('P-2')).drift.heldBy, null);
+});
+
+test('S143 an item with drift of its own is told about its own change first, not about the one above', async () => {
+  const { w } = familyWorld();
+  w.edit('P-1', { summary: 'parent edited' });
+  w.edit('P-2', { summary: 'child edited too' });
+  await heldEverywhere(w, 'P-2');
+  for (const r of Object.values(await w.verdicts('P-2'))) assert.match(r.errorMessage, /^This work item has changed since it was approved/);
+  assert.equal((await w.panel('P-2')).drift.heldBy, null);
 });
 
 test('S131 approving the child in its own panel releases it and clears the parent\'s waiting count', async () => {

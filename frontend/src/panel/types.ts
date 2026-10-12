@@ -85,6 +85,7 @@ export type PanelSummary = {
   drift: { count: number; materialCount: number; decidesDrift: boolean; policyIncomplete: boolean; canApprove: boolean; canReject: boolean; eligible?: boolean;
     /** Descendants drifted against their own baselines. A parent decision covers them; they do not hold the parent. */
     childrenAwaiting?: number;
+    heldBy?: { issueKey: string; issueId: number; depth: number } | null;
     /** Links approved on the other issue, on their way to this record (jobs/linkWorker.js). */
     linkPending?: { decidedOnKey: string; queuedAt: number }[] };
   /** Hash of the tracked content right now; moves on every edit. */

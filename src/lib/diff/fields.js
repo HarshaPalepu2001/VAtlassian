@@ -73,14 +73,55 @@ const SPECIAL_HANDLERS = {
 };
 
 /**
+ * Extract a mapping of mediaId -> filename and attachmentId -> filename from raw value sets.
+ */
+export function extractMediaMap(...valueSets) {
+  const map = new Map();
+  const inspect = (item) => {
+    if (!item || typeof item !== 'object') return;
+    if (Array.isArray(item)) {
+      for (const el of item) inspect(el);
+      return;
+    }
+    const filename = item.filename ?? item.name;
+    const mediaId = item.mediaId ?? item.standsForMediaId;
+    const jiraId = item.jiraAttachmentId ?? item.jiraId ?? item.id;
+    if (filename) {
+      if (mediaId) map.set(String(mediaId), String(filename));
+      if (jiraId) map.set(String(jiraId), String(filename));
+    }
+    if (item.attachment) inspect(item.attachment);
+    if (item.allAttachments) inspect(item.allAttachments);
+    if (item.fields?.attachment) inspect(item.fields.attachment);
+  };
+  for (const set of valueSets) {
+    if (!set) continue;
+    if (Array.isArray(set)) {
+      inspect(set);
+    } else if (typeof set === 'object') {
+      inspect(set.attachment);
+      inspect(set.allAttachments);
+      inspect(set.fields?.attachment);
+      for (const val of Object.values(set)) {
+        if (Array.isArray(val) && val.some(x => x && typeof x === 'object' && ('filename' in x || 'mediaId' in x))) {
+          inspect(val);
+        }
+      }
+    }
+  }
+  return map;
+}
+
+/**
  * Diff one field.
  *
  * @param field    { field_id, field_name, field_kind, store_values, writable }
  * @param before   the baseline's retained value, or undefined if not retained
  * @param after    the live value
  * @param retained whether this field's contents were stored at all
+ * @param mediaMap optional Map of mediaId/attachmentId -> filename
  */
-export function diffField({ field, before, after, retained, digestChanged = true }) {
+export function diffField({ field, before, after, retained, digestChanged = true, mediaMap = null }) {
   const base = {
     fieldId: field.field_id,
     fieldName: field.field_name ?? field.field_id,
@@ -110,7 +151,7 @@ export function diffField({ field, before, after, retained, digestChanged = true
   }
 
   switch (field.field_kind) {
-    case FIELD_KIND.ADF: return diffAdfField(base, before, after);
+    case FIELD_KIND.ADF: return diffAdfField(base, before, after, mediaMap);
     case FIELD_KIND.TEXT: return diffTextField(base, before, after);
     case FIELD_KIND.SCALAR: return diffScalarField(base, before, after);
     case FIELD_KIND.MULTI: return diffMultiField(base, before, after);
@@ -120,8 +161,8 @@ export function diffField({ field, before, after, retained, digestChanged = true
   }
 }
 
-function diffAdfField(base, before, after) {
-  const result = diffAdf(before, after);
+function diffAdfField(base, before, after, mediaMap = null) {
+  const result = diffAdf(before, after, { mediaMap });
   const beforeText = adfPlainText(before);
   const afterText = adfPlainText(after);
 

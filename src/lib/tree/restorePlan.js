@@ -105,15 +105,61 @@ export function planTreeRestore({ baselineTree, currentTree, controlledFields, f
       let filesComeBack = false;
       const nodeAttachmentIds = fieldIds.filter(fieldId => attachmentFieldIds.has(fieldId));
       if (nodeAttachmentIds.length > 1) throw new FailClosed('MULTI_ATTACHMENT_FIELD_UNSUPPORTED');
-      if (nodeAttachmentIds.length === 1) {
-        const fieldId = nodeAttachmentIds[0];
-        const target = retainedFields(baselineTree, idOf(node), [fieldId])[fieldId];
+      const regularValues = regularFieldIds.length > 0 ? retainedFields(baselineTree, idOf(node), regularFieldIds) : {};
+      const currentValues = currentValuesOf(idOf(node));
+      const adfFieldIds = new Set([
+        ...(fieldsFor(node) ?? [])
+          .filter(f => f.field_kind === FIELD_KIND.ADF || f.field_id === 'description')
+          .map(f => String(f.field_id)),
+        ...Object.keys(currentValues).filter(k => currentValues[k]?.type === 'doc'),
+        ...Object.keys(regularValues).filter(k => regularValues[k]?.type === 'doc')
+      ]);
+      const targetAdfMedia = new Set();
+      const currentAdfMedia = new Set();
+      for (const fieldId of adfFieldIds) {
+        const targetVal = regularFieldIds.includes(fieldId)
+          ? regularValues[fieldId]
+          : currentValues[fieldId];
+        if (targetVal && typeof targetVal === 'object' && targetVal.type === 'doc') {
+          for (const mId of adfMediaIds(targetVal)) targetAdfMedia.add(String(mId));
+        }
+        const curVal = currentValues[fieldId];
+        if (curVal && typeof curVal === 'object' && curVal.type === 'doc') {
+          for (const mId of adfMediaIds(curVal)) currentAdfMedia.add(String(mId));
+        }
+      }
+      const mediaAdded = [...currentAdfMedia].some(mId => !targetAdfMedia.has(mId));
+      const mediaRemoved = [...targetAdfMedia].some(mId => !currentAdfMedia.has(mId));
+      const richMediaChanged = mediaAdded || mediaRemoved;
+
+      if (nodeAttachmentIds.length === 1 || (richMediaChanged && !removedIds.has(idOf(node)))) {
+        const fieldId = nodeAttachmentIds[0] ?? 'attachment';
+        const rawTarget = nodeAttachmentIds.length === 1
+          ? (retainedFields(baselineTree, idOf(node), [fieldId])[fieldId] ?? []).filter(a => !a?.isRichText)
+          : ((currentValues[fieldId] ?? []).filter(a => !a?.isRichText));
+        let target = Array.isArray(rawTarget) ? [...rawTarget] : [];
+        const current = removedIds.has(idOf(node)) ? [] : (currentValues[fieldId] ?? []);
+
+        if (targetAdfMedia.size > 0) {
+          const baselineAll = baselineTree?.values?.[idOf(node)]?.allAttachments
+            ?? baselineTree?.values?.[idOf(node)]?.attachment ?? [];
+          for (const a of Array.isArray(baselineAll) ? baselineAll : []) {
+            if (a?.mediaId && targetAdfMedia.has(String(a.mediaId))) {
+              if (!target.some(t => String(t.id) === String(a.id))) target.push(a);
+            }
+          }
+          for (const a of Array.isArray(current) ? current : []) {
+            if (a?.mediaId && targetAdfMedia.has(String(a.mediaId))) {
+              if (!target.some(t => String(t.id) === String(a.id))) target.push(a);
+            }
+          }
+        }
+
         // FILES BEFORE FIELDS: rich text that shows a file can only be written
         // while Jira has it. A recreated work item starts with no files: only
         // one that had some needs the step, and its files come from the
         // ORIGINAL item's vault page.
         if (!removedIds.has(idOf(node)) || (Array.isArray(target) && target.length > 0)) {
-          const current = removedIds.has(idOf(node)) ? [] : (currentValuesOf(idOf(node))[fieldId] ?? []);
           const have = new Set((Array.isArray(current) ? current : []).map(a => String(a?.id)));
           filesComeBack = Array.isArray(target) && target.some(a => !have.has(String(a?.id)));
           steps.push(action('RESTORE_ATTACHMENTS', idOf(node), parentOf(node), [fieldId], { attachments: target, current }));
@@ -121,7 +167,7 @@ export function planTreeRestore({ baselineTree, currentTree, controlledFields, f
       }
       if (regularFieldIds.length > 0) {
         steps.push(action('RESTORE_FIELDS', idOf(node), parentOf(node), regularFieldIds, {
-          fields: retainedFields(baselineTree, idOf(node), regularFieldIds)
+          fields: regularValues
         }));
       }
       // Rich text nobody edited that shows a file this step puts back: the

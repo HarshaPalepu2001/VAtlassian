@@ -21,7 +21,7 @@ const mocked = {
   'db/configStore.js': ['gatedTransition', 'controlledFields', 'projectConfig', 'declaredFieldRows',
     'seedControlledFields', 'countControlledFields', 'listGatedTransitions', 'gateActiveOutOf'],
   'db/baselineStore.js': ['activeBaseline', 'baselineByVersion'],
-  'db/baselineTreeStore.js': ['rootNodeDigests', 'activeRootsForNode', 'driftedDescendants', 'capturingParent'],
+  'db/baselineTreeStore.js': ['rootNodeDigests', 'activeRootsForNode', 'driftedDescendants', 'driftedDescendantsOfNode', 'capturingParent'],
   'db/itemStateStore.js': ['getReview'],
   'db/incidentStore.js': ['adminIncidentCount'],
   'db/credentialStore.js': ['credentialState'],
@@ -370,6 +370,11 @@ export function world({ workflow = WORKFLOW, tracked = TRACKED } = {}) {
       const parent = w.baselines.find(b => hex(b.baseline_id) === hex(baselineId));
       const root = [...w.issues.values()].find(i => Number(i.id) === parent?.issue_id);
       return root ? w.descendants(root.key).filter(w.driftedNow).length : 0;
+    },
+    // The slice of the capturing parent's tree under this child: here, its live descendants.
+    driftedDescendantsOfNode: async (_parentBaselineId, issueId) => {
+      const node = [...w.issues.values()].find(i => Number(i.id) === Number(issueId));
+      return node ? w.descendants(node.key).filter(w.driftedNow).length : 0;
     },
     capturingParent: async baselineId => {
       const parent = w.baselines.find(b => hex(b.baseline_id) === hex(baselineId));

@@ -344,6 +344,44 @@ export async function driftedDescendants(baselineId, query = store.throwing) {
 }
 
 /**
+ * DRIFT BELOW A WORK ITEM THAT IS NOT A TREE ROOT ITSELF. A child captured by
+ * its parent has a field-level baseline, so driftedDescendants (counted over a
+ * tree baseline's own nodes) never reaches the items under it. Its subtree is
+ * the slice of the parent's signed tree under its node — the same slice its
+ * review and restore use (lib/tree/scopedBaseline.js) — so the flag climbs to
+ * every ancestor, not only the root. Counted over the CURRENT item state.
+ */
+export async function driftedDescendantsOfNode(parentBaselineId, issueId, query = store.throwing) {
+  const nodes = await query(
+    `SELECT logical_node_id AS id, parent_logical_node_id AS parentId, current_issue_id AS issueId
+       FROM va_baseline_node WHERE baseline_id = FROM_BASE64(?)`,
+    [toBinaryParam(parentBaselineId)]
+  );
+  const key = value => (value == null ? null : Buffer.isBuffer(value) ? value.toString('hex') : String(value));
+  const start = (nodes ?? []).find(node => Number(node.issueId) === Number(issueId));
+  if (!start) return 0;
+  const below = new Set([key(start.id)]);
+  const issues = new Set();
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const node of nodes) {
+      if (!below.has(key(node.id)) && below.has(key(node.parentId))) {
+        below.add(key(node.id));
+        issues.add(Number(node.issueId));
+        grew = true;
+      }
+    }
+  }
+  if (issues.size === 0) return 0;
+  const ids = [...issues];
+  const rows = await query(
+    `SELECT COUNT(*) AS n FROM va_item_state WHERE state = 'DRIFTED' AND issue_id IN (${ids.map(() => '?').join(', ')})`,
+    ids
+  );
+  return Number(rows?.[0]?.n ?? 0);
+}
+
+/**
  * The parent capture that produced a child's baseline: its root's issue id,
  * key and version, for "Baselined with PARENT-1 v3". One indexed read.
  */

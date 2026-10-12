@@ -78,9 +78,9 @@ function signature(block) {
  *   magnitude: number
  * }
  */
-export function diffAdf(before, after) {
-  const a = flatten(before);
-  const b = flatten(after);
+export function diffAdf(before, after, options = {}) {
+  const a = flatten(before, options);
+  const b = flatten(after, options);
 
   const sigA = a.map(signature);
   const sigB = b.map(signature);

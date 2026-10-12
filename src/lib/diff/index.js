@@ -1,6 +1,6 @@
 import { normaliseField, digestsEquivalent } from '../content.js';
 import { canonical, sha256Hex } from '../hash.js';
-import { diffField, presentationKind, withAttachmentDetails } from './fields.js';
+import { diffField, presentationKind, withAttachmentDetails, extractMediaMap } from './fields.js';
 import { classify, maxMateriality, MATERIALITY } from '../materiality.js';
 import { attributionByField, timeline } from '../changelog.js';
 
@@ -48,6 +48,7 @@ export function diffIssue({
   const fieldIds = controlledFields.map((f) => f.field_id);
   const attribution = attributionByField(changelogEntries, fieldIds);
   const driftByField = groupBy(driftRows, (d) => d.field_id);
+  const mediaMap = extractMediaMap(baselineValues, currentFields);
   let bDigests = {};
   try {
     bDigests = baseline?.field_digests ? (typeof baseline.field_digests === 'string' ? JSON.parse(baseline.field_digests) : baseline.field_digests) : {};
@@ -86,7 +87,7 @@ export function diffIssue({
       digestChanged = !digestsEquivalent(field.field_id, bDigests[field.field_id], currentDigest);
     }
 
-    const diff = withAttachmentDetails(diffField({ field: { ...field, field_kind: displayKind }, before, after, retained, digestChanged }), beforeRaw, afterRaw);
+    const diff = withAttachmentDetails(diffField({ field: { ...field, field_kind: displayKind }, before, after, retained, digestChanged, mediaMap }), beforeRaw, afterRaw);
     if (!diff.changed) continue;
 
     const events = (driftByField.get(field.field_id) ?? [])
@@ -124,8 +125,10 @@ export function diffIssue({
       // A LOOKUP RATHER THAN A SUBSTITUTION, because in a signed record the
       // stored identifier IS the evidence. The panel shows the name AND the id
       // it resolves; it never silently replaces one with the other, and an id
-      // with no known name renders as itself rather than as a guess.
-      valueLabels: valueLabels(beforeRaw, afterRaw),
+      valueLabels: {
+        ...Object.fromEntries(mediaMap.entries()),
+        ...valueLabels(beforeRaw, afterRaw)
+      },
 
       // The ordered account of how this field got here. `touches` is the raw
       // changelog view; `events` is what Baseline recorded and is what the AI
@@ -244,7 +247,7 @@ function materialityRank(m) {
  * so a label field ("urgent") does not produce a pointless "urgent" → "urgent"
  * mapping for the panel to render twice.
  */
-function valueLabels(...raws) {
+export function valueLabels(...raws) {
   const map = {};
   for (const raw of raws) {
     for (const item of Array.isArray(raw) ? raw : [raw]) {
@@ -262,6 +265,14 @@ function valueLabels(...raws) {
           map[String(linked.id)] = label;
           if (key) map[String(key)] = label;
         }
+      }
+      if (item.filename) {
+        const fname = String(item.filename);
+        if (item.mediaId) map[String(item.mediaId)] = fname;
+        if (item.standsForMediaId) map[String(item.standsForMediaId)] = fname;
+        if (item.jiraId) map[String(item.jiraId)] = fname;
+        if (item.jiraAttachmentId) map[String(item.jiraAttachmentId)] = fname;
+        if (item.id) map[String(item.id)] = fname;
       }
       const id = item.accountId ?? item.id ?? item.value ?? item.key;
       const name = readableName(item);

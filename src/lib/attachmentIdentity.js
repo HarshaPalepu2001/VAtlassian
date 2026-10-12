@@ -1,4 +1,4 @@
-import { identityRecords } from '../db/vaultStore.js';
+import { identityRecords, vaultedAttachmentMedia } from '../db/vaultStore.js';
 
 /**
  * WHICH APPROVED FILE IS THIS?
@@ -47,7 +47,9 @@ function entry(attachment, aliases) {
     created: attachment?.created ?? null,
     author: attachment?.author?.accountId
       ? { accountId: attachment.author.accountId, displayName: attachment.author.displayName ?? null }
-      : null
+      : null,
+    isRichText: Boolean(attachment?.isRichText),
+    mediaId: attachment?.mediaId ?? null
   };
 }
 
@@ -147,10 +149,39 @@ export function danglingMediaPointers(fields, record, liveJiraIds) {
 async function recordsFor(issueIds, read) {
   if (issueIds.length === 0) return new Map();
   try {
-    return await read(issueIds);
+    const records = await read(issueIds);
+    if (read === identityRecords) {
+      try {
+        const vaulted = await vaultedAttachmentMedia(issueIds);
+        for (const [issueId, mediaMap] of vaulted) {
+          if (!records.has(issueId)) records.set(issueId, { files: new Map(), media: new Map(), mediaOwner: new Map(), attachmentMedia: new Map() });
+          const entry = records.get(issueId);
+          if (entry.attachmentMedia) {
+            for (const [jId, mId] of mediaMap) {
+              if (!entry.attachmentMedia.has(jId)) entry.attachmentMedia.set(jId, mId);
+            }
+          }
+        }
+      } catch {
+        // non-fatal
+      }
+    }
+    return records;
   } catch (error) {
     console.error('attachmentIdentity: aliases unavailable; restored copies will read as changed', error);
     return new Map();
+  }
+}
+
+async function defaultMediaIdOf(attachmentId) {
+  try {
+    const forge = await import('@forge/api');
+    const api = forge.default ?? forge;
+    const { route } = forge;
+    const { readMediaId } = await import('./mediaIdentity.js');
+    return await readMediaId({ api, route, attachmentId });
+  } catch {
+    return null;
   }
 }
 
@@ -161,13 +192,51 @@ async function recordsFor(issueIds, read) {
  * lookup for all of them, and none at all when no item has an attachment.
  * Never throws.
  */
-export async function canonicaliseItems(items, { read = identityRecords } = {}) {
+export async function canonicaliseItems(items, { read = identityRecords, mediaIdOf = null } = {}) {
   const list = (items ?? []).filter(item => item && hasAttachments(item.fields));
   const byIssue = await recordsFor([...new Set(list.map(item => Number(item.id)))], read);
+  const resolveMedia = mediaIdOf ?? defaultMediaIdOf;
   for (const item of list) {
     const record = byIssue.get(Number(item.id));
     const files = record instanceof Map ? record : record?.files ?? null;
     const media = record instanceof Map ? null : record?.media ?? null;
+    const mediaOwner = record instanceof Map ? null : record?.mediaOwner ?? null;
+    const attachmentMedia = record instanceof Map ? null : record?.attachmentMedia ?? null;
+
+    const richTextMedia = new Set();
+    for (const [fieldId, value] of Object.entries(item.fields ?? {})) {
+      if (isAdfDoc(value)) {
+        for (const mId of adfMediaIds(value)) richTextMedia.add(String(mId));
+      }
+    }
+
+    if (Array.isArray(item.fields.attachment)) {
+      for (const a of item.fields.attachment) {
+        const jId = String(a?.jiraId ?? a?.id ?? '');
+        let aMediaId = a?.mediaId ?? attachmentMedia?.get(jId) ?? null;
+        if (!aMediaId && richTextMedia.size > 0 && typeof resolveMedia === 'function') {
+          try {
+            aMediaId = await resolveMedia(jId);
+          } catch {
+            aMediaId = null;
+          }
+          if (aMediaId) {
+            if (attachmentMedia) attachmentMedia.set(jId, aMediaId);
+            if (mediaOwner) mediaOwner.set(aMediaId, jId);
+          }
+        }
+        const canonMediaId = media?.get(aMediaId) ?? aMediaId;
+        if (canonMediaId) a.mediaId = canonMediaId;
+        const isRich = Boolean(
+          a?.isRichText ||
+          (aMediaId && richTextMedia.has(String(aMediaId))) ||
+          (canonMediaId && richTextMedia.has(String(canonMediaId))) ||
+          (mediaOwner && [...richTextMedia].some(mId => mediaOwner.get(mId) === jId))
+        );
+        a.isRichText = isRich;
+      }
+    }
+
     const fields = { ...item.fields, attachment: canonicalAttachments(item.fields.attachment, files) };
     if (media?.size) {
       for (const [fieldId, value] of Object.entries(fields)) {
@@ -193,7 +262,6 @@ export async function canonicaliseIssue(issue, options = {}) {
  */
 export function recordedAttachments(values, fields) {
   const ids = (fields ?? []).filter(f => f.field_kind === 'ATTACHMENTS').map(f => f.field_id);
-  if (ids.length === 0) return null;
   const seen = new Map();
   for (const fieldId of ids) {
     for (const a of Array.isArray(values?.[fieldId]) ? values[fieldId] : []) {
@@ -201,5 +269,11 @@ export function recordedAttachments(values, fields) {
       if (id && !seen.has(id)) seen.set(id, { id, jiraId: jiraIdOf(a), filename: a?.filename ?? '' });
     }
   }
-  return [...seen.values()];
+  const allAtts = Array.isArray(values?.allAttachments) ? values.allAttachments
+    : (Array.isArray(values?.attachment) ? values.attachment : []);
+  for (const a of allAtts) {
+    const id = String(a?.id ?? '');
+    if (id && !seen.has(id)) seen.set(id, { id, jiraId: jiraIdOf(a), filename: a?.filename ?? '' });
+  }
+  return seen.size > 0 ? [...seen.values()] : (ids.length > 0 ? [] : null);
 }

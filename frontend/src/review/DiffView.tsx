@@ -11,6 +11,43 @@ import type { Attribution as Step, DiffField, DiffOp, DiffBlock, DiffCell, DiffI
 const IconArrowRight = () => <span aria-hidden>→</span>;
 const IconRemove = () => <span aria-hidden>−</span>;
 const IconAdd = () => <span aria-hidden>+</span>;
+const IconAttachment = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden style={{ verticalAlign: -1, marginRight: 4, display: 'inline-block' }}>
+    <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+  </svg>
+);
+
+function renderFormattedText(text: string, field?: DiffField): ReactNode {
+  if (!text) return text;
+  const regex = /\[attachment(?::\s*([^\]]+)|\s+([0-9a-fA-F-]{36}|[0-9]+)|)\]/g;
+  if (!regex.test(text)) return text;
+  regex.lastIndex = 0;
+  const parts: ReactNode[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.substring(lastIndex, match.index));
+    }
+    const resolvedName = match[1]?.trim();
+    const id = match[2]?.trim();
+    let name = resolvedName;
+    if (!name && id) {
+      name = field?.valueLabels?.[id] || (id.length === 36 ? 'Attached file' : `Attachment ${id}`);
+    }
+    name = name || 'Attachment';
+    parts.push(
+      <span key={match.index} className="va-pill va-pill--attachment" title={id || name}>
+        <IconAttachment /> {name}
+      </span>
+    );
+    lastIndex = regex.lastIndex;
+  }
+  if (lastIndex < text.length) {
+    parts.push(text.substring(lastIndex));
+  }
+  return parts;
+}
 
 /**
  * The diff.
@@ -334,8 +371,8 @@ function SideBody({ field, side }: { field: DiffField; side: Side }) {
     return <p className="va-muted">Its approved value was not kept, so it cannot be shown or restored.</p>;
   }
   switch (field.kind) {
-    case 'adf': return <SideBlocks blocks={field.blocks} side={side} />;
-    case 'text': return <div className="va-side__text"><SideOps ops={field.ops} side={side} /></div>;
+    case 'adf': return <SideBlocks blocks={field.blocks} side={side} field={field} />;
+    case 'text': return <div className="va-side__text"><SideOps ops={field.ops} side={side} field={field} /></div>;
     case 'multi':
     case 'links':
     case 'attachments': {
@@ -354,30 +391,42 @@ function SideBody({ field, side }: { field: DiffField; side: Side }) {
     }
     default: {
       const shown = display(field, side === 'before' ? field.before : field.after);
-      return <div className="va-side__text">{shown.text}{shown.id && <span className="va-chip__id"> id {shown.id}</span>}</div>;
+      return (
+        <div className="va-side__text">
+          {shown.text}
+          {shown.id && shown.id !== shown.text && <span className="va-chip__id" style={{ marginLeft: 6 }}>id {shown.id}</span>}
+        </div>
+      );
     }
   }
 }
 
-const itemName = (field: DiffField, item: DiffItem) =>
-  typeof item === 'string' ? display(field, item).text : (item.filename || item.id || display(field, item).text);
+const itemName = (field: DiffField, item: DiffItem) => {
+  if (typeof item === 'string') {
+    const d = display(field, item);
+    return d.text || item;
+  }
+  const id = item.id ? String(item.id) : '';
+  const resolved = item.filename || (id && field.valueLabels?.[id]);
+  return resolved || item.id || display(field, item).text;
+};
 
 /** One side of a word-level edit: what the other side added or removed is left out. */
-function SideOps({ ops, side }: { ops?: DiffOp[]; side: Side }) {
+function SideOps({ ops, side, field }: { ops?: DiffOp[]; side: Side; field?: DiffField }) {
   if (!ops || ops.length === 0) return <span className="va-muted">No visible change.</span>;
   const mine = side === 'before' ? 'delete' : 'insert';
   const theirs = side === 'before' ? 'insert' : 'delete';
   return (
     <span>
       {ops.filter(op => op.op !== theirs).map((op, i) => op.op === mine
-        ? (side === 'before' ? <del key={i} className="va-del">{op.text}</del> : <ins key={i} className="va-ins">{op.text}</ins>)
-        : <span key={i}>{op.text}</span>)}
+        ? (side === 'before' ? <del key={i} className="va-del">{renderFormattedText(op.text, field)}</del> : <ins key={i} className="va-ins">{renderFormattedText(op.text, field)}</ins>)
+        : <span key={i}>{renderFormattedText(op.text, field)}</span>)}
     </span>
   );
 }
 
 /** One side of a rich-text field, block by block, with untouched stretches collapsed. */
-function SideBlocks({ blocks, side }: { blocks?: DiffBlock[]; side: Side }) {
+function SideBlocks({ blocks, side, field }: { blocks?: DiffBlock[]; side: Side; field?: DiffField }) {
   if (!blocks || blocks.length === 0) return <div className="va-muted">No visible change.</div>;
   const out: ReactNode[] = [];
   let equal = 0;
@@ -390,8 +439,8 @@ function SideBlocks({ blocks, side }: { blocks?: DiffBlock[]; side: Side }) {
     const own = side === 'before' ? block.before : block.after;
     const text = own?.text ?? (own?.cells ?? []).map(cell => cell.text ?? '').join(' | ');
     out.push(block.op === 'modified' && (block.ops ?? []).length
-      ? <div key={i} className="va-block"><SideOps ops={block.ops} side={side} /></div>
-      : <div key={i} className="va-block">{text}</div>);
+      ? <div key={i} className="va-block"><SideOps ops={block.ops} side={side} field={field} /></div>
+      : <div key={i} className="va-block">{renderFormattedText(text, field)}</div>);
   });
   flush(blocks.length);
   return <div className="va-side__text">{out}</div>;
@@ -413,8 +462,8 @@ function Body({ field, historical, fromVersion, toVersion }: {field: DiffField; 
   }
 
   switch (field.kind) {
-    case 'adf': return <AdfDiff blocks={field.blocks} />;
-    case 'text': return <InlineDiff ops={field.ops} />;
+    case 'adf': return <AdfDiff blocks={field.blocks} field={field} />;
+    case 'text': return <InlineDiff ops={field.ops} field={field} />;
     case 'multi': return <SetDiff field={field} added={field.added} removed={field.removed} />;
     case 'links': return <LinkDiff field={field} historical={historical} />;
     case 'attachments': return <AttachmentDiff field={field} historical={historical} />;
@@ -430,7 +479,7 @@ function Body({ field, historical, fromVersion, toVersion }: {field: DiffField; 
  * place, and a moved paragraph is one row rather than a deletion and an
  * insertion twenty lines apart.
  */
-function AdfDiff({ blocks }: {blocks?: DiffBlock[]}) {
+function AdfDiff({ blocks, field }: {blocks?: DiffBlock[]; field?: DiffField}) {
   if (!blocks || blocks.length === 0) return <div className="va-muted">No visible change.</div>;
 
   // Long unchanged stretches are collapsed to a single line. A reviewer reading
@@ -460,13 +509,13 @@ function AdfDiff({ blocks }: {blocks?: DiffBlock[]}) {
       while (i < blocks.length && tableIdOf(blocks[i]) === id) run.push(blocks[i++]);
       if (run.every((r) => r.op === 'equal')) { equalRun += run.length; continue; }
       flushEqual(i);
-      rendered.push(<TableDiff key={`table-${i}`} rows={run} />);
+      rendered.push(<TableDiff key={`table-${i}`} rows={run} field={field} />);
       continue;
     }
 
     if (block.op === 'equal') { equalRun++; i++; continue; }
     flushEqual(i);
-    rendered.push(<Block key={i} block={block} />);
+    rendered.push(<Block key={i} block={block} field={field} />);
     i++;
   }
   flushEqual('end');
@@ -489,7 +538,7 @@ function tableIdOf(block?: DiffBlock): string | null {
  * that changed. That is the same vocabulary the rest of this diff already uses,
  * applied to a grid, which is why this needed no new legend.
  */
-function TableDiff({ rows }: {rows: DiffBlock[]}) {
+function TableDiff({ rows, field }: {rows: DiffBlock[]; field?: DiffField}) {
   const changed = rows.filter((r) => r.op !== 'equal');
   const every = (op: string) => changed.length > 0 && changed.every((r) => r.op === op);
   const caption = every('insert') ? 'Added' : every('delete') ? 'Removed' : 'Edited';
@@ -501,14 +550,14 @@ function TableDiff({ rows }: {rows: DiffBlock[]}) {
       <StructureNote changes={[...new Map(rows.flatMap((r) => r.structureChange ?? []).map((c) => [c.text, c])).values()]} />
       <table className="va-diff-table">
         <tbody>
-          {rows.map((row, i) => <TableRowDiff key={i} row={row} />)}
+          {rows.map((row, i) => <TableRowDiff key={i} row={row} field={field} />)}
         </tbody>
       </table>
     </div>
   );
 }
 
-function TableRowDiff({ row }: {row: DiffBlock}) {
+function TableRowDiff({ row, field }: {row: DiffBlock; field?: DiffField}) {
   const op = row.op === 'markOnly' || row.op === 'move' ? 'equal' : row.op === 'structure' ? 'modified' : row.op;
   const side = op === 'delete' ? row.before : (row.after ?? row.before);
 
@@ -524,7 +573,7 @@ function TableRowDiff({ row }: {row: DiffBlock}) {
         const Cell = cell.header ? 'th' : 'td';
         return (
           <Cell key={i} className={`va-diff-table__cell va-diff-table__cell--${cell.op}`}>
-            <CellBody cell={cell} rowOp={op} />
+            <CellBody cell={cell} rowOp={op} field={field} />
           </Cell>
         );
       })}
@@ -532,14 +581,14 @@ function TableRowDiff({ row }: {row: DiffBlock}) {
   );
 }
 
-function CellBody({ cell, rowOp }: {cell: DiffCell; rowOp: string}) {
-  if (cell.op === 'modified' && (cell.ops ?? []).length > 0) return <InlineDiff ops={cell.ops} />;
+function CellBody({ cell, rowOp, field }: {cell: DiffCell; rowOp: string; field?: DiffField}) {
+  if (cell.op === 'modified' && (cell.ops ?? []).length > 0) return <InlineDiff ops={cell.ops} field={field} />;
   // A cell a row gained or lost is named as such even when the row as a whole
   // was only edited, so "the Type column is new" does not read as "this row was
   // rewritten".
-  if (cell.op === 'insert' && rowOp === 'modified') return <ins className="va-ins">{cell.after}</ins>;
-  if (cell.op === 'delete' && rowOp === 'modified') return <del className="va-del">{cell.before}</del>;
-  return <>{cell.op === 'delete' ? cell.before : (cell.after ?? cell.before)}</>;
+  if (cell.op === 'insert' && rowOp === 'modified') return <ins className="va-ins">{renderFormattedText(cell.after ?? '', field)}</ins>;
+  if (cell.op === 'delete' && rowOp === 'modified') return <del className="va-del">{renderFormattedText(cell.before ?? '', field)}</del>;
+  return <>{renderFormattedText((cell.op === 'delete' ? cell.before : (cell.after ?? cell.before)) ?? '', field)}</>;
 }
 
 function Unchanged({ count }: {count:number}) {
@@ -550,16 +599,16 @@ function Unchanged({ count }: {count:number}) {
   );
 }
 
-function Block({ block }: {block:DiffBlock}) {
+function Block({ block, field }: {block:DiffBlock; field?: DiffField}) {
   switch (block.op) {
     case 'insert':
-      return <div className="va-block va-block-insert">{block.after?.text}</div>;
+      return <div className="va-block va-block-insert">{renderFormattedText(block.after?.text ?? '', field)}</div>;
     case 'delete':
-      return <div className="va-block va-block-delete">{block.before?.text}</div>;
+      return <div className="va-block va-block-delete">{renderFormattedText(block.before?.text ?? '', field)}</div>;
     case 'modified':
       return (
         <div className="va-block va-block-modified">
-          <InlineDiff ops={block.ops} />
+          <InlineDiff ops={block.ops} field={field} />
           <StructureNote changes={block.structureChange} />
           {block.markChange && <MarkNote change={block.markChange} />}
         </div>
@@ -567,13 +616,13 @@ function Block({ block }: {block:DiffBlock}) {
     case 'move':
       return (
         <div className="va-block va-block-move">
-          <span className="va-subtlest">moved · </span>{block.after?.text}
+          <span className="va-subtlest">moved · </span>{renderFormattedText(block.after?.text ?? '', field)}
         </div>
       );
     case 'markOnly':
       return (
         <div className="va-block va-block-markonly">
-          {block.after?.text}
+          {renderFormattedText(block.after?.text ?? '', field)}
           <MarkNote change={block.markChange} />
         </div>
       );
@@ -583,7 +632,7 @@ function Block({ block }: {block:DiffBlock}) {
     case 'structure':
       return (
         <div className="va-block va-block-modified">
-          {block.after?.text ?? block.before?.text}
+          {renderFormattedText(block.after?.text ?? block.before?.text ?? '', field)}
           <StructureNote changes={block.structureChange} />
           {block.markChange && <MarkNote change={block.markChange} />}
         </div>
@@ -627,14 +676,14 @@ function MarkNote({ change }: {change?:MarkChange | null}) {
   );
 }
 
-function InlineDiff({ ops }: {ops?:DiffOp[]}) {
+function InlineDiff({ ops, field }: {ops?:DiffOp[]; field?: DiffField}) {
   if (!ops || ops.length === 0) return <span className="va-muted">No visible change.</span>;
   return (
     <span>
       {ops.map((op, i) => {
-        if (op.op === 'insert') return <ins key={i} className="va-ins">{op.text}</ins>;
-        if (op.op === 'delete') return <del key={i} className="va-del">{op.text}</del>;
-        return <span key={i}>{op.text}</span>;
+        if (op.op === 'insert') return <ins key={i} className="va-ins">{renderFormattedText(op.text, field)}</ins>;
+        if (op.op === 'delete') return <del key={i} className="va-del">{renderFormattedText(op.text, field)}</del>;
+        return <span key={i}>{renderFormattedText(op.text, field)}</span>;
       })}
     </span>
   );
@@ -669,7 +718,7 @@ function Chip({ side, value, label }: {side:'was'|'now'; value:{text:string;id?:
     <span className={`va-chip va-chip--${side === 'was' ? 'before' : 'after'}`}>
       <span className="va-chip__side">{label}</span>
       <span className="va-chip__value">{value.text}</span>
-      {value.id && <span className="va-chip__id">id {value.id}</span>}
+      {value.id && value.id !== value.text && <span className="va-chip__id" title={`Entity ID: ${value.id}`}>id {value.id}</span>}
     </span>
   );
 }

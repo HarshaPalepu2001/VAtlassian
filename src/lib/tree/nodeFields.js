@@ -44,8 +44,9 @@ export async function readTreeWithNodeFields({ readStableTree, readTree, rootIss
  * on the child re-baselines it without one, and the child would quietly fall
  * back to its own issue type's fields on its next approval.
  *
- *   · The item is a root itself: its own fields. It has its own approval.
- *   · Covered by one or more roots: the most recently approved root's fields.
+ *   · Covered by one or more other roots: the most recently approved root's
+ *     fields, whether or not the item also has a baseline of its own.
+ *   · A root with no other tree above it: its own fields. It has its own approval.
  *   · Covered by none: its own issue type's fields, as always.
  *
  * A root row with no scope (read before its columns existed) falls back to the
@@ -53,13 +54,18 @@ export async function readTreeWithNodeFields({ readStableTree, readTree, rootIss
  */
 export async function scopeForItem({ issueId, projectId, issueTypeId }, deps) {
   const roots = await deps.activeRootsForNode(Number(issueId));
-  if (roots.some(root => Number(root.rootIssueId) === Number(issueId))) {
-    return { projectId, issueTypeId, source: 'own', rootIssueId: Number(issueId) };
-  }
+  // A root covering this item from above governs it even once the item has a
+  // baseline of its own. A covered child signs under that root's fields and the
+  // capture its signature triggers makes it a root too; moving it to its own
+  // issue type at that moment gave the validator a different field set than the
+  // one just signed (found live 2026-10-12: VAT-59, VAT-68, VAT-69).
   const governing = roots
-    .filter(root => root.projectId != null && root.issueTypeId != null)
+    .filter(root => Number(root.rootIssueId) !== Number(issueId) && root.projectId != null && root.issueTypeId != null)
     .sort((a, b) => Number(b.capturedAt ?? 0) - Number(a.capturedAt ?? 0))[0];
-  if (!governing) return { projectId, issueTypeId, source: 'own', rootIssueId: null };
+  if (!governing) {
+    const isRoot = roots.some(root => Number(root.rootIssueId) === Number(issueId));
+    return { projectId, issueTypeId, source: 'own', rootIssueId: isRoot ? Number(issueId) : null };
+  }
   return { projectId: Number(governing.projectId), issueTypeId: String(governing.issueTypeId),
     source: 'governing-root', rootIssueId: Number(governing.rootIssueId),
     rootBaselineId: governing.baselineId ?? null, rootVersion: governing.version ?? null };

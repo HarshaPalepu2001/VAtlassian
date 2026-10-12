@@ -32,16 +32,87 @@ const nodeIssueId = node => Number(node.currentIssueId ?? node.originalIssueId);
  * Map logicalNodeId -> the child's own active baseline, for every non-root
  * node of a parent's baseline tree that owns its content. One read.
  */
-export async function ownedChildBaselines({ parentBaseline, baselineTree, activeBaselines }) {
+export async function ownedChildBaselines({ parentBaseline, baselineTree, activeBaselines, governorOf = () => parentBaseline }) {
   const children = (baselineTree?.nodes ?? []).filter(node => node.parentLogicalNodeId != null);
   if (!children.length) return new Map();
   const byIssue = await activeBaselines(children.map(nodeIssueId));
   const owned = new Map();
   for (const node of children) {
     const own = byIssue.get(nodeIssueId(node)) ?? byIssue.get(String(nodeIssueId(node)));
-    if (ownsItsContent(own, parentBaseline)) owned.set(node.logicalNodeId, own);
+    if (ownsItsContent(own, governorOf(node) ?? parentBaseline)) owned.set(node.logicalNodeId, own);
   }
   return owned;
+}
+
+const parentIdOf = node => node.parentLogicalNodeId ?? node.parentLogicalId ?? null;
+
+/** Every node below `nodeId` in `tree` (not the node itself). */
+function descendantsOf(tree, nodeId) {
+  const below = new Set();
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const node of tree.nodes) {
+      const parent = parentIdOf(node);
+      if (!below.has(node.logicalNodeId) && (parent === nodeId || below.has(parent))) {
+        below.add(node.logicalNodeId);
+        grew = true;
+      }
+    }
+  }
+  return below;
+}
+
+function depthOf(tree, nodeId) {
+  const byId = new Map(tree.nodes.map(node => [node.logicalNodeId, node]));
+  let depth = 0;
+  for (let node = byId.get(nodeId); node && parentIdOf(node) != null && depth < 64; node = byId.get(parentIdOf(node))) depth += 1;
+  return depth;
+}
+
+/**
+ * THE CHILD'S BRANCH, AS THE CHILD LAST SIGNED IT.
+ *
+ * A child that has its own tree baseline newer than the parent's capture (a
+ * decision or a controlled transition on the child, covering its own
+ * children) owns its whole branch, structure included: the sub-tasks it added
+ * or removed are part of what it signed. Its branch in the parent's tree is
+ * replaced by the child's own tree, so the tree stays connected to every
+ * issue's latest record. A change the child already decided is not reported
+ * again on the parent (live 2026-10-12: VAT-76 added under VAT-74 and approved
+ * there kept showing as "Added node" on VAT-72), and a parent rejection never
+ * deletes or detaches what the child signed for.
+ *
+ * Shallowest branch first. A node inside a grafted branch is then judged
+ * against the capture that branch came from, so a grandchild's own baseline
+ * wins only if it is newer than its parent's.
+ */
+async function graftOwnedBranches({ parentBaseline, baselineTree, activeBaselines, readBaselineTree }) {
+  let tree = baselineTree;
+  const governor = new Map();
+  const governorOf = node => governor.get(node.logicalNodeId) ?? parentBaseline;
+  const grafted = new Set();
+  for (let pass = 0; pass < 32; pass += 1) {
+    const owned = await ownedChildBaselines({ parentBaseline, baselineTree: tree, activeBaselines, governorOf });
+    const next = [...owned].filter(([id, child]) => child.tree_hash && !grafted.has(id))
+      .sort(([a], [b]) => depthOf(tree, a) - depthOf(tree, b))[0];
+    if (!next || typeof readBaselineTree !== 'function') break;
+    const [nodeId, child] = next;
+    grafted.add(nodeId);
+    const own = await readBaselineTree(child.baseline_id);
+    const ownRoot = own?.nodes?.find(node => parentIdOf(node) == null);
+    if (!ownRoot) continue;
+    const below = descendantsOf(tree, nodeId);
+    const branch = own.nodes.filter(node => node !== ownRoot);
+    const values = { ...(tree.values ?? {}) };
+    for (const id of below) delete values[id];
+    for (const node of branch) {
+      values[node.logicalNodeId] = own.values?.[node.logicalNodeId] ?? {};
+      governor.set(node.logicalNodeId, child);
+    }
+    governor.set(nodeId, governorOf({ logicalNodeId: nodeId }));
+    tree = { ...tree, nodes: [...tree.nodes.filter(node => !below.has(node.logicalNodeId)), ...branch], values };
+  }
+  return { tree, governorOf };
 }
 
 function parseDigests(text) {
@@ -87,11 +158,14 @@ async function ownRecord(child, issueId, stored, { readAllValues, readBaselineTr
  * baseline, and the parent's review shows each child against exactly that
  * (spec 2026-09-24 §4.5, §4.7). Building it once, here, is what keeps the
  * review diff, the restore plan, the queued worker and the post-restore
- * verification comparing against the same thing. Structure (parents, order)
- * stays the parent's: only content comes from the child.
+ * verification comparing against the same thing. Structure stays the
+ * parent's, except under a child that has since signed its own tree: that
+ * branch is the child's (graftOwnedBranches above).
  */
-export async function withChildBaselines({ parentBaseline, baselineTree, activeBaselines, readAllValues, readBaselineTree }) {
-  const owned = await ownedChildBaselines({ parentBaseline, baselineTree, activeBaselines });
+export async function withChildBaselines({ parentBaseline, baselineTree: signedTree, activeBaselines, readAllValues, readBaselineTree }) {
+  const { tree: baselineTree, governorOf } = await graftOwnedBranches({ parentBaseline, baselineTree: signedTree,
+    activeBaselines, readBaselineTree });
+  const owned = await ownedChildBaselines({ parentBaseline, baselineTree, activeBaselines, governorOf });
   if (!owned.size) return baselineTree;
   const values = { ...(baselineTree.values ?? {}) };
   const records = await Promise.all([...owned].map(async ([id, child]) => {

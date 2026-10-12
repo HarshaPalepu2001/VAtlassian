@@ -445,3 +445,24 @@ test('tree publication can require the version\'s evidence', async () => {
     query: async () => [] });
   assert.doesNotMatch(legacy[0], /policy_recorded/);
 });
+
+test('drift below a parent-captured child: only the items under its node in the parent tree are counted', async () => {
+  const { driftedDescendantsOfNode } = await import('../src/db/baselineTreeStore.js');
+  // E (100) > C1 (101) > S1 (103); E > C2 (102) > S2 (104)
+  const nodes = [
+    { id: 'n-e', parentId: null, issueId: 100 }, { id: 'n-c1', parentId: 'n-e', issueId: 101 },
+    { id: 'n-c2', parentId: 'n-e', issueId: 102 }, { id: 'n-s1', parentId: 'n-c1', issueId: 103 },
+    { id: 'n-s2', parentId: 'n-c2', issueId: 104 }
+  ];
+  const drifted = new Set([103, 104, 102]);
+  const asked = [];
+  const query = async (sql, params) => {
+    if (/FROM va_baseline_node/.test(sql)) return nodes;
+    asked.push(params);
+    return [{ n: params.filter(id => drifted.has(Number(id))).length }];
+  };
+  assert.equal(await driftedDescendantsOfNode(Buffer.alloc(16, 1), 101, query), 1, 'C1 sees S1 only, not its sibling\'s subtree');
+  assert.deepEqual(asked.at(-1), [103]);
+  assert.equal(await driftedDescendantsOfNode(Buffer.alloc(16, 1), 103, query), 0, 'a leaf has nothing below it');
+  assert.equal(await driftedDescendantsOfNode(Buffer.alloc(16, 1), 999, query), 0, 'an item not in the tree counts nothing');
+});

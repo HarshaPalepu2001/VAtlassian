@@ -61,13 +61,20 @@ type Action = {
 type SigningContext = {
   actions?: Action[]; transitions?: Action[]; blocker?: string | null; requiredRole?: string | null;
   issue?: { key?: string; summary?: string; statusName?: string }; actorName?: string;
-  drift?: { evidenceHash?: string; count?: number; blocked?: boolean }; error?: string;
+  drift?: { evidenceHash?: string; count?: number; blocked?: boolean; heldBy?: string | null }; error?: string;
+  heldBy?: string | null;
 };
 type Challenge = Result & { challengeId: string; meaning: string; requiredAssurance: AssuranceLevel };
 type Submitted = Result & { approvalId: string; printedName?: string; meaning?: string };
 
 /** The one action this screen may sign for `transitionId`, or why none. */
 function exactAction(state: SigningContext, transitionId: string): { action: Action | null; blocker: string } {
+  if (state.blocker === 'ANCESTOR_DRIFT') {
+    const above = state.heldBy ?? state.drift?.heldBy;
+    return { action: null, blocker: above
+      ? `Transition blocked: ${above}, above this work item, has unreviewed changes since its approved baseline. Approve or reject them on ${above} from the VAtlassian issue panel or My approvals, then reopen this transition.`
+      : 'Transition blocked: a work item above this one could not be checked for unreviewed changes. Reopen this transition in a moment.' };
+  }
   if (state.blocker === 'UNDECIDED_DRIFT' || state.drift?.blocked === true) {
     return { action: null, blocker: 'Transition blocked: this work item has unreviewed changes since its approved baseline. Review and approve or reject those changes from the VAtlassian issue panel or My approvals, then reopen this transition.' };
   }

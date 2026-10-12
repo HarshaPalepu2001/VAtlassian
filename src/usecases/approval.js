@@ -1,13 +1,15 @@
 import { providerFor } from '../lib/approval/registry.js';
 import { meetsAssurance, isAssuranceLevel, effectiveAssurance, controlledAuthenticationMethod } from '../lib/approval/levels.js';
 import { makeApproval, validEvidence } from '../lib/approval/record.js';
-import { FailClosed, DENY } from '../lib/errors.js';
+import { FailClosed, DENY, ancestorDriftMessage } from '../lib/errors.js';
 import { canonical } from '../lib/hash.js';
 import { createChallengePayload, challengeContextHash } from '../lib/approval/challenge.js';
 import { writeChallenge, getChallenge, markChallengeConsumed } from '../db/challengeStore.js';
 import { lockLeaseMs } from '../lib/decision.js';
 import { REVIEW_STATE } from '../lib/interception.js';
 import { MIXED_INTENT } from '../lib/approval/mixedDecision.js';
+import { harnessLog } from '../lib/harnessLogger.js';
+import { hashBasis } from '../lib/hashBasis.js';
 
 const fail = reason => { throw new FailClosed(reason); };
 /**
@@ -62,6 +64,16 @@ function activeOperationLock(review, now) {
 }
 
 export function createApprovalUsecases(deps) {
+  // HELD FROM ABOVE (lib/ancestorHold.js): the validator refuses any
+  // transition of a work item whose ancestor has undecided drift, so a
+  // signature for one is refused here, before any authentication is spent.
+  // Drift decisions are about content, not movement, and are never refused.
+  async function refuseIfHeldFromAbove(issue) {
+    if (typeof deps.ancestorDrift !== 'function') return;
+    const above = await deps.ancestorDrift(issue);
+    if (above) throw Object.assign(new FailClosed('ANCESTOR_DRIFT'), { userMessage: ancestorDriftMessage(above) });
+  }
+
   const challenges = {
     write: deps.writeChallenge ?? writeChallenge,
     get: deps.getChallenge ?? getChallenge,
@@ -158,6 +170,8 @@ export function createApprovalUsecases(deps) {
         decisions: mixed ? payload.decisions : undefined });
       phase = 'verify-evidence';
       if (payload.expectedEvidenceHash != null && payload.expectedEvidenceHash !== prepared.evidenceHash) fail('CONTENT_CHANGED');
+      phase = 'ancestor-hold';
+      if (workflowTransition) await refuseIfHeldFromAbove(issue);
 
       const tenantId = context.siteUrl || 'local';
 
@@ -218,10 +232,24 @@ export function createApprovalUsecases(deps) {
       if (challengeRow.transition_id != null && String(challengeRow.transition_id) !== String(transition?.id ?? '')) fail('TRANSITION_MISMATCH');
       if (challengeRow.transition_id == null && workflowTransition) fail('TRANSITION_MISMATCH');
       if (prepared.contentHash !== challengeRow.candidate_hash) fail('CONTENT_CHANGED');
+      // What the signed hash covers, so a later validator denial can be compared
+      // against it (gate.js logs the same shape). Same labels as the validator's.
+      harnessLog('APPROVAL', 'approval:hash-basis', { issueKey: issue.issueKey, contentHash: prepared.contentHash,
+        basis: hashBasis({ mode: prepared.treeHash ? 'tree' : 'flat',
+          scopeSource: prepared.ruleScope?.source === 'INHERITED' ? 'governing-root' : 'own',
+          scopeIssueTypeId: prepared.ruleScope?.issueTypeId, fields: prepared.fields ?? [], issue: prepared.issue }) });
       if (activeOperationLock(prepared.review, deps.now())) fail('RESTORE_IN_PROGRESS');
+      if (workflowTransition) await refuseIfHeldFromAbove(issue);
       // A signed capture resolves this drift in apply(), before a pending
       // transition capability is published. Non-capturing edges still block.
-      if (hasTransition && !yes(ct.capture_baseline) && prepared.driftCount > 0) fail('UNDECIDED_DRIFT');
+      // Its OWN drift, as the validator holds it: for a tree, driftCount also
+      // counts the children's changes, which flag a parent but never hold it
+      // (found live 2026-10-12: VAT-72's Development Phase refused at submit
+      // for a sub-task's label).
+      if (hasTransition && !yes(ct.capture_baseline)) {
+        const own = typeof deps.ownDriftCount === 'function' ? await deps.ownDriftCount(issue) : prepared.driftCount;
+        if (own > 0) fail('UNDECIDED_DRIFT');
+      }
       if (challengeRow.operation_plan_hash !== challengeContextHash({ issue, transition, prepared, policy: ct })) fail('CONTENT_CHANGED');
 
       const required = controlledAuthenticationMethod(ct.required_assurance);

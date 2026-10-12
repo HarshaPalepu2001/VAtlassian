@@ -176,7 +176,9 @@ authenticated capture. Until then they behave as today.
 ## 6. Out of scope
 
 - The content of linked issues. Only the link is hashed, as today.
-- Holding the parent while a child is drifted.
+- Holding the parent while a child is drifted. (Still true. But **superseded downward on 2026-10-12**: a drifted
+  parent now holds every item below it, and the flag climbs to every ancestor, not only the root. See
+  `src/lib/ancestorHold.js` and `docs/acceptance/2026-10-12-assurance-run.md`.)
 - Changing how a controlled transition on the child itself works.
 
 ## 7. Testing

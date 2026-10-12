@@ -43,7 +43,7 @@ const CELL_SEPARATOR = ' | ';
  * to their leaf blocks: a person editing a bullet expects the bullet to be the
  * thing that changed, not the panel three levels up.
  */
-export function flatten(doc) {
+export function flatten(doc, options = {}) {
   const blocks = [];
   if (doc == null) return blocks;
   if (typeof doc === 'string') {
@@ -73,7 +73,7 @@ export function flatten(doc) {
     // Stopping at the row keeps one edited cell as one changed row, and lets
     // the panel put the rows back together as a table.
     if (node.type === 'tableRow') {
-      blocks.push(withSignature({ ...tableRow(node, path, ancestry), context }));
+      blocks.push(withSignature({ ...tableRow(node, path, ancestry, options), context }));
       return;
     }
 
@@ -90,7 +90,7 @@ export function flatten(doc) {
     if ((isBlock || node.type !== 'doc') && !container) {
       blocks.push(withSignature({
         type: node.type,
-        text: inlineText(node),
+        text: inlineText(node, options),
         marks: markSignature(node),
         attrs: node.attrs ?? null,
         path,
@@ -136,9 +136,9 @@ function withSignature(block) {
  * one table can be grouped back into one rendered table and two adjacent
  * tables are never merged into one.
  */
-function tableRow(node, path, ancestry) {
+function tableRow(node, path, ancestry, options = {}) {
   const cells = (node.content ?? []).map((c) => ({
-    text: inlineText(c),
+    text: inlineText(c, options),
     header: c?.type === 'tableHeader',
     colspan: Number(c?.attrs?.colspan ?? 1),
     rowspan: Number(c?.attrs?.rowspan ?? 1)
@@ -178,7 +178,8 @@ function hasBlockDescendant(node) {
 }
 
 /** All text inside a node, with placeholders for things that are not text. */
-export function inlineText(node) {
+export function inlineText(node, options = {}) {
+  const mediaMap = options?.mediaMap;
   const out = [];
   const walk = (n) => {
     if (!n || typeof n !== 'object') return;
@@ -188,7 +189,18 @@ export function inlineText(node) {
     if (n.type === 'emoji') { out.push(n.attrs?.text ?? n.attrs?.shortName ?? ''); return; }
     if (n.type === 'inlineCard' || n.type === 'blockCard') { out.push(n.attrs?.url ?? '[link]'); return; }
     if (n.type === 'hardBreak') { out.push('\n'); return; }
-    if (n.type === 'media') { out.push(`[attachment ${n.attrs?.id ?? ''}]`); return; }
+    if (n.type === 'media' || n.type === 'mediaInline') {
+      const id = n.attrs?.id ? String(n.attrs.id) : '';
+      const name = (mediaMap?.get?.(id) ?? mediaMap?.[id]) ?? n.attrs?.name ?? n.attrs?.alt;
+      if (name) {
+        out.push(`[attachment: ${name}]`);
+      } else if (id) {
+        out.push(`[attachment ${id}]`);
+      } else {
+        out.push('[attachment]');
+      }
+      return;
+    }
     // Lozenges and dates carry their words in attrs. Read as containers they
     // contributed nothing, so a status changed from "ON TRACK" to "AT RISK", or
     // a date moved a month, left the paragraph's text exactly as it was.

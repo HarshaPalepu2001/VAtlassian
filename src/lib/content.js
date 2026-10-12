@@ -275,9 +275,10 @@ export function normaliseMulti(v) {
  * that copy shares with its original is hashed — not `created`, `author` or
  * `mimeType`, which a re-upload changes and which say nothing about content.
  */
-export function normaliseAttachments(list) {
+export function normaliseAttachments(list, issueFields = null) {
   if (!Array.isArray(list)) return [];
   return list
+    .filter((a) => !a?.isRichText)
     .map((a) => ({
       id: String(a.id ?? ''),
       filename: a.filename ?? '',
@@ -318,12 +319,12 @@ export function isEmptyAdf(node) {
     && node.type === 'doc' && (!Array.isArray(node.content) || node.content.length === 0);
 }
 
-export function normaliseField(kind, value) {
+export function normaliseField(kind, value, issueFields = null) {
   switch (kind) {
     case FIELD_KIND.ADF: return isEmptyAdf(value) ? null : normaliseAdf(value);
     case FIELD_KIND.TEXT: return normaliseText(value);
     case FIELD_KIND.MULTI: return normaliseMulti(value);
-    case FIELD_KIND.ATTACHMENTS: return normaliseAttachments(value);
+    case FIELD_KIND.ATTACHMENTS: return normaliseAttachments(value, issueFields);
     case FIELD_KIND.LINKS: return normaliseLinks(value);
     case FIELD_KIND.SUBTASKS: return normaliseSubtasks(value);
     case FIELD_KIND.SCALAR:
@@ -363,7 +364,7 @@ export function project(issueFields, controlledFields) {
   for (const field of [...controlledFields].sort((a, b) => (a.field_id < b.field_id ? -1 : 1))) {
     const { field_id, field_kind } = field;
     const rawValue = issueFields?.[field_id];
-    const normalised = normaliseField(field_kind, rawValue);
+    const normalised = normaliseField(field_kind, rawValue, issueFields);
 
     digests[field_id] = sha256Hex(canonical({ f: field_id, k: field_kind, v: normalised }));
 

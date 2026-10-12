@@ -1,7 +1,14 @@
+/** The validator's refusal for a work item held from above: it names the work item to decide (lib/ancestorHold.js). */
+export function ancestorDriftMessage(found) {
+  return `${found.issueKey}, above this work item, has changed since it was approved, and those changes have not been reviewed. `
+    + `This work item cannot move until they are approved or reverted on ${found.issueKey}.`;
+}
+
 export const DENY = {
   NO_DECISION: 'This transition needs a reviewer\'s approval first. Open the VAtlassian panel on this work item, review the changes, and choose Approve — then run this transition again.',
   DECISION_EXPIRED: 'The review decision expired before this transition was performed. Open the VAtlassian panel and approve again.',
   UNDECIDED_DRIFT: 'This work item has changed since it was approved, and those changes have not been reviewed. Open the VAtlassian panel to see what changed and either approve or revert it.',
+  ANCESTOR_DRIFT: 'A work item above this one has changed since it was approved, and those changes have not been reviewed. This work item cannot move until they are approved or reverted there.',
   LINK_DECISION_PENDING: 'This work item has changed since it was approved. A link approved on a linked work item is still being recorded here; if that link was the only change, try again in a few seconds.',
   NOT_ELIGIBLE: 'You are not an eligible reviewer for this work item, so this transition was blocked.',
   ELIGIBILITY_REVOKED: 'The reviewer who approved this transition is no longer eligible to do so, so it was blocked. A current reviewer needs to approve it again.',

@@ -9,7 +9,8 @@ import { adminIncidentCount } from '../db/incidentStore.js';
 import { credentialState } from '../db/credentialStore.js';
 import { isActiveAdmin } from '../db/adminStore.js';
 import { restoresForIssue, restoreReaching } from '../db/restoreStore.js';
-import { activeRootsForNode, rootNodeDigests, driftedDescendants, capturingParent } from '../db/baselineTreeStore.js';
+import { activeRootsForNode, rootNodeDigests, driftedDescendants, driftedDescendantsOfNode, capturingParent } from '../db/baselineTreeStore.js';
+import { driftedAncestor, viewerAncestorDeps } from '../lib/ancestorHold.js';
 import { isEligible } from '../lib/reviewer.js';
 import { baselinePolicy } from '../lib/baselinePolicy.js';
 import { baselineDecisionMeaning } from '../lib/approval/challenge.js';
@@ -104,6 +105,19 @@ export function pendingApprovalSummary(row, transitions) {
     transitionId: String(row.transition_id), state: row.state, expiresAt: Number(row.expires_at) };
 }
 
+/** The nearest ancestor holding this item, or null. Never throws: the panel degrades, the validator decides. */
+async function heldFromAbove(issue, projectId) {
+  if (!issue.fields?.parent?.key) return null;
+  try {
+    const deps = await viewerAncestorDeps();
+    if ((await deps.projectConfig(projectId))?.enabled === false) return null;
+    return await driftedAncestor(issue, deps, { surface: 'panel-ancestor' });
+  } catch (error) {
+    console.error('panelSummary: the work items above could not be read', error?.message ?? error);
+    return null;
+  }
+}
+
 export async function getSummary(args) { return respond(async () => {
   const [issue, myself] = await Promise.all([
     readIssueSummary(args),
@@ -192,9 +206,22 @@ export async function getSummary(args) { return respond(async () => {
   // covers them all (re-baselines or restores every child), so it is offered
   // here too while any is drifted. The parent itself is not held by them:
   // `driftCount` stays its own fields. Both reads are single indexed rows.
-  const [childrenAwaiting, capturedBy] = await Promise.all([
-    baseline?.tree_hash ? driftedDescendants(baseline.baseline_id).catch(() => 0) : 0,
-    baseline?.captured_by_baseline_id ? capturingParent(baseline.captured_by_baseline_id).catch(() => null) : null
+  //
+  // The flag climbs to EVERY ancestor, not only the tree root: a child captured
+  // by its parent counts the drifted items under it in the parent's signed
+  // tree (driftedDescendantsOfNode), the same subtree its decision covers.
+  //
+  // HELD FROM ABOVE: an item whose own content is unchanged is still held by
+  // the validator while an issue above it has undecided drift
+  // (lib/ancestorHold.js). Shown here so the hold names where to decide it;
+  // display only, the validator reads for itself.
+  const [childrenAwaiting, capturedBy, heldBy] = await Promise.all([
+    baseline?.tree_hash ? driftedDescendants(baseline.baseline_id).catch(() => 0)
+      : baseline?.captured_by_baseline_id
+        ? Promise.resolve().then(() => driftedDescendantsOfNode(baseline.captured_by_baseline_id, issueId)).catch(() => 0)
+        : 0,
+    baseline?.captured_by_baseline_id ? capturingParent(baseline.captured_by_baseline_id).catch(() => null) : null,
+    driftCount > 0 ? null : heldFromAbove(issue, projectId)
   ]);
   // A link approved on the other end, on its way to this record
   // (jobs/linkWorker.js): the panel says so and re-reads until it lands.
@@ -225,7 +252,9 @@ export async function getSummary(args) { return respond(async () => {
   const tier = (anyEligible || decidesDrift) ? 'actor' : 'observer';
 
   let livingState = 'Waiting on signature';
-  if (decidesDrift && driftCount === 0) {
+  if (heldBy) {
+    livingState = `Held: ${heldBy.issueKey}, above this work item, has changes awaiting a decision there`;
+  } else if (decidesDrift && driftCount === 0) {
     livingState = `${childrenAwaiting === 1 ? '1 child work item has' : `${childrenAwaiting} child work items have`} changes awaiting a decision`;
   } else if (decidesDrift) {
     livingState = 'Changes since approval need a decision';
@@ -321,6 +350,7 @@ export async function getSummary(args) { return respond(async () => {
       transitionId: approval.transition_id ?? null
     } : null,
     drift: { count: driftCount, materialCount, childrenAwaiting, decidesDrift, policyIncomplete, linkPending,
+      heldBy: heldBy ? { issueKey: heldBy.issueKey, issueId: heldBy.issueId, depth: heldBy.depth } : null,
       // Whether this viewer COULD decide drift on this baseline, independent of
       // whether the stored counter currently shows any. The client needs both.
       eligible: baselineEligible,

@@ -22,7 +22,7 @@ const modules = {
   'db/configStore.js': ['controlledFields', 'projectConfig', 'gateActiveOutOf', 'gatedTransition',
     'listGatedTransitions', 'declaredFieldRows', 'seedControlledFields', 'countControlledFields'],
   'db/baselineStore.js': ['activeBaseline', 'activeBaselines', 'readAllValues', 'baselineHistory', 'baselineByVersion', 'baselineById'],
-  'db/baselineTreeStore.js': ['readBaselineTree', 'activeRootsForNode', 'rootNodeDigests', 'driftedDescendants', 'capturingParent'],
+  'db/baselineTreeStore.js': ['readBaselineTree', 'activeRootsForNode', 'rootNodeDigests', 'driftedDescendants', 'driftedDescendantsOfNode', 'capturingParent'],
   'db/itemStateStore.js': ['getReview'],
   'db/driftStore.js': ['driftForIssue', 'driftForIssueVersions'],
   'db/approvalStore.js': ['approvalById', 'pendingApprovalForActor', 'latestApproval'],

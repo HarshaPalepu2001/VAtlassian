@@ -1,4 +1,4 @@
-import { DENY, FailClosed } from './lib/errors.js';
+import { DENY, FailClosed, ancestorDriftMessage } from './lib/errors.js';
 import { meetsAssurance, isAssuranceLevel, effectiveAssurance } from './lib/approval/levels.js';
 import { validEvidence } from './lib/approval/record.js';
 import { normalizeCode } from './lib/totp.js';
@@ -59,11 +59,14 @@ export function createGate(deps) {
       // only: the full per-field digests are in the DRIFT log line, and the
       // ledger should not carry them.
       const drift = extra.drift ?? null;
-      deps.log({ event: 'gate:deny', ...facts, reason, detail, elapsedMs, ...(drift ? { drift } : {}) });
-      harnessLog('GATE', 'gate:deny', { ...facts, reason, detail, elapsedMs, ...(drift ? { drift } : {}) }, 'WARN');
+      // Both hashes and what the recompute covered, when a hash mismatch is why.
+      // Log lines only: the ledger does not carry them.
+      const hashes = extra.hashes ?? null;
+      deps.log({ event: 'gate:deny', ...facts, reason, detail, elapsedMs, ...(drift ? { drift } : {}), ...(hashes ? { hashes } : {}) });
+      harnessLog('GATE', 'gate:deny', { ...facts, reason, detail, elapsedMs, ...(drift ? { drift } : {}), ...(hashes ? { hashes } : {}) }, 'WARN');
       try { await deps.audit({ eventType: 'TRANSITION_BLOCKED', actorAccountId: 'system', payload: { ...facts, reason, detail: detail ?? null, elapsedMs, ...(drift ? { drift } : {}) } }, { deadlineMs: 1200 }); } catch { /* refusal remains closed even if evidence storage is down */ }
       const assurance = extra.required ? ` Obtained: ${extra.obtained ?? 'none'}. Required: ${extra.required}.` : '';
-      return { result: false, errorMessage: (DENY[reason] ?? DENY.SERVICE_UNAVAILABLE) + assurance };
+      return { result: false, errorMessage: (extra.message ?? DENY[reason] ?? DENY.SERVICE_UNAVAILABLE) + assurance };
     };
     const allow = (detail) => {
       const elapsedMs = deps.now() - startedAt;
@@ -112,6 +115,19 @@ export function createGate(deps) {
         });
       }
 
+      // HELD FROM ABOVE. Drift is flagged upward and held downward: a work item
+      // whose own content is unchanged still cannot move while an issue above
+      // it (Jira's parent field) has undecided drift of its own
+      // (lib/ancestorHold.js). An ancestor that could not be read fails closed.
+      if (!projectDisabled && snapshot.ancestorDriftError) return deny('ANCESTOR_DRIFT', 'ANCESTOR_UNREADABLE');
+      if (!projectDisabled && snapshot.ancestorDrift) {
+        const above = snapshot.ancestorDrift;
+        return deny('ANCESTOR_DRIFT', 'ANCESTOR_DRIFT_OUTSTANDING', {
+          message: ancestorDriftMessage(above),
+          drift: { heldBy: above.issueKey, heldByIssueId: above.issueId, depth: above.depth, changed: above.changed }
+        });
+      }
+
       // ── The edge: a signature only where VAtlassian controls it ──────────
       //
       // Jira's workflow-validator Lambda payload does not include transition.id.
@@ -148,7 +164,12 @@ export function createGate(deps) {
       if (!policy || !isAssuranceLevel(policy.required_assurance) || !policy.required_role || !policy.meaning) return deny('NOT_CONFIGURED', 'INVALID_EDGE_POLICY');
       const required = effectiveAssurance(policy.required_assurance);
       if (!meetsAssurance(approval.assurance_level, required)) return deny('INSUFFICIENT_ASSURANCE', 'ASSURANCE_FLOOR', { obtained: approval.assurance_level, required });
-      if (!validEvidence(approval) || approval.content_hash !== await contentHashOf(snapshot)) return deny('CONTENT_CHANGED', 'CONTENT_OR_EVIDENCE_CHANGED');
+      const evidenceValid = validEvidence(approval);
+      const recomputedHash = evidenceValid ? await contentHashOf(snapshot) : null;
+      if (!evidenceValid || approval.content_hash !== recomputedHash) {
+        return deny('CONTENT_CHANGED', 'CONTENT_OR_EVIDENCE_CHANGED', { hashes: { evidenceValid,
+          approvalHash: approval.content_hash ?? null, recomputedHash, basis: snapshot.hashBasis?.() ?? null } });
+      }
       if (approval.signer_role !== policy.required_role || approval.meaning !== policy.meaning) return deny('POLICY_CHANGED', 'POLICY_CHANGED');
       if (!await deps.eligible({ accountId: approval.account_id, issueTypeId, projectId, role: policy.required_role })) return deny('ELIGIBILITY_REVOKED', 'ELIGIBILITY_REVOKED');
       const result = await deps.consume({ approvalId: approval.approval_id, now: deps.now() });

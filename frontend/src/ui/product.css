@@ -11,7 +11,40 @@
  * So the diff is a ledger, not a stack of cards. Boldness is spent in exactly
  * two places — the materiality spine down the left of each changed field, and
  * the signature block in tokens.css. Everything else is deliberately quiet.
- */
+/* Sleek custom scrollbars across all surfaces */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--va-border-strong) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--va-border-strong);
+  border-radius: 9999px;
+  border: 1.5px solid transparent;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--va-text-subtle);
+}
+
+.va-review,
+.va-review__detail,
+.va-review__list,
+.va-version-compare__diff,
+.va-diff-text {
+  overscroll-behavior: contain;
+  scroll-behavior: smooth;
+}
 
 /* ---------------------------------------------------------------------------
    Banner — a statement with a coloured rule, not a filled alert box
@@ -186,7 +219,13 @@
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  margin-bottom: 4px;
+  margin: -16px -20px 12px -20px;
+  padding: 12px 20px 10px;
+  position: sticky;
+  top: -16px;
+  z-index: 3;
+  background: var(--va-surface);
+  border-bottom: 1px solid var(--va-border);
 }
 
 .va-review__field-name {
@@ -480,6 +519,27 @@
   text-decoration: none;
 }
 
+.va-pill--attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: var(--va-size-meta);
+  font-weight: 500;
+  color: var(--va-text);
+  background: var(--va-surface-sunken);
+  border: 1px solid var(--va-border-strong);
+  border-radius: var(--va-radius);
+  vertical-align: middle;
+  margin: 0 2px;
+  text-decoration: none !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.va-pill--attachment svg {
+  color: var(--va-text-subtle);
+}
+
 /* ---------------------------------------------------------------------------
    Baseline record
    --------------------------------------------------------------------------- */
@@ -501,7 +561,7 @@
 }
 .va-version-compare__controls input:focus-visible { outline: 2px solid var(--va-focus); outline-offset: 2px; }
 .va-version-compare__provenance { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; padding: 10px 0; border-block: 1px solid var(--va-border); font-size: var(--va-size-meta); }
-.va-version-compare__diff { height: min(54vh, 520px); min-height: 300px; display: flex; }
+.va-version-compare__diff { height: min(75vh, 760px); min-height: 460px; display: flex; }
 .va-version-compare__diff > .va-review { min-width: 0; }
 .va-version-compare > .va-subtlest { margin: 0; }
 
