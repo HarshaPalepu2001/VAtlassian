@@ -1,14 +1,12 @@
 # Recursive Field Review Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
-
 **Goal:** Make the existing field-by-field review and Save changes workflow available from any governed work item, with the clicked item as the review root and all visible descendants included recursively.
 
 **Architecture:** Build an effective baseline tree for the clicked review root even when its active row is a field-level child baseline written by a parent capture. Reuse the existing tree diff, mixed decision map, restore worker, assurance ceremony, and tree capture path once that scoped baseline is available. Keep reviewer eligibility and visibility authoritative; never enable a decision from browser-only labels or a hardcoded issue.
 
 **Tech Stack:** Node.js ESM, Forge SQL stores, Jira REST, React/TypeScript frontend, Node test runner, Forge deploy.
 
-**Spec:** `docs/superpowers/specs/2026-10-07-drift-field-decision-design.md` plus the approved recursive parent/middle/leaf review requirements in this task.
+**Spec:** `docs/specs/2026-10-07-drift-field-decision-design.md` plus the approved recursive parent/middle/leaf review requirements in this task.
 
 ## Global Constraints
 

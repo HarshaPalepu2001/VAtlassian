@@ -1,14 +1,12 @@
 # Continuous Review and Scope Assurance Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** Make the review timeline scrub freely in either direction, and prove baseline publication and assurance follow the field decision map and baseline that owns the decision scope.
 
 **Architecture:** `ChangeTimeline` will convert a compact slider position to a timestamp and select the latest recorded event at or before that time. The existing backend separates restoration from publication and derives drift assurance from immutable baseline policy; focused regressions will make those contracts explicit for direct rejection, all-rejected maps, mixed maps, parent scope, and child scope.
 
 **Tech Stack:** React and TypeScript, Node.js built-in test runner, Forge backend JavaScript.
 
-**Spec:** `docs/superpowers/specs/2026-10-12-continuous-review-and-scope-assurance-design.md`
+**Spec:** `docs/specs/2026-10-12-continuous-review-and-scope-assurance-design.md`
 
 ## Global Constraints
 

@@ -1,6 +1,6 @@
 /**
  * PER-FIELD DRIFT DECISIONS, as the review window holds them before anything is
- * signed (docs/superpowers/specs/2026-10-07-drift-field-decision-design.md).
+ * signed (docs/specs/2026-10-07-drift-field-decision-design.md).
  *
  * Pure: no React, no clock, no network. Nothing here is evidence of anything —
  * a choice is only a request, and the server re-derives and re-checks the whole

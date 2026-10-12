@@ -1,7 +1,7 @@
 # Per-field drift decisions — live acceptance checklist, 2026-10-07
 
-Spec: `docs/superpowers/specs/2026-10-07-drift-field-decision-design.md`.
-Plan: `docs/superpowers/plans/2026-10-07-drift-field-decision.md`.
+Spec: `docs/specs/2026-10-07-drift-field-decision-design.md`.
+Plan: `docs/plans/2026-10-07-drift-field-decision.md`.
 
 **This is a checklist, not a result.** Everything below the line "Local evidence" is what the working tree
 proves on its own. Nothing in the live section has been run: it needs a Forge deploy and install of the

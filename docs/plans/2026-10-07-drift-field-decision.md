@@ -1,14 +1,12 @@
 # Per-field Drift Decisions Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** Let a reviewer approve or reject each changed field in the review window, authenticate that complete choice once, restore only the rejected fields, and publish the resulting state as the next baseline — while whole-set Approve/Reject stays exactly as it is.
 
 **Architecture:** A pure `mixedDecision` module turns a canonical `{fieldId, decision}` map into a *target tree* (the approved baseline with every APPROVED field's digest replaced by the live one). The existing `planTreeRestore` and `verifyTreeRestore` run unchanged against that target tree, so "restore only rejected fields" and "verify rejected fields are at their approved value" fall out for free. A new `MIXED` decision flows through the existing challenge → authenticate → record → apply path; the restore worker owns the single durable boundary and captures the next baseline only after verification.
 
 **Tech Stack:** Node ESM (`node --test`), Forge SQL (MySQL), Forge queues, React 19 + TypeScript frontend (`node --experimental-strip-types --test`, happy-dom).
 
-**Spec:** `docs/superpowers/specs/2026-10-07-drift-field-decision-design.md`
+**Spec:** `docs/specs/2026-10-07-drift-field-decision-design.md`
 
 ## Global Constraints
 

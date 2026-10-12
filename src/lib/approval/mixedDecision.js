@@ -3,7 +3,7 @@ import { FailClosed } from '../errors.js';
 import { planTreeRestore } from '../tree/restorePlan.js';
 
 /**
- * PER-FIELD DRIFT DECISIONS (docs/superpowers/specs/2026-10-07-drift-field-decision-design.md).
+ * PER-FIELD DRIFT DECISIONS (docs/specs/2026-10-07-drift-field-decision-design.md).
  *
  * A reviewer chooses APPROVE or REJECT for every changed field. Rather than
  * teaching the restore planner and verifier a second vocabulary, the choice is

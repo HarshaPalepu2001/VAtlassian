@@ -1,7 +1,5 @@
 # Baseline Evidence Model, Step 1: Schema and Evidence Rows Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** Every new baseline version records its field definitions, the rule that required them, its signature and its links, and cannot become ACTIVE without them. Every drift observation records how much is known about it. What any reader shows stays the same.
 
 **Architecture:** This is rollout step 1 of the spec (§9.5). It has three parts:
@@ -23,7 +21,7 @@ Readers (panel, validator, collector comparison, restore) are not touched. They 
   - Commit only the paths a task names, with `git add <paths>` and then `git commit -m "<msg>" -- <paths>`.
   - Never use `git add -A`, `git add .` or `git commit -a`.
   - Never modify `test/drift-store.test.js`.
-- **Commit messages:** conventional (`feat(scope): …`, `fix(scope): …`). **No `Co-Authored-By` and no "Generated with" lines** (standing user rule).
+- **Commit messages:** conventional (`feat(scope): …`, `fix(scope): …`). **No trailer lines** (standing user rule).
 - **Migrations are append-only.** Never edit or remove `v001`–`v087`: v075–v087 may already have run on mgtechdemo. New migrations start at `v088`.
 - **Forge SQL:**
   - There are no transactions.
