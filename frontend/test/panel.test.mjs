@@ -2730,6 +2730,21 @@ test('dragging the handle left to right rejects and right to left approves; a sh
  await drag(100,110);assert.deepEqual(probe.state,{'n1:summary':'APPROVE'},'under the threshold is not a decision');
 });
 
+test('the approve and reject handle follows the pointer across the whole track while dragging',async()=>{
+ const probe={};
+ await renderInto(React.createElement(DecideHarness,{fields:[decidable('summary')],probe}));
+ const track=container.querySelector('.va-track');
+ track.getBoundingClientRect=()=>({left:100,width:360});
+ const thumb=container.querySelector('.va-track__thumb');
+ await act(()=>{track.dispatchEvent(new window.PointerEvent('pointerdown',{clientX:280,pointerId:1,bubbles:true}));});
+ await act(()=>{track.dispatchEvent(new window.PointerEvent('pointermove',{clientX:440,pointerId:1,bubbles:true}));});
+ assert.equal(thumb.style.left,'323px','the handle can reach the reject end instead of stopping after a short movement');
+ await act(()=>{track.dispatchEvent(new window.PointerEvent('pointermove',{clientX:120,pointerId:1,bubbles:true}));});
+ assert.equal(thumb.style.left,'3px','the handle can freely return to the approve end before release');
+ await act(()=>{track.dispatchEvent(new window.PointerEvent('pointerup',{clientX:120,pointerId:1,bubbles:true}));});
+ assert.deepEqual(probe.state,{'n1:summary':'APPROVE'});
+});
+
 test('a field that cannot be restored cannot be rejected by button, key or drag, and says why',async()=>{
  const probe={};
  const kept=decidable('summary',{retained:false,restorable:'NOT_RETAINED'});

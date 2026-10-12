@@ -5,6 +5,8 @@ import type { Decidable, DecisionKey, Decisions } from './fieldDecisions';
 
 /** How far a drag has to travel before it counts as a decision. */
 const THRESHOLD = 40;
+const THUMB_WIDTH = 34;
+const TRACK_INSET = 3;
 const KEYS = new Set<string>(['ArrowRight', 'ArrowLeft', 'Escape', 'Backspace', 'Enter', ' ']);
 
 /**
@@ -30,7 +32,7 @@ export default function FieldDecisionTrack({ field, name, state, onChange }: {
   const choice = state[field.fieldId];
   const why = blocked(field);
   const start = useRef<number | null>(null);
-  const [drag, setDrag] = useState(0);
+  const [dragLeft, setDragLeft] = useState<number | null>(null);
 
   const apply = (next: Decisions) => { if (next !== state) onChange(next); };
 
@@ -42,21 +44,28 @@ export default function FieldDecisionTrack({ field, name, state, onChange }: {
   }
   function down(event: PointerEvent<HTMLDivElement>) {
     start.current = event.clientX;
+    setDragLeft(pointerLeft(event));
     event.currentTarget.setPointerCapture?.(event.pointerId);
+  }
+  function pointerLeft(event: PointerEvent<HTMLDivElement>) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const min = TRACK_INSET;
+    const max = Math.max(min, rect.width - THUMB_WIDTH - TRACK_INSET);
+    return Math.max(min, Math.min(max, event.clientX - rect.left - (THUMB_WIDTH / 2)));
   }
   function move(event: PointerEvent<HTMLDivElement>) {
     if (start.current == null) return;
-    setDrag(Math.max(-THRESHOLD * 1.5, Math.min(THRESHOLD * 1.5, event.clientX - start.current)));
+    setDragLeft(pointerLeft(event));
   }
   function up(event: PointerEvent<HTMLDivElement>) {
     if (start.current == null) return;
     const travelled = event.clientX - start.current;
     start.current = null;
-    setDrag(0);
+    setDragLeft(null);
     if (travelled >= THRESHOLD) apply(swipe(state, field, 'ltr'));
     else if (travelled <= -THRESHOLD) apply(swipe(state, field, 'rtl'));
   }
-  function cancel() { start.current = null; setDrag(0); }
+  function cancel() { start.current = null; setDragLeft(null); }
 
   const position = choice === 'APPROVE' ? 'approve' : choice === 'REJECT' ? 'reject' : 'none';
   const status = choice === 'REJECT' ? `Reject change selected for ${name}`
@@ -70,7 +79,7 @@ export default function FieldDecisionTrack({ field, name, state, onChange }: {
         aria-label={`${name}: use the left and right arrow keys, or the buttons below`}>
         <span className="va-track__label va-track__label--approve" aria-hidden>Approve</span>
         <span className="va-track__label va-track__label--reject" aria-hidden>Reject</span>
-        <span className="va-track__thumb" aria-hidden style={drag ? { transform: `translateX(${drag}px)`, transition: 'none' } : undefined} />
+        <span className="va-track__thumb" aria-hidden style={dragLeft !== null ? { left: `${dragLeft}px`, transition: 'none' } : undefined} />
       </div>
       <div className="va-decision__buttons">
         <button type="button" className="va-button" aria-pressed={choice === 'APPROVE'}
