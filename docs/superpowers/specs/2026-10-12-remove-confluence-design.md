@@ -66,6 +66,21 @@ Existing migrations are not edited (Forge SQL migrations are append-only). A new
 
 This is irreversible on the deployed test site (mgtechdemo). That was accepted explicitly. Existing Confluence-stored vault copies become unrestorable; no copy-over is attempted.
 
+## Preservation contract: baseline and drift must not change
+
+Baseline capture and drift detection read Jira and Forge SQL only; they never read the vault. The one coupling is `lib/attachmentIdentity.js` (called by `capture.js` and `collect.js` through `canonicaliseIssue`), which reads attachment identity and alias records from `db/vaultStore.js`. Those are SQL and are not Confluence, but they live in the file this change prunes.
+
+Therefore:
+
+1. **Kept untouched in `vaultStore.js`**: `identityRecords`, `recordAttachmentAlias`, `vaultedCopies`, `isAttachmentVaulted`, `insertVaultAttachment`, the `va_vault_space` row functions for the delete grant and lockdown, and `markPermissionUnlocked`. Only the site, page and project-page functions are removed.
+2. **Gate before any deletion**: run the full suite on the current tree and record the result. Baseline, drift, capture, restore, approval and panel tests must be green first.
+3. **Tests are removed only when they test removed behaviour.** No baseline, drift, capture or restore assertion is loosened, skipped or rewritten to pass. A Confluence-only test is deleted whole; a mixed test is edited to drop its Confluence cases and keep the rest.
+4. **Same gate after**: the same suites, green, with the diff of removed test names listed in the plan so each deletion is accountable.
+5. **Failure stays isolated**: vaulting remains asynchronous (`va-vault-queue`), so a vault failure still cannot block an approval, a baseline or a drift decision; it is recorded as `ATTACHMENT_VAULT_FAILED`. With one store and no fallback, such failures now surface instead of being masked.
+6. **Live acceptance checklist** (run by the user after deploy, added to `docs/acceptance/`): baseline an issue with an attachment, confirm a `vault:copied` log with `storage: OBJECT_STORE`; add and remove a file and confirm drift is flagged; reject and confirm the restored file's bytes hash to the baselined hash. This is the first end-to-end proof of the Object Store path; it has unit tests but no recorded live run today.
+
+Authority: the Object Store needs no user permission or scope (the app calls it as itself). The authority this feature depends on is Jira's: reading attachment content, adding one on restore, and deleting one added after approval (the app delete grant and opt-in lockdown, unchanged here).
+
 ## Out of scope
 
 - Moving existing Confluence copies into the Object Store.
