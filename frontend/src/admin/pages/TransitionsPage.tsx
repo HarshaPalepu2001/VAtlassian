@@ -195,6 +195,19 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
   }, [projectId, issueTypeId, refresh, editing]);
 
   const selectedTransition = workflowTransitions.find((t) => optionKey(t) === selectedKey) ?? null;
+  // Creating a second rule for the same live Jira edge is rejected by the
+  // server. Detect it while the administrator is choosing the edge, so the
+  // screen explains the state instead of failing after they fill the form.
+  const controls = (rule: ControlledTransition, transition: WorkflowTransition) =>
+    rule.projectId === projectId && rule.issueTypeId === issueTypeId
+      && String(rule.transitionId) === String(transition.transitionId)
+      && String(rule.fromStatusId) === String(transition.fromStatusId)
+      && String(rule.toStatusId) === String(transition.toStatusId);
+  const existingRule = selectedTransition
+    ? transitions.find(rule => rule.ctId !== editing?.ctId && controls(rule, selectedTransition)) ?? null
+    : null;
+  const allTransitionsAlreadyControlled = discovery === 'loaded' && workflowTransitions.length > 0
+    && workflowTransitions.every(transition => transitions.some(rule => controls(rule, transition)));
   // A transition with no enabled va-gate of ours cannot be enforced no matter
   // what is saved — Jira would never call this app on it. That is a blocking
   // finding, not a soft warning: saving must stay disabled until it clears.
@@ -207,7 +220,8 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
   const statusOptions = projectStatuses.map((s) => ({ value: s.id, label: s.name }));
 
   const complete = Boolean(projectId && issueTypeId && selectedTransition && role.trim() && meaning.trim());
-  const canSave = loaded && complete && discovery === 'loaded' && !blockingFinding && availableRoles.includes(role) && (!rejectStatus || projectStatuses.some(s=>s.id===rejectStatus));
+  const canSave = loaded && complete && discovery === 'loaded' && !blockingFinding && !existingRule
+    && availableRoles.includes(role) && (!rejectStatus || projectStatuses.some(s=>s.id===rejectStatus));
 
   const handleCreate = async () => {
     setMessage(null);
@@ -312,6 +326,12 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
           </Field>
         </div>
 
+        {allTransitionsAlreadyControlled && !editing && (
+          <SectionMessage appearance="information">
+            <p>All transitions in this workflow already have approval rules. Edit an existing rule below to change its requirements.</p>
+          </SectionMessage>
+        )}
+
         {selectedTransition && (
           <div style={{ marginTop: '12px' }}>
             <Facts items={[
@@ -325,7 +345,11 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
               {
                 label: 'Other Jira rules on this edge',
                 value: `${selectedTransition.jiraRules.otherValidators} other validator(s), ${selectedTransition.jiraRules.postFunctions} post function(s)${selectedTransition.jiraRules.conditions ? ', has conditions' : ''}`
-              }
+              },
+              ...(existingRule ? [{
+                label: 'Approval rule',
+                value: <span className="va-unknown">This transition already has an approval rule. Edit its existing rule below.</span>
+              }] : [])
             ]} />
           </div>
         )}
@@ -376,6 +400,7 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
           <span className="va-hint">
             {blockingFinding
               ? 'Attach the signature validator to this transition in Jira before it can be controlled.'
+              : existingRule ? 'This transition already has an approval rule. Edit its existing rule below.'
               : canSave ? 'Takes effect immediately.' : 'Choose a project, type, exact transition, a role and a meaning.'}
           </span>
         </div>

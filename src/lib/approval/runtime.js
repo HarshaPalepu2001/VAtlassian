@@ -15,7 +15,9 @@ import { canonicaliseIssue } from '../attachmentIdentity.js';
 
 export async function approvalContentHash({ issue, declared, modifiedFields = {}, activeBaseline, readTree }) {
   const { fields } = scopeFromIssue({ declared, issueFields: issue.fields, editmetaFields: {} });
-  if (!activeBaseline?.tree_hash) {
+  // A child baseline captured by its parent has no tree_hash of its own, but
+  // its panel signs the child's recursive subtree (panelAccess.snapshot).
+  if (!activeBaseline?.tree_hash && !activeBaseline?.captured_by_baseline_id) {
     return { fields, contentHash: project({ ...issue.fields, ...modifiedFields }, fields).contentHash };
   }
   if (typeof readTree !== 'function') throw new FailClosed('SERVICE_UNAVAILABLE');
@@ -278,7 +280,8 @@ export async function gateRuntime() {
       // The approval content hash reads the whole tree for a tree baseline, so
       // it is computed only when a signature is actually being checked.
       const contentHash = async () => (await approvalContentHash({ issue, declared, modifiedFields, activeBaseline: active,
-        readTree: active?.tree_hash ? createTreeReader({ api, route }).read : null })).contentHash;
+        readTree: active?.tree_hash || active?.captured_by_baseline_id
+          ? createTreeReader({ api, route }).read : null })).contentHash;
       return { ...issue, ...edge, health, item, contentHash, driftCount: drift.changed.length, linkPending,
         driftedFields: drift.changed, driftDiagnostics: drift.diagnostics ?? null, driftScope: scope };
     }

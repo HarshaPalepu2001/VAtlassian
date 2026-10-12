@@ -4,6 +4,7 @@ import { createGate, rawCodeSubmitted } from '../src/gate.js';
 import { makeApproval } from '../src/lib/approval/record.js';
 import { providerFor } from '../src/lib/approval/registry.js';
 import { approvalContentHash } from '../src/lib/approval/runtime.js';
+import { planTreeCapture } from '../src/lib/tree/capturePlan.js';
 
 async function fixture(level = 'ESIGNATURE', baselineControl = null) {
   const binding = { accountId: 'actor', issueId: 10, fromStatusId: '1', toStatusId: '2', contentHash: 'a'.repeat(64), decision: 'APPROVE', transitionId: '50' };
@@ -65,6 +66,25 @@ test('validator recomputes the recursive tree hash for a tree-backed baseline', 
 
   assert.match(first.contentHash, /^[a-f0-9]{64}$/);
   assert.notEqual(first.contentHash, second.contentHash);
+});
+test('validator hashes a parent-captured child in the same recursive scope as its approval panel', async () => {
+  const declared = [{ field_id: 'summary', field_name: 'Summary', field_kind: 'TEXT', store_values: true, writable: true }];
+  const issue = { id: '57', key: 'VAT-57', fields: {
+    project: { id: '1' }, issuetype: { id: '2' }, status: { id: '10000' },
+    parent: { id: '56' }, summary: 'child root'
+  } };
+  // The tree reader intentionally makes the selected child the root of its
+  // own review, while retaining descendants signed under the parent's tree.
+  const nodes = [
+    { ...issue, fields: { ...issue.fields, parent: null } },
+    { id: '58', key: 'VAT-58', fields: { ...issue.fields, parent: { id: '57' }, summary: 'grandchild' } }
+  ];
+  const panelHash = planTreeCapture({ rootIssueId: issue.id, nodes, controlledFields: declared }).treeHash;
+  const validator = await approvalContentHash({ issue, declared,
+    activeBaseline: { tree_hash: null, captured_by_baseline_id: Buffer.alloc(16, 1) },
+    readTree: async () => ({ nodes }) });
+
+  assert.equal(validator.contentHash, panelHash);
 });
 test('gate refuses legacy session-only approvals even if stored transition policy is weaker', async () => {
   const f = await fixture('NATIVE_TRANSITION');

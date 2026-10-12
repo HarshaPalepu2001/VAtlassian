@@ -1806,9 +1806,9 @@ test('the UI Kit field emits nothing when the signature is refused',async()=>{
 // work item type changes. See src/usecases/adminDirectory.js and
 // src/usecases/transitionsValidation.js for the server-side half.
 const oneProject=[{id:'1',key:'ONE',name:'Project one'}];
-function transitionsHandler({workflow=[],fail=false,issueTypes=[{id:'2',name:'Bug'}]}={}){
+function transitionsHandler({workflow=[],controlled=[],fail=false,issueTypes=[{id:'2',name:'Bug'}]}={}){
  return async(key)=>{
-  if(key==='admin:listControlledTransitions')return {success:true,transitions:[]};
+  if(key==='admin:listControlledTransitions')return {success:true,transitions:controlled};
   if(key==='admin:listIssueTypesForProject')return {success:true,issueTypes};
   if(key==='admin:listStatusesForProject')return {success:true,statuses:[]};
   if(key==='admin:listAvailableRoles')return {success:true,roles:['QA']};
@@ -1838,6 +1838,21 @@ test('two transitions sharing a destination status remain two separate options',
  await chooseScope();
  const values=[...fieldSelect('Exact transition').querySelectorAll('option')].map(o=>o.value).filter(Boolean);
  assert.equal(values.length,2,'both edges into Done must stay selectable, not collapse into one');
+});
+
+test('an already controlled edge is identified before save and points to its existing rule',async()=>{
+ const existing={ctId:'rule-1',revision:'r1',projectId:'1',issueTypeId:'2',transitionId:'2',
+  fromStatusId:'10004',toStatusId:'10006',requiredAssurance:'ESIGNATURE',captureBaseline:false,
+  requiredRole:'QA',meaning:'Reviewed',projectName:'Project one',issueTypeName:'Bug',
+  fromStatusName:'To Do',toStatusName:'Done'};
+ setup(transitionsHandler({workflow:[directedEdge()],controlled:[existing]}));
+ await act(()=>root.render(h(TransitionsPage,{projects:oneProject})));await flush();
+ await chooseScope();
+ assert.match(text(),/All transitions in this workflow already have approval rules/);
+ await act(()=>selectValue(fieldSelect('Exact transition'),'2:10004'));await flush();
+ assert.match(text(),/already has an approval rule/);
+ assert.equal(clickButton('Add rule').disabled,true);
+ assert.match(text(),/Edit its existing rule below/);
 });
 
 test('selecting a transition shows its read-only facts; changing scope clears them',async()=>{
