@@ -103,6 +103,18 @@ export async function baselineByVersion(issueId, version, query = throwing) {
   return rows.length > 0 ? decode(rows[0]) : null;
 }
 
+/** Read a published baseline by immutable id, including a parent capture's tree provenance. */
+export async function baselineById(baselineId, query = throwing) {
+  if (!baselineId) return null;
+  const id = Buffer.isBuffer(baselineId) ? baselineId : Buffer.from(String(baselineId), 'hex');
+  const rows = await selectBaselines(query, columns =>
+    `SELECT ${columns} FROM va_baseline
+     WHERE baseline_id = FROM_BASE64(?) AND state <> 'CAPTURING' LIMIT 1`,
+    [toBinaryParam(id)]
+  );
+  return rows.length > 0 ? decode(rows[0]) : null;
+}
+
 /**
  * Has this decision already produced a baseline?
  *

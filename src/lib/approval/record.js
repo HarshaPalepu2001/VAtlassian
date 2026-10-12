@@ -3,7 +3,7 @@ import { canonical, sha256Hex } from '../hash.js';
 import { isAssuranceLevel } from './levels.js';
 export const APPROVAL_STATE = Object.freeze({ PENDING: 'PENDING', CONSUMED: 'CONSUMED', VOID: 'VOID' });
 export const APPROVAL_TTL_MS = 15 * 60 * 1000;
-export const DECISION = Object.freeze({ APPROVE: 'APPROVE', REJECT: 'REJECT' });
+export const DECISION = Object.freeze({ APPROVE: 'APPROVE', REJECT: 'REJECT', MIXED: 'MIXED' });
 const hashPattern = /^[a-f0-9]{64}$/;
 export function makeApproval(input) {
   const { proof, now, accountId, contentHash } = input;
@@ -21,7 +21,9 @@ export function makeApproval(input) {
     content_hash: contentHash, covers_from_hash: input.coversFromHash ?? null, covers_to_hash: contentHash,
     drift_count: input.driftCount ?? 0, report_hash: input.reportHash ?? null, note: input.note ?? null,
     assurance_level: proof.level, provider_id: proof.providerId, provider_ref: proof.providerRef ?? null,
-    provider_evidence: canonical(proof.evidence)
+    provider_evidence: canonical(proof.evidence),
+    // Set only by a mixed drift decision: the exact field map that was signed.
+    decision_map: input.decisionMap ?? null, decision_map_hash: input.decisionMapHash ?? null
   };
   row.evidence_hash = evidenceHash(row);
   if (!validEvidence(row)) throw new TypeError('Approval proof does not match record');
@@ -32,6 +34,8 @@ export function evidenceHash(row) {
   const keys = ['issue_id','project_id','issue_type_id','actor_account_id','account_id','decision',
     'from_status_id','to_status_id','transition_id','signer_role','meaning','content_hash','covers_to_hash',
     'assurance_level','provider_id','provider_ref','provider_evidence','signed_at'];
+  // Present only on a mixed decision, so whole-set evidence hashes are unchanged.
+  if (row.decision_map_hash != null) keys.push('decision_map_hash');
   return sha256Hex(canonical(Object.fromEntries(keys.map(key => [key, row[key] == null ? null : String(row[key])]))));
 }
 export function validEvidence(row) {
@@ -43,6 +47,7 @@ export function validEvidence(row) {
       && b.accountId === row.account_id && String(b.issueId) === String(row.issue_id)
       && (b.fromStatusId ?? null) === row.from_status_id && (b.toStatusId ?? null) === row.to_status_id
       && b.contentHash === row.content_hash && b.decision === row.decision
-      && (b.transitionId ?? null) === (row.transition_id ?? null);
+      && (b.transitionId ?? null) === (row.transition_id ?? null)
+      && (b.decisionMapHash ?? null) === (row.decision_map_hash ?? null);
   } catch { return false; }
 }

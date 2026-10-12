@@ -89,7 +89,7 @@ export function parseHarnessEvent(line) {
     const issueKey = details.issueKey || details.targetKey || details.rootIssueKey || null;
     const traceId = details.traceId || null;
     const durationMs = typeof details.durationMs === 'number' ? details.durationMs : null;
-    const isError = category === 'ERROR' || details.success === false || Boolean(details.error) || action.includes('failed') || action === 'gate:deny';
+    const isError = category === 'ERROR' || details.level === 'ERROR' || details.success === false || Boolean(details.error) || (action ?? '').includes('failed') || action === 'gate:deny';
 
     return {
       isHarness: true,
@@ -99,7 +99,7 @@ export function parseHarnessEvent(line) {
       traceId,
       durationMs,
       timestamp: details.timestamp || new Date().toISOString(),
-      level: isError ? 'ERROR' : details.reason ? 'WARN' : 'INFO',
+      level: isError ? 'ERROR' : (details.level === 'WARN' || details.reason ? 'WARN' : 'INFO'),
       details,
       raw: line
     };

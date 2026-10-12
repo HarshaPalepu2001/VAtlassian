@@ -65,7 +65,7 @@ export async function enqueueVaultJobs(bodies, { queue = vaultQueue } = {}) {
         .map(entry => entry?.payload?.body ?? entry?.payload)
         .filter(body => body?.baselineId);
       const lost = named.length
-        ? batch.filter(event => named.some(body => body.baselineId === event.body.baselineId))
+        ? batch.filter(event => named.some(body => body.baselineId === event.body.baselineId && body.issueId === event.body.issueId))
         : batch;
       for (const event of lost) failed.push({ body: event.body, error });
     }

@@ -11,8 +11,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as admin from '../src/usecases/admin.js';
-import { readWorkflowForPair } from '../src/lib/workflowSource.js';
-import { request } from './admin-fixture.js';
+import { defaultRequest, readWorkflowForPair } from '../src/lib/workflowSource.js';
+import { fixture, fixtureGateValidator, request } from './admin-fixture.js';
 import { randomBytes } from 'node:crypto';
 
 const APP_ID = 'app-under-test';
@@ -192,4 +192,74 @@ test('an ambiguous workflow response fails closed instead of selecting the first
   );
 
   assert.equal(result, null);
+});
+
+test('Jira status references become status ids before an edge is offered', async () => {
+  const response = {
+    statuses: [
+      { id: '10004', name: 'To Do', statusReference: 'ref-todo' },
+      { id: '10006', name: 'Done', statusReference: 'ref-done' }
+    ],
+    workflows: [{
+      id: 'wf', name: 'Software workflow',
+      statuses: [{ statusReference: 'ref-todo' }, { statusReference: 'ref-done' }],
+      transitions: [{
+        id: '31', name: 'Approve', type: 'DIRECTED', toStatusReference: 'ref-done',
+        links: [{ fromStatusReference: 'ref-todo' }], validators: [gate()]
+      }]
+    }]
+  };
+  const workflow = await readWorkflowForPair({ projectId: '1', issueTypeId: '2' }, {
+    request: async () => ({ ok: true, json: async () => response })
+  });
+  const discovered = await admin.listWorkflowTransitions(
+    request({ projectId: '1', issueTypeId: '2' }),
+    deps({ workflow, statuses: statusMap() })
+  );
+  assert.equal(discovered.success, true);
+  assert.deepEqual(discovered.transitions.map(({ fromStatusId, toStatusId }) => ({ fromStatusId, toStatusId })),
+    [{ fromStatusId: '10004', toStatusId: '10006' }]);
+});
+
+test('a controlled edge can be saved from Jira’s documented numeric status-reference response', async () => {
+  const workflow = await readWorkflowForPair({ projectId: '1', issueTypeId: '2' }, {
+    request: async () => ({ ok: true, json: async () => ({
+      statuses: [{ id: '10004', statusReference: '10004' }, { id: '10006', statusReference: '10006' }],
+      workflows: [{
+        id: 'wf', name: 'Software workflow',
+        statuses: [{ statusReference: '10004' }, { statusReference: '10006' }],
+        transitions: [{ id: '31', name: 'Approve', type: 'DIRECTED', toStatusReference: '10006',
+          links: [{ fromStatusReference: '10004' }], validators: [fixtureGateValidator()] }]
+      }]
+    }) })
+  });
+  const result = await admin.createControlledTransition(request({
+    projectId: '1', issueTypeId: '2', transitionId: '31', fromStatusId: '10004', toStatusId: '10006',
+    requiredRole: 'QA', meaning: 'APPROVED', requiredAssurance: 'ESIGNATURE', captureBaseline: false
+  }), fixture({ readWorkflowForPair: async () => workflow }));
+  assert.equal(result.success, true, result.error);
+});
+
+test('the workflow read requests transition links in Jira’s current response format', async () => {
+  let sent;
+  await defaultRequest({ projectId: '1', issueTypeId: '2' }, {
+    asApp: () => ({ requestJira: async (path, options) => { sent = { path, options }; return { ok: true }; } }),
+    route: (parts, ...values) => parts.reduce((url, part, index) => url + (values[index - 1] ?? '') + part)
+  });
+  assert.equal(sent.path, '/rest/api/3/workflows?useTransitionLinksFormat=true');
+  assert.deepEqual(JSON.parse(sent.options.body), {
+    projectAndIssueTypes: [{ projectId: '1', issueTypeId: '2' }]
+  });
+});
+
+test('an incomplete Jira workflow read cannot clear gate findings or offer an empty picker', async () => {
+  for (const body of [
+    { statuses: [{ id: '10004', statusReference: '10004' }], workflows: [{ id: 'wf' }] },
+    { workflows: [{ id: 'wf', transitions: [] }] }
+  ]) {
+    const workflow = await readWorkflowForPair({ projectId: '1', issueTypeId: '2' }, {
+      request: async () => ({ ok: true, json: async () => body })
+    });
+    assert.equal(workflow, null);
+  }
 });

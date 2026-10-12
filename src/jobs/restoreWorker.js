@@ -1,7 +1,7 @@
 import api, { route } from '@forge/api';
 import { restoreById, claimRestore, heartbeatRestore, beginRestoreVerification,
   finishQueuedRestore, markRestoreQueued, markRestoreQueueFailure, failRestore } from '../db/restoreStore.js';
-import { activeBaseline, activeBaselines, readAllValues } from '../db/baselineStore.js';
+import { activeBaseline, activeBaselines, baselineById, readAllValues } from '../db/baselineStore.js';
 import { approvalById } from '../db/approvalStore.js';
 import { markDecided } from '../db/driftStore.js';
 import { release, refreshRestoreLock } from '../db/itemStateStore.js';
@@ -11,11 +11,16 @@ import { stateAfter, DECISION } from '../lib/decision.js';
 import { readBaselineTree, activeRootsForNode } from '../db/baselineTreeStore.js';
 import { controlledFields, projectConfig } from '../db/configStore.js';
 import { scopeFromIssue } from '../lib/trackedFields.js';
+import { baselinePolicy } from '../lib/baselinePolicy.js';
+import { baselineDecisionMeaning } from '../lib/approval/challenge.js';
+import { CAUSE } from '../lib/evidence/versionEvidence.js';
 import { createTreeReader } from '../lib/tree/jira.js';
 import { readStableTree } from '../lib/tree/stableRead.js';
 import { planTreeCapture } from '../lib/tree/capturePlan.js';
-import { readTreeWithNodeFields, fieldsForItem } from '../lib/tree/nodeFields.js';
+import { readTreeWithNodeFields, fieldScope } from '../lib/tree/nodeFields.js';
 import { withChildBaselines } from '../lib/tree/childBaselines.js';
+import { resolveBaselineTree } from '../lib/tree/scopedBaseline.js';
+import { logicalNodeId } from '../lib/tree/model.js';
 import { approvedLinksResolver } from '../db/approvedLinks.js';
 import { executeTreeRestore } from '../lib/tree/restoreExecutor.js';
 import { verifyTreeRestore, explainRefusals } from '../lib/tree/restoreVerifier.js';
@@ -25,6 +30,7 @@ import { createRestoreAdapters } from '../lib/tree/restoreAdapters.js';
 import { enqueueRestore } from '../lib/restore/queue.js';
 import { withRequestCache } from '../lib/cache.js';
 import { harnessLog } from '../lib/harnessLogger.js';
+import { applyOverlay } from '../lib/approval/mixedDecision.js';
 
 const WORKER_BATCH = 25;
 
@@ -56,6 +62,25 @@ function actionPlan(restore) {
   return Array.isArray(steps) ? { steps } : null;
 }
 
+/**
+ * The per-field decision a restore belongs to: the frozen overlay, the map hash
+ * and which fields were approved and rejected (usecases/restoreActions.js
+ * queueRestore). Like the plan, a finished restore keeps it in its first detail
+ * entry, so a Retry finds it.
+ */
+function mixedOf(restore) {
+  const detail = restore?.detail;
+  const mixed = Array.isArray(detail) ? detail[0]?.mixed : detail?.mixed;
+  return mixed && typeof mixed === 'object' && mixed.overlay && typeof mixed.overlay === 'object' ? mixed : null;
+}
+
+const PUBLICATION_INCOMPLETE = {
+  kind: 'PUBLICATION_INCOMPLETE', logicalNodeId: null, issueKey: null, fieldId: null, fieldName: null,
+  expected: null, actual: null,
+  reason: 'The rejected fields were put back and verified, but the next baseline could not be published, '
+    + 'so the approved fields are not yet recorded. Retry the restore to publish it.'
+};
+
 function countersFor(executed, state) {
   // A refused step is a step that did not happen, and the panel counts `failed`
   // to tell a reviewer how much of the restore did not land. Reporting 0 while
@@ -74,6 +99,45 @@ function countersFor(executed, state) {
   };
 }
 
+const REWRITING_STEPS = new Set(['RESTORE_FIELDS', 'RESTORE_LINKS', 'RESTORE_ATTACHMENTS', 'REPOINT_RICH_TEXT', 'MOVE_NODE']);
+
+/**
+ * The descendants this restore wrote to. A parent's restore puts each child
+ * back to that child's own record, and the child carries its own stored review
+ * state and its own evidence, so both have to follow. A recreated or deleted
+ * node is not here: it has no prior record to settle.
+ */
+function rewrittenChildren({ plan, prepared, rootIssueId }) {
+  const byLogical = new Map();
+  for (const node of [...(prepared?.baselineTree?.nodes ?? []), ...(prepared?.currentTree?.nodes ?? [])]) {
+    const issueId = Number(node?.currentIssueId);
+    if (Number.isFinite(issueId)) byLogical.set(String(node.logicalNodeId), issueId);
+  }
+  const children = new Map();
+  for (const step of plan?.steps ?? []) {
+    if (!REWRITING_STEPS.has(step.kind)) continue;
+    const issueId = byLogical.get(String(step.logicalNodeId));
+    if (issueId != null && issueId !== rootIssueId) children.set(issueId, String(step.logicalNodeId));
+  }
+  return [...children].map(([issueId, logicalNodeId]) => ({ issueId, logicalNodeId }));
+}
+
+/**
+ * The children whose restore can be called settled. After a COMPLETE restore,
+ * every one of them. After a PARTIAL one, only those the verification read back
+ * as matching their own record: a child whose write was refused, or that the
+ * verification names, stays drifted, and when the verification cannot say WHICH
+ * item is wrong (it could not read the tree, or an entry names no item) none is
+ * claimed.
+ */
+function settledChildren({ complete, plan, prepared, rootIssueId, refused = [], unmatched = [] }) {
+  const written = rewrittenChildren({ plan, prepared, rootIssueId });
+  if (complete) return written;
+  if (unmatched.some(entry => entry?.kind === 'READ_FAILED' || entry?.logicalNodeId == null)) return [];
+  const wrong = new Set([...refused, ...unmatched].map(entry => String(entry.logicalNodeId)));
+  return written.filter(child => !wrong.has(child.logicalNodeId));
+}
+
 async function defaultPrepare({ restore, baseline }) {
   const forgeApi = api?.default?.asApp ? api.default : api;
   const response = await forgeApi.asApp().requestJira(
@@ -83,8 +147,8 @@ async function defaultPrepare({ restore, baseline }) {
   const issue = await response.json();
   const projectId = Number(issue.fields.project.id);
   const issueTypeId = String(issue.fields.issuetype.id);
-  const [declared, config, editResponse] = await Promise.all([
-    fieldsForItem({ issueId: Number(issue.id), projectId, issueTypeId }, { activeRootsForNode, controlledFields }),
+  const [{ fields: declared, ruleScope }, config, editResponse] = await Promise.all([
+    fieldScope({ issueId: Number(issue.id), projectId, issueTypeId }, { activeRootsForNode, controlledFields }),
     projectConfig(projectId),
     forgeApi.asApp().requestJira(route`/rest/api/3/issue/${issue.key}/editmeta?overrideScreenSecurity=true&overrideEditableFlag=true`)
   ]);
@@ -95,13 +159,17 @@ async function defaultPrepare({ restore, baseline }) {
     rootIssueKey: issue.key, rootFields: fields });
   const { fieldsFor } = stable;
   const captured = planTreeCapture({ rootIssueId: issue.id, nodes: stable.tree.nodes, controlledFields: fields, fieldsFor });
+  const baselineValues = await readAllValues(Number(issue.id), Number(baseline.version));
+  const resolvedBaseline = await resolveBaselineTree({ baseline, baselineValues,
+    rootLogicalNodeId: logicalNodeId(issue.id), baselineById, readBaselineTree });
+  if (!resolvedBaseline) throw new Error('Restore cannot reconstruct the signed governing baseline tree.');
   return {
-    issue, issueId: Number(issue.id), projectId, config, fields, fieldsFor,
+    issue, issueId: Number(issue.id), projectId, config, fields, fieldsFor, ruleScope,
     // The same tree the reviewer rejected against (usecases/panelAccess.js):
     // each child that carries its own latest baseline stands as that baseline,
     // so verification checks each issue against its own record.
-    baseline, baselineTree: await withChildBaselines({ parentBaseline: baseline,
-      baselineTree: await readBaselineTree(baseline.baseline_id), activeBaselines, readAllValues, readBaselineTree }),
+    baseline, baselineTree: await withChildBaselines({ parentBaseline: resolvedBaseline.governingBaseline,
+      baselineTree: resolvedBaseline.tree, activeBaselines, readAllValues, readBaselineTree }),
     currentTree: { nodes: captured.nodes, values: captured.values },
     reader, forgeApi
   };
@@ -136,9 +204,46 @@ async function defaultExecute({ restoreId, restore, prepared, plan, maxActions }
 async function defaultVerify({ prepared, restoreId }) {
   const replacements = await readReplacements(restoreId);
   return verifyTreeRestore({ readStableTree, readTree: prepared.reader.read.bind(prepared.reader),
-    rootIssueKey: prepared.issue.key, baselineTree: prepared.baselineTree,
+    // A per-field decision verifies against its target (restoreWorker's
+    // `targetTree`); every other restore verifies against the baseline itself.
+    rootIssueKey: prepared.issue.key, baselineTree: prepared.targetTree ?? prepared.baselineTree,
     controlledFields: prepared.fields, fieldsFor: prepared.fieldsFor, replacements,
     expectedRootStatusId: null });
+}
+
+/**
+ * Publishes the next baseline from the state a per-field restore just verified.
+ *
+ * The worker has no user session, so it reads as the app and re-reads the item:
+ * the issue read in prepare() predates this restore's last writes. The tree hash
+ * of that fresh read is handed to the capture as the hash it must still see —
+ * the signed hash cannot be it (the reviewer signed the candidate, and the
+ * rejected fields have since been restored), and this refuses the capture if
+ * anything moved between the verification and the read it makes itself.
+ */
+async function defaultCaptureMixed({ restore, approval, prepared, baseline }) {
+  const { captureDriftBaseline, publishBaselineSideEffects } = await import('../usecases/drift.js');
+  const readTree = prepared.reader.read.bind(prepared.reader);
+  const response = await prepared.forgeApi.asApp().requestJira(route`/rest/api/3/issue/${prepared.issueId}?fields=*all`);
+  if (!response.ok) throw new Error('Restore worker could not re-read the issue to publish its baseline');
+  const issue = await response.json();
+  const stable = await readTreeWithNodeFields({ readStableTree, readTree, rootIssueKey: issue.key,
+    rootFields: prepared.fields, extraFieldIds: ['status', 'parent', 'security'] });
+  const expectedTreeHash = planTreeCapture({ rootIssueId: issue.id, nodes: stable.tree.nodes,
+    controlledFields: prepared.fields, fieldsFor: stable.fieldsFor }).treeHash;
+  // The baseline's own recorded rule, mapped exactly as prepareApproval maps it.
+  const frozen = baselinePolicy(baseline);
+  const gate = { transition_id: frozen.transitionId, from_status_id: frozen.reviewStatusId,
+    to_status_id: frozen.destinationStatusId, required_role: frozen.requiredRole,
+    required_assurance: frozen.requiredAssurance, meaning: baselineDecisionMeaning('MIXED', frozen.version),
+    capture_baseline: true };
+  const actor = { accountId: restore.actor_account_id, displayName: approval.actor_name ?? approval.printed_name ?? null };
+  const checked = { issue, issueId: Number(issue.id), projectId: prepared.projectId, fields: prepared.fields,
+    ruleScope: prepared.ruleScope, gate, baseline, baselineTree: prepared.baselineTree };
+  const capture = await captureDriftBaseline({ checked, approval, actor, cause: CAUSE.MIXED_DECISION,
+    readTree, expectedTreeHash });
+  if (capture.captured) await publishBaselineSideEffects({ capture, checked, approval, actor });
+  return capture;
 }
 
 /**
@@ -155,7 +260,7 @@ export async function runRestoreWorker(eventOrBody, overrides = {}) {
     markRestoreQueued, markRestoreQueueFailure, failRestore, markDecided, release,
     refreshItemLock: refreshRestoreLock,
     enqueue: enqueueRestore, prepare: defaultPrepare, executeBatch: defaultExecute,
-    verify: defaultVerify, append: tryAppend, ...overrides
+    verify: defaultVerify, captureMixed: defaultCaptureMixed, append: tryAppend, ...overrides
   };
   // The work item's RESTORING lock is what the gate, the collectors and every
   // other decision read; va_restore's own heartbeat is invisible to them. Kept
@@ -188,8 +293,15 @@ export async function runRestoreWorker(eventOrBody, overrides = {}) {
 
   try {
     const approval = await deps.approvalById(restore.approval_id);
-    if (!approval || approval.decision !== 'REJECT') throw new Error('Original rejection approval is unavailable');
+    if (!approval || !['REJECT', 'MIXED'].includes(approval.decision)) throw new Error('Original rejection approval is unavailable');
+    const mixed = approval.decision === 'MIXED' ? mixedOf(restore) : null;
+    if (approval.decision === 'MIXED' && !mixed) throw new Error('The field decisions this restore belongs to are unavailable');
     const prepared = await deps.prepare({ restore, approval, baseline, body });
+    // Verify against what the reviewer decided: the approved baseline, with each
+    // APPROVED field at the digest they saw. Rebuilt from the frozen overlay,
+    // never from live values, so an edit to an approved field after signing
+    // fails verification instead of being silently accepted.
+    if (mixed) prepared.targetTree = applyOverlay({ baselineTree: prepared.baselineTree, overlay: mixed.overlay });
     const plan = actionPlan(restore);
     if (!plan) throw new Error('Restore action plan is unavailable');
     await deps.heartbeatRestore({ restoreId, completedSteps: Number(restore.completed_steps ?? 0),
@@ -241,13 +353,36 @@ export async function runRestoreWorker(eventOrBody, overrides = {}) {
     await beat(Date.now());
     const verified = await deps.verify({ restoreId, restore, approval, prepared, plan });
     const replacements = verified.replacements ?? [];
-    const state = verified.matches
+    const restoredState = verified.matches
       ? (replacements.length ? 'COMPLETE_WITH_REPLACEMENTS' : 'COMPLETE')
       : (verified.progress ? 'PARTIAL' : 'FAILED');
+    // THE ONE DURABLE BOUNDARY OF A PER-FIELD DECISION: the next baseline is
+    // captured only now, after every rejected field has been read back at its
+    // approved value. Capturing earlier would re-approve a value the reviewer
+    // rejected. If publication fails the restore is NOT left looking complete:
+    // the rejected fields are back, but the approved ones are not yet recorded.
+    let publication = null;
+    if (mixed && restoredState !== 'PARTIAL' && restoredState !== 'FAILED') {
+      if (mixed.approved.length === 0) publication = 'NOT_NEEDED';
+      else {
+        try {
+          const captured = await deps.captureMixed({ restore, approval, prepared, baseline, mixed });
+          publication = captured?.captured === true ? 'PUBLISHED' : 'INCOMPLETE';
+          if (publication === 'INCOMPLETE') harnessLog('ERROR', 'worker:publishRefused', { restoreId: idBase64(restoreId), reason: captured?.reason }, 'WARN');
+        } catch (error) {
+          publication = 'INCOMPLETE';
+          harnessLog('ERROR', 'worker:publishFailed', { restoreId: idBase64(restoreId), error: error?.message });
+        }
+      }
+    }
+    const state = publication === 'INCOMPLETE' ? 'PARTIAL' : restoredState;
     const counters = countersFor(executed, state);
     const unmatched = explainRefusals(verified.unmatched ?? [], executed.refused);
     const detail = [{ ...counters, remaining: Number(executed.remaining ?? 0),
-      refused: executed.refused ?? [], unmatched, verification: verified, actionPlan: plan.steps }];
+      refused: executed.refused ?? [],
+      unmatched: publication === 'INCOMPLETE' ? [...unmatched, PUBLICATION_INCOMPLETE] : unmatched,
+      verification: verified, actionPlan: plan.steps,
+      ...(mixed ? { mixed, publication } : {}) }];
     await deps.finishRestore({ restoreId, now: Date.now(), counters, state, detail });
     harnessLog('RESTORE', 'worker:finished', { restoreId: idBase64(restoreId), state,
       replacementsCount: replacements.length, refusedCount: (executed.refused ?? []).length,
@@ -295,7 +430,24 @@ export async function runRestoreWorker(eventOrBody, overrides = {}) {
         eventType: complete ? EVENT.RESTORE_COMPLETED : EVENT.RESTORE_PARTIAL,
         payload: { restoreId: idBase64(restoreId), state, counters,
           refused: (executed.refused ?? []).map(entry => entry.stepKey),
-          unmatched: unmatched.map(entry => entry.fieldId ?? entry.kind) } });
+          unmatched: unmatched.map(entry => entry.fieldId ?? entry.kind),
+          ...(mixed ? { publication, ...(complete ? { mixed: { approved: mixed.approved, rejected: mixed.rejected,
+            baselineCreated: publication === 'PUBLISHED' } } : {}) } : {}) } });
+      // Each child is settled on its own: one that cannot be written must not
+      // leave the others (or the decided item, already released) unsettled.
+      for (const child of settledChildren({ complete, plan, prepared, rootIssueId: Number(body.issueId),
+        refused: executed.refused ?? [], unmatched })) {
+        try {
+          await deps.release({ issueId: child.issueId, state: stateAfter({ decision: DECISION.REJECT, restoreState: 'COMPLETE' }),
+            now: Date.now(), counters: { driftCount: 0, driftedFieldCount: 0, maxMateriality: null } });
+          await deps.append({ actorAccountId: restore.actor_account_id, issueId: child.issueId,
+            approvalId: restore.approval_id, eventType: EVENT.RESTORE_COMPLETED,
+            payload: { restoreId: idBase64(restoreId), state: 'COMPLETE', parentState: state,
+              viaParentIssueId: Number(body.issueId) } });
+        } catch (childError) {
+          console.error('restoreWorker: could not settle a restored child', JSON.stringify({ restoreId: idBase64(restoreId), childId: child.issueId }), childError);
+        }
+      }
     } catch (bookkeepingError) {
       console.error('restoreWorker: post-completion bookkeeping failed', JSON.stringify({ restoreId: idBase64(restoreId), state }), bookkeepingError);
     }

@@ -57,7 +57,10 @@ export async function retry(args) { return respond(async () => {
     issueTypeId: prepared.issueTypeId, role: frozen.requiredRole });
   if (!eligible) fail('NOT_ELIGIBLE');
   const approval = await approvalById(restore.approval_id);
-  if (!approval || approval.decision !== 'REJECT' ||
+  // A per-field decision's restore is resumed by the same signature: its target
+  // and the fields it approved are frozen in the restore's own detail, which the
+  // worker reads (jobs/restoreWorker.js), so nothing about the retry changes.
+  if (!approval || !['REJECT', 'MIXED'].includes(approval.decision) ||
       String(approval.actor_account_id ?? approval.account_id) !== prepared.actor.accountId) fail('NOT_ELIGIBLE');
 
   // A retry RESUMES the reviewer's signature; it never re-signs. The signed
@@ -96,6 +99,8 @@ export async function retry(args) { return respond(async () => {
         remainingSteps: Math.max(0, Number(restore.total_steps ?? 0) - Number(restore.completed_steps ?? 0)) } };
   } catch (error) {
     await markRestoreQueueFailure({ restoreId, error: String(error?.message ?? error), now: Date.now() });
+    await (release)({ issueId: prepared.issueId, state: 'ERROR', now: Date.now() })
+      .catch(failure => console.error('restore: could not release the lock after a queue failure', failure));
     return { success: false, state: 'QUEUING_FAILED', restoreId, error: String(error?.message ?? error) };
   }
 }); }

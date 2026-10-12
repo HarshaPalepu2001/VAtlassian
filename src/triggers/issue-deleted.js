@@ -14,11 +14,14 @@ import { retryEvent } from './retry.js';
  * depend on either way, but there is no reason to race the two when running
  * the tree lookup first costs nothing.
  */
-export async function run(event, deps = { collectAffectedTrees, affectedTreeRoots, collectTree }) {
-  return withRequestCache(() => runUncached(event, deps));
+export async function run(event, suppliedDeps = null) {
+  return withRequestCache(() => runUncached(event, suppliedDeps));
 }
 
-async function runUncached(event, deps) {
+async function runUncached(event, suppliedDeps) {
+  const deps = typeof suppliedDeps?.collectAffectedTrees === 'function'
+    ? suppliedDeps
+    : { collectAffectedTrees, affectedTreeRoots, collectTree };
   const issue = event?.issue;
   if (!issue?.id) return;
   const issueId = Number(issue.id);

@@ -16,7 +16,7 @@ test('the event user is recorded as what triggered the check, and an edit time o
   assert.deepEqual(observationColumns({ changelogId: null, attributionAt: 5, historyComplete: true,
     detectedVia: 'EVENT', actorAccountId: 'event-user', now: 900 }), {
     observed_at: 900, trigger_kind: 'EVENT', trigger_account_id: 'event-user',
-    edit_status: 'UNATTRIBUTED', edited_at: null
+    edit_status: 'UNATTRIBUTED', edited_at: null, changelog_id: null
   });
   assert.equal(observationColumns({ changelogId: '7', attributionAt: 5, historyComplete: true,
     detectedVia: 'EVENT', actorAccountId: 'event-user', now: 900 }).edited_at, 5);

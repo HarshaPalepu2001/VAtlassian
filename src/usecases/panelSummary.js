@@ -8,7 +8,7 @@ import { latestApproval, pendingApprovalForActor } from '../db/approvalStore.js'
 import { adminIncidentCount } from '../db/incidentStore.js';
 import { credentialState } from '../db/credentialStore.js';
 import { isActiveAdmin } from '../db/adminStore.js';
-import { restoresForIssue } from '../db/restoreStore.js';
+import { restoresForIssue, restoreReaching } from '../db/restoreStore.js';
 import { activeRootsForNode, rootNodeDigests, driftedDescendants, capturingParent } from '../db/baselineTreeStore.js';
 import { isEligible } from '../lib/reviewer.js';
 import { baselinePolicy } from '../lib/baselinePolicy.js';
@@ -118,7 +118,7 @@ export async function getSummary(args) { return respond(async () => {
   const isDone = statusCategory === 'done' || issue.fields.status?.name?.toLowerCase() === 'done';
 
   const [available, baseline, review, approval, pendingRow, credentialEnrolled, isAdmin, restores,
-    governingRoots, declared] = await Promise.all([
+    reachedBy, governingRoots, declared] = await Promise.all([
     availableTransitions(api, issue.key),
     activeBaseline(issueId),
     getReview(issueId),
@@ -127,6 +127,9 @@ export async function getSummary(args) { return respond(async () => {
     credentialState(actor.accountId).then(row => row?.state === 'ACTIVE').catch(() => undefined),
     isActiveAdmin(actor.accountId).catch(() => false),
     restoresForIssue(issueId, 1).catch(() => []),
+    // A parent's restore writes to its children under the parent's signature;
+    // the child's own restores never show that.
+    restoreReaching(issueId).catch(() => null),
     // Governed-by-coverage, for a work item that is a node inside a parent's
     // tree baseline and therefore has no va_baseline row of its own.
     activeRootsForNode(issueId).catch(() => []),
@@ -243,7 +246,9 @@ export async function getSummary(args) { return respond(async () => {
   }
 
   const restore = restores[0] ? {
-    restoreId: Buffer.from(restores[0].restore_id).toString('hex'),
+    // RestoreStatus may need this summary value before its detailed restore
+    // rows arrive. Keep the same base64 identifier the retry resolver reads.
+    restoreId: Buffer.from(restores[0].restore_id).toString('base64'),
     state: restores[0].state,
     attempted: Number(restores[0].attempted ?? 0),
     succeeded: Number(restores[0].succeeded ?? 0),
@@ -258,6 +263,15 @@ export async function getSummary(args) { return respond(async () => {
     completedSteps: Number(restores[0].completed_steps ?? 0),
     lastCheckpoint: restores[0].last_checkpoint != null ? Number(restores[0].last_checkpoint) : null,
     lastError: restores[0].last_error ?? null
+  } : null;
+
+  const restoredVia = reachedBy ? {
+    restoreId: Buffer.from(reachedBy.restore_id).toString('hex'),
+    parentIssueId: Number(reachedBy.parent_issue_id),
+    parentIssueKey: reachedBy.parent_issue_key ?? null,
+    state: reachedBy.state,
+    finishedAt: reachedBy.finished_at != null ? Number(reachedBy.finished_at) : null,
+    baselineVersion: reachedBy.baseline_version != null ? Number(reachedBy.baseline_version) : null
   } : null;
 
   const payload = {
@@ -323,6 +337,7 @@ export async function getSummary(args) { return respond(async () => {
     // an edit instead of waiting for a trigger to catch up.
     contentHash: comparison.contentHash ?? null,
     restore,
+    restoredVia,
     approval: {
       requiredRole: policy?.requiredRole ?? transitions.find(t => t.requiredRole)?.requiredRole ?? null,
       requiredAssurance: policy?.requiredAssurance ?? transitions.find(t => t.canApprove)?.requiredAssurance ?? null,

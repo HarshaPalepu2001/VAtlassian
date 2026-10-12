@@ -34,7 +34,7 @@ const modules = {
   'db/incidentStore.js': ['adminIncidentCount'],
   'db/credentialStore.js': ['credentialState'],
   'db/adminStore.js': ['isActiveAdmin'],
-  'db/restoreStore.js': ['restoresForIssue'],
+  'db/restoreStore.js': ['restoresForIssue', 'restoreReaching'],
   'lib/reviewer.js': ['isEligible'],
   'lib/transitions.js': ['availableTransitions'],
   'db/baselineTreeStore.js': ['activeRootsForNode', 'rootNodeDigests', 'driftedDescendants', 'capturingParent']
@@ -94,6 +94,7 @@ function fixture(overrides = {}) {
     credentialState: async () => null,
     isActiveAdmin: async () => false,
     restoresForIssue: async () => [],
+    restoreReaching: async () => null,
     activeBaseline: async () => null,
     controlledFields: async () => [{ field_id: 'summary', field_name: 'Summary', field_kind: 'TEXT', store_values: true, materiality: 'MAJOR' }],
     isEligible: async () => true,
@@ -122,6 +123,21 @@ test('summary never invokes tree, changelog, editmeta, or baseline-value readers
   const summary = await getSummary(args);
   assert.equal(summary.error, undefined, `getSummary must not fail: ${summary.error}`);
   assert.equal(summary.issue.key, 'T-10');
+});
+
+test('summary returns a restore identifier in the base64 form accepted by Retry', async () => {
+  const restoreId = Buffer.alloc(16, 7);
+  fixture({
+    restoresForIssue: async () => [{
+      restore_id: restoreId,
+      state: 'FAILED', attempted: 1, succeeded: 0, failed: 1, skipped: 0,
+      baseline_version: 3
+    }]
+  });
+
+  const summary = await getSummary(args);
+
+  assert.equal(summary.restore.restoreId, restoreId.toString('base64'));
 });
 
 // The issue read is now `*all`, DELIBERATELY. Drift is derived from the
@@ -544,4 +560,34 @@ test('a child baselined by its parent names the parent capture it came with', as
   });
   const summary = await getSummary(args);
   assert.deepEqual(summary.baseline.capturedBy, { issueKey: 'PARENT-1', version: 3 });
+});
+
+// A parent's restore rewrites its children under the parent's signature. The
+// child's own restoration row read "No restoration has run" because it only
+// looked at restores started FROM the child, so a work item changed by a
+// signature that was not its own said nothing about it.
+test('a child a parent restore rewrote is told so, with the parent and the time', async () => {
+  const asked = [];
+  fixture({ restoreReaching: async issueId => {
+    asked.push(issueId);
+    return { restore_id: Buffer.alloc(16, 7), parent_issue_id: 20, parent_issue_key: 'T-20',
+      state: 'COMPLETE', finished_at: 1_700_000_100_000, baseline_version: 4 };
+  } });
+  const summary = await getSummary(args);
+  assert.deepEqual(asked, [10]);
+  assert.deepEqual(summary.restoredVia, { restoreId: Buffer.alloc(16, 7).toString('hex'), parentIssueId: 20,
+    parentIssueKey: 'T-20', state: 'COMPLETE', finishedAt: 1_700_000_100_000, baselineVersion: 4 });
+});
+
+test('a work item no parent restore reached has no restoredVia', async () => {
+  fixture();
+  const summary = await getSummary(args);
+  assert.equal(summary.restoredVia, null);
+});
+
+test('a failed restoredVia lookup does not fail the summary', async () => {
+  fixture({ restoreReaching: async () => { throw new Error('database unavailable'); } });
+  const summary = await getSummary(args);
+  assert.equal(summary.error, undefined);
+  assert.equal(summary.restoredVia, null);
 });

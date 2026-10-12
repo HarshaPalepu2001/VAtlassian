@@ -62,7 +62,7 @@ function clip(text) {
   // mid-word for the sake of four characters.
   const cut = trimmed.slice(0, PREVIEW_CHARS);
   const space = cut.lastIndexOf(' ');
-  return { text: (space > PREVIEW_CHARS - 40 ? cut.slice(0, space) : cut), truncated: true };
+  return { text: (space >= PREVIEW_CHARS - 40 ? cut.slice(0, space) : cut), truncated: true };
 }
 
 /**

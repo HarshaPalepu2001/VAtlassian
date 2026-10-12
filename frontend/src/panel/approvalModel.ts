@@ -7,8 +7,13 @@ export function approvalReady({ level, confirmed, code, busy, eligible }: { leve
   return eligible && !busy && confirmed && mode !== 'unavailable' && (mode !== 'totp' || /^\d{6}$/.test(code));
 }
 
-export function approvalPayload({ issueKey, transitionId, toStatusId, intent, decision, code, note, evidenceHash, confirmed, level }: { issueKey?: string; transitionId?: string; toStatusId?: string; intent?: 'WORKFLOW' | 'DRIFT'; decision: 'APPROVE' | 'REJECT'; code: string; note: string; evidenceHash?: string | null; confirmed: boolean; level: AssuranceLevel }) {
-  return { issueKey, transitionId, toStatusId, intent, decision, confirmed, note: note.trim() || undefined, expectedEvidenceHash: evidenceHash ?? undefined, ...(approvalMode(level) === 'totp' ? { code } : {}) };
+export type FieldDecision = { fieldId: string; decision: 'APPROVE' | 'REJECT' };
+
+export function approvalPayload({ issueKey, transitionId, toStatusId, intent, decision, decisions, code, note, evidenceHash, confirmed, level }: { issueKey?: string; transitionId?: string; toStatusId?: string; intent?: 'WORKFLOW' | 'DRIFT' | 'DRIFT_MIXED'; decision?: 'APPROVE' | 'REJECT'; decisions?: FieldDecision[]; code: string; note: string; evidenceHash?: string | null; confirmed: boolean; level: AssuranceLevel }) {
+  // A per-field decision names no whole-set decision: the server derives its
+  // meaning from the map, and the map is part of what is signed.
+  const mixed = intent === 'DRIFT_MIXED';
+  return { issueKey, transitionId, toStatusId, intent, ...(mixed ? { decisions } : { decision }), confirmed, note: note.trim() || undefined, expectedEvidenceHash: evidenceHash ?? undefined, ...(approvalMode(level) === 'totp' ? { code } : {}) };
 }
 
 /** The facts a panel transition and a transition-screen action share. */
@@ -30,7 +35,8 @@ export const PROGRESS = {
   biometric: 'Checking biometric',
   publishing: 'Publishing baseline',
   restoring: 'Starting restoration',
-  restoreRunning: 'Restoration in progress'
+  restoreRunning: 'Restoration in progress',
+  savingDecisions: 'Saving field decisions'
 } as const;
 
 /** The destination status a transition reaches. Never the transition's own
@@ -80,7 +86,8 @@ export function movingTo(transition?: TransitionFacts): string {
 }
 
 /** What the server does once a signature is proven, named for the reviewer. */
-export function recordingProgress({ decision, reviewingDrift, transition }: { decision: 'APPROVE' | 'REJECT'; reviewingDrift: boolean; transition?: TransitionFacts }): string {
+export function recordingProgress({ decision, reviewingDrift, transition }: { decision: 'APPROVE' | 'REJECT' | 'MIXED'; reviewingDrift: boolean; transition?: TransitionFacts }): string {
+  if (decision === 'MIXED') return PROGRESS.savingDecisions;
   if (decision === 'REJECT') return PROGRESS.restoring;
   if (reviewingDrift || transition?.capturesBaseline) return PROGRESS.publishing;
   return movingTo(transition);

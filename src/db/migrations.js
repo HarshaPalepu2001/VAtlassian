@@ -923,5 +923,13 @@ export const MIGRATIONS = [
   { id: 'v104_capture_lease_acquired', sql: `ALTER TABLE va_capture_lease ADD COLUMN IF NOT EXISTS acquired_at BIGINT NULL` },
   // Set only by the step-2 job on a child version materialised from its
   // parent's stored node: when that content was read, not when it was written.
-  { id: 'v105_baseline_content_as_of', sql: `ALTER TABLE va_baseline ADD COLUMN IF NOT EXISTS content_as_of BIGINT NULL` }
+  { id: 'v105_baseline_content_as_of', sql: `ALTER TABLE va_baseline ADD COLUMN IF NOT EXISTS content_as_of BIGINT NULL` },
+  // "Did a parent's restore write to THIS item?" is asked on every panel
+  // paint; the table is otherwise only keyed by restore.
+  { id: 'v106_restore_action_issue_index', sql: `ALTER TABLE va_restore_action ADD INDEX IF NOT EXISTS idx_restore_action_issue (issue_id, state)` },
+  // A mixed drift decision records exactly which fields were approved and which
+  // rejected. NULL on every whole-set approval, which are unchanged.
+  { id: 'v107_approval_decision_map', sql: `ALTER TABLE va_approval
+    ADD COLUMN IF NOT EXISTS decision_map TEXT NULL,
+    ADD COLUMN IF NOT EXISTS decision_map_hash CHAR(64) NULL` }
 ];

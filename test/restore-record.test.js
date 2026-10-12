@@ -149,3 +149,14 @@ test('each restore says whether this viewer may retry it: only the reviewer who 
   const result = await getState(args);
   assert.deepEqual(result.restores.map(r => r.canRetry), [true, false]);
 });
+
+test('a retry resumes a per-field decision\'s restore under its own signature, and refuses any other kind of approval', async () => {
+  for (const [decision, expected] of [['MIXED', 'RESTORING'], ['REJECT', 'RESTORING'], ['APPROVE', undefined]]) {
+    const { args } = retryFixture();
+    const original = globalThis.vaRestore.approvalById;
+    globalThis.vaRestore.approvalById = async id => ({ ...(await original(id)), decision });
+    const result = await retry(args);
+    assert.equal(result.state, expected, decision);
+    if (expected === undefined) assert.equal(result.reason, 'NOT_ELIGIBLE');
+  }
+});

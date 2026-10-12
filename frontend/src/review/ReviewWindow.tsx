@@ -10,6 +10,10 @@ import { daysBetween, formatTimestamp, plural } from '../ui/format';
 import usePanelState from '../panel/usePanelState';
 import useDecisionState from '../panel/useDecisionState';
 import ApprovalControls from '../panel/sections/ApprovalControls';
+import type { MixedRequest } from '../panel/sections/ApprovalControls';
+import { payload as decisionPayload } from './fieldDecisions';
+import type { Decisions } from './fieldDecisions';
+import { clearDecisionDraft, loadDecisionDraft, saveDecisionDraft } from './decisionDrafts';
 import BaselineRecord from '../panel/sections/BaselineRecord';
 import DiffView from './DiffView';
 import ChangeTimeline from './ChangeTimeline';
@@ -49,11 +53,18 @@ export default function ReviewWindow({ issueKey, tab: initialTab = 'changes', no
   const [focus, setFocus] = useState<{ driftId?: string; fieldId?: string; n: number }>({ n: 0 });
   const [selectedTransitionId, setSelectedTransitionId] = useState('');
   const decided = useRef(false);
+  // FIELD-BY-FIELD CHOICES, kept here rather than in the diff so they survive
+  // switching tabs and cancelling the signing sheet. They belong to ONE reading
+  // of the record: a choice made against evidence that has since changed was
+  // never made about what is now there, so a new evidence hash starts clean.
+  const [choices, setChoices] = useState<{ hash: string | null; state: Decisions }>({ hash: null, state: {} });
+  const [mixedRequest, setMixedRequest] = useState<MixedRequest | null>(null);
 
   const [report, setReport] = useState<ReportEnvelope | null>(null);
   const [reportBusy, setReportBusy] = useState(false);
   const [reportError, setReportError] = useState('');
   const reportRequested = useRef(false);
+  const draftIdentity = useRef<{ issueKey: string; evidenceHash: string } | null>(null);
   useEffect(() => {
     // The cached summary is fetched the first time the tab is shown, never
     // generated unasked: generating costs the customer, reading does not.
@@ -89,6 +100,20 @@ export default function ReviewWindow({ issueKey, tab: initialTab = 'changes', no
   const edits = fields.reduce((n, f) => n + Math.max(f.occurrences ?? 0, f.attribution?.filter(a => !a.detected).length ?? 0), 0);
   const people = [...new Set(fields.flatMap(f => (f.attribution ?? []).filter(a => !a.detected).map(a => a.authorName).filter(Boolean)))] as string[];
   const driftCount = authoritativeSummary?.drift.count ?? 0;
+  const evidenceHash = shownEvidence?.evidenceHash ?? null;
+  useEffect(() => {
+    if (!key || !evidenceHash) return;
+    const previous = draftIdentity.current;
+    if (previous && (previous.issueKey !== key || previous.evidenceHash !== evidenceHash)) {
+      clearDecisionDraft(previous.issueKey, previous.evidenceHash);
+    }
+    draftIdentity.current = { issueKey: key, evidenceHash };
+    const restored = loadDecisionDraft(key, evidenceHash);
+    if (restored) setChoices({ hash: evidenceHash, state: restored });
+    else if (choices.hash === null) setChoices({ hash: evidenceHash, state: {} });
+  }, [key, evidenceHash]);
+  const decisionState: Decisions = choices.hash === evidenceHash ? choices.state : {};
+  const choicesCleared = choices.hash !== evidenceHash && Object.keys(choices.state).length > 0;
   const history = shownEvidence?.drift as { historyTruncated?: boolean; historyUnavailable?: boolean } | undefined;
   const split = Boolean(summary && tab === 'changes' && shownEvidence && fields.length > 0);
 
@@ -147,11 +172,29 @@ export default function ReviewWindow({ issueKey, tab: initialTab = 'changes', no
             {shownEvidence && fields.length > 0 && (
               <ChangeTimeline fields={fields} baselineAt={signedAt} now={now} onPick={fieldId => setFocus(f => ({ fieldId, n: f.n + 1 }))} />
             )}
+            {choicesCleared && <Notice>The record changed while you were deciding, so your choices were cleared. Review the current changes and decide again.</Notice>}
             {shownEvidence && (
               fields.length === 0 && !driftCount
                 ? <p className="va-muted">Nothing tracked has changed since this baseline was signed.</p>
                 : <DiffView fields={fields} groups={shownEvidence.drift?.groups} baselineAt={signedAt} now={now}
-                    focusDriftId={focus.driftId} focusFieldId={focus.fieldId} focusKey={focus.n} />
+                    focusDriftId={focus.driftId} focusFieldId={focus.fieldId} focusKey={focus.n}
+                    decisions={authoritativeSummary && driftCount > 0 ? {
+                      state: decisionState,
+                      onChange: next => {
+                        setChoices({ hash: evidenceHash, state: next });
+                        if (key && evidenceHash) saveDecisionDraft(key, evidenceHash, next);
+                      },
+                      mixed: shownEvidence.drift?.mixed ?? null,
+                      loading: evidenceLoading,
+                      error: evidenceError ?? '',
+                      // A previous read still on screen is not authority to decide on.
+                      held: Boolean(heldEvidence) || !hasAuthoritativeEvidence,
+                      eligible: authoritativeSummary.drift.canApprove === true,
+                      // Saving only asks the server to check the map and open the
+                      // signing sheet; nothing is recorded until the reviewer signs.
+                      onSave: () => setMixedRequest(previous => ({ token: (previous?.token ?? 0) + 1,
+                        decisions: decisionPayload(fields, decisionState), fields }))
+                    } : undefined} />
             )}
           </div>
         )}
@@ -197,7 +240,12 @@ export default function ReviewWindow({ issueKey, tab: initialTab = 'changes', no
             variant="window"
             summary={authoritativeSummary!}
             issueKey={key}
-            onDone={async () => { decided.current = true; await refresh(); }}
+            onDone={async () => {
+              decided.current = true;
+              if (key && evidenceHash) clearDecisionDraft(key, evidenceHash);
+              setChoices({ hash: null, state: {} });
+              await refresh();
+            }}
             onFinished={close}
             disabled={!!error || !hasAuthoritativeEvidence}
             evidence={evidence}
@@ -206,6 +254,7 @@ export default function ReviewWindow({ issueKey, tab: initialTab = 'changes', no
             evidenceHeld={Boolean(heldEvidence)}
             selectedTransitionId={selectedTransitionId}
             onSelectTransition={setSelectedTransitionId}
+            mixedRequest={mixedRequest}
           />
         </footer>
       )}

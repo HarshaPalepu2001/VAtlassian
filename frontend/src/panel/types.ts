@@ -90,6 +90,9 @@ export type PanelSummary = {
   /** Hash of the tracked content right now; moves on every edit. */
   contentHash?: string | null;
   restore: PanelRestore | null;
+  /** The latest restore of ANOTHER work item that wrote to this one: a parent's
+   *  rejection puts each child back to its own record, under the parent's signature. */
+  restoredVia?: { restoreId: string; parentIssueId: number; parentIssueKey: string | null; state: string; finishedAt: number | null; baselineVersion: number | null } | null;
   approval: { requiredRole?: string | null; requiredAssurance?: AssuranceLevel | null; meaning?: string | null; pending: PendingApproval | null };
   adminIncidentCount?: number;
   adminIncidentUnavailable?: boolean;
@@ -121,7 +124,10 @@ export type PanelEvidence = {
   assignee?: unknown;
   reporter?: unknown;
   record: BaselineRecordData | null;
-  drift: { count: number; materialCount: number; fields: DiffField[]; groups?: ReviewGroup[]; historyTruncated?: boolean; historyUnavailable?: boolean; addedNodes?: any[]; removedNodes?: any[]; movedNodes?: any[]; changedFields?: any[] };
+  drift: { count: number; materialCount: number; fields: DiffField[]; groups?: ReviewGroup[];
+    /** Whether this review can be decided field by field (never for a structural change), and why not. */
+    mixed?: { eligible: boolean; reason: string | null; fields: { fieldId: string; restorable: string | null; retained: boolean }[] };
+    historyTruncated?: boolean; historyUnavailable?: boolean; addedNodes?: any[]; removedNodes?: any[]; movedNodes?: any[]; changedFields?: any[] };
   rejection: { deleteIssueKeys: string[]; recreateCount: number; attachments?: AttachmentRejection | null };
   restoreHistory: any[];
 };

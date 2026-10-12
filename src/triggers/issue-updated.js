@@ -1,6 +1,6 @@
 import { collectAffectedTrees, affectedTreeRoots, collectTree, collect, ownFlatBaseline } from '../lib/collect.js';
 import { executeQuery } from '../lib/db.js';
-import { retryEvent } from './retry.js';
+import { retryEvent, eventTime } from './retry.js';
 import { withRequestCache } from '../lib/cache.js';
 
 export function isDependencyBundle(value) {
@@ -45,7 +45,8 @@ async function runUncached(event, suppliedDeps) {
   const now = Date.now();
 
   try {
-    const results = await deps.collectAffectedTrees(event, deps);
+    const eventAt = eventTime(event) ?? now;
+    const results = await deps.collectAffectedTrees({ ...event, eventId, eventAt }, deps);
     const result = results[0] || { outcome: 'NO_CHANGE' };
     // One event can fan out to several governed roots (collectAffectedTrees);
     // a failure on any of them must not be masked by another root's success.

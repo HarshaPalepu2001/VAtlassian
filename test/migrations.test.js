@@ -132,10 +132,10 @@ test('v075-v087 stay in the list: they may already have run on a site', () => {
   }
 });
 
-test('migration ids are unique and the list ends at v105', () => {
+test('migration ids are unique and the list ends at v107', () => {
   const ids = MIGRATIONS.map(m => m.id);
   assert.equal(new Set(ids).size, ids.length);
-  assert.equal(MIGRATIONS.at(-1).id, 'v105_baseline_content_as_of');
+  assert.equal(MIGRATIONS.at(-1).id, 'v107_approval_decision_map');
 });
 
 test('v088-v093 replace the draft field, rule and signature tables with the spec shape', () => {
@@ -190,4 +190,19 @@ test('v104-v105 add the lease acquisition time and a migrated version\'s content
   assert.match(sqlFor('v104_capture_lease_acquired'),
     /^ALTER TABLE va_capture_lease ADD COLUMN IF NOT EXISTS acquired_at BIGINT NULL$/);
   assert.match(sqlFor('v105_baseline_content_as_of'), /^ALTER TABLE va_baseline ADD COLUMN IF NOT EXISTS content_as_of BIGINT NULL$/);
+});
+
+test('a work item a parent restore rewrote can be found by its own id', () => {
+  // The panel summary asks "did a restore of a parent write to THIS item?" on
+  // every paint. va_restore_action is keyed by restore, so without this index
+  // that question is a scan of every step ever journaled.
+  const sql = sqlFor('v106_restore_action_issue_index');
+  assert.match(sql, /ALTER TABLE va_restore_action ADD INDEX IF NOT EXISTS idx_restore_action_issue \(issue_id, state\)/);
+});
+
+test('a mixed drift decision stores the exact field map it signed, NULL on every other approval', () => {
+  const sql = sqlFor('v107_approval_decision_map');
+  assert.match(sql, /ALTER TABLE va_approval/);
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS decision_map TEXT NULL/);
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS decision_map_hash CHAR\(64\) NULL/);
 });

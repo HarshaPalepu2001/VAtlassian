@@ -95,7 +95,7 @@ export async function grantEligibility(req, overrides) {
   });
   const insertResult = await executeQuery(
     `INSERT INTO va_eligibility (el_id, account_id, issue_type_id, role, state, granted_at, granted_by, project_id)
-     VALUES (FROM_BASE64(?), ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [toBinaryParam(elId), targetAccountId, issueTypeId, role, ACTIVE, now, accountId, projectId == null ? null : String(projectId)]
   );
   if (!insertResult.result) return { success: false, error: 'Failed to grant eligibility' };
@@ -116,7 +116,7 @@ export async function revokeEligibility(req, overrides) {
     payload: { action: 'REVOKE_REQUESTED', elId }
   });
   const updateResult = await executeQuery(
-    `UPDATE va_eligibility SET state = ? WHERE el_id = FROM_BASE64(?)`,
+    `UPDATE va_eligibility SET state = ? WHERE el_id = ?`,
     [REVOKED, toBinaryParam(Buffer.from(elId, 'hex'))]
   );
   if (!updateResult.result) return { success: false, error: 'Failed to revoke eligibility' };

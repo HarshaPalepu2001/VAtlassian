@@ -161,8 +161,8 @@ export const applySignature = applyApproval;
 export function gateDecision({ item, candidateApproval, now }) {
   if (!item) return { allow: false, reason: 'NOT_CONFIGURED', detail: 'ITEM_NEVER_OBSERVED' };
   if (item.state === REVIEW_STATE.LOCKED) return { allow: false, reason: 'RECORD_LOCKED' };
-  if (!candidateApproval || candidateApproval.state !== 'PENDING') return { allow: false, reason: 'NO_PENDING_APPROVAL' };
-  if (candidateApproval.expires_at <= now) return { allow: false, reason: 'APPROVAL_EXPIRED' };
+  if (!candidateApproval || candidateApproval.state !== 'PENDING') return { allow: false, reason: 'NO_PENDING_SIGNATURE' };
+  if (candidateApproval.expires_at <= now) return { allow: false, reason: 'SIGNATURE_EXPIRED' };
   if (candidateApproval.covers_to_hash !== item.content_hash) return { allow: false, reason: 'CONTENT_CHANGED' };
   return { allow: true, approvalId: candidateApproval.approval_id };
 }

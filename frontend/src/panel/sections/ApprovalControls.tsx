@@ -12,7 +12,9 @@ import type { AssuranceLevel } from '../../lib/assurance';
 import { assertResult, errorMessage } from '../../lib/result';
 import type { Result } from '../../lib/result';
 import type { PanelEvidence, PanelSummary, RejectedFile } from '../types';
+import type { DiffField, DiffItem } from '../../review/types';
 import { recordHarnessEvent } from '../../lib/harness';
+import type { FieldDecision } from '../approvalModel';
 import {
   PROGRESS, approvalPayload, approvalReady, captureFact, driftFact, movingTo, recordingProgress, resolveSelectedAction,
   restoreStateLabel, transitionApproveLabel, transitionDestination, transitionOptionLabel, transitionScopeLabel
@@ -20,12 +22,24 @@ import {
 
 import { biometricStatus, confirmBiometric, enrolBiometric } from '../deviceAuth';
 
-type Decision = 'APPROVE' | 'REJECT';
+type Decision = 'APPROVE' | 'REJECT' | 'MIXED';
 /** What a signature recorded, kept on screen as the signer's receipt. */
 type Receipt = { decision: Decision; meaning: string; note: string; level: AssuranceLevel; at: number; approvalId?: string;
-  evidenceHash: string | null; signer: string | null; role: string | null; reviewingDrift: boolean; destination: string | null };
+  evidenceHash: string | null; signer: string | null; role: string | null; reviewingDrift: boolean; destination: string | null;
+  /** A per-field decision: the fields on each side, by name, and anything the reviewer must be told. */
+  mixed?: { approved: string[]; rejected: string[]; notice?: string } };
 type Phase = 'challenge' | 'submit' | 'retry' | 'device';
-type Challenge = { id: string; nonce: string; decision: Decision; expiresAt: number; meaning: string; requiredAssurance?: AssuranceLevel };
+type Challenge = { id: string; nonce: string; decision: Decision; expiresAt: number; meaning: string; requiredAssurance?: AssuranceLevel;
+  /** A per-field decision: the exact map the server was asked about, re-sent verbatim at submit, and the fields it names. */
+  decisions?: FieldDecision[]; fields?: DiffField[] };
+
+/**
+ * A request to sign a per-field decision, from the review window's Save button.
+ * Each new request carries a new `token`. Saving only asks the server for a
+ * challenge — which validates the whole map before anything is signed and
+ * records nothing — and then opens the same signing sheet every decision uses.
+ */
+export type MixedRequest = { token: number; decisions: FieldDecision[]; fields: DiffField[] };
 
 /**
  * EVERYTHING GATHERED FOR ONE ACTION — the code, the confirmation, the note,
@@ -63,7 +77,7 @@ const fileList = (files: RejectedFile[]) => files.map(f => f.issueKey ? `${f.fil
  * controlled by the parent when `onSelectTransition` is given; it does not
  * create a competing evidence read.
  */
-export default function ApprovalControls({ summary, issueKey, onDone, disabled = false, evidence, evidenceLoading, evidenceError, evidenceHeld = false, selectedTransitionId, onSelectTransition, variant = 'panel', onFinished }: {
+export default function ApprovalControls({ summary, issueKey, onDone, disabled = false, evidence, evidenceLoading, evidenceError, evidenceHeld = false, selectedTransitionId, onSelectTransition, variant = 'panel', onFinished, mixedRequest = null }: {
   summary: PanelSummary;
   issueKey?: string;
   onDone: () => Promise<void>;
@@ -82,6 +96,8 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
    * review window, which signs in a sheet over the window and ends on a receipt.
    */
   variant?: 'panel' | 'window';
+  /** Window only: the reviewer chose Save on their field-by-field decisions. */
+  mixedRequest?: MixedRequest | null;
   /** Window only: the reviewer closed the receipt. */
   onFinished?: () => void;
 }) {
@@ -173,7 +189,7 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
     patch(gen, { phase: null, phaseDecision: null, progress: '' });
   }
 
-  async function requestChallenge(decision: Decision) {
+  async function requestChallenge(decision: Decision, mixed?: MixedRequest) {
     recordHarnessEvent('UI', 'click:requestChallenge', {
       decision,
       reviewingDrift,
@@ -189,11 +205,12 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
         issueKey: targetKey,
         transitionId: reviewingDrift ? undefined : transition?.transitionId,
         toStatusId: reviewingDrift ? undefined : transition?.toStatusId,
-        intent: reviewingDrift ? 'DRIFT' : 'WORKFLOW',
-        decision, code: '', note: session.note, evidenceHash: reviewingDrift ? evidence?.evidenceHash : undefined, confirmed: true, level
+        intent: mixed ? 'DRIFT_MIXED' : reviewingDrift ? 'DRIFT' : 'WORKFLOW',
+        decision: decision === 'MIXED' ? undefined : decision, decisions: mixed?.decisions, code: '', note: session.note, evidenceHash: reviewingDrift ? evidence?.evidenceHash : undefined, confirmed: true, level
       })));
       recordHarnessEvent('UI', 'challenge:received', { challengeId: result.challengeId, requiredAssurance: result.requiredAssurance, issueKey: targetKey });
-      patch(gen, { challenge: { id: result.challengeId, nonce: result.nonce, decision, expiresAt: result.expiresAt, meaning: result.meaning, requiredAssurance: result.requiredAssurance } });
+      patch(gen, { challenge: { id: result.challengeId, nonce: result.nonce, decision, expiresAt: result.expiresAt, meaning: result.meaning, requiredAssurance: result.requiredAssurance,
+        ...(mixed ? { decisions: mixed.decisions, fields: mixed.fields } : {}) } });
     } catch (e) {
       recordHarnessEvent('ERROR', 'challenge:failed', { decision, issueKey: targetKey }, e);
       patch(gen, { failed: true, message: errorMessage(e) });
@@ -201,6 +218,14 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
       end(gen);
     }
   }
+
+  // Save, in the review window, opens the signing sheet for the decisions made.
+  const handledMixed = useRef(0);
+  useEffect(() => {
+    if (!mixedRequest || mixedRequest.token === handledMixed.current) return;
+    handledMixed.current = mixedRequest.token;
+    void requestChallenge('MIXED', mixedRequest);
+  }, [mixedRequest?.token]);
 
   async function submit() {
     const challenge = session.challenge;
@@ -230,8 +255,10 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
         webauthn = check.assertion;
         patch(gen, { progress: recording });
       }
-      const result = assertResult(await invoke<Result & { approvalId: string; transitioned?: boolean; state?: string; transitionError?: string }>('signature:submit', {
-        challengeId: challenge.id, note, confirmed, issueKey: targetKey, ...(mode === 'totp' ? { code } : {}), ...(webauthn ? { webauthn } : {})
+      const result = assertResult(await invoke<Result & { approvalId: string; transitioned?: boolean; state?: string; transitionError?: string; restore?: { state?: string } | null }>('signature:submit', {
+        challengeId: challenge.id, note, confirmed, issueKey: targetKey, ...(mode === 'totp' ? { code } : {}), ...(webauthn ? { webauthn } : {}),
+        // The same map the challenge validated; the server refuses any other.
+        ...(challenge.decision === 'MIXED' ? { decisions: challenge.decisions } : {})
       }));
       recordHarnessEvent('UI', 'submit:recorded', { approvalId: result.approvalId, transitioned: result.transitioned, state: result.state, issueKey: targetKey });
       // The signature is spent either way; it is never offered again.
@@ -242,11 +269,18 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
           ? { failed: true, message: `${result.transitionError} The approval is recorded; retry the transition when Jira allows it.` }
           : { failed: true, message: `${result.transitionError} A fresh signature may be required.` });
       } else {
-        setOutcome({ failed: false, message: challenge.decision === 'APPROVE' ? 'Approval recorded.' : 'Rejection recorded. Check the restoration result below.' });
+        const split = challenge.decision === 'MIXED' ? splitDecisions(challenge.decisions ?? [], challenge.fields ?? []) : null;
+        // Decisions are recorded but the restore never started: said plainly, never as a clean save.
+        const notice = split && result.restore?.state === 'QUEUING_FAILED'
+          ? 'Your decisions are recorded, but the restoration could not be started, so the rejected fields are not yet put back and the new baseline is not published. Use Retry on the restoration.'
+          : undefined;
+        setOutcome({ failed: Boolean(notice), message: notice ?? (split ? 'Decisions recorded. Check the restoration result below.'
+          : challenge.decision === 'APPROVE' ? 'Approval recorded.' : 'Rejection recorded. Check the restoration result below.') });
         setReceipt({ decision: challenge.decision, meaning: challenge.meaning, note: note.trim(), level, at: Date.now(),
           approvalId: result.approvalId, evidenceHash: reviewingDrift ? evidence?.evidenceHash ?? null : null,
           signer: summary.actorName ?? null, role: reviewingDrift ? summary.approval.requiredRole ?? null : transition?.requiredRole ?? null,
-          reviewingDrift, destination: transition ? transitionDestination(transition) : null });
+          reviewingDrift, destination: transition ? transitionDestination(transition) : null,
+          ...(split ? { mixed: { approved: split.approved, rejected: split.rejected, notice } } : {}) });
         view.refresh().catch(() => {});
       }
       await onDone();
@@ -330,12 +364,13 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
   // sheet over everything else; in the panel it replaces these controls.
   if (session.challenge && canSign && mode !== 'unavailable') {
     const decline = session.challenge.decision === 'REJECT';
+    const mixedSheet = session.challenge.decision === 'MIXED';
     const role = reviewingDrift ? summary.approval.requiredRole : transition?.requiredRole;
     const authors = [...new Set((evidence?.drift?.fields ?? []).flatMap(f => (f.attribution ?? []).map(a => a.authorName).filter(Boolean)))] as string[];
     const automated = (evidence?.drift?.fields ?? []).some(f => (f.attribution ?? []).some(a => a.source === 'AUTOMATION'));
-    const signingView = <section className={decline ? 'va-attest va-attest--decline' : 'va-attest'} aria-label={decline ? 'Sign and restore' : 'Sign and approve'}>
+    const signingView = <section className={decline ? 'va-attest va-attest--decline' : 'va-attest'} aria-label={mixedSheet ? 'Sign and save decisions' : decline ? 'Sign and restore' : 'Sign and approve'}>
       <div className="va-attest__banner">
-        <p className="va-attest__eyebrow">{decline ? 'Rejecting these changes' : 'Approving this work item'}</p>
+        <p className="va-attest__eyebrow">{mixedSheet ? 'Saving your field decisions' : decline ? 'Rejecting these changes' : 'Approving this work item'}</p>
         <p className="va-attest__label">What your signature means</p>
         <p className="va-attest__meaning">{session.challenge.meaning}</p>
       </div>
@@ -360,7 +395,8 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
         </ul>
         <div className="va-attest__consequence">
           <AssuranceChip level={level} />
-          {decline ? (
+          {mixedSheet ? <MixedConsequence decisions={session.challenge.decisions ?? []} fields={session.challenge.fields ?? []} />
+          : decline ? (
             <div className="va-stack" style={{ marginLeft: 12 }}>
               <span>The governed issue tree will be returned to its approved content.</span>
               {evidenceLoading && !evidence && <span className="va-muted">Loading impact details…</span>}
@@ -413,7 +449,7 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
         {session.confirmed && mode === 'biometric' && <p className="va-secondary" style={{ marginBottom: 16 }}>Signing opens a separate device window for Face ID, Touch ID, or Windows Hello. Nothing is recorded until that check passes.</p>}
         <p className="va-manifest">{summary.actorName ?? 'Your name'} · {formatTimestamp(Date.now())} · {session.challenge.meaning}</p>
         <div className="va-row">
-          <Button appearance={decline ? 'danger' : 'primary'} isDisabled={!ready} onClick={() => void submit()}>{session.phase === 'submit' ? session.progress : decline ? 'Sign and restore' : 'Sign and approve'}</Button>
+          <Button appearance={decline ? 'danger' : 'primary'} isDisabled={!ready} onClick={() => void submit()}>{session.phase === 'submit' ? session.progress : mixedSheet ? 'Sign and save' : decline ? 'Sign and restore' : 'Sign and approve'}</Button>
           <Button appearance="subtle" isDisabled={busy || disabled} onClick={() => patch(session.generation, { challenge: null, message: '', failed: false })}>Cancel</Button>
         </div>
       </div>
@@ -518,6 +554,49 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
   </div>;
 }
 
+/** The fields on each side of a per-field decision, by the names the reviewer read. */
+function splitDecisions(decisions: FieldDecision[], fields: DiffField[]) {
+  const name = (id: string) => fields.find(f => f.fieldId === id)?.fieldName ?? id;
+  return {
+    approved: decisions.filter(d => d.decision === 'APPROVE').map(d => name(d.fieldId)),
+    rejected: decisions.filter(d => d.decision === 'REJECT').map(d => name(d.fieldId))
+  };
+}
+
+/** What the receipt claims. It never says a baseline is published until it is: a restoration comes first. */
+function mixedHeadline({ approved, rejected }: { approved: string[]; rejected: string[] }): string {
+  if (rejected.length === 0) return 'Decisions saved. A new baseline is now the approved record.';
+  return approved.length
+    ? 'Decisions saved. The rejected fields are being restored; the new baseline is published once they are verified.'
+    : 'Decisions saved. The rejected fields are being restored to the approved record.';
+}
+
+const fileName = (item: DiffItem) => typeof item === 'string' ? item : item.filename || item.id || 'a file';
+
+/**
+ * What signing a per-field decision does, field by field, before it is signed:
+ * which are approved, which will be put back, any files that change as a result
+ * (derived from the very changes the reviewer was shown), and whether a new
+ * baseline version results.
+ */
+function MixedConsequence({ decisions, fields }: { decisions: FieldDecision[]; fields: DiffField[] }) {
+  const { approved, rejected } = splitDecisions(decisions, fields);
+  const rejectedFields = decisions.filter(d => d.decision === 'REJECT').map(d => fields.find(f => f.fieldId === d.fieldId)).filter((f): f is DiffField => Boolean(f));
+  const deleted = rejectedFields.filter(f => f.kind === 'attachments').flatMap(f => (f.added ?? []).map(fileName));
+  const uploaded = rejectedFields.filter(f => f.kind === 'attachments').flatMap(f => (f.removed ?? []).map(fileName));
+  return (
+    <div className="va-stack" style={{ marginLeft: 12 }}>
+      <span><strong>{plural(approved.length, 'change')} approved:</strong> {approved.join(', ') || 'none'}</span>
+      <span><strong>{plural(rejected.length, 'change')} rejected:</strong> {rejected.join(', ') || 'none'}{rejected.length ? ' — these are returned to their approved values.' : ''}</span>
+      {!!deleted.length && <span className="va-warning-text"><strong>Permanently delete files:</strong> {deleted.join(', ')}</span>}
+      {!!uploaded.length && <span><strong>Upload again from the vault:</strong> {uploaded.join(', ')}</span>}
+      <span>{approved.length
+        ? (rejected.length ? 'A new baseline is captured from the result once every rejected field is verified.' : 'A new baseline is captured from the current content.')
+        : 'No new baseline version is created: the work item returns to the baseline it was approved on.'}</span>
+    </div>
+  );
+}
+
 const APPROVE_REASONS = ['Re-planned with the team', 'Agreed with the product owner', 'Correcting an error'];
 const REJECT_REASONS = ['Not agreed with the approver', 'Made outside the change process', 'Made in error'];
 
@@ -537,20 +616,26 @@ function shortHash(hash: string): string {
  */
 function SignedReceipt({ receipt, issueKey, onFinished }: { receipt: Receipt; issueKey?: string; onFinished?: () => void }) {
   const approved = receipt.decision === 'APPROVE';
+  const mixed = receipt.decision === 'MIXED' ? receipt.mixed : undefined;
   const utc = new Date(receipt.at).toISOString().replace('T', ' ').slice(0, 19);
   return <section className="va-receipt" aria-label="Signed record">
     <header className="va-receipt__head">
       <Seal hash={receipt.approvalId ?? receipt.evidenceHash} size={56} tone="success" label="Seal of this signature" />
       <div className="va-stack va-stack--tight">
         <span className="va-receipt__eyebrow">Signed</span>
-        <h2 className="va-receipt__title">{approved
-          ? (receipt.reviewingDrift ? 'Changes approved. A new baseline is now the approved record.' : `Approved${receipt.destination ? ` to ${receipt.destination}` : ''}.`)
-          : 'Changes rejected. The approved record is being restored.'}</h2>
+        <h2 className="va-receipt__title">{mixed ? mixedHeadline(mixed)
+          : approved
+            ? (receipt.reviewingDrift ? 'Changes approved. A new baseline is now the approved record.' : `Approved${receipt.destination ? ` to ${receipt.destination}` : ''}.`)
+            : 'Changes rejected. The approved record is being restored.'}</h2>
         {issueKey && <span className="va-secondary">{issueKey}</span>}
       </div>
     </header>
     <dl className="va-receipt__facts">
-      <dt>Decision</dt><dd>{approved ? 'Approved' : 'Rejected'}</dd>
+      <dt>Decision</dt><dd>{mixed ? 'Saved field decisions' : approved ? 'Approved' : 'Rejected'}</dd>
+      {mixed && <>
+        <dt>Approved</dt><dd>{mixed.approved.length} · {mixed.approved.join(', ') || 'none'}</dd>
+        <dt>Rejected</dt><dd>{mixed.rejected.length} · {mixed.rejected.join(', ') || 'none'}</dd>
+      </>}
       <dt>Signed by</dt><dd>{receipt.signer ?? 'You'}{receipt.role ? ` · ${receipt.role}` : ''}</dd>
       <dt>Time</dt><dd><time>{formatTimestamp(receipt.at)}</time> <span className="va-subtlest">· {utc} UTC</span></dd>
       <dt>Method</dt><dd>{assuranceLabel(receipt.level)}</dd>
@@ -559,6 +644,7 @@ function SignedReceipt({ receipt, issueKey, onFinished }: { receipt: Receipt; is
       {receipt.evidenceHash && <><dt>Evidence</dt><dd><code className="va-hash" title={receipt.evidenceHash}>{shortHash(receipt.evidenceHash)}</code></dd></>}
       {receipt.approvalId && <><dt>Record</dt><dd><code className="va-hash">{receipt.approvalId}</code> <span className="va-subtlest">· added to the audit ledger</span></dd></>}
     </dl>
+    {mixed?.notice && <Notice danger>{mixed.notice}</Notice>}
     <div className="va-row">
       <span className="va-spacer" />
       <Button appearance="primary" onClick={() => onFinished?.()}>Done</Button>
@@ -587,6 +673,20 @@ function noActionExplanation(summary: PanelSummary, reviewingDrift: boolean): st
  * exactly what they are about to sign. While drift is open the rows say they
  * are held, and why, instead of offering a button that would be refused.
  */
+/**
+ * The Restoration row. A parent's rejection restores each child under the
+ * parent's signature, so a child's own restores never mention it: when that is
+ * the newest restore to have touched this item, say so, and name the parent.
+ */
+function restorationLabel(restore: PanelSummary['restore'], via: PanelSummary['restoredVia']): string {
+  const viaIsNewer = via && (!restore || (via.finishedAt ?? 0) > (restore.finishedAt ?? 0));
+  if (via && viaIsNewer) {
+    const when = formatTimestamp(via.finishedAt);
+    return `${restoreStateLabel(via.state)} through ${via.parentIssueKey ?? 'its parent'}'s rejection${when ? ` · ${when}` : ''}`;
+  }
+  return restore ? restoreStateLabel(restore.state) : 'No restoration has run';
+}
+
 export function ControlFacts({ summary, fromStatusName, authoritativeReady = true, held = false }: { summary: PanelSummary; fromStatusName?: string; authoritativeReady?: boolean; held?: boolean }) {
   const { baseline, drift, approval, restore } = summary;
   const transitions = summary.transitions ?? [];
@@ -621,7 +721,7 @@ export function ControlFacts({ summary, fromStatusName, authoritativeReady = tru
             : 'None since the latest baseline'}
       </dd>
       <dt>Restoration</dt>
-      <dd>{restore ? restoreStateLabel(restore.state) : 'No restoration has run'}</dd>
+      <dd>{restorationLabel(restore, summary.restoredVia)}</dd>
     </dl>
   );
 }

@@ -27,20 +27,30 @@ function asBase64(value) {
 }
 
 /** Persist the full deterministic plan before asking Forge to deliver work. */
-export async function queueRestore({ prepared, actor, approval, stores = restoreStore,
+/**
+ * `mixed` is a per-field decision (lib/approval/mixedDecision.js): its restore
+ * plan already covers only the rejected fields, and the overlay that turns the
+ * baseline into the verification target is frozen into the restore's detail so
+ * the worker verifies the state the reviewer SAW, not whatever is live later.
+ * Only digests are frozen: no field value is added to the restore record.
+ */
+export async function queueRestore({ prepared, actor, approval, mixed = null, stores = restoreStore,
   enqueue = enqueueRestore, now = Date.now() }) {
   if (!prepared?.baselineTree || !prepared?.currentTree) {
     const error = new Error('Recursive restore requires the reviewed baseline and current tree snapshots.');
     error.reason = 'CAPTURE_INCOMPLETE';
     throw error;
   }
-  const plan = planTreeRestore({ baselineTree: prepared.baselineTree, currentTree: prepared.currentTree,
+  const plan = mixed ? mixed.restore : planTreeRestore({ baselineTree: prepared.baselineTree, currentTree: prepared.currentTree,
     controlledFields: prepared.fields, fieldsFor: prepared.fieldsFor });
   const restoreId = await stores.startRestore({
     approvalId: approval.approval_id, issueId: prepared.issueId, projectId: prepared.projectId,
     baselineId: prepared.baseline.baseline_id, baselineVersion: prepared.baseline.version,
     actorAccountId: actor.accountId, now, state: 'QUEUING', totalSteps: plan.steps.length,
-    actionPlan: plan.steps, detail: { actionPlan: plan.steps }, candidateDigests: prepared.digests ?? {}
+    actionPlan: plan.steps,
+    detail: { actionPlan: plan.steps, ...(mixed ? { mixed: { overlay: mixed.overlay, mapHash: mixed.mapHash,
+      approved: mixed.approvedIds, rejected: mixed.rejectedIds } } : {}) },
+    candidateDigests: prepared.digests ?? {}
   });
   const body = { restoreId: asBase64(restoreId), issueId: Number(prepared.issueId),
     baselineId: asBase64(prepared.baseline.baseline_id), baselineVersion: Number(prepared.baseline.version) };

@@ -212,6 +212,29 @@ export async function restoresForIssue(issueId, limit = 20) {
 }
 
 /**
+ * The latest restore of ANOTHER work item that wrote to this one.
+ *
+ * A parent's restore puts each child back to the child's own record, under the
+ * parent's signature, so restoresForIssue() — restores started FROM this item —
+ * never finds it. One indexed read (idx_restore_action_issue); null when no
+ * parent's restore has rewritten this item.
+ */
+export async function restoreReaching(issueId) {
+  const rows = await throwing(
+    `SELECT TO_BASE64(r.restore_id) AS restore_id, r.issue_id AS parent_issue_id, s.issue_key AS parent_issue_key,
+            r.state, r.finished_at, r.baseline_version
+     FROM va_restore_action a
+     JOIN va_restore r ON r.restore_id = a.restore_id
+     LEFT JOIN va_item_state s ON s.issue_id = r.issue_id
+     WHERE a.issue_id = ? AND a.state = 'COMPLETE' AND r.issue_id <> a.issue_id
+       AND a.kind IN ('RESTORE_FIELDS', 'RESTORE_LINKS', 'RESTORE_ATTACHMENTS', 'REPOINT_RICH_TEXT', 'MOVE_NODE')
+     ORDER BY r.started_at DESC LIMIT 1`,
+    [issueId]
+  );
+  return rows?.[0] ?? null;
+}
+
+/**
  * The latest restore of each item, in one read: Map(issueId -> row), for the
  * worklist. Only what it shows is selected — never the detail blob.
  */

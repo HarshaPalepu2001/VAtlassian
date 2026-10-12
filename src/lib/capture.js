@@ -237,8 +237,9 @@ export function approvalFrom(record, requiredAssurance = 'NATIVE_TRANSITION') {
 
 
 
+// `expectedTreeHash`: a per-field decision signs the candidate hash but captures its verified post-restore state.
 export async function writeCapturedTreeBaseline({
-  rootIssue, policy, approval, controlledFields, transitionAt, ruleScope = null, cause = CAUSE.OWN_TRANSITION, deps = {}
+  rootIssue, policy, approval, controlledFields, transitionAt, ruleScope = null, cause = CAUSE.OWN_TRANSITION, deps = {}, expectedTreeHash = null
 }) {
   const services = {
     baselineForApproval,
@@ -278,7 +279,7 @@ export async function writeCapturedTreeBaseline({
   if (existing && existing.state !== 'CAPTURING') {
     if (!['ACTIVE', 'SUPERSEDED'].includes(existing.state)
       || !existing.tree_hash
-      || existing.content_hash !== approval.content_hash
+      || (expectedTreeHash == null && existing.content_hash !== approval.content_hash)
       || existing.tree_hash !== existing.content_hash
       || Number(existing.node_count) < 1
       || Number(existing.total_field_count) < 1) {
@@ -357,7 +358,7 @@ export async function writeCapturedTreeBaseline({
   const treePlan = services.planTreeCapture({
     rootIssueId: rootIssue.id, nodes: stable.tree.nodes, controlledFields, fieldsFor
   });
-  if (treePlan.treeHash !== approval.content_hash) {
+  if (treePlan.treeHash !== (expectedTreeHash ?? approval.content_hash)) {
     return { captured: false, reason: 'CONTENT_CHANGED' };
   }
 

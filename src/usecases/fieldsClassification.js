@@ -48,7 +48,7 @@ export async function classifyFieldsForBaseline(req, overrides) {
         rationale: c.rationale,
         pinned: alwaysIds.has(c.fieldId),
         currentState: stateByField.get(c.fieldId) ?? 'UNRULED',
-        storeValues: candidate?.store_values === true
+        storeValues: Boolean(Number(candidate?.store_values ?? 0))
       };
     })
   };

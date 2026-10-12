@@ -3,6 +3,9 @@ import { MaterialityBadge, When } from '../ui/feedback';
 import { Badge } from '../ui/primitives';
 import { Avatar } from '../ui/brand';
 import { formatTimestamp, relativeTime, sinceLabel } from '../ui/format';
+import FieldDecisionTrack from './FieldDecisionTrack';
+import { canSave, summary as decisionSummary, unavailable } from './fieldDecisions';
+import type { Decisions, MixedFacts } from './fieldDecisions';
 import type { KeyboardEvent, ReactNode } from 'react';
 import type { Attribution as Step, DiffField, DiffOp, DiffBlock, DiffCell, DiffItem, MarkChange, ReviewGroup, StructureChange } from './types';
 const IconArrowRight = () => <span aria-hidden>→</span>;
@@ -35,6 +38,26 @@ const IconAdd = () => <span aria-hidden>+</span>;
  * whose contents were never retained says so.
  */
 
+/**
+ * Deciding each change on its own. Present only in the review window, and only
+ * once the authoritative evidence is on screen. `mixed` says whether the server
+ * can take a field-by-field decision for this review at all; when it cannot, the
+ * reviewer is told why and the whole-set actions outside this view are the way.
+ */
+export type DecisionMode = {
+  state: Decisions;
+  onChange: (next: Decisions) => void;
+  mixed: MixedFacts;
+  loading: boolean;
+  error: string;
+  /** A previous read is still on screen while its replacement loads. */
+  held: boolean;
+  /** This reviewer may decide at all. */
+  eligible: boolean;
+  /** Save was chosen: the caller opens the signing sheet. Nothing is recorded here. */
+  onSave: () => void;
+};
+
 type Props = {
   fields: DiffField[];
   groups?: ReviewGroup[];
@@ -51,6 +74,7 @@ type Props = {
   baselineAt?: number | null;
   /** The clock relative times are read against; tests pin it, callers omit it. */
   now?: number;
+  decisions?: DecisionMode;
 };
 
 type Section = { key: string; title: string | null; version: number | null; fields: DiffField[] };
@@ -61,7 +85,7 @@ const severity = (field: DiffField) => {
   return rank < 0 ? SEVERITY.length : rank;
 };
 
-export default function DiffView({ fields, groups, mode = 'drift', fromVersion, toVersion, incomplete = false, focusDriftId, focusFieldId, focusKey, baselineAt, now }: Props) {
+export default function DiffView({ fields, groups, mode = 'drift', fromVersion, toVersion, incomplete = false, focusDriftId, focusFieldId, focusKey, baselineAt, now, decisions }: Props) {
   // A parent's review covers its children: one section per work item, each
   // child compared with its own latest baseline. The groups hold the same
   // fields as the flat list, so nothing is shown twice or left out.
@@ -117,7 +141,14 @@ export default function DiffView({ fields, groups, mode = 'drift', fromVersion, 
     listRef.current?.querySelectorAll<HTMLElement>('[role="option"]')[index]?.focus();
   }
 
+  const deciding = decisions && decisions.mixed?.eligible ? decisions : null;
+  const gate = deciding && canSave({ fields: ordered, state: deciding.state, mixed: deciding.mixed, loading: deciding.loading,
+    error: deciding.error, held: deciding.held, eligible: deciding.eligible });
+  const tally = deciding && decisionSummary(ordered, deciding.state);
+
   return (
+    <>
+    {decisions && !deciding && <div className="va-banner va-banner-info" role="note">{unavailable(decisions.mixed?.reason)}</div>}
     <div className="va-review">
       <div ref={listRef} className="va-review__list" role="listbox" aria-label={mode === 'versions' ? 'Changes between signed versions' : 'Changes'} onKeyDown={onKeyDown}>
         {sections.map(section => (
@@ -132,16 +163,26 @@ export default function DiffView({ fields, groups, mode = 'drift', fromVersion, 
               <ChangeRow key={`${field.issueKey ?? ''}:${field.fieldId}`} field={field}
                 // Inside its work item's section a field is named plainly.
                 name={grouped ? field.label ?? field.fieldName : field.fieldName}
-                selected={field === selected} onSelect={() => pick(field)} now={now} historical={mode === 'versions'} />
+                selected={field === selected} onSelect={() => pick(field)} now={now} historical={mode === 'versions'}
+                choice={deciding ? (deciding.state[field.fieldId] ?? null) : undefined} />
             ))}
           </div>
         ))}
       </div>
       <section className="va-review__detail" aria-label="Selected change">
         <FieldDetail key={selected.fieldId} field={selected} flash={flashId === selected.fieldId} baselineAt={baselineAt} now={now}
-          historical={mode === 'versions'} fromVersion={fromVersion} toVersion={toVersion} />
+          historical={mode === 'versions'} fromVersion={fromVersion} toVersion={toVersion} deciding={deciding} />
       </section>
     </div>
+    {deciding && gate && tally && (
+      <div className="va-savebar" role="region" aria-label="Save field decisions">
+        <span className="va-savebar__summary" aria-live="polite">{tally.text}</span>
+        {!gate.enabled && <span className="va-subtlest va-savebar__why">{gate.reason}</span>}
+        <span className="va-spacer" />
+        <button type="button" className="va-button va-button--primary" disabled={!gate.enabled} onClick={deciding.onSave}>Save changes</button>
+      </div>
+    )}
+    </>
   );
 }
 
@@ -163,7 +204,9 @@ function whoLine(field: DiffField, now?: number): { text: string; title?: string
 }
 
 /** One line in the list: name, the change in a line, and who last touched it. */
-function ChangeRow({ field, name, selected, onSelect, now, historical }: { field: DiffField; name: string; selected: boolean; onSelect: () => void; now?: number; historical?: boolean }) {
+function ChangeRow({ field, name, selected, onSelect, now, historical, choice }: { field: DiffField; name: string; selected: boolean; onSelect: () => void; now?: number; historical?: boolean;
+  /** Present only while deciding: the choice made for this field, or null for none yet. */
+  choice?: 'APPROVE' | 'REJECT' | null }) {
   const who = historical ? null : whoLine(field, now);
   return (
     <div role="option" aria-selected={selected} tabIndex={selected ? 0 : -1} onClick={onSelect}
@@ -171,12 +214,18 @@ function ChangeRow({ field, name, selected, onSelect, now, historical }: { field
       <span className="va-review__row-name">{name}</span>
       <span className="va-review__row-what">{headline(field)}</span>
       {who && <span className="va-review__row-who" title={who.title}>{who.text}</span>}
+      {choice !== undefined && (
+        <span className="va-review__row-decision" data-choice={choice ?? 'NONE'}>
+          {choice === 'APPROVE' ? 'Approve' : choice === 'REJECT' ? 'Reject' : 'Undecided'}
+        </span>
+      )}
     </div>
   );
 }
 
 /** The selected change in full: its values, then every edit that got it here. */
-function FieldDetail({ field, flash, baselineAt, now, historical, fromVersion, toVersion }: { field: DiffField; flash: boolean; baselineAt?: number | null; now?: number; historical?: boolean; fromVersion?: number; toVersion?: number }) {
+function FieldDetail({ field, flash, baselineAt, now, historical, fromVersion, toVersion, deciding }: { field: DiffField; flash: boolean; baselineAt?: number | null; now?: number; historical?: boolean; fromVersion?: number; toVersion?: number;
+  deciding?: DecisionMode | null }) {
   const who = historical ? null : whoLine(field, now);
   return (
     <article id={`field-${field.fieldId}`} className={flash ? 'va-review__field va-highlight' : 'va-review__field'}>
@@ -189,7 +238,12 @@ function FieldDetail({ field, flash, baselineAt, now, historical, fromVersion, t
       {who && <div className="va-review__row-who" title={who.title}>Last changed by {who.text}</div>}
       {historical && field.scopeChange === 'ADDED' && <p className="va-secondary">First tracked in version {toVersion}. Version {fromVersion} has no signed value for this field.</p>}
       {historical && field.scopeChange === 'REMOVED' && <p className="va-secondary">Tracked in version {fromVersion}, then left the signed field set in version {toVersion}.</p>}
-      <Body field={field} historical={historical} fromVersion={fromVersion} toVersion={toVersion} />
+      {deciding
+        ? <>
+            <TwoSided field={field} />
+            <FieldDecisionTrack field={field} name={field.fieldName} state={deciding.state} onChange={deciding.onChange} />
+          </>
+        : <Body field={field} historical={historical} fromVersion={fromVersion} toVersion={toVersion} />}
       {!historical && <Attribution field={field} baselineAt={baselineAt} />}
     </article>
   );
@@ -249,6 +303,98 @@ function blockSummary(blocks?: DiffBlock[]): string | null {
     const n = tally.get(verb)!;
     return i === 0 ? `${n} ${n === 1 ? unit : `${unit}s`} ${verb}` : `${n} ${verb}`;
   }).join(', ');
+}
+
+/**
+ * THE TWO SIDES, WHEN A CHANGE IS BEING DECIDED: the approved value on the
+ * left, what is there now on the right, each headed in words. The unified diff
+ * above this view's other mode answers "what changed"; this answers "which of
+ * these two do I want", so each side is shown whole (long unchanged stretches
+ * of rich text collapse to one line, as in the diff).
+ */
+function TwoSided({ field }: { field: DiffField }) {
+  return (
+    <div className="va-sides" role="group" aria-label="Approved value and current value">
+      <section className="va-side va-side--approved" aria-label="Approved value">
+        <h4 className="va-side__title">Approved value</h4>
+        <SideBody field={field} side="before" />
+      </section>
+      <section className="va-side va-side--current" aria-label="Current value">
+        <h4 className="va-side__title">Current value</h4>
+        <SideBody field={field} side="after" />
+      </section>
+    </div>
+  );
+}
+
+type Side = 'before' | 'after';
+
+function SideBody({ field, side }: { field: DiffField; side: Side }) {
+  if (side === 'before' && field.retained === false) {
+    return <p className="va-muted">Its approved value was not kept, so it cannot be shown or restored.</p>;
+  }
+  switch (field.kind) {
+    case 'adf': return <SideBlocks blocks={field.blocks} side={side} />;
+    case 'text': return <div className="va-side__text"><SideOps ops={field.ops} side={side} /></div>;
+    case 'multi':
+    case 'links':
+    case 'attachments': {
+      // Only the items that differ are known; the others are the same on both sides.
+      const items = (side === 'before' ? field.removed : field.added) ?? [];
+      const shown = items.map((item, i) => (
+        <span key={i} className={`va-pill ${side === 'before' ? 'va-pill-before' : 'va-pill-after'}`}>
+          {side === 'before' ? <IconRemove /> : <IconAdd />} {field.kind === 'links' ? describeLink(item, field) : itemName(field, item)}
+        </span>));
+      return (
+        <div className="va-pill-change">
+          {shown.length ? shown : <span className="va-muted">{side === 'before' ? 'Nothing was removed.' : 'Nothing was added.'}</span>}
+          <div className="va-subtlest" style={{ marginTop: 6 }}>Items that did not change are the same on both sides.</div>
+        </div>
+      );
+    }
+    default: {
+      const shown = display(field, side === 'before' ? field.before : field.after);
+      return <div className="va-side__text">{shown.text}{shown.id && <span className="va-chip__id"> id {shown.id}</span>}</div>;
+    }
+  }
+}
+
+const itemName = (field: DiffField, item: DiffItem) =>
+  typeof item === 'string' ? display(field, item).text : (item.filename || item.id || display(field, item).text);
+
+/** One side of a word-level edit: what the other side added or removed is left out. */
+function SideOps({ ops, side }: { ops?: DiffOp[]; side: Side }) {
+  if (!ops || ops.length === 0) return <span className="va-muted">No visible change.</span>;
+  const mine = side === 'before' ? 'delete' : 'insert';
+  const theirs = side === 'before' ? 'insert' : 'delete';
+  return (
+    <span>
+      {ops.filter(op => op.op !== theirs).map((op, i) => op.op === mine
+        ? (side === 'before' ? <del key={i} className="va-del">{op.text}</del> : <ins key={i} className="va-ins">{op.text}</ins>)
+        : <span key={i}>{op.text}</span>)}
+    </span>
+  );
+}
+
+/** One side of a rich-text field, block by block, with untouched stretches collapsed. */
+function SideBlocks({ blocks, side }: { blocks?: DiffBlock[]; side: Side }) {
+  if (!blocks || blocks.length === 0) return <div className="va-muted">No visible change.</div>;
+  const out: ReactNode[] = [];
+  let equal = 0;
+  const flush = (key: number) => { if (equal) { out.push(<Unchanged key={`eq-${key}`} count={equal} />); equal = 0; } };
+  blocks.forEach((block, i) => {
+    if (block.op === 'equal') { equal += 1; return; }
+    // The other side's addition or removal has no counterpart here.
+    if ((side === 'before' && block.op === 'insert') || (side === 'after' && block.op === 'delete')) return;
+    flush(i);
+    const own = side === 'before' ? block.before : block.after;
+    const text = own?.text ?? (own?.cells ?? []).map(cell => cell.text ?? '').join(' | ');
+    out.push(block.op === 'modified' && (block.ops ?? []).length
+      ? <div key={i} className="va-block"><SideOps ops={block.ops} side={side} /></div>
+      : <div key={i} className="va-block">{text}</div>);
+  });
+  flush(blocks.length);
+  return <div className="va-side__text">{out}</div>;
 }
 
 function Body({ field, historical, fromVersion, toVersion }: {field: DiffField; historical?: boolean; fromVersion?: number; toVersion?: number}) {

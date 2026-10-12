@@ -64,20 +64,48 @@ export async function readWorkflowForPair({ projectId, issueTypeId }, { request 
       console.error(`workflowSource: ambiguous response (${workflows.length} workflows) for one pair ${projectId}/${issueTypeId}`);
       return null;
     }
-    return workflows[0];
+    if (!Array.isArray(data.statuses) || data.statuses.length === 0 || !Array.isArray(workflows[0].transitions)) {
+      console.error(`workflowSource: incomplete workflow response for ${projectId}/${issueTypeId}`);
+      return null;
+    }
+    // Jira returns the reference-to-id table at the response root. Workflow
+    // transitions point at those references, which can be UUIDs rather than
+    // the numeric status ids used by issue reads and our controlled rows.
+    const statusIds = new Map((data.statuses ?? [])
+      .filter(status => status?.statusReference != null && status?.id != null)
+      .map(status => [String(status.statusReference), String(status.id)]));
+    const transitions = [];
+    for (const transition of workflows[0].transitions ?? []) {
+      const toStatusId = statusIds.get(String(transition.toStatusReference));
+      const links = [];
+      for (const link of transition.links ?? []) {
+        const fromStatusId = statusIds.get(String(link.fromStatusReference));
+        if (!fromStatusId) {
+          console.error(`workflowSource: unknown source status reference for ${projectId}/${issueTypeId}`);
+          return null;
+        }
+        links.push({ ...link, fromStatusReference: fromStatusId });
+      }
+      if (!toStatusId) {
+        console.error(`workflowSource: unknown destination status reference for ${projectId}/${issueTypeId}`);
+        return null;
+      }
+      transitions.push({ ...transition, toStatusReference: toStatusId, links });
+    }
+    return { ...workflows[0], transitions };
   } catch (e) {
     console.error(`workflowSource: workflow read threw for ${projectId}/${issueTypeId}`, e);
     return null;
   }
 }
 
-export async function defaultRequest({ projectId, issueTypeId }) {
+export async function defaultRequest({ projectId, issueTypeId }, { asApp: appClient = asApp, route: jiraRoute = route } = {}) {
   // asApp(), not asUser(): reading workflow configuration needs admin
   // authority. gatecheck runs from a scheduled trigger with no user in
   // context at all; the admin picker runs from a request that already
   // rechecked admin authority in adminRuntime.js#requireAdmin, so asUser()
   // would add nothing here and would fail for gatecheck's caller.
-  return asApp().requestJira(route`/rest/api/3/workflows?expand=workflows.transitions`, {
+  return appClient().requestJira(jiraRoute`/rest/api/3/workflows?useTransitionLinksFormat=true`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({

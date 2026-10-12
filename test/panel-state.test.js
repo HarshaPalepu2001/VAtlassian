@@ -21,7 +21,7 @@ import { logicalNodeId } from '../src/lib/tree/model.js';
 const modules = {
   'db/configStore.js': ['controlledFields', 'projectConfig', 'gateActiveOutOf', 'gatedTransition',
     'listGatedTransitions', 'declaredFieldRows', 'seedControlledFields', 'countControlledFields'],
-  'db/baselineStore.js': ['activeBaseline', 'activeBaselines', 'readAllValues', 'baselineHistory', 'baselineByVersion'],
+  'db/baselineStore.js': ['activeBaseline', 'activeBaselines', 'readAllValues', 'baselineHistory', 'baselineByVersion', 'baselineById'],
   'db/baselineTreeStore.js': ['readBaselineTree', 'activeRootsForNode', 'rootNodeDigests', 'driftedDescendants', 'capturingParent'],
   'db/itemStateStore.js': ['getReview'],
   'db/driftStore.js': ['driftForIssue', 'driftForIssueVersions'],
@@ -29,7 +29,7 @@ const modules = {
   'db/incidentStore.js': ['issueControlStatus', 'adminIncidentCount'],
   'db/credentialStore.js': ['credentialState'],
   'db/adminStore.js': ['isActiveAdmin'],
-  'db/restoreStore.js': ['restoresForIssue'],
+  'db/restoreStore.js': ['restoresForIssue', 'restoreReaching'],
   'lib/reviewer.js': ['isEligible'],
   'lib/transitions.js': ['availableTransitions']
 };
@@ -91,6 +91,7 @@ function fixture(overrides = {}) {
     activeBaselines: async () => new Map(),
     baselineHistory: async () => [],
     baselineByVersion: async () => null,
+    baselineById: async () => null,
     getReview: async () => ({ state: 'BASELINED', version: 1, baseline_version: 1 }),
     driftForIssue: async () => [],
     driftForIssueVersions: async () => ({ rows: [], truncated: false }),
@@ -100,6 +101,7 @@ function fixture(overrides = {}) {
     issueControlStatus: async () => ({ incidents: [], gateFindings: [] }),
     adminIncidentCount: async () => 0,
     restoresForIssue: async () => [],
+    restoreReaching: async () => null,
     // A work item that is a node inside someone else's tree baseline resolves
     // its governing approval through this. Most fixtures here are roots, so the
     // default is "covered by nothing of its own".
@@ -417,6 +419,8 @@ test('evidence returns the retained-value record, live diff fields, and tree rej
   assert.ok(evidence.record, 'the retained-value record is part of evidence for every viewer');
   assert.ok(Array.isArray(evidence.drift.fields));
   assert.ok(evidence.drift.fields.some(field => field.fieldId === 'summary'));
+  assert.deepEqual(evidence.drift.mixed, { eligible: false, reason: 'NOT_TREE_BASELINE', fields: [] },
+    'a field-only baseline has no per-node digests to build a field decision from');
   assert.deepEqual(evidence.rejection, { deleteIssueKeys: [], recreateCount: 0,
     attachments: { deleteFiles: [], restoreFiles: [], unrestorableFiles: [], mediaUnknownFiles: [], vaultChecked: true } });
   assert.deepEqual(evidence.restoreHistory, []);
@@ -476,6 +480,8 @@ test('evidence reports structural rejection detail identically to the compatibil
   const evidence = await getEvidence(args);
   assert.deepEqual(evidence.rejection.deleteIssueKeys.sort(), ['NEW-10', 'NEW-9'].sort());
   assert.equal(evidence.rejection.recreateCount, 1);
+  assert.equal(evidence.drift.mixed.eligible, false, 'work items added or removed cannot be decided field by field');
+  assert.equal(evidence.drift.mixed.reason, 'STRUCTURE_CHANGED');
 });
 
 // ── Issue Security Scheme enforcement on descendant tree nodes ───────────────
@@ -588,6 +594,8 @@ test('evidence and panel state hide a hidden descendant\'s changed-field content
     'a visible descendant\'s changed field must still reach evidence.drift.fields');
   assert.equal(evidence.drift.count, evidence.drift.fields.length,
     'the visible count must not include hidden descendant changes');
+  assert.deepEqual(evidence.drift.mixed, { eligible: false, reason: 'HIDDEN_CHANGES', fields: [] },
+    'an exact decision map cannot be built from what this viewer may see, and nothing hidden is named');
 
   const state = await getState(args);
   assert.ok(!state.drift.fields.some(field => String(field.fieldId).startsWith(hiddenId)),
@@ -805,4 +813,90 @@ test('a deleted historical child makes the comparison incomplete without disclos
   assert.equal(result.incomplete, true);
   assert.equal(result.fields.length, 0);
   assert.doesNotMatch(JSON.stringify(result), /DELETED-11|old secret/);
+});
+
+test('a tree review with only visible field changes is offered field by field, naming each field once', async () => {
+  const rootId = logicalNodeId('10');
+  const f = fixture({
+    activeBaseline: async () => ({
+      baseline_id: Buffer.alloc(16, 1), tree_hash: 'abc', node_count: 1, edge_count: 0, total_field_count: 1,
+      from_status_id: '100', to_status_id: '200', transition_id: '31'
+    }),
+    readBaselineTree: async () => ({
+      nodes: [{ logicalNodeId: rootId, issueKey: 'T-10', parentLogicalId: null, digests: { summary: 'baseline-root' } }],
+      values: { [rootId]: { summary: 'before' } }
+    }),
+    request: async (identity, url, options = {}) => {
+      const response = body => ({ ok: true, status: 200, json: async () => body });
+      if (String(url).includes('/editmeta')) return response({ fields: {} });
+      if (options.method === 'POST' && String(url).includes('/permissions/check')) {
+        return response({ projectPermissions: [{ permission: 'BROWSE_PROJECTS', issues: JSON.parse(options.body).projectPermissions[0].issues }] });
+      }
+      if (options.method === 'POST' && String(url).includes('/search/jql')) return response({ issues: [] });
+      return response({ ...f.issue, fields: { ...f.issue.fields, parent: null } });
+    }
+  });
+  f.issue.fields.summary = 'edited after approval';
+  const evidence = await getEvidence(args);
+  assert.equal(evidence.drift.mixed.eligible, true, JSON.stringify(evidence.drift.mixed));
+  assert.deepEqual(evidence.drift.mixed.fields.map(field => field.fieldId), evidence.drift.fields.map(field => field.fieldId));
+  assert.ok(evidence.drift.mixed.fields.every(field => field.fieldId.startsWith(rootId)), 'identity is node and field together');
+});
+
+test('a child opened from See changes gets its subtree and field decisions from its parent-captured baseline', async () => {
+  const fields = [{ field_id: 'summary', field_name: 'Summary', field_kind: 'TEXT', store_values: true, writable: true, materiality: 'MAJOR' }];
+  const childId = logicalNodeId('57');
+  const grandchildId = logicalNodeId('59');
+  const parentId = logicalNodeId('56');
+  const digests = value => project({ summary: value }, fields).digests;
+  const parentBaseline = { baseline_id: Buffer.alloc(16, 9), issue_id: 56, version: 3, tree_hash: 'parent-tree',
+    node_count: 3, edge_count: 2, total_field_count: 3, captured_at: NOW - 5000 };
+  const childBaseline = { baseline_id: Buffer.alloc(16, 7), issue_id: 57, version: 3, tree_hash: null,
+    field_digests: JSON.stringify(digests('child approved')), captured_by_baseline_id: parentBaseline.baseline_id,
+    captured_at: NOW - 5000 };
+  const node = (logicalNodeId, issueId, issueKey, parentLogicalId, value) => {
+    const result = { logicalNodeId, originalIssueId: issueId, currentIssueId: issueId, issueKey, parentLogicalNodeId: parentLogicalId,
+      projectId: 1, issueTypeId: '1', fieldDigests: JSON.stringify(digests(value)) };
+    Object.defineProperties(result, { parentLogicalId: { value: parentLogicalId, enumerable: false }, digests: { value: digests(value), enumerable: false } });
+    return result;
+  };
+  const f = fixture({
+    gateActiveOutOf: async () => ({ required_assurance: 'ESIGNATURE', required_role: 'reviewer', meaning: 'Reviewed',
+      capture_baseline: false, block_on_drift: true, gated: true }),
+    gatedTransition: async () => ({ required_assurance: 'ESIGNATURE', required_role: 'reviewer', meaning: 'Reviewed',
+      capture_baseline: false, block_on_drift: true, gated: true }),
+    issue: { id: '57', key: 'VAT-57', fields: { summary: 'child live', parent: { id: '56' }, project: { id: '1' }, issuetype: { id: '1' }, status: { id: '100' } } },
+    fields, controlledFields: async () => fields,
+    activeBaseline: async () => childBaseline,
+    baselineById: async id => Buffer.from(id).equals(parentBaseline.baseline_id) ? parentBaseline : null,
+    readAllValues: async issueId => Number(issueId) === 57 ? { summary: 'child approved' } : { summary: 'grand approved' },
+    readBaselineTree: async () => ({ nodes: [
+      node(parentId, 56, 'VAT-56', null, 'parent approved'),
+      node(childId, 57, 'VAT-57', parentId, 'parent capture child'),
+      node(grandchildId, 59, 'VAT-59', childId, 'grand approved')
+    ], values: {
+      [parentId]: { summary: 'parent approved' },
+      [childId]: { summary: 'parent capture child' },
+      [grandchildId]: { summary: 'grand approved' }
+    } }),
+    request: async (_identity, url, options = {}) => {
+      const response = body => ({ ok: true, status: 200, json: async () => structuredClone(body) });
+      if (String(url).includes('/editmeta')) return response({ fields: {} });
+      if (String(url).includes('/changelog')) return response({ values: [], total: 0, isLast: true });
+      if (options.method === 'POST' && String(url).includes('/permissions/check')) {
+        return response({ projectPermissions: [{ permission: 'BROWSE_PROJECTS', issues: JSON.parse(options.body).projectPermissions[0].issues }] });
+      }
+      if (options.method === 'POST' && String(url).includes('/search/jql')) {
+        return response({ issues: String(options.body).includes('VAT-57') ? [{ id: '59', key: 'VAT-59', fields: {
+          summary: 'grand live', parent: { id: '57' }, project: { id: '1' }, issuetype: { id: '1' }, status: { id: '100' }
+        } }] : [] });
+      }
+      return response(f.issue);
+    }
+  });
+  const evidence = await getEvidence({ payload: { issueKey: 'VAT-57' }, context: { accountId: 'reviewer-1' } });
+  assert.equal(evidence.error, undefined, JSON.stringify(evidence));
+  assert.equal(evidence.drift.mixed.eligible, true, JSON.stringify(evidence.drift.mixed));
+  assert.deepEqual(evidence.drift.groups.map(group => group.issueKey), ['VAT-57', 'VAT-59']);
+  assert.deepEqual(evidence.drift.fields.map(field => field.issueKey), ['VAT-57', 'VAT-59']);
 });

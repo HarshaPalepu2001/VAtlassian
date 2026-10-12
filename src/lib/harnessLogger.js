@@ -87,19 +87,22 @@ export function harnessLog(category, action, details = {}, level = 'INFO') {
   const tag = `[HARNESS:${categoryTag}]`;
   const activeTrace = details.traceId ?? currentTraceId();
   const cleanDetails = sanitizeHarnessDetails(details);
+  const emittedLevel = level === 'ERROR' || cleanDetails.error || cleanDetails.reason
+    ? 'ERROR' : level === 'WARN' ? 'WARN' : 'INFO';
 
   const payload = {
     timestamp,
     category: categoryTag,
     action,
     ...(activeTrace ? { traceId: activeTrace } : {}),
-    ...cleanDetails
+    ...cleanDetails,
+    level: emittedLevel
   };
 
   const line = `${tag} ${action} ${JSON.stringify(payload)}`;
-  if (level === 'ERROR' || payload.error || payload.reason) {
+  if (emittedLevel === 'ERROR') {
     console.error(line);
-  } else if (level === 'WARN') {
+  } else if (emittedLevel === 'WARN') {
     console.warn(line);
   } else {
     console.log(line);

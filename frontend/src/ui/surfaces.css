@@ -200,7 +200,10 @@
 .va-timeline__count {
   position: absolute; left: 12px; top: -10px; font-size: 10px; font-weight: 700; color: var(--va-text-subtle);
 }
+.va-timeline__scrubber { display: block; width: calc(100% - 16px); margin: 2px 8px; accent-color: var(--va-brand); cursor: ew-resize; }
+.va-timeline__scrubber:focus-visible { outline: 2px solid var(--va-focus); outline-offset: 2px; }
 .va-timeline__labels { display: flex; justify-content: space-between; font-size: var(--va-size-meta); color: var(--va-text-subtle); padding: 2px 8px 0; }
+.va-timeline__selection { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 8px 8px 2px; font-size: var(--va-size-meta); color: var(--va-text-subtle); }
 
 /* ── The review window ───────────────────────────────────────────────────── */
 

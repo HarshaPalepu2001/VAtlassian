@@ -9,6 +9,7 @@ import { recordSnapshot, compareBaselineSnapshots } from '../lib/baselineVersion
 import { logicalNodeId } from '../lib/tree/model.js';
 import { withStoredAttribution } from '../lib/tree/reviewAttribution.js';
 import { attachmentRejection, removedNodeFiles } from '../lib/restore/attachmentPreflight.js';
+import { mixedEligibility } from '../lib/approval/mixedDecision.js';
 
 /**
  * THE HEAVY READ — recursive tree, retained values, changelog attribution,
@@ -87,7 +88,7 @@ export async function getEvidence(args) { return respond(async () => {
     baseline?.approval_id ? approvalById(baseline.approval_id) : null
   ]);
 
-  const record = baseline?.tree_hash
+  const record = prepared.baselineTree
     ? recordSnapshot({ baseline, nodes: prepared.baselineTree?.nodes ?? [],
       values: prepared.baselineTree?.values ?? {} }, prepared.fields)
     : baseline ? recordSnapshot({ baseline, values: prepared.baselineValues }, prepared.fields) : null;
@@ -145,6 +146,13 @@ export async function getEvidence(args) { return respond(async () => {
       // A tree parent's review, one section per issue (lib/tree/groupedReview.js),
       // recomputed after the visibility filter. Absent for a single-issue diff.
       ...(attributedReviewDiff?.groups ? { groups: attributedReviewDiff.groups } : {}),
+      // Whether this review can be decided field by field, and each decidable
+      // field's restorability. Built from the viewer-filtered fields; the server
+      // re-checks an exact map against its own unfiltered reading, so a map that
+      // omits a field this viewer cannot see is refused rather than guessed.
+      mixed: mixedEligibility({ baseline, baselineTree: prepared.baselineTree,
+        reviewFields: attributedReviewDiff?.fields ?? [],
+        authoritativeCount: prepared.reviewDiff?.fields?.length ?? null }),
       ...groupedDrift
     },
     rejection: { deleteIssueKeys, recreateCount, attachments },

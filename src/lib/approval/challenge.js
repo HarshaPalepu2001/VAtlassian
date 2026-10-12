@@ -4,6 +4,7 @@ import { canonical, sha256Hex } from '../hash.js';
 
 /** A stable signer-facing declaration derived from immutable baseline state. */
 export function baselineDecisionMeaning(decision, version) {
+  if (decision === 'MIXED') return `Save drift decisions against baseline v${Number(version)}`;
   const action = decision === 'REJECT' ? 'Reject changes and restore' : 'Approve changes against';
   return `${action} baseline v${Number(version)}`;
 }
@@ -17,6 +18,8 @@ export function challengeContextHash({ issue, transition, prepared, policy }) {
     baselineVersion: Number(prepared.baselineVersion ?? 0),
     baselineHash: prepared.baseline?.tree_hash ?? prepared.baseline?.content_hash ?? null,
     evidenceHash: prepared.evidenceHash ?? null, plan: prepared.plan ?? null, treeDiff: prepared.treeDiff ?? null,
+    // Only a mixed decision carries one, so every whole-set hash is unchanged.
+    ...(prepared.mixed ? { mixed: prepared.mixed.planHash } : {}),
     policy: { meaning: policy.meaning, role: policy.required_role,
       assurance: policy.required_assurance, captureBaseline: !!Number(policy.capture_baseline) }
   }));

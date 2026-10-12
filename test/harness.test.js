@@ -314,3 +314,26 @@ test('scripts/harness.mjs parser extracts structured event properties', async ()
   assert.equal(opts.errors, true);
   assert.equal(opts.json, true);
 });
+
+test('the harness error filter keeps warning logs without a reason field', async () => {
+  const { parseHarnessEvent, matchesFilter } = await import('../scripts/harness.mjs');
+  const originalWarn = console.warn;
+  let line = '';
+  console.warn = value => { line = value; };
+  try {
+    harnessLog('ADMIN', 'workflow:unavailable', { issueKey: 'ENG-12' }, 'WARN');
+  } finally {
+    console.warn = originalWarn;
+  }
+  const event = parseHarnessEvent(line);
+  assert.equal(event.level, 'WARN');
+  assert.equal(matchesFilter(event, { errors: true }), true);
+});
+
+test('a truncated harness line does not crash log inspection', async () => {
+  const { groupLogEntries } = await import('../scripts/harness.mjs');
+  const events = groupLogEntries(['[HARNESS:GATE] ', '[HARNESS:GATE] gate:deny {"issueKey":"ENG-12"}']);
+  assert.equal(events.length, 2);
+  assert.equal(events[0].action, 'unknown');
+  assert.equal(events[1].action, 'gate:deny');
+});

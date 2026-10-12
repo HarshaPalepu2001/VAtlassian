@@ -16,7 +16,7 @@ import { MATERIALITY } from './materiality.js';
  * have to be testable without a Jira and without a database.
  */
 
-export const DECISION = { APPROVE: 'APPROVE', REJECT: 'REJECT' };
+export const DECISION = { APPROVE: 'APPROVE', REJECT: 'REJECT', MIXED: 'MIXED' };
 
 export const REFUSE = {
   NO_BASELINE: 'NO_BASELINE',
@@ -82,7 +82,7 @@ export function canDecide({ review, baseline, isEligible, authRequired = false, 
  * never saw. The panel sends back the evidence hash it rendered; if the current
  * evidence differs, the decision is refused and the panel reloads.
  */
-export function decide({ decision, diff, plan = null, evidenceHash = null }) {
+export function decide({ decision, diff, plan = null, evidenceHash = null, approvedCount = null }) {
   if (!diff) return { allow: false, reason: REFUSE.NO_BASELINE };
 
   if (evidenceHash != null && evidenceHash !== diff.evidenceHash) {
@@ -108,6 +108,17 @@ export function decide({ decision, diff, plan = null, evidenceHash = null }) {
       marksDriftDecided: true,
       appliesTransition: true
     };
+  }
+
+  if (decision === DECISION.MIXED) {
+    // A per-field decision (lib/approval/mixedDecision.js). Rejected fields are
+    // restored and the resulting state is then published as the next baseline.
+    // When EVERY field is rejected the item simply returns to the standing
+    // baseline, exactly as a whole-set reject does, so no new version is cut.
+    // The restore plan is scoped by the mixed module, not passed here.
+    if (diff.changedFieldCount === 0) return { allow: false, reason: REFUSE.NO_DRIFT };
+    return { allow: true, decision, cutsNewBaseline: approvedCount == null ? true : approvedCount > 0,
+      marksDriftDecided: true, appliesTransition: false, restores: true };
   }
 
   if (decision === DECISION.REJECT) {

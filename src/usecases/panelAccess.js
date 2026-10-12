@@ -1,6 +1,6 @@
 import api, { route } from '@forge/api';
 import { controlledFields, projectConfig, gateActiveOutOf, gatedTransition, listGatedTransitions } from '../db/configStore.js';
-import { activeBaseline, activeBaselines, readAllValues } from '../db/baselineStore.js';
+import { activeBaseline, activeBaselines, readAllValues, baselineById } from '../db/baselineStore.js';
 import { getReview } from '../db/itemStateStore.js';
 import { driftForIssue } from '../db/driftStore.js';
 import { isEligible } from '../lib/reviewer.js';
@@ -17,6 +17,7 @@ import { treeReviewDiff } from '../lib/tree/reviewDiff.js';
 import { groupReview } from '../lib/tree/groupedReview.js';
 import { readTreeWithNodeFields, fieldScope } from '../lib/tree/nodeFields.js';
 import { withChildBaselines } from '../lib/tree/childBaselines.js';
+import { resolveBaselineTree } from '../lib/tree/scopedBaseline.js';
 import { readBaselineTree, activeRootsForNode } from '../db/baselineTreeStore.js';
 import { maxMateriality } from '../lib/materiality.js';
 import { canonicaliseIssue } from '../lib/attachmentIdentity.js';
@@ -117,7 +118,11 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
   // Capture, the validator's signature check and this evidence hash must all
   // agree on it, or no signature would match.
   let fieldsFor = () => fields;
-  const useTree = gate?.capture_baseline || baseline?.tree_hash;
+  // A child baseline written by a parent capture is still governed by the
+  // parent's signed tree even when the child's own transition does not capture
+  // a new baseline. Keep that provenance in tree mode so See changes exposes
+  // the child's recursive subtree and field-level decisions.
+  const useTree = gate?.capture_baseline || baseline?.tree_hash || baseline?.captured_by_baseline_id;
   if (useTree) {
     const stable = await readTreeWithNodeFields({
       readStableTree,
@@ -141,19 +146,17 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
     };
     treeHash = plan.treeHash;
     
-    if (baseline?.tree_hash) {
-      // Each child that carries its own latest baseline is compared against
-      // THAT, not the parent's stored node: it is what a parent reject
-      // restores it to, and what the review shows for it (spec §4.5, §4.7).
-      baselineTree = await withChildBaselines({ parentBaseline: baseline,
-        baselineTree: await readBaselineTree(baseline.baseline_id),
-        activeBaselines, readAllValues, readBaselineTree });
-      treeDiff = diffTree({
-        baselineTree,
-        currentTree,
-        controlledFields: fields,
-        scopeFor: fieldsFor
-      });
+    const resolvedBaseline = await resolveBaselineTree({ baseline, baselineValues,
+      rootLogicalNodeId: logicalNodeId(issue.id), baselineById, readBaselineTree });
+    if (resolvedBaseline) {
+      // The panel and queued restore both resolve parent-captured child
+      // baselines through this same boundary, so neither can invent structural
+      // drift for descendants the reviewer just saw as in scope.
+      baselineTree = await withChildBaselines({ parentBaseline: resolvedBaseline.governingBaseline,
+        baselineTree: resolvedBaseline.tree, activeBaselines, readAllValues, readBaselineTree });
+    }
+    if (baselineTree) {
+      treeDiff = diffTree({ baselineTree, currentTree, controlledFields: fields, scopeFor: fieldsFor });
     }
   }
   const summaries = new Map((tree?.nodes ?? []).map(n => [n.logicalNodeId, n.fields?.summary ?? null]));

@@ -25,7 +25,8 @@ export function observationColumns({ changelogId, attributionAt, historyComplete
     trigger_kind: detectedVia ?? null,
     trigger_account_id: actorAccountId ?? null,
     edit_status: status,
-    edited_at: status === EDIT_STATUS.CONFIRMED ? attributionAt ?? null : null
+    edited_at: status === EDIT_STATUS.CONFIRMED ? attributionAt ?? null : null,
+    changelog_id: changelogId ?? null
   };
 }
 

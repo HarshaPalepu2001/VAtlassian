@@ -167,3 +167,111 @@ test('a worker does not requeue a restore batch that made no progress', async ()
   assert.equal(f.calls.filter(call => call?.[0] === 'enqueue').length, 0);
   assert.equal(f.calls.some(call => call?.[0] === 'fail'), true);
 });
+
+// A parent's restore rewrites its children, and each child carries its own
+// stored review state and its own evidence. Before this, only the decided item
+// was released: a child the restore had put back stayed DRIFTED in
+// va_item_state, so the parent kept saying "1 child work item has changes
+// awaiting a decision" and the child's own record said nothing happened to it.
+function withRewrittenChild(f) {
+  const base = prepared();
+  f.prepare = async () => ({
+    ...base,
+    baselineTree: { nodes: [...base.baselineTree.nodes,
+      { logicalNodeId: 'child', currentIssueId: 11, issueKey: 'T-11', parentLogicalNodeId: 'root' }],
+    values: { ...base.baselineTree.values, child: { summary: 'child approved' } } }
+  });
+  f.restore.detail = { actionPlan: [
+    { stepKey: 's-root', kind: 'RESTORE_FIELDS', logicalNodeId: 'root' },
+    { stepKey: 's-child', kind: 'RESTORE_FIELDS', logicalNodeId: 'child' }] };
+  f.restore.total_steps = 2;
+  const released = [];
+  const appended = [];
+  f.release = async args => { released.push(args); };
+  f.append = async args => { appended.push(args); };
+  return { released, appended };
+}
+
+test('a complete restore releases every child it rewrote, not only the decided item', async () => {
+  const f = storeFixture();
+  const { released, appended } = withRewrittenChild(f);
+  const result = await runRestoreWorker(body, f);
+  assert.equal(result.state, 'COMPLETE');
+  const child = released.find(args => args.issueId === 11);
+  assert.ok(child, 'the child the restore rewrote is released');
+  assert.equal(child.state, 'BASELINED');
+  assert.deepEqual(child.counters, { driftCount: 0, driftedFieldCount: 0, maxMateriality: null });
+  assert.equal(released.filter(args => args.issueId === 10).length, 1, 'the decided item is released once');
+  const childEntry = appended.find(entry => entry.issueId === 11);
+  assert.ok(childEntry, 'the child has its own ledger entry');
+  assert.equal(childEntry.eventType, 'RESTORE_COMPLETED');
+  assert.equal(childEntry.payload.viaParentIssueId, 10);
+});
+
+test('a restore that did not verify leaves its children as they were', async () => {
+  const f = storeFixture();
+  const { released, appended } = withRewrittenChild(f);
+  f.verify = async () => ({ matches: false, progress: true, unmatched: [{ fieldId: 'summary' }] });
+  const result = await runRestoreWorker(body, f);
+  assert.equal(result.state, 'PARTIAL');
+  assert.equal(released.some(args => args.issueId === 11), false);
+  assert.equal(appended.some(entry => entry.issueId === 11), false);
+});
+
+// One refused child must not strand a sibling that DID land. The restore is
+// PARTIAL, the decided item stays drifted for the child that is still wrong,
+// but a child the verification read back as matching its own record has been
+// put right and has to be released, or it reads as drifted until some later
+// sweep happens to look at it.
+function withTwoChildren(f) {
+  const base = prepared();
+  f.prepare = async () => ({
+    ...base,
+    baselineTree: { nodes: [...base.baselineTree.nodes,
+      { logicalNodeId: 'landed', currentIssueId: 11, issueKey: 'T-11', parentLogicalNodeId: 'root' },
+      { logicalNodeId: 'refused', currentIssueId: 12, issueKey: 'T-12', parentLogicalNodeId: 'root' }],
+    values: { ...base.baselineTree.values } }
+  });
+  f.restore.detail = { actionPlan: [
+    { stepKey: 's-root', kind: 'RESTORE_FIELDS', logicalNodeId: 'root' },
+    { stepKey: 's-landed', kind: 'RESTORE_FIELDS', logicalNodeId: 'landed' },
+    { stepKey: 's-refused', kind: 'RESTORE_FIELDS', logicalNodeId: 'refused' }] };
+  f.restore.total_steps = 3;
+  f.executeBatch = async () => ({ state: 'READY_TO_VERIFY', completed: 2, remaining: 0, attempted: 3,
+    refused: [{ stepKey: 's-refused', logicalNodeId: 'refused', kind: 'RESTORE_FIELDS', error: { detail: 'Description is required' } }] });
+  f.verify = async () => ({ matches: false, progress: true, unmatched: [
+    { logicalNodeId: 'refused', issueKey: 'T-12', kind: 'FIELD_CHANGED', fieldId: 'summary', fieldName: 'Summary' }] });
+  const released = [];
+  const appended = [];
+  f.release = async args => { released.push(args); };
+  f.append = async args => { appended.push(args); };
+  return { released, appended };
+}
+
+test('when one child is refused, a sibling that landed is still released and the refused one is not', async () => {
+  const f = storeFixture();
+  const { released, appended } = withTwoChildren(f);
+  const result = await runRestoreWorker(body, f);
+  assert.equal(result.state, 'PARTIAL');
+  const landed = released.find(args => args.issueId === 11);
+  assert.ok(landed, 'the child that landed is released');
+  assert.equal(landed.state, 'BASELINED');
+  assert.deepEqual(landed.counters, { driftCount: 0, driftedFieldCount: 0, maxMateriality: null });
+  assert.equal(released.some(args => args.issueId === 12), false, 'the refused child keeps its drift');
+  const entry = appended.find(item => item.issueId === 11);
+  assert.ok(entry, 'the landed child has its own ledger entry');
+  assert.equal(entry.payload.state, 'COMPLETE');
+  assert.equal(entry.payload.parentState, 'PARTIAL');
+  assert.equal(appended.some(item => item.issueId === 12), false);
+  const root = released.find(args => args.issueId === 10);
+  assert.equal(root.state, 'DRIFTED', 'the decided item still reports what is outstanding');
+});
+
+test('a verification that cannot say which item is wrong releases no child', async () => {
+  const f = storeFixture();
+  const { released } = withTwoChildren(f);
+  f.verify = async () => ({ matches: false, progress: false,
+    unmatched: [{ logicalNodeId: null, issueKey: 'T-10', kind: 'READ_FAILED', fieldId: null }] });
+  await runRestoreWorker(body, f);
+  assert.equal(released.some(args => args.issueId === 11 || args.issueId === 12), false);
+});

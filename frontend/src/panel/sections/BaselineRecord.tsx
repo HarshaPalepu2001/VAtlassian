@@ -24,9 +24,9 @@ export function LatestApproval({ approval }: { approval: PanelLatestApproval | n
         <p className="va-muted">No approval has been recorded for this work item yet.</p>
       ) : (
         <div className="va-row">
-          <Person name={approval.actorName} meta={<>{approval.decision === 'REJECT' ? 'Rejected' : 'Approved'} <When ms={approval.decidedAt} /></>} noun="reviewer" />
+          <Person name={approval.actorName} meta={<>{approval.decision === 'REJECT' ? 'Rejected' : approval.decision === 'MIXED' ? 'Decided field by field' : 'Approved'} <When ms={approval.decidedAt} /></>} noun="reviewer" />
           <span className="va-spacer" />
-          <Badge tone={approval.state === 'PENDING' ? 'warning' : 'neutral'}>{approval.state === 'PENDING' ? 'Transition pending' : approval.decision}</Badge>
+          <Badge tone={approval.state === 'PENDING' ? 'warning' : 'neutral'}>{approval.state === 'PENDING' ? 'Transition pending' : approval.decision === 'MIXED' ? 'Field decisions' : approval.decision}</Badge>
         </div>
       )}
     </div>

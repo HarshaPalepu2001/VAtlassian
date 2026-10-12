@@ -6,7 +6,7 @@ const columns = ['approval_id','issue_id','issue_key','project_id','issue_type_i
   'decision','state','actor_account_id','account_id','actor_name','printed_name','decided_at','signed_at','created_at',
   'expires_at','consumed_at','from_status_id','to_status_id','transition_id','signer_role','meaning','content_hash',
   'covers_from_hash','covers_to_hash','drift_count','report_hash','note','assurance_level','provider_id',
-  'provider_ref','provider_evidence','evidence_hash'];
+  'provider_ref','provider_evidence','evidence_hash','decision_map','decision_map_hash'];
 const binary = new Set(['approval_id','baseline_id']);
 const selection = columns.map(key => binary.has(key) ? `TO_BASE64(${key}) AS ${key}` : key).join(', ');
 const encode = value => value == null ? null : toBinaryParam(value);

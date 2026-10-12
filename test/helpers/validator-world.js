@@ -26,7 +26,7 @@ const mocked = {
   'db/incidentStore.js': ['adminIncidentCount'],
   'db/credentialStore.js': ['credentialState'],
   'db/adminStore.js': ['isActiveAdmin'],
-  'db/restoreStore.js': ['restoresForIssue'],
+  'db/restoreStore.js': ['restoresForIssue', 'restoreReaching'],
   'lib/reviewer.js': ['isEligible'],
   'db/linkPendingStore.js': ['linkDecisionsPending']
 };
@@ -382,6 +382,7 @@ export function world({ workflow = WORKFLOW, tracked = TRACKED } = {}) {
       .map(p => ({ decidedOnKey: p.decided_on_key, queuedAt: p.queued_at })),
     adminIncidentCount: async () => 0, credentialState: async () => ({ state: 'ACTIVE' }), isActiveAdmin: async () => false,
     restoresForIssue: async () => [],
+    restoreReaching: async () => null,
     isEligible: async ({ accountId, projectId, issueTypeId, role }) =>
       w.eligibility.some(e => e.state === 'ACTIVE' && e.account_id === accountId && e.role === role
         && (e.project_id == null || Number(e.project_id) === Number(projectId))

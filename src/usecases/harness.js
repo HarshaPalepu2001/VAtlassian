@@ -150,7 +150,7 @@ export async function inspectIssue({ payload, context }, deps = defaultInspectDe
   const childBaselines = baseline?.baseline_id
     ? (await rows(`SELECT issue_id, version, content_hash, captured_at
         FROM va_baseline WHERE captured_by_baseline_id = FROM_BASE64(?) ORDER BY issue_id ASC LIMIT 20`,
-      [toBinaryParam(Buffer.from(baseline.baseline_id))])).map(c => ({
+      [Buffer.from(baseline.baseline_id).toString('base64')])).map(c => ({
         issueId: c.issue_id,
         version: c.version,
         contentHash: c.content_hash,
@@ -209,7 +209,11 @@ export async function inspectIssue({ payload, context }, deps = defaultInspectDe
   } else if (!baseline) {
     verdict = 'NO_BASELINE';
     remediations.push('Work item has no active baseline. Perform a controlled transition to capture one.');
-  } else if ((restores || []).some(r => r.state === 'FAILED' || (r.unmatched && r.unmatched.length > 0))) {
+  } else if ((restores || []).some(r => {
+    const summary = Array.isArray(r.detail) ? r.detail.find(entry => entry && typeof entry === 'object') : null;
+    const unmatched = summary?.unmatched ?? summary?.verification?.unmatched ?? [];
+    return r.state === 'FAILED' || unmatched.length > 0;
+  })) {
     verdict = 'RESTORE_INCOMPLETE';
     remediations.push('Recent restore had unmatched fields or refused items. Check restore verification details.');
   } else {

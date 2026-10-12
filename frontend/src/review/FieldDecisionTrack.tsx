@@ -1,0 +1,87 @@
+import { useRef, useState } from 'react';
+import type { KeyboardEvent, PointerEvent } from 'react';
+import { blocked, decide, key as pressKey, reset, swipe } from './fieldDecisions';
+import type { Decidable, DecisionKey, Decisions } from './fieldDecisions';
+
+/** How far a drag has to travel before it counts as a decision. */
+const THRESHOLD = 40;
+const KEYS = new Set<string>(['ArrowRight', 'ArrowLeft', 'Escape', 'Backspace', 'Enter', ' ']);
+
+/**
+ * ONE FIELD'S DECISION: approve the change, reject it, or not yet.
+ *
+ * Three positions on a track: Approve on the left, undecided in the middle,
+ * Reject on the right. Dragging the handle left to right rejects, right to left
+ * approves. A drag is only ever a convenience: the keyboard (arrow keys on the
+ * track), the three buttons beneath it, and Reset all make exactly the same
+ * change through the same pure functions, and the choice is also written out in
+ * words in a polite live region — it never relies on colour or on dragging.
+ *
+ * Choosing here only records a request. Nothing is signed or written until the
+ * reviewer saves and authenticates (see ReviewWindow and ApprovalControls).
+ */
+export default function FieldDecisionTrack({ field, name, state, onChange }: {
+  field: Decidable;
+  /** The field's name as the reviewer reads it. */
+  name: string;
+  state: Decisions;
+  onChange: (next: Decisions) => void;
+}) {
+  const choice = state[field.fieldId];
+  const why = blocked(field);
+  const start = useRef<number | null>(null);
+  const [drag, setDrag] = useState(0);
+
+  const apply = (next: Decisions) => { if (next !== state) onChange(next); };
+
+  function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    // Space and Enter on one of the buttons below belong to that button.
+    if (event.target !== event.currentTarget || !KEYS.has(event.key)) return;
+    event.preventDefault();
+    apply(pressKey(state, field, event.key as DecisionKey));
+  }
+  function down(event: PointerEvent<HTMLDivElement>) {
+    start.current = event.clientX;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }
+  function move(event: PointerEvent<HTMLDivElement>) {
+    if (start.current == null) return;
+    setDrag(Math.max(-THRESHOLD * 1.5, Math.min(THRESHOLD * 1.5, event.clientX - start.current)));
+  }
+  function up(event: PointerEvent<HTMLDivElement>) {
+    if (start.current == null) return;
+    const travelled = event.clientX - start.current;
+    start.current = null;
+    setDrag(0);
+    if (travelled >= THRESHOLD) apply(swipe(state, field, 'ltr'));
+    else if (travelled <= -THRESHOLD) apply(swipe(state, field, 'rtl'));
+  }
+  function cancel() { start.current = null; setDrag(0); }
+
+  const position = choice === 'APPROVE' ? 'approve' : choice === 'REJECT' ? 'reject' : 'none';
+  const status = choice === 'REJECT' ? `Reject change selected for ${name}`
+    : choice === 'APPROVE' ? `Approve change selected for ${name}`
+      : `No decision yet for ${name}`;
+
+  return (
+    <div className="va-decision" role="group" aria-label={`Decision for ${name}`}>
+      <div className="va-track" data-choice={position} tabIndex={0} onKeyDown={onKeyDown}
+        onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={cancel}
+        aria-label={`${name}: use the left and right arrow keys, or the buttons below`}>
+        <span className="va-track__label va-track__label--approve" aria-hidden>Approve</span>
+        <span className="va-track__label va-track__label--reject" aria-hidden>Reject</span>
+        <span className="va-track__thumb" aria-hidden style={drag ? { transform: `translateX(${drag}px)`, transition: 'none' } : undefined} />
+      </div>
+      <div className="va-decision__buttons">
+        <button type="button" className="va-button" aria-pressed={choice === 'APPROVE'}
+          onClick={() => apply(decide(state, field, 'APPROVE'))}>Approve change</button>
+        <button type="button" className="va-button" aria-pressed={choice === 'REJECT'} disabled={Boolean(why)}
+          onClick={() => apply(decide(state, field, 'REJECT'))}>Reject change</button>
+        <button type="button" className="va-button" disabled={!choice}
+          onClick={() => apply(reset(state, field.fieldId))}>Reset decision</button>
+      </div>
+      {why && <p className="va-subtlest va-decision__why">{why}</p>}
+      <p className="va-decision__status" role="status" aria-live="polite">{status}</p>
+    </div>
+  );
+}

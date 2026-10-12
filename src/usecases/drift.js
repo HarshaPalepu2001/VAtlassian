@@ -6,7 +6,8 @@ import { markDecided } from '../db/driftStore.js';
 import { canDecide, decide, undecidedCounters } from '../lib/decision.js';
 import { planRestore } from '../lib/restore/planner.js';
 import { planTreeRestore } from '../lib/tree/restorePlan.js';
-import { performRestore } from './restoreActions.js';
+import { mixedPrepared } from '../lib/approval/mixedDecision.js';
+import { performRestore, queueRestore } from './restoreActions.js';
 import { meetsAssurance, effectiveAssurance } from '../lib/approval/levels.js';
 import { activeBaseline } from '../db/baselineStore.js';
 import { baselinePolicy } from '../lib/baselinePolicy.js';
@@ -61,7 +62,7 @@ export async function releaseFailedApproval({ locked, issueId, diff, driftCount,
 }
 
 /** Called internally by the sole approval writer; no approval is inserted here. */
-export async function prepareApproval({ issue, actor, decision, expectedEvidenceHash, forTransition = false, transition = null, allowBusy = false, now = Date.now() }) {
+export async function prepareApproval({ issue, actor, decision, expectedEvidenceHash, forTransition = false, transition = null, allowBusy = false, decisions, now = Date.now() }) {
   const fresh = await readableIssue({ payload: { issueId: issue.id }, context: { accountId: actor.accountId } });
   const active = await activeBaseline(Number(fresh.id));
   // A workflow transition is authorised by the controlled transition it runs,
@@ -125,15 +126,21 @@ export async function prepareApproval({ issue, actor, decision, expectedEvidence
           evidenceHash: prepared.treeHash
         }
       : prepared.diff;
+    // A per-field decision is planned against the server's own reading of the
+    // drift: exact coverage, restorability and the restore plan for the rejected
+    // fields only (lib/approval/mixedDecision.js). The browser's list is never used.
+    const mixed = decision === 'MIXED' ? mixedPrepared({ decisions, prepared }) : null;
     const result = decide({
       decision,
       diff: decisionDiff,
       plan,
-      evidenceHash: expectedEvidenceHash
+      evidenceHash: expectedEvidenceHash,
+      approvedCount: mixed?.approvedIds.length ?? null
     });
     if (!result.allow) fail(result.reason);
     prepared.plan = plan;
-  } else if (decision === 'REJECT') fail('NO_BASELINE');
+    if (mixed) prepared.mixed = mixed;
+  } else if (decision === 'REJECT' || decision === 'MIXED') fail('NO_BASELINE');
   return prepared;
 }
 
@@ -223,6 +230,75 @@ async function queueVaulting({ capture, checked, actor }) {
   }
 }
 
+/**
+ * Captures and publishes the next tree baseline from the item's CURRENT state,
+ * under the policy the standing baseline recorded. Shared by an approval that
+ * ratifies drift and by a per-field decision, which captures only after its
+ * rejected fields are verified back at their approved values. `readTree` lets
+ * the restore worker, which has no user session, read as the app.
+ */
+export async function captureDriftBaseline({ checked, approval, actor, cause, readTree = null, expectedTreeHash = null }) {
+  const { writeCapturedTreeBaseline } = await import('../lib/capture.js');
+  const { readStableTree } = await import('../lib/tree/stableRead.js');
+  const { planTreeCapture } = await import('../lib/tree/capturePlan.js');
+  const { writeTreeCapture, publishTreeBaseline } = await import('../db/baselineTreeStore.js');
+  const { tryAppend } = await import('../db/store.js');
+  const { executeQuery } = await import('../lib/db.js');
+  const { createTreeReader } = await import('../lib/tree/jira.js');
+  const forge = await import('@forge/api');
+  return writeCapturedTreeBaseline({
+    rootIssue: checked.issue,
+    policy: checked.gate,
+    approval: {
+      accountId: actor.accountId,
+      displayName: approval.actor_name ?? approval.printed_name ?? actor.displayName,
+      approvalId: approval.approval_id,
+      assuranceLevel: approval.assurance_level,
+      content_hash: approval.content_hash,
+    },
+    controlledFields: checked.fields, ruleScope: checked.ruleScope, cause, expectedTreeHash,
+    transitionAt: approval.decided_at ?? approval.signed_at ?? Date.now(),
+    deps: {
+      readTree: readTree ?? createTreeReader({ api: forge.default, route: forge.route }).read,
+      readStableTree,
+      planTreeCapture,
+      writeTreeCapture,
+      publishTreeBaseline,
+      tryAppend,
+      executeQuery
+    }
+  });
+}
+
+/** Vault copy and other-end link records for a baseline just published. */
+export async function publishBaselineSideEffects({ capture, checked, approval, actor }) {
+  await queueVaulting({ capture, checked, actor });
+  await queueLinkDecisions({ checked, approval, actor }).catch(error =>
+    console.error('applyApproval: link decisions not queued', error));
+}
+
+/**
+ * A per-field decision, applied under the lock applyApproval holds.
+ *
+ * Every field approved: the live state is the new baseline, captured now.
+ * Any field rejected: the rejected fields are restored first, by the queue
+ * worker, which verifies them and ONLY THEN captures the next baseline
+ * (jobs/restoreWorker.js) — capturing here would re-approve a value the
+ * reviewer explicitly rejected. No baseline exists until that worker succeeds.
+ */
+async function applyMixedDecision({ checked, approval, actor }) {
+  const counts = { approved: checked.mixed.approvedIds.length, rejected: checked.mixed.rejectedIds.length };
+  if (counts.rejected > 0) {
+    const queued = await queueRestore({ prepared: checked, actor, approval, mixed: checked.mixed });
+    return { ...queued, mixed: counts };
+  }
+  const capture = await captureDriftBaseline({ checked, approval, actor, cause: CAUSE.MIXED_DECISION });
+  if (!capture.captured) fail(capture.reason ?? 'CAPTURE_FAILED');
+  await publishBaselineSideEffects({ capture, checked, approval, actor });
+  await markDecided({ issueId: checked.issueId, baselineVersion: checked.baseline.version, approvalId: approval.approval_id });
+  return { success: true, capture, baselinePublished: true, mixed: counts };
+}
+
 export async function applyApproval({ issue, actor, approval, prepared, resuming = false, policy = null, workflowTransition = null }) {
   if (!approval?.approval_id || !actor?.accountId ||
       String(approval.actor_account_id ?? approval.account_id) !== actor.accountId ||
@@ -235,7 +311,10 @@ export async function applyApproval({ issue, actor, approval, prepared, resuming
   // cannot tell the two intents apart. Workflow approvals are recorded without
   // a baseline binding; use that when the caller does not say explicitly.
   const forTransition = transition != null && (workflowTransition ?? approval.baseline_id == null);
-  let fresh = await prepareApproval({ issue, actor, decision: approval.decision,
+  // A per-field decision re-derives its plan from the map the reviewer SIGNED
+  // (the approval row), never from anything the caller passes now.
+  const decisions = approval.decision === 'MIXED' ? JSON.parse(approval.decision_map) : undefined;
+  let fresh = await prepareApproval({ issue, actor, decision: approval.decision, decisions,
     expectedEvidenceHash: resuming ? undefined : prepared?.evidenceHash, forTransition, transition, allowBusy: resuming });
   const assertPolicy = current => {
     const authoritative = current.approvalPolicy ?? current.gate;
@@ -257,13 +336,14 @@ export async function applyApproval({ issue, actor, approval, prepared, resuming
     const attempts = resuming ? 2 : 1;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       const result = await acquire({ issueId: fresh.issueId, expectedVersion: fresh.review.version,
-        state: approval.decision === 'REJECT' ? 'RESTORING' : 'DECIDING', allowedStates, now: Date.now() });
+        state: approval.decision === 'REJECT' || fresh.mixed?.rejectedIds.length ? 'RESTORING' : 'DECIDING',
+        allowedStates, now: Date.now() });
       if (result.acquired) { locked = true; break; }
       if (!resuming || attempt === attempts - 1) fail('ALREADY_DECIDING');
       // A collector or an older observer may have advanced the CAS token
       // between the snapshot and this acquire. Re-read and retry once, but
       // keep the state allow-list so a live restore is never taken over.
-      fresh = await prepareApproval({ issue, actor, decision: approval.decision,
+      fresh = await prepareApproval({ issue, actor, decision: approval.decision, decisions,
         expectedEvidenceHash: undefined, forTransition, transition, allowBusy: true });
       assertPolicy(fresh);
     }
@@ -271,9 +351,13 @@ export async function applyApproval({ issue, actor, approval, prepared, resuming
   }
   try {
     // Re-read after the CAS: a concurrent edit must not be silently accepted.
-    const checked = await prepareApproval({ issue, actor, decision: approval.decision,
+    const checked = await prepareApproval({ issue, actor, decision: approval.decision, decisions,
       expectedEvidenceHash: fresh.evidenceHash, forTransition, transition, allowBusy: true });
     if (!resuming && checked.contentHash !== approval.content_hash) fail('STALE_EVIDENCE');
+    if (approval.decision === 'MIXED') {
+      if (checked.mixed?.mapHash !== approval.decision_map_hash || checked.mixed.planHash !== fresh.mixed?.planHash) fail('STALE_EVIDENCE');
+      return await applyMixedDecision({ checked, approval, actor });
+    }
     if (approval.decision === 'REJECT') {
       if (checked.baseline && checked.issue.fields.status?.id && String(checked.issue.fields.status.id) !== checked.baseline.from_status_id) {
         await api.asUser().requestJira(route`/rest/api/3/issue/${checked.issue.key}/comment`, {
@@ -296,37 +380,7 @@ export async function applyApproval({ issue, actor, approval, prepared, resuming
     const capturesBaseline = [true, 1, '1'].includes(checked.gate?.capture_baseline);
     if (!transition || capturesBaseline) {
       if (capturesBaseline) {
-        const { writeCapturedTreeBaseline } = await import('../lib/capture.js');
-        const { readStableTree } = await import('../lib/tree/stableRead.js');
-        const { planTreeCapture } = await import('../lib/tree/capturePlan.js');
-        const { writeTreeCapture, publishTreeBaseline } = await import('../db/baselineTreeStore.js');
-        const { tryAppend } = await import('../db/store.js');
-        const { executeQuery } = await import('../lib/db.js');
-        const { createTreeReader } = await import('../lib/tree/jira.js');
-        const api = await import('@forge/api');
-        
-        capture = await writeCapturedTreeBaseline({
-          rootIssue: checked.issue,
-          policy: checked.gate,
-          approval: {
-            accountId: actor.accountId,
-            displayName: approval.actor_name ?? approval.printed_name ?? actor.displayName,
-            approvalId: approval.approval_id,
-            assuranceLevel: approval.assurance_level,
-            content_hash: approval.content_hash,
-          },
-          controlledFields: checked.fields, ruleScope: checked.ruleScope, cause,
-          transitionAt: approval.decided_at ?? approval.signed_at ?? Date.now(),
-          deps: {
-            readTree: createTreeReader({ api: api.default, route: api.route }).read,
-            readStableTree,
-            planTreeCapture,
-            writeTreeCapture,
-            publishTreeBaseline,
-            tryAppend,
-            executeQuery
-          }
-        });
+        capture = await captureDriftBaseline({ checked, approval, actor, cause });
       } else {
         capture = await writeCapturedBaseline({ issueId: checked.issueId, issueKey: checked.issue.key,
           projectId: checked.projectId, issueTypeId: checked.issueTypeId, controlledFields: checked.fields,
@@ -344,9 +398,7 @@ export async function applyApproval({ issue, actor, approval, prepared, resuming
           reviewerFieldId: checked.config.reviewerFieldId });
       }
       if (!capture.captured) fail(capture.reason ?? 'CAPTURE_FAILED');
-      await queueVaulting({ capture, checked, actor });
-      await queueLinkDecisions({ checked, approval, actor }).catch(error =>
-        console.error('applyApproval: link decisions not queued', error));
+      await publishBaselineSideEffects({ capture, checked, approval, actor });
     }
     if (checked.baseline && capture.captured) {
       await markDecided({ issueId: checked.issueId,

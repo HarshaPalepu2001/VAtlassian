@@ -40,6 +40,11 @@ export const DENY = {
   TREE_CHANGED_DURING_CAPTURE: 'The work item hierarchy changed while it was being read. Wait a moment and try again.',
   BASELINE_VALUES_REQUIRED: 'Required baseline field values could not be captured for all items in the hierarchy. The transition was blocked.',
   CAPTURE_INCOMPLETE: 'The baseline could not be captured completely, so the transition was blocked. Try again; if it persists, contact your VAtlassian administrator.',
+  MIXED_UNAVAILABLE: 'This work item\'s approved record cannot be decided field by field. Approve or reject all changes together instead.',
+  DECISION_MAP_INVALID: 'The field decisions were not recognised. Reload the review and choose again. Nothing was signed.',
+  DECISION_MAP_MISMATCH: 'The fields you decided no longer match the fields that changed. Reload the review, decide every changed field, and sign again. Nothing was signed.',
+  FIELD_NOT_RESTORABLE: 'A field you chose to reject cannot be put back, because its approved value was not kept or Jira cannot currently write it. Approve it, or use the whole-set action. Nothing was signed.',
+  MIXED_STRUCTURE_UNSUPPORTED: 'Work items were added, removed or moved, so changes cannot be decided field by field. Approve or reject all changes together instead.',
   SCHEMA_PENDING: 'VAtlassian is finishing an update, so nothing was changed. Try again in a few minutes.',
 };
 export const DENY_DETAIL = {

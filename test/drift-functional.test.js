@@ -11,7 +11,7 @@ import { totpFixture } from './helpers/approval-fixture.js';
 // diff, restoration and validator. Replace only Jira and persistence boundaries.
 const modules = {
   'db/configStore.js': ['controlledFields','projectConfig','gateActiveOutOf','gatedTransition','listGatedTransitions','declaredFieldRows','seedControlledFields','countControlledFields'],
-  'db/baselineStore.js': ['activeBaseline','activeBaselines','valueBatches','readAllValues','baselineForApproval','currentVersion','writeBaseline'],
+  'db/baselineStore.js': ['activeBaseline','activeBaselines','valueBatches','readAllValues','baselineForApproval','baselineById','currentVersion','writeBaseline'],
   'db/itemStateStore.js': ['getReview','acquire','release','upsertBaselined'],
   'db/driftStore.js': ['driftForIssue','markDecided'],
   'db/restoreStore.js': ['startRestore','finishRestore','declareWrite'],

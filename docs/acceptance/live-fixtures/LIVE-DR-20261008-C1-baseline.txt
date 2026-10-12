@@ -1,0 +1,3 @@
+VAtlassian T01 C1 baseline attachment
+fixture=LIVE-DR-20261008
+oracle=byte-for-byte-restore

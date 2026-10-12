@@ -745,3 +745,88 @@
     gap: 2px;
   }
 }
+
+/* ── Deciding a change field by field ───────────────────────────────────────
+   The two sides: what was approved, what is there now. Words lead; colour only
+   reinforces them (the same del/ins tokens as the rest of the diff). */
+.va-sides {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  margin: 8px 0 12px;
+}
+.va-side {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--va-border);
+  border-radius: var(--va-radius);
+  background: var(--va-surface-sunken);
+  overflow-wrap: anywhere;
+}
+.va-side--approved { border-color: var(--va-del-line); background: var(--va-del-bg); }
+.va-side--current { border-color: var(--va-ins-line); background: var(--va-ins-bg); }
+.va-side__title { margin: 0 0 6px; font-size: var(--va-size-meta); font-weight: 600; }
+.va-side--approved .va-side__title { color: var(--va-del-ink); }
+.va-side--current .va-side__title { color: var(--va-ins-ink); }
+.va-side__text { white-space: pre-wrap; }
+@media (max-width: 720px) { .va-sides { grid-template-columns: minmax(0, 1fr); } }
+
+.va-decision { display: grid; gap: 8px; margin-top: 4px; }
+.va-decision__buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.va-decision__buttons .va-button[aria-pressed="true"] {
+  border-color: var(--va-brand); background: var(--va-brand-bg); color: var(--va-brand-text); font-weight: 600;
+}
+.va-decision__buttons .va-button:disabled { cursor: not-allowed; color: var(--va-text-subtlest); }
+.va-decision__why, .va-decision__status { margin: 0; font-size: var(--va-size-dense); }
+.va-decision__status { color: var(--va-text); font-weight: 500; }
+
+.va-track {
+  position: relative;
+  height: 40px;
+  max-width: 360px;
+  border: 1px solid var(--va-border-strong);
+  border-radius: var(--va-radius-pill);
+  background: var(--va-surface-sunken);
+  touch-action: pan-y;
+  user-select: none;
+  cursor: grab;
+}
+.va-track:focus-visible { outline: 2px solid var(--va-focus); outline-offset: 2px; }
+.va-track__label {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  font-size: var(--va-size-meta); font-weight: 600; pointer-events: none;
+}
+.va-track__label--approve { left: 14px; color: var(--va-ins-ink); }
+.va-track__label--reject { right: 14px; color: var(--va-del-ink); }
+.va-track__thumb {
+  position: absolute; top: 3px; left: calc(50% - 17px);
+  width: 34px; height: 32px;
+  border-radius: var(--va-radius-pill);
+  background: var(--va-surface); border: 2px solid var(--va-border-strong);
+  box-shadow: var(--va-shadow-raised);
+  transition: left 120ms ease, background-color 120ms ease, border-color 120ms ease;
+}
+.va-track[data-choice="approve"] .va-track__thumb { left: 3px; border-color: var(--va-ins-ink); background: var(--va-ins-bg); }
+.va-track[data-choice="reject"] .va-track__thumb { left: calc(100% - 37px); border-color: var(--va-del-ink); background: var(--va-del-bg); }
+/* The same state change, without the travel. */
+@media (prefers-reduced-motion: reduce) { .va-track__thumb { transition: none; } }
+
+.va-review__row-decision {
+  justify-self: start; margin-top: 2px; padding: 1px 8px;
+  border: 1px solid var(--va-border); border-radius: var(--va-radius-pill);
+  font-size: var(--va-size-micro); font-weight: 600; color: var(--va-text-subtle);
+}
+.va-review__row-decision[data-choice="APPROVE"] { color: var(--va-ins-ink); border-color: var(--va-ins-line); background: var(--va-ins-bg); }
+.va-review__row-decision[data-choice="REJECT"] { color: var(--va-del-ink); border-color: var(--va-del-line); background: var(--va-del-bg); }
+
+.va-savebar {
+  position: sticky; bottom: 0; z-index: 1;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px;
+  margin-top: 12px; padding: 10px 14px;
+  border: 1px solid var(--va-border); border-radius: var(--va-radius);
+  background: var(--va-surface-raised); box-shadow: var(--va-shadow-raised);
+}
+.va-savebar__summary { font-weight: 600; }
+.va-savebar__why { flex: 1 1 200px; font-size: var(--va-size-dense); }
+.va-savebar .va-button--primary { border-color: var(--va-brand); background: var(--va-brand); color: var(--va-text-inverse); }
+.va-savebar .va-button--primary:disabled { opacity: 0.5; cursor: not-allowed; }
