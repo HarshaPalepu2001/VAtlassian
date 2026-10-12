@@ -3,7 +3,6 @@ import { formatDate, formatTimestamp } from '../ui/format';
 import type { DiffField } from './types';
 
 type Mark = { at: number; fieldId: string; fieldName: string; author: string; materiality: string; detected: boolean };
-const SCRUB_MAX = 10_000;
 
 /**
  * WHEN, AT A GLANCE.
@@ -18,7 +17,7 @@ const SCRUB_MAX = 10_000;
  * dot, because they were one action.
  */
 export default function ChangeTimeline({ fields, baselineAt, now = Date.now(), onPick }: { fields: DiffField[]; baselineAt?: number | null; now?: number; onPick?: (fieldId: string) => void }) {
-  const [cursorPosition, setCursorPosition] = useState<number | null>(null);
+  const [cursorAt, setCursorAt] = useState<number | null>(null);
   const [selectedAt, setSelectedAt] = useState<number | null>(null);
   const marks: Mark[] = fields.flatMap(field => (field.attribution ?? [])
     .filter(step => Number.isFinite(Number(step.at)) && Number(step.at) > 0)
@@ -30,8 +29,6 @@ export default function ChangeTimeline({ fields, baselineAt, now = Date.now(), o
   const end = Math.max(start + 1, now, ...marks.map(m => m.at));
   const span = Math.max(1, end - start);
   const position = (at: number) => `${(Math.min(1, Math.max(0, (at - start) / span)) * 100).toFixed(2)}%`;
-  const scrubPositionFor = (at: number) => Math.round(Math.min(SCRUB_MAX, Math.max(0, ((at - start) / span) * SCRUB_MAX)));
-  const timeForScrubPosition = (value: number) => start + ((value / SCRUB_MAX) * span);
 
   const moments = new Map<number, Mark[]>();
   for (const mark of marks) moments.set(mark.at, [...(moments.get(mark.at) ?? []), mark]);
@@ -39,15 +36,14 @@ export default function ChangeTimeline({ fields, baselineAt, now = Date.now(), o
   const selectedGroup = selectedAt === null ? null : moments.get(selectedAt);
   const rank = (m: string) => ['CRITICAL', 'MAJOR', 'MINOR', 'COSMETIC'].indexOf(m);
   const pickMoment = (at: number, group: Mark[]) => {
-    setCursorPosition(scrubPositionFor(at));
+    setCursorAt(at);
     setSelectedAt(at);
     onPick?.(group[0].fieldId);
   };
   const scrubTo = (value: string) => {
-    const position = Number(value);
-    if (!Number.isFinite(position)) return;
-    const at = timeForScrubPosition(Math.min(SCRUB_MAX, Math.max(0, position)));
-    setCursorPosition(position);
+    const at = Number(value);
+    if (!Number.isFinite(at)) return;
+    setCursorAt(at);
     const nearest = orderedMoments.reduce((best, moment) =>
       Math.abs(moment[0] - at) < Math.abs(best[0] - at) ? moment : best);
     if (nearest[0] !== selectedAt) {
@@ -74,8 +70,8 @@ export default function ChangeTimeline({ fields, baselineAt, now = Date.now(), o
         <span className="va-timeline__now" style={{ left: '100%' }} />
       </div>
       <input type="range" className="va-timeline__scrubber" aria-label="Scrub through changes"
-        min={0} max={SCRUB_MAX} step={1} value={Math.min(SCRUB_MAX, Math.max(0, cursorPosition ?? 0))}
-        onInput={event => scrubTo(event.currentTarget.value)} />
+        min={start} max={end} step={1} value={Math.min(end, Math.max(start, cursorAt ?? start))}
+        onChange={event => scrubTo(event.currentTarget.value)} />
       <div className="va-timeline__labels">
         <span>{formatDate(start)} · signed</span>
         <span>Now</span>
