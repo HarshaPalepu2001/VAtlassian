@@ -2734,11 +2734,12 @@ test('the approve and reject handle follows the pointer across the whole track w
  const probe={};
  await renderInto(React.createElement(DecideHarness,{fields:[decidable('summary')],probe}));
  const track=container.querySelector('.va-track');
- track.getBoundingClientRect=()=>({left:100,width:360});
+ track.getBoundingClientRect=()=>({left:100,width:362});
+ Object.defineProperties(track,{clientLeft:{value:1},clientWidth:{value:360}});
  const thumb=container.querySelector('.va-track__thumb');
  await act(()=>{track.dispatchEvent(new window.PointerEvent('pointerdown',{clientX:280,pointerId:1,bubbles:true}));});
  await act(()=>{track.dispatchEvent(new window.PointerEvent('pointermove',{clientX:440,pointerId:1,bubbles:true}));});
- assert.equal(thumb.style.left,'323px','the handle can reach the reject end instead of stopping after a short movement');
+ assert.equal(thumb.style.left,'319px','the handle reaches the reject end without crossing the track edge');
  await act(()=>{track.dispatchEvent(new window.PointerEvent('pointermove',{clientX:120,pointerId:1,bubbles:true}));});
  assert.equal(thumb.style.left,'3px','the handle can freely return to the approve end before release');
  await act(()=>{track.dispatchEvent(new window.PointerEvent('pointerup',{clientX:120,pointerId:1,bubbles:true}));});

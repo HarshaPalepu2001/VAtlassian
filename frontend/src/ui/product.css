@@ -799,7 +799,7 @@
 .va-track__label--approve { left: 14px; color: var(--va-ins-ink); }
 .va-track__label--reject { right: 14px; color: var(--va-del-ink); }
 .va-track__thumb {
-  position: absolute; top: 3px; left: calc(50% - 17px);
+  position: absolute; top: 3px; left: calc(50% - 19px);
   width: 34px; height: 32px;
   border-radius: var(--va-radius-pill);
   background: var(--va-surface); border: 2px solid var(--va-border-strong);
@@ -807,7 +807,7 @@
   transition: left 120ms ease, background-color 120ms ease, border-color 120ms ease;
 }
 .va-track[data-choice="approve"] .va-track__thumb { left: 3px; border-color: var(--va-ins-ink); background: var(--va-ins-bg); }
-.va-track[data-choice="reject"] .va-track__thumb { left: calc(100% - 37px); border-color: var(--va-del-ink); background: var(--va-del-bg); }
+.va-track[data-choice="reject"] .va-track__thumb { left: calc(100% - 41px); border-color: var(--va-del-ink); background: var(--va-del-bg); }
 /* The same state change, without the travel. */
 @media (prefers-reduced-motion: reduce) { .va-track__thumb { transition: none; } }
 

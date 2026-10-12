@@ -5,7 +5,7 @@ import type { Decidable, DecisionKey, Decisions } from './fieldDecisions';
 
 /** How far a drag has to travel before it counts as a decision. */
 const THRESHOLD = 40;
-const THUMB_WIDTH = 34;
+const THUMB_OUTER_WIDTH = 38;
 const TRACK_INSET = 3;
 const KEYS = new Set<string>(['ArrowRight', 'ArrowLeft', 'Escape', 'Backspace', 'Enter', ' ']);
 
@@ -48,10 +48,13 @@ export default function FieldDecisionTrack({ field, name, state, onChange }: {
     event.currentTarget.setPointerCapture?.(event.pointerId);
   }
   function pointerLeft(event: PointerEvent<HTMLDivElement>) {
-    const rect = event.currentTarget.getBoundingClientRect();
+    const track = event.currentTarget;
+    const rect = track.getBoundingClientRect();
+    const width = track.clientWidth || rect.width;
+    const left = rect.left + track.clientLeft;
     const min = TRACK_INSET;
-    const max = Math.max(min, rect.width - THUMB_WIDTH - TRACK_INSET);
-    return Math.max(min, Math.min(max, event.clientX - rect.left - (THUMB_WIDTH / 2)));
+    const max = Math.max(min, width - THUMB_OUTER_WIDTH - TRACK_INSET);
+    return Math.max(min, Math.min(max, event.clientX - left - (THUMB_OUTER_WIDTH / 2)));
   }
   function move(event: PointerEvent<HTMLDivElement>) {
     if (start.current == null) return;
