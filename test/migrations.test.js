@@ -54,13 +54,6 @@ test('vault space is keyed by project and records its permission lockdown', () =
   }
 });
 
-test('vault page is keyed by issue', () => {
-  const sql = sqlFor('v057_vault_page');
-  assert.match(sql, /CREATE TABLE IF NOT EXISTS va_vault_page/);
-  assert.match(sql, /PRIMARY KEY \(issue_id\)/);
-  assert.match(sql, /confluence_page_id/);
-});
-
 test('vault attachment is unique per baseline and jira attachment', () => {
   const sql = sqlFor('v058_vault_attachment');
   assert.match(sql, /CREATE TABLE IF NOT EXISTS va_vault_attachment/);
@@ -132,10 +125,22 @@ test('v075-v087 stay in the list: they may already have run on a site', () => {
   }
 });
 
-test('migration ids are unique and the list ends at v107', () => {
+test('migration ids are unique and the list ends at v108_remove_confluence', () => {
   const ids = MIGRATIONS.map(m => m.id);
   assert.equal(new Set(ids).size, ids.length);
-  assert.equal(MIGRATIONS.at(-1).id, 'v107_approval_decision_map');
+  assert.equal(MIGRATIONS.at(-1).id, 'v108_remove_confluence');
+});
+
+test('v108 drops Confluence governance and vault tables, columns, and tier config', () => {
+  const sql = sqlFor('v108_remove_confluence');
+  assert.match(sql, /DROP TABLE IF EXISTS/);
+  for (const table of ['va_governed_subject', 'va_governance_policy', 'va_governance_state', 'va_events', 'va_vault_site', 'va_vault_page']) {
+    assert.match(sql, new RegExp(`\\b${table}\\b`), `missing table ${table}`);
+  }
+  for (const col of ['space_id', 'space_key', 'project_page_id']) {
+    assert.match(sql, new RegExp(`DROP COLUMN IF EXISTS ${col}\\b`), `missing drop column ${col}`);
+  }
+  assert.match(sql, /DELETE FROM va_config WHERE cfg_key = 'vault:tier'/);
 });
 
 test('v088-v093 replace the draft field, rule and signature tables with the spec shape', () => {

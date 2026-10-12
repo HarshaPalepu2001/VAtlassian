@@ -1,5 +1,7 @@
 # Confluence Attachment Vault — Design (Phases 1 & 2)
 
+> **Superseded 2026-10-12**: VAtlassian drops every Confluence integration. Attachments are vaulted in the Forge Object Store only.
+
 > **Revised 2026-09-23 — supersedes "Confluence layout" below.**
 > - **One vault space for the whole site** (`VATVAULT`, recorded in `va_vault_site`),
 >   not one per project: each project is a page under the vault home page, each

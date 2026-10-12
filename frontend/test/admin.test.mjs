@@ -260,7 +260,7 @@ const labelled=t=>[...container.querySelectorAll('label')].find(l=>l.textContent
 
 test('settings offers every preference that has a runtime consumer',async()=>{
  await mount('Settings',key=>key==='admin:getConfig'?liveConfig():{success:true,statuses:[]});
- for(const control of ['Content processing','Restore as','Notify watchers','Retries per field','Vault storage']){
+ for(const control of ['Content processing','Restore as','Notify watchers','Retries per field']){
   assert.ok(text().includes(control),`${control} is missing from the settings page`);
  }
 });
@@ -393,7 +393,7 @@ test('an approved change is shown, not only a rejected one',async()=>{
 });
 
 const vaultStatus=(over={})=>({success:true,projectId:1,
- vault:{storage:'CONFLUENCE',siteSpaceKey:'VATVAULT',projectPageId:'pp1'},
+ vault:{storage:'OBJECT_STORE'},
  lockdown:{enabled:false,lockedAt:null,lockedSchemeId:null},
  appDelete:{grantedAt:1,refusedAt:null},
  scheme:{id:10000,name:'Default Permission Scheme'},schemeError:null,sharedWith:null,...over});
@@ -416,7 +416,7 @@ test('turning the lockdown on warns about a shared scheme and sends only that ch
   return {success:true,statuses:[]};
  });
  await select(0,'1');
- assert.match(text(),/Confluence vault space VATVAULT/);
+ assert.match(text(),/Approved files are copied to the Forge Object Store/);
  assert.match(text(),/Default Permission Scheme/);
  assert.doesNotMatch(text(),/often shared/,'no warning before the box is ticked');
  await act(()=>labelled('Lock attachment deletion').querySelector('input').click());await flush();
@@ -452,33 +452,12 @@ test('an unreadable vault status is reported, not shown as unprotected',async()=
  assert.match(text(),/vault status could not be read: Vault storage down/);
 });
 
-test('a Jira-only site is told its vault is the Forge Object Store',async()=>{
+test('attachment protection explains that files are copied to the Forge Object Store',async()=>{
  await mount('Settings',key=>key==='admin:getConfig'?liveConfig()
-  :key==='admin:getVaultStatus'?vaultStatus({vault:{storage:'OBJECT_STORE',storageReason:'NO_CONFLUENCE_404',storageChosen:false,siteSpaceKey:null,projectPageId:null}})
+  :key==='admin:getVaultStatus'?vaultStatus()
   :{success:true,statuses:[]});
  await select(0,'1');
- assert.match(text(),/copied to the Forge Object Store, because this site has no Confluence vault/);
-});
-
-test('vault storage is a site-wide choice, shown at every scope and saved only on request',async()=>{
- const chosen=[];let pinned=false;
- await mount('Settings',(key,payload)=>{
-  if(key==='admin:getConfig')return liveConfig();
-  if(key==='admin:getVaultTier')return {success:true,storage:pinned?'CONFLUENCE':'OBJECT_STORE',storageChosen:pinned,siteSpaceKey:null};
-  if(key==='admin:setVaultTier'){chosen.push(payload.tier);pinned=true;return {success:true,note:'New vault copies go to Confluence. Existing copies stay where they are.'};}
-  return {success:true,statuses:[]};
- });
- // Site scope: no project is selected, and the control is still there.
- assert.match(text(),/New copies go to the Forge Object Store/);
- const storage=[...container.querySelectorAll('select')].find(s=>[...s.options].some(o=>o.value==='OBJECT_STORE'));
- assert.ok(storage,'the storage control is missing');
- assert.equal(button('Save vault storage').disabled,true,'nothing to save before a change');
- await act(()=>{storage.value='CONFLUENCE';storage.dispatchEvent(new window.Event('change',{bubbles:true}));});await flush();
- assert.deepEqual(chosen,[],'choosing an option must not save it');
- await act(()=>button('Save vault storage').click());await flush();
- assert.deepEqual(chosen,['CONFLUENCE']);
- assert.match(text(),/Existing copies stay where they are/);
- assert.match(text(),/New copies go to Confluence/);
+ assert.match(text(),/Approved files are copied to the Forge Object Store/);
 });
 
 test('a workflow finding names the transition it is about, and cleared findings can be shown',async()=>{

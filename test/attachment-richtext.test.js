@@ -159,8 +159,8 @@ test('a restored file with no known media id: the text showing it is named as fa
   const attachmentDeps = {
     aliases: async () => null,
     readCurrent: async () => (uploaded ? [{ id: '12090', filename: 'shot.png' }] : []),
-    vaultedCopies: async () => new Map([['12085', { content_hash: sha256(bytes), confluence_attachment_id: 'c1',
-      confluence_page_id: 'p1', media_id: ORIGINAL, filename: 'shot.png' }]]),
+    vaultedCopies: async () => new Map([['12085', { content_hash: sha256(bytes), storage: 'OBJECT_STORE',
+      object_key: 'vault/sha256/k', media_id: ORIGINAL, filename: 'shot.png' }]]),
     downloadVaulted: async () => bytes,
     upload: async () => { uploaded = true; return { id: '12090' }; },
     download: async () => bytes,

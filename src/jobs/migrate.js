@@ -16,8 +16,19 @@ export async function run({ ddl = executeDDL, query = executeQuery, migrations =
   let applied = 0;
   for (const migration of migrations) {
     if (done.has(migration.id)) continue;
-    const result = migration === bootstrap ? ready : await ddl(migration.sql);
-    if (!result.result) return {ok:false, applied, failedAt:migration.id};
+    if (migration === bootstrap) {
+      if (!ready.result) return {ok:false, applied, failedAt:migration.id};
+    } else {
+      const statements = migration.sql
+        .split(';')
+        .map(s => s.trim())
+        .filter(Boolean);
+      for (const stmt of statements) {
+        const isDml = /^\s*(DELETE|INSERT|UPDATE)\b/i.test(stmt);
+        const res = isDml ? await query(stmt) : await ddl(stmt);
+        if (!res?.result) return {ok:false, applied, failedAt:migration.id};
+      }
+    }
     const recorded = await query(
       `INSERT INTO va_config (cfg_key,cfg_value,updated_at,updated_by) VALUES (?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE cfg_value = VALUES(cfg_value)`,

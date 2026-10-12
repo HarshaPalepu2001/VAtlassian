@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createAttachmentRestoreDeps } from '../src/lib/restore/attachmentAdapters.js';
-import { downloadVaultAttachment } from '../src/lib/vaultConfluence.js';
 
 const route = (s, ...v) => s.reduce((a, b, i) => a + b + (i < v.length ? encodeURIComponent(String(v[i])) : ''), '');
 
@@ -54,14 +53,38 @@ test('the audit entry is strict: one that was not written is a failure, not a ga
   await assert.rejects(() => deps.audit('ATTACHMENT_REMOVED_BY_RESTORE', {}, 11), e => e.status === 503);
 });
 
-test('the vault copy is downloaded from its page as the app, and a failure carries its status', async () => {
-  const seen = [];
-  const api = { asApp: () => ({ requestConfluence: async (path) => {
-    seen.push(path.value ?? String(path));
-    return seen.length === 1 ? { ok: true, arrayBuffer: async () => new TextEncoder().encode('bytes').buffer } : { ok: false, status: 404 };
-  } }) };
-  const bytes = await downloadVaultAttachment({ pageId: 'p1', attachmentId: 'att9' }, api);
-  assert.equal(bytes.toString(), 'bytes');
-  assert.match(seen[0], /\/wiki\/rest\/api\/content\/p1\/child\/attachment\/att9\/download$/);
-  await assert.rejects(() => downloadVaultAttachment({ pageId: 'p1', attachmentId: 'x' }, api), e => e.status === 404);
+test('downloadVaulted downloads from the Object Store and refuses Confluence copies', async () => {
+  const os = {
+    getContent: async (key) => Buffer.from(`os:${key}`)
+  };
+  const deps = createAttachmentRestoreDeps({
+    api: fakeApi(() => ({})).api,
+    route,
+    objectStore: os
+  });
+  const bytes = await deps.downloadVaulted({ storage: 'OBJECT_STORE', object_key: 'vault/sha256/123' });
+  assert.equal(bytes.toString(), 'os:vault/sha256/123');
+
+  await assert.rejects(
+    () => deps.downloadVaulted({ storage: 'CONFLUENCE', confluence_attachment_id: 'c1' }),
+    e => e.status === 404 && /stored in Confluence, which is no longer supported/.test(e.message)
+  );
+});
+
+test('preserve stores a file to the Object Store', async () => {
+  const puts = [];
+  const os = {
+    putContent: async ({ buffer }) => {
+      puts.push(buffer);
+      return { storage: 'OBJECT_STORE', objectKey: 'vault/sha256/abc' };
+    }
+  };
+  const deps = createAttachmentRestoreDeps({
+    api: fakeApi(() => ({})).api,
+    route,
+    objectStore: os
+  });
+  const res = await deps.preserve({ buffer: Buffer.from('deleted-file') });
+  assert.deepEqual(res, { storage: 'OBJECT_STORE', objectKey: 'vault/sha256/abc' });
+  assert.equal(puts[0].toString(), 'deleted-file');
 });

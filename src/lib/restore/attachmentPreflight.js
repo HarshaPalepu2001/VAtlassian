@@ -58,7 +58,11 @@ export async function attachmentRejection({ reviewFields = [], issue = {}, remov
       vaultChecked = false;
     }
     for (const entry of files) {
-      if (copies && !isReadableCopy(copies.get(entry.id))) {
+      const copy = copies?.get(entry.id);
+      if (copy?.storage === 'CONFLUENCE') {
+        unrestorableFiles.push({ ...entry,
+          reason: 'stored in Confluence, which is no longer supported' });
+      } else if (copies && !isReadableCopy(copy)) {
         unrestorableFiles.push({ ...entry,
           reason: 'No copy of this file is in the vault, so a rejection cannot put it back.' });
       } else {

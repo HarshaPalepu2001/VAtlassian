@@ -931,5 +931,16 @@ export const MIGRATIONS = [
   // rejected. NULL on every whole-set approval, which are unchanged.
   { id: 'v107_approval_decision_map', sql: `ALTER TABLE va_approval
     ADD COLUMN IF NOT EXISTS decision_map TEXT NULL,
-    ADD COLUMN IF NOT EXISTS decision_map_hash CHAR(64) NULL` }
+    ADD COLUMN IF NOT EXISTS decision_map_hash CHAR(64) NULL` },
+  // Remove all Confluence governance and vault tables and columns. Forge Object
+  // Store is the only attachment vault.
+  { id: 'v108_remove_confluence', sql: `DROP TABLE IF EXISTS
+    va_governed_subject, va_governance_policy, va_governance_state, va_governance_approval,
+    va_governance_challenge, va_governance_baseline, va_governance_node, va_governance_artifact,
+    va_governance_workspace, va_governance_operation, va_governance_event_receipt, va_events,
+    va_vault_site, va_vault_page;
+    ALTER TABLE va_vault_space DROP COLUMN IF EXISTS space_id;
+    ALTER TABLE va_vault_space DROP COLUMN IF EXISTS space_key;
+    ALTER TABLE va_vault_space DROP COLUMN IF EXISTS project_page_id;
+    DELETE FROM va_config WHERE cfg_key = 'vault:tier'` }
 ];

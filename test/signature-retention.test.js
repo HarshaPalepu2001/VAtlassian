@@ -24,7 +24,7 @@ const NOW = Date.parse('2026-08-31T12:00:00Z');
 /** A segment with every evidence precondition satisfied. */
 const ready = (over = {}) => ({
   sealed_at: NOW - 800 * DAY,
-  export_ref: 'confluence:12345',
+  export_ref: 'archive:12345',
   export_sha256: 'a'.repeat(64),
   verified_at: NOW - 799 * DAY,
   pruned_at: null,

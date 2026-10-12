@@ -11,7 +11,7 @@ import { defaultVaultObjectStore } from '../lib/vaultObjectStore.js';
  *      rich-text field points at) from the download redirect?
  *   2. Which media ids does the description point at, and which attachment is each?
  *   3. What does the vault hold for this issue, and do those copies — in
- *      Confluence or the Forge Object Store — still hash to what was recorded?
+ *      the Forge Object Store — still hash to what was recorded?
  *   4. Who holds attachment-delete permission on the project's scheme?
  *
  * Guarded by the encrypted PROBE_SECRET variable. It changes nothing.
@@ -53,8 +53,8 @@ function mediaNodes(node, found = []) {
 
 async function vaultProof(issueId) {
   const vaulted = await rows(`SELECT va.baseline_id, va.jira_attachment_id, va.filename, va.content_hash,
-      va.confluence_attachment_id, va.media_id, va.vaulted_at, va.storage, va.object_key, vp.confluence_page_id
-    FROM va_vault_attachment va LEFT JOIN va_vault_page vp ON vp.issue_id = va.issue_id
+      va.media_id, va.vaulted_at, va.storage, va.object_key
+    FROM va_vault_attachment va
     WHERE va.issue_id = ? ORDER BY va.vaulted_at`, [issueId]);
   if (!Array.isArray(vaulted)) return vaulted;
   const proof = [];
@@ -67,14 +67,6 @@ async function vaultProof(issueId) {
         entry.download = { from: 'OBJECT_STORE', bytes: bytes.length, sha256: hash, matchesRecord: hash === row.content_hash };
         proof.push(entry);
         continue;
-      }
-      const res = await api.asApp().requestConfluence(
-        route`/wiki/rest/api/content/${row.confluence_page_id}/child/attachment/${row.confluence_attachment_id}/download`);
-      if (!res.ok) entry.download = { status: res.status };
-      else {
-        const bytes = Buffer.from(await res.arrayBuffer());
-        const hash = sha256(bytes);
-        entry.download = { from: 'CONFLUENCE', status: res.status, bytes: bytes.length, sha256: hash, matchesRecord: hash === row.content_hash };
       }
     } catch (error) {
       entry.download = { error: String(error?.message ?? error) };
@@ -129,8 +121,7 @@ export async function handler(request) {
     descriptionMediaNodes: mediaNodes(issue.fields.description),
     aliases: await rows('SELECT attachment_id, stands_for_id, media_id, stands_for_media_id, content_hash, created_at FROM va_attachment_alias WHERE issue_id = ?', [issueId]),
     vault: await vaultProof(issueId),
-    vaultSpace: await rows('SELECT project_id, project_page_id, permission_scheme_id, permission_locked_at, app_delete_granted_at, app_delete_checked_at FROM va_vault_space WHERE project_id = ?', [Number(issue.fields.project?.id)]),
-    vaultTier: await rows(`SELECT cfg_value FROM va_config WHERE cfg_key = 'vault:tier'`, []),
+    vaultSpace: await rows('SELECT project_id, permission_scheme_id, permission_locked_at, app_delete_granted_at, app_delete_checked_at FROM va_vault_space WHERE project_id = ?', [Number(issue.fields.project?.id)]),
     controlledAttachmentField: await rows(`SELECT project_id, issue_type_id, field_id, state, store_values FROM va_controlled_field
       WHERE project_id = ? AND field_id = 'attachment'`, [Number(issue.fields.project?.id)]),
     vaultLedger: await rows(`SELECT event_type, payload, occurred_at FROM va_audit WHERE issue_id = ?

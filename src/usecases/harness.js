@@ -16,7 +16,7 @@ import { controlledFields } from '../db/configStore.js';
 
 /**
  * The issue is read AS THE CALLER. This is served from the panel resolver,
- * which every Jira and Confluence user can reach, so the caller's own browse
+ * which every Jira user can reach, so the caller's own browse
  * permission is what stands between them and the stored record of an issue
  * hidden from them by issue security.
  */
@@ -138,13 +138,9 @@ export async function inspectIssue({ payload, context }, deps = defaultInspectDe
     FROM va_audit WHERE issue_id = ? ORDER BY seq DESC LIMIT 15`, [numericIssueId]);
 
   // 1. Vault storage diagnostics
-  const vaultPage = (await rows('SELECT confluence_page_id, created_at FROM va_vault_page WHERE issue_id = ?',
-    [numericIssueId]))[0] ?? null;
-  const vaultAttachments = await rows(`SELECT jira_attachment_id, filename, content_hash, confluence_attachment_id, vaulted_at,
+  const vaultAttachments = await rows(`SELECT jira_attachment_id, filename, content_hash, vaulted_at,
       storage, object_key, media_id
     FROM va_vault_attachment WHERE issue_id = ? ORDER BY vaulted_at DESC LIMIT 20`, [numericIssueId]);
-  // Where this site's new copies go (lib/vaultTier.js).
-  const vaultTier = (await rows(`SELECT cfg_value FROM va_config WHERE cfg_key = 'vault:tier'`, []))[0]?.cfg_value ?? null;
 
   // 2. Child baselines diagnostics
   const childBaselines = baseline?.baseline_id
@@ -284,16 +280,13 @@ export async function inspectIssue({ payload, context }, deps = defaultInspectDe
     } : null,
     childBaselines,
     vault: {
-      tier: (() => { try { return vaultTier ? JSON.parse(vaultTier) : null; } catch { return null; } })(),
-      confluencePageId: vaultPage?.confluence_page_id || null,
-      pageCreatedAt: vaultPage?.created_at || null,
+      storage: 'OBJECT_STORE',
       attachmentCount: vaultAttachments.length,
       attachments: vaultAttachments.map(va => ({
         jiraAttachmentId: va.jira_attachment_id,
         filename: va.filename,
         contentHash: va.content_hash,
-        confluenceAttachmentId: va.confluence_attachment_id,
-        storage: va.storage || 'CONFLUENCE',
+        storage: va.storage || 'OBJECT_STORE',
         objectKey: va.object_key || null,
         mediaId: va.media_id || null,
         vaultedAt: va.vaulted_at

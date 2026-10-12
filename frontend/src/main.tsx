@@ -17,9 +17,6 @@ const GateConfig=lazy(()=>import('./gate/GateConfig'));
 const ReviewWindow=lazy(()=>import('./review/ReviewWindow'));
 const WebAuthnPopup=lazy(()=>import('./panel/WebAuthnPopup'));
 const ApprovalField=lazy(()=>import('./field/ApprovalField'));
-const ConfluenceSpaceSetup = lazy(() => import('./confluence/ConfluenceSpaceSetup'));
-const ConfluencePageStatus = lazy(() => import('./confluence/ConfluencePageStatus'));
-const ConfluenceProtectAction = lazy(() => import('./confluence/ConfluenceProtectAction'));
 
 type Context = Awaited<ReturnType<typeof view.getContext>>;
 function isWebAuthnPopup() {
@@ -43,11 +40,6 @@ function App() {
     case 'va-admin-configure': screen = <AdminConsole configure />; break;
     case 'va-authenticator': screen = <TotpEnrollment />; break;
     case 'va-gate': screen = <GateConfig readOnly={context.extension.entryPoint === 'view'} transitionContext={context.extension.transitionContext} />; break;
-    case 'confluence-byline':
-    case 'confluence-banner': screen = <ConfluencePageStatus view={context.moduleKey} />; break;
-    case 'confluence-action': screen = <ConfluenceProtectAction />; break;
-    case 'confluence-global': screen = <QueueList />; break;
-    case 'confluence-space': screen = <ConfluenceSpaceSetup />; break;
     default: screen = <Page title="Screen unavailable"><Notice>This module is not configured. Contact your administrator.</Notice></Page>;
   }
  return <Suspense fallback={<Loading/>}>{screen}</Suspense>;

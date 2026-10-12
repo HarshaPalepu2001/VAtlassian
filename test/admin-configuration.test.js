@@ -264,7 +264,7 @@ test('creating a transition without capture-baseline never touches vault provisi
 
 test('a vault provisioning problem is surfaced as a note but never fails the save', async () => {
   const deps = fixture();
-  deps.provisionVault = async () => ({ errors: [{ step: 'ensureVaultSpace', error: 'confluence down' }] });
+  deps.provisionVault = async () => ({ errors: [{ step: 'ensureVaultProjectRow', error: 'db down' }] });
   const result = await admin.createControlledTransition(request({ ...edge, captureBaseline: true }), deps);
   assert.equal(result.success, true);
   assert.match(result.note, /retry automatically/);
@@ -362,15 +362,13 @@ test('vault status reports the lockdown setting, what was applied, the app grant
   let walked = false;
   Object.assign(deps, {
     projectConfig: async () => ({ vault: { lockAttachmentDeletion: false } }),
-    getVaultSpace: async () => ({ project_page_id: 'pp1', permission_locked_at: 1700, permission_scheme_id: '10000', app_delete_granted_at: 1600, app_delete_checked_at: null }),
-    getVaultSite: async () => ({ space_key: 'VATVAULT' }),
-    getConfig: async () => null,
+    getVaultSpace: async () => ({ permission_locked_at: 1700, permission_scheme_id: '10000', app_delete_granted_at: 1600, app_delete_checked_at: null }),
     getProjectPermissionScheme: async () => ({ id: 10000, name: 'Default Permission Scheme', permissions: [] }),
     getProjectsUsingPermissionScheme: async () => { walked = true; return ['SEC']; }
   });
   const result = await admin.getVaultStatus(request({ projectId: '1' }), deps);
   assert.equal(result.success, true);
-  assert.deepEqual(result.vault, { storage: 'CONFLUENCE', storageReason: null, storageChosen: false, siteSpaceKey: 'VATVAULT', projectPageId: 'pp1' });
+  assert.deepEqual(result.vault, { storage: 'OBJECT_STORE' });
   assert.deepEqual(result.lockdown, { enabled: false, lockedAt: 1700, lockedSchemeId: '10000' },
     'a lock applied before the setting existed is still reported');
   assert.deepEqual(result.appDelete, { grantedAt: 1600, refusedAt: null });
@@ -387,8 +385,6 @@ test('vault status still answers when the scheme cannot be read', async () => {
   Object.assign(deps, {
     projectConfig: async () => ({}),
     getVaultSpace: async () => null,
-    getVaultSite: async () => null,
-    getConfig: async () => ({ tier: 'OBJECT_STORE', reason: 'NO_CONFLUENCE_404' }),
     getProjectPermissionScheme: async () => { throw new Error('403'); },
     getProjectsUsingPermissionScheme: async () => []
   });
@@ -396,40 +392,6 @@ test('vault status still answers when the scheme cannot be read', async () => {
   assert.equal(result.success, true);
   assert.equal(result.scheme, null);
   assert.match(result.schemeError, /403/);
-  assert.equal(result.vault.storage, 'OBJECT_STORE', 'a Jira-only site reports its Object Store vault');
-  assert.equal(result.vault.storageReason, 'NO_CONFLUENCE_404');
+  assert.deepEqual(result.vault, { storage: 'OBJECT_STORE' });
   assert.equal(result.lockdown.enabled, false);
-});
-
-test('vault storage is read for the whole site, with no project', async () => {
-  const deps = fixture();
-  Object.assign(deps, {
-    getVaultSite: async () => null,
-    getConfig: async () => ({ tier: 'OBJECT_STORE', reason: 'CHOSEN_BY_ADMIN' }),
-    getVaultSpace: async () => { throw new Error('a project was read'); },
-    getProjectPermissionScheme: async () => { throw new Error('a project was read'); },
-    getProjectsUsingPermissionScheme: async () => []
-  });
-  const result = await admin.getVaultTier(request({}), deps);
-  assert.equal(result.success, true, result.error);
-  assert.equal(result.storage, 'OBJECT_STORE');
-  assert.equal(result.storageChosen, true);
-  assert.equal(result.siteSpaceKey, null);
-});
-
-test('vault storage can be pinned by an administrator or handed back to detection', async () => {
-  const deps = fixture();
-  const saved = [];
-  deps.setConfig = async (key, value) => saved.push([key, value]);
-  const pinned = await admin.setVaultTier(request({ tier: 'OBJECT_STORE' }), deps);
-  assert.equal(pinned.success, true);
-  assert.equal(saved[0][0], 'vault:tier');
-  assert.deepEqual({ tier: saved[0][1].tier, reason: saved[0][1].reason }, { tier: 'OBJECT_STORE', reason: 'CHOSEN_BY_ADMIN' });
-  assert.match(pinned.note, /Existing copies stay where they are/);
-
-  const auto = await admin.setVaultTier(request({ tier: 'AUTO' }), deps);
-  assert.equal(auto.success, true);
-  assert.ok(deps.calls.some(c => c.sql === 'DELETE FROM va_config WHERE cfg_key = ?' && c.params[0] === 'vault:tier'));
-
-  assert.equal((await admin.setVaultTier(request({ tier: 'S3' }), fixture())).success, false);
 });

@@ -326,7 +326,7 @@ export const EVENT = {
   // grants it removed are NOT put back (grantsRestored: false): which holders
   // had them is in the ATTACHMENT_DELETE_LOCKED entry, for a person to re-add.
   ATTACHMENT_DELETE_LOCK_DISABLED: 'ATTACHMENT_DELETE_LOCK_DISABLED',
-  // Where this site's vault is: CONFLUENCE, or OBJECT_STORE on a site without
-  // Confluence (lib/vaultTier.js). Written when the answer is first remembered.
+  // Legacy audit event: where this site's vault was originally recorded (CONFLUENCE, or OBJECT_STORE).
+  // Kept for audit trail history.
   VAULT_TIER_DETECTED: 'VAULT_TIER_DETECTED'
 };

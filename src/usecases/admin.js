@@ -12,4 +12,4 @@ export { debugDump, listContentChanges, storage, listCredentials, reconcileDirec
 export { fieldSetup, syncFields } from './fields.js';
 export { classifyFieldsForBaseline, saveControlledFieldsBaseline } from './fieldsClassification.js';
 export { saveField, trackField, deleteField, setRetention, saveConfig, getConfig } from './fieldsConfiguration.js';
-export { getVaultStatus, getVaultTier, setVaultTier } from './vaultStatus.js';
+export { getVaultStatus } from './vaultStatus.js';

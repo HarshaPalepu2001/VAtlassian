@@ -1,5 +1,7 @@
 # Confluence Attachment Vault (Phases 1 & 2) Implementation Plan
 
+> **Superseded 2026-10-12**: VAtlassian drops every Confluence integration. Attachments are vaulted in the Forge Object Store only.
+
 > Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** When a Jira project gets a controlled transition with `capture_baseline = true`, silently provision a dedicated, locked-down Confluence space for it and block attachment deletion project-wide; when a baseline is captured for an issue in such a project, push a copy of its current attachments into that vault as durable, hashed evidence.

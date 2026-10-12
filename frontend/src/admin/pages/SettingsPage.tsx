@@ -26,17 +26,14 @@ type ConfigData = Result & {
 };
 /** src/usecases/vaultStatus.js getVaultStatus */
 type VaultStatus = Result & {
-  vault: { storage: string | null; storageReason?: string | null; storageChosen?: boolean; siteSpaceKey: string | null; projectPageId: string | null };
+  vault: { storage: string | null };
   lockdown: { enabled: boolean; lockedAt: number | null; lockedSchemeId: string | null };
   appDelete: { grantedAt: number | null; refusedAt: number | null };
   scheme: { id: number | string | null; name: string | null } | null;
   schemeError: string | null;
   sharedWith: string[] | null;
 };
-/** src/usecases/vaultStatus.js getVaultTier */
-type VaultTier = Result & { storage: string | null; storageChosen: boolean; siteSpaceKey: string | null };
 const when = (ms: number) => new Date(ms).toLocaleString();
-const STORAGE_LABEL: Record<string, string> = { AUTO: 'Automatic', CONFLUENCE: 'Confluence', OBJECT_STORE: 'Forge Object Store' };
 
 export default function SettingsPage({ projects }: { projects: Project[] }) {
   const [projectId, setProject] = useState('');
@@ -58,11 +55,6 @@ export default function SettingsPage({ projects }: { projects: Project[] }) {
   const [vaultError, setVaultError] = useState('');
   const [checkingShare, setCheckingShare] = useState(false);
   const vaultSequence = useRef(0);
-
-  const [tier, setTier] = useState<VaultTier | null>(null);
-  const [tierChoice, setTierChoice] = useState('AUTO');
-  const [tierError, setTierError] = useState('');
-  const [tierBusy, setTierBusy] = useState(false);
 
   const sequence = useRef(0);
 
@@ -105,28 +97,7 @@ export default function SettingsPage({ projects }: { projects: Project[] }) {
   }, [projectId]);
   useEffect(() => { setVaultStatus(null); void loadVault(); return () => { ++vaultSequence.current; }; }, [loadVault]);
 
-  // Vault storage is one choice for the whole site, so it is read once and
-  // shown at every scope rather than inside a project's card.
-  const loadTier = useCallback(async () => {
-    setTierError('');
-    try {
-      const r = assertResult(await invoke<VaultTier>('admin:getVaultTier', {}));
-      setTier(r); setTierChoice(r.storageChosen ? r.storage ?? 'AUTO' : 'AUTO');
-    } catch (e) { setTierError(errorMessage(e)); }
-  }, []);
-  useEffect(() => { void loadTier(); }, [loadTier]);
 
-  // lib/vaultTier.js: where the whole site's new vault copies go.
-  async function saveStorage() {
-    setTierBusy(true); setTierError(''); setMessage('');
-    try {
-      const r = assertResult(await invoke<Result & { note?: string }>('admin:setVaultTier', { tier: tierChoice }));
-      if (r.note) setMessage(r.note);
-      await Promise.all([loadTier(), loadVault()]);
-    } catch (e) { setTierError(errorMessage(e)); }
-    finally { setTierBusy(false); }
-  }
-  const savedTierChoice = tier?.storageChosen ? tier.storage ?? 'AUTO' : 'AUTO';
 
   const c = saved?.config;
   const was = {
@@ -230,14 +201,7 @@ export default function SettingsPage({ projects }: { projects: Project[] }) {
               {!vaultStatus && !vaultError && <Loading label="Loading attachment protection…" />}
               {vaultStatus && <>
                 <p>
-                  {vaultStatus.vault.storage === 'OBJECT_STORE'
-                    ? <>Approved files are copied to the Forge Object Store{vaultStatus.vault.storageChosen ? ', as chosen for this site' : ', because this site has no Confluence vault'}.</>
-                    : vaultStatus.vault.storage === 'CONFLUENCE'
-                      ? vaultStatus.vault.siteSpaceKey
-                        ? <>Approved files are copied to the Confluence vault space <code>{vaultStatus.vault.siteSpaceKey}</code>{vaultStatus.vault.projectPageId ? '.' : '; this project\'s page there is not created yet.'}</>
-                        : 'Approved files are copied to Confluence; the vault space is created with the first copy.'
-                      : 'No vault has been provisioned yet. Where it goes is decided when a controlled transition first captures a baseline: Confluence when the site has it, otherwise the Forge Object Store.'}
-                  {' '}A rejection puts a removed file back from its vaulted copy.
+                  Approved files are copied to the Forge Object Store. A rejection puts a removed file back from its vaulted copy.
                 </p>
                 <p className="va-muted">{vaultStatus.appDelete.grantedAt
                   ? 'The app can delete attachments here, so a rejection can remove files added after approval.'
@@ -287,28 +251,6 @@ export default function SettingsPage({ projects }: { projects: Project[] }) {
         {legacyStrict && <Notice danger>A STRICT policy value stored by an earlier build is present. It does not lock content: the locking it refers to is not implemented, and saving replaces it with DETECT, the mode this runtime enforces.</Notice>}
       </>}
 
-      {/* lib/vaultTier.js, usecases/vaultStatus.js getVaultTier / setVaultTier */}
-      <Card title="Vault storage" subtitle="Where new vaulted copies go, for the whole site">
-        <div className="va-stack">
-          {tierError && <Notice danger>Vault storage could not be read or saved: {tierError} <Button isDisabled={tierBusy} onClick={() => void loadTier()}>Retry</Button></Notice>}
-          {!tier && !tierError && <Loading label="Loading vault storage…" />}
-          {tier && <>
-            <p className="va-muted">
-              {tier.storage === 'OBJECT_STORE' ? 'New copies go to the Forge Object Store.'
-                : tier.storage === 'CONFLUENCE' ? <>New copies go to Confluence{tier.siteSpaceKey ? <> (space <code>{tier.siteSpaceKey}</code>)</> : ''}.</>
-                  : 'Not decided yet: the first vault job chooses.'}
-              {' '}This applies to every project, whichever scope is selected above. Existing copies stay where they are; a restore reads each from where it was kept.
-            </p>
-            <Field label="Storage" hint="Automatic uses Confluence when the site has it and the Forge Object Store otherwise.">
-              <Select value={tierChoice} disabled={tierBusy} onChange={v => { setTierChoice(v); touch(); }} placeholder="Choose where copies go"
-                options={Object.entries(STORAGE_LABEL).map(([value, label]) => ({ value, label }))} />
-            </Field>
-            <div className="va-row">
-              <Button isDisabled={tierBusy || tierChoice === savedTierChoice} onClick={() => void saveStorage()}>{tierBusy ? 'Saving…' : 'Save vault storage'}</Button>
-            </div>
-          </>}
-        </div>
-      </Card>
 
       <Card title="Configured elsewhere">
         <p>Approval rules are set in Controlled transitions, signer access in Approver roles, baseline contents in Controlled fields, and security alert delivery in Control health.</p>

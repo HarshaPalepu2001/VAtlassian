@@ -19,7 +19,7 @@ function world({ onIssue = [], vault = {}, aliases = {} } = {}) {
     readCurrent: async () => [...w.jira.values()].map(({ bytes, ...rest }) => rest),
     vaultedCopies: async ({ attachmentIds }) => new Map(attachmentIds.filter(id => w.vault[id]).map(id => [id, {
       jira_attachment_id: id, filename: w.vault[id].filename, content_hash: w.vault[id].hash ?? hash(w.vault[id].bytes),
-      confluence_attachment_id: `c${id}`, confluence_page_id: 'p1', baseline_id: 'b1' }])),
+      storage: 'OBJECT_STORE', object_key: `vault/sha256/${w.vault[id].hash ?? hash(w.vault[id].bytes)}`, baseline_id: 'b1' }])),
     downloadVaulted: async copy => Buffer.from(w.vault[copy.jira_attachment_id].bytes),
     upload: async ({ filename, buffer }) => {
       if (w.faults.has('upload')) throw Object.assign(new Error('refused'), { status: 400 });
@@ -43,7 +43,7 @@ function world({ onIssue = [], vault = {}, aliases = {} } = {}) {
       if (w.faults.has('audit')) throw Object.assign(new Error('ledger down'), { status: 503 });
       w.calls.push(['audit', eventType]); w.audit.push({ eventType, payload });
     },
-    preserve: async () => ({ storage: 'CONFLUENCE', confluenceAttachmentId: 'kept-1' })
+    preserve: async () => ({ storage: 'OBJECT_STORE', objectKey: 'vault/sha256/kept' })
   };
   return w;
 }
@@ -64,7 +64,7 @@ test('an added file is written to the ledger with its hash, then deleted', async
   assert.deepEqual(result.removed, [{ id: '3', filename: 'evil.exe' }]);
   assert.deepEqual(w.calls, [['audit', 'ATTACHMENT_REMOVED_BY_RESTORE'], ['remove', '3']], 'evidence before destruction');
   assert.equal(w.audit[0].payload.contentHash, hash('mz'));
-  assert.deepEqual(w.audit[0].payload.vaultCopy, { storage: 'CONFLUENCE', confluenceAttachmentId: 'kept-1', objectKey: null });
+  assert.deepEqual(w.audit[0].payload.vaultCopy, { storage: 'OBJECT_STORE', objectKey: 'vault/sha256/kept' });
 });
 
 test('nothing is deleted when the ledger entry cannot be written', async () => {
@@ -94,10 +94,23 @@ test('a file with no vaulted copy is named, and everything else still goes ahead
   assert.ok(w.calls.some(c => c[0] === 'remove' && c[1] === '3'));
 });
 
-test('a vaulted copy changed in Confluence is refused before anything reaches Jira', async () => {
+test('a vaulted copy changed in the vault is refused before anything reaches Jira', async () => {
   const w = world({ vault: { 1: { filename: 'spec.pdf', bytes: 'tampered', hash: hash('pdf') }, 2: { filename: 'data.csv', bytes: 'csv' } } });
   await assert.rejects(() => run(w), /no longer matches the hash/);
   assert.equal(w.calls.filter(c => c[0] === 'upload').map(c => c[2]).join(), 'data.csv');
+});
+
+test('a legacy copy with storage: CONFLUENCE fails with stored in Confluence, which is no longer supported', async () => {
+  const w = world({ onIssue: [], vault: { 1: { filename: 'spec.pdf', bytes: 'pdf' } } });
+  w.deps.vaultedCopies = async () => new Map([['1', {
+    jira_attachment_id: '1', filename: 'spec.pdf', content_hash: hash('pdf'),
+    storage: 'CONFLUENCE', confluence_attachment_id: 'c1', baseline_id: 'b1'
+  }]]);
+  await assert.rejects(() => run(w), error => {
+    assert.equal(error.status, 422);
+    assert.match(error.detail, /stored in Confluence, which is no longer supported/);
+    return true;
+  });
 });
 
 test('an upload whose bytes do not read back as the vaulted ones is removed and never aliased', async () => {
@@ -156,7 +169,7 @@ test('the reject dialog is told which files go, which come back, and which canno
     issue: { issueId: 10, issueKey: 'T-1' },
     removedNodes: [{ issueId: 12, issueKey: 'T-3', files: [{ id: '8', filename: 'gone-with-item.png' }] }],
     lookup: async ({ issueId, attachmentIds }) => new Map(attachmentIds.filter(id => id !== '4')
-      .map(id => [id, { issueId, confluence_attachment_id: `c${id}`, confluence_page_id: 'p', media_id: 'm' }]))
+      .map(id => [id, { issueId, storage: 'OBJECT_STORE', object_key: `vault/sha256/${id}`, media_id: 'm' }]))
   });
   assert.deepEqual(rejection.deleteFiles, [{ issueId: 10, issueKey: 'T-1', id: '3', filename: 'added.txt' }]);
   assert.deepEqual(rejection.restoreFiles.map(f => `${f.issueKey}:${f.filename}`), ['T-1:spec.pdf', 'T-2:child.pdf', 'T-3:gone-with-item.png']);
@@ -169,7 +182,7 @@ test('a restorable file the vault holds no media id for is named: text showing i
     reviewFields: [{ kind: 'attachments', removed: [{ id: '1', filename: 'known.png' }, { id: '2', filename: 'old.png' }] }],
     issue: { issueId: 10, issueKey: 'T-1' },
     lookup: async () => new Map([['1', { media_id: 'm1', storage: 'OBJECT_STORE', object_key: 'vault/sha256/a' }],
-      ['2', { media_id: null, confluence_attachment_id: 'c2', confluence_page_id: 'p' }]])
+      ['2', { media_id: null, storage: 'OBJECT_STORE', object_key: 'vault/sha256/b' }]])
   });
   assert.deepEqual(rejection.restoreFiles.map(f => f.filename), ['known.png', 'old.png']);
   assert.deepEqual(rejection.mediaUnknownFiles.map(f => f.filename), ['old.png']);
@@ -200,7 +213,7 @@ function objectStoreWorld(getContent) {
   const w = world({ onIssue: [[file('2', 'data.csv'), 'csv']], vault: { 1: { filename: 'spec.pdf', bytes: 'pdf' } } });
   w.deps.vaultedCopies = async ({ attachmentIds }) => new Map(attachmentIds.filter(id => w.vault[id]).map(id => [id, {
     jira_attachment_id: id, filename: w.vault[id].filename, content_hash: hash(w.vault[id].bytes),
-    storage: 'OBJECT_STORE', object_key: `vault/sha256/${hash(w.vault[id].bytes)}`, confluence_attachment_id: null, baseline_id: 'b1' }]));
+    storage: 'OBJECT_STORE', object_key: `vault/sha256/${hash(w.vault[id].bytes)}`, baseline_id: 'b1' }]));
   w.deps.downloadVaulted = getContent;
   return w;
 }
@@ -228,14 +241,14 @@ test('an Object Store that cannot be reached is a system failure, retried', asyn
     error => error.status === 503);
 });
 
-test('the restore adapter reads each copy from where it was vaulted', async () => {
+test('the restore adapter reads each copy from the Object Store and refuses legacy Confluence copies', async () => {
   const { createAttachmentRestoreDeps } = await import('../src/lib/restore/attachmentAdapters.js');
-  const confluenceCalls = [];
-  const api = { asApp: () => ({ requestConfluence: async path => { confluenceCalls.push(String(path)); return { ok: true, arrayBuffer: async () => Buffer.from('c') }; } }) };
-  const deps = createAttachmentRestoreDeps({ api, route: (s, ...v) => s.reduce((a, b, i) => a + b + (v[i] ?? ''), ''),
-    objectStore: { getContent: async key => Buffer.from(`os:${key}`) } });
+  const deps = createAttachmentRestoreDeps({
+    objectStore: { getContent: async key => Buffer.from(`os:${key}`) }
+  });
   assert.equal((await deps.downloadVaulted({ storage: 'OBJECT_STORE', object_key: 'vault/sha256/x' })).toString(), 'os:vault/sha256/x');
-  assert.equal(confluenceCalls.length, 0);
-  assert.equal((await deps.downloadVaulted({ storage: 'CONFLUENCE', confluence_page_id: 'p', confluence_attachment_id: 'a' })).toString(), 'c');
-  assert.equal(confluenceCalls.length, 1, 'a Confluence copy is downloaded from Confluence');
+  await assert.rejects(
+    () => deps.downloadVaulted({ storage: 'CONFLUENCE', confluence_attachment_id: 'a' }),
+    error => error.status === 404 && /stored in Confluence, which is no longer supported/.test(error.message)
+  );
 });

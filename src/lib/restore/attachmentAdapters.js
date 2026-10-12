@@ -1,21 +1,26 @@
-import { identityRecords, recordAttachmentAlias, vaultedCopies, getVaultPage } from '../../db/vaultStore.js';
+import { identityRecords, recordAttachmentAlias, vaultedCopies } from '../../db/vaultStore.js';
 import { readMediaId } from '../mediaIdentity.js';
-import { downloadVaultAttachment, uploadAttachmentToPage, sanitizeMultipartFilename } from '../vaultConfluence.js';
-import { jiraIdOf } from '../attachmentIdentity.js';
 import { tryAppend } from '../../db/store.js';
 import { STORAGE } from '../vaultLocation.js';
 import { defaultVaultObjectStore } from '../vaultObjectStore.js';
 import { EVENT } from '../ledger.js';
 
 /**
- * The Jira, Confluence and database side of ./attachments.js, which stays
+ * A multipart Content-Disposition filename sits inside a quoted-string header
+ * value. An attachment's filename is attacker-influenceable, so bare `"` or CR/LF
+ * are stripped rather than merely escaped.
+ */
+export function sanitizeMultipartFilename(filename) {
+  return String(filename).replace(/[\r\n]/g, '').replace(/"/g, "'");
+}
+
+/**
+ * The Jira, Object Store and database side of ./attachments.js, which stays
  * free of I/O so it can be tested exhaustively.
  *
  * Everything acts as the APP: the vault is private to it, and on a project
  * whose attachment deletion is locked (lib/vaultProvision.js) only the app's
- * own account keeps the grant to delete. Each failure carries Jira's or
- * Confluence's HTTP status, which is how ./attachments.js tells a refusal of
- * one file from a failure of the whole system.
+ * own account keeps the grant to delete.
  */
 
 function failure(operation, status, detail) {
@@ -66,10 +71,12 @@ export function createAttachmentRestoreDeps({ api, route, actorAccountId = 'syst
 
     vaultedCopies,
 
-    /** From wherever the copy was vaulted (lib/vaultLocation.js). */
+    /** From the Forge Object Store (lib/vaultLocation.js). */
     async downloadVaulted(copy) {
-      if ((copy.storage ?? STORAGE.CONFLUENCE) === STORAGE.OBJECT_STORE) return (await vaultStore()).getContent(copy.object_key);
-      return downloadVaultAttachment({ pageId: copy.confluence_page_id, attachmentId: copy.confluence_attachment_id }, api);
+      if (copy?.storage === 'CONFLUENCE') {
+        throw failure('DOWNLOAD_VAULTED', 404, 'stored in Confluence, which is no longer supported');
+      }
+      return (await vaultStore()).getContent(copy.object_key);
     },
 
     async upload({ issueKey, filename, mimeType, buffer }) {
@@ -125,20 +132,9 @@ export function createAttachmentRestoreDeps({ api, route, actorAccountId = 'syst
     },
 
     /**
-     * Keep the bytes of a file about to be deleted: on the item's vault page
-     * when it has one, otherwise in the Object Store.
+     * Keep the bytes of a file about to be deleted in the Object Store.
      */
-    async preserve({ issueId, file, buffer }) {
-      const page = await getVaultPage(issueId).catch(() => null);
-      if (page?.confluence_page_id) {
-        try {
-          const uploaded = await uploadAttachmentToPage({ pageId: page.confluence_page_id,
-            filename: `rejected-${jiraIdOf(file)}-${file.filename ?? 'file'}`, buffer }, api);
-          return { storage: STORAGE.CONFLUENCE, confluenceAttachmentId: String(uploaded?.id ?? '') || null };
-        } catch (error) {
-          console.error('restore: could not keep the removed file in Confluence; using the Object Store', error);
-        }
-      }
+    async preserve({ buffer }) {
       const put = await (await vaultStore()).putContent({ buffer });
       return { storage: STORAGE.OBJECT_STORE, objectKey: put.objectKey };
     }

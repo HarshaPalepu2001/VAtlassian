@@ -180,8 +180,7 @@ test('inspectIssue reports the stored record, vault and controls for a browsable
       fields: { summary: 's', status: { name: 'Open' }, issuetype: { name: 'Story' }, project: { id: '10', key: 'VAT' } } }) },
     rows: {
       va_audit: [{ event_type: 'BASELINE_CAPTURED', actor_account_id: 'u1', payload: '{}', occurred_at: 1 }],
-      va_vault_page: [{ confluence_page_id: 'p-1', created_at: 5 }],
-      va_vault_attachment: [{ jira_attachment_id: 'a-1', filename: 'spec.pdf', content_hash: 'h', confluence_attachment_id: 'c-1', vaulted_at: 6 }]
+      va_vault_attachment: [{ jira_attachment_id: 'a-1', filename: 'spec.pdf', content_hash: 'h', storage: 'OBJECT_STORE', object_key: 'vault/sha256/h', vaulted_at: 6 }]
     },
     config: { enabled: false },
     gated: [{ state: 'ACTIVE', transition_id: '31', from_status_id: '1', to_status_id: '3', required_role: 'QA',
@@ -190,7 +189,7 @@ test('inspectIssue reports the stored record, vault and controls for a browsable
   const result = await inspect({ payload: { issueKey: 'VAT-42' }, context: { accountId: 'u1' } }, deps);
   assert.equal(result.ok, true);
   assert.equal(result.recentAudit.length, 1);
-  assert.equal(result.vault.confluencePageId, 'p-1');
+  assert.equal(result.vault.storage, 'OBJECT_STORE');
   assert.equal(result.vault.attachmentCount, 1);
   assert.equal(result.gateSimulation.projectDisabled, true);
   assert.equal(result.gateSimulation.activeControlledTransitions, 1);

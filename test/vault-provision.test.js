@@ -1,21 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ensureVaultSpace, ensureAppDeleteGrant, lockAttachmentDeletion, provisionVault } from '../src/lib/vaultProvision.js';
+import { ensureAppDeleteGrant, lockAttachmentDeletion, provisionVault } from '../src/lib/vaultProvision.js';
 
 function baseDeps(overrides = {}) {
-  let site = null;
   let vaultSpace = null;
   return {
-    getVaultSite: async () => site,
-    insertVaultSite: async (args) => { site = { space_id: args.spaceId, space_key: args.spaceKey, homepage_id: args.homepageId }; },
     getVaultSpace: async () => vaultSpace,
-    insertVaultSpace: async (args) => { vaultSpace = { space_id: args.spaceId, space_key: args.spaceKey, project_page_id: args.projectPageId }; },
-    setVaultProjectPage: async (args) => { vaultSpace = { ...vaultSpace, project_page_id: args.projectPageId }; },
-    appAccountId: async () => 'app-1',
-    createSpace: async () => ({ id: 's1', key: 'VATVAULT', homepageId: 'h1', authorId: 'app-1' }),
+    insertVaultSpace: async (args) => { vaultSpace = { ...args }; },
     projectFor: async () => ({ key: 'ENG', name: 'Engineering' }),
-    findPageByTitle: async () => null,
-    createProjectPage: async () => ({ id: 'pp1' }),
     getProjectPermissionScheme: async () => ({ id: 10000, name: 'Default', permissions: [] }),
     getProjectsUsingPermissionScheme: async () => ['ENG'],
     attachmentDeleteGrantIds: () => [],
@@ -27,7 +19,6 @@ function baseDeps(overrides = {}) {
     markAppDeleteGranted: async () => {},
     markAppDeleteChecked: async () => {},
     projectConfig: async () => ({ vault: { lockAttachmentDeletion: false } }),
-    vaultTier: async () => null,
     ensureVaultProjectRow: async () => true,
     tryAppend: async () => {},
     now: () => 1000,
@@ -35,82 +26,6 @@ function baseDeps(overrides = {}) {
     ...overrides
   };
 }
-
-test('the first project creates ONE private site vault, then a project page under its home page', async () => {
-  const calls = [];
-  const deps = baseDeps({
-    createSpace: async (args) => { calls.push(['createSpace', args]); return { id: 's1', key: 'VATVAULT', homepageId: 'h1' }; },
-    createProjectPage: async (args) => { calls.push(['projectPage', args]); return { id: 'pp1' }; },
-    tryAppend: async (event) => calls.push(['audit', event.eventType])
-  });
-  const result = await ensureVaultSpace(7, deps);
-  assert.equal(result.spaceId, 's1');
-  assert.equal(result.projectPageId, 'pp1');
-  const create = calls.find(c => c[0] === 'createSpace')[1];
-  assert.equal(create.spaceKey, 'VATVAULT');
-  assert.equal(create.ownerAccountId, 'app-1', 'adoption is limited to a space the app itself made');
-  const page = calls.find(c => c[0] === 'projectPage')[1];
-  assert.equal(page.parentId, 'h1');
-  assert.equal(page.title, 'ENG — Engineering');
-  assert.deepEqual(calls.filter(c => c[0] === 'audit').map(c => c[1]), ['VAULT_SPACE_CREATED', 'VAULT_PROJECT_ADDED']);
-});
-
-test('a second project reuses the site vault — there is never a space per project', async () => {
-  let spacesCreated = 0;
-  const deps = baseDeps({
-    getVaultSite: async () => ({ space_id: 's1', space_key: 'VATVAULT', homepage_id: 'h1' }),
-    createSpace: async () => { spacesCreated += 1; return { id: 'sX' }; }
-  });
-  const result = await ensureVaultSpace(8, deps);
-  assert.equal(spacesCreated, 0);
-  assert.equal(result.spaceId, 's1');
-  assert.equal(result.projectPageId, 'pp1');
-});
-
-test('a fully provisioned project returns at once, with no Confluence calls', async () => {
-  let touched = false;
-  const deps = baseDeps({
-    getVaultSite: async () => { touched = true; return null; },
-    getVaultSpace: async () => ({ space_id: 's1', space_key: 'VATVAULT', project_page_id: 'pp1' })
-  });
-  const result = await ensureVaultSpace(7, deps);
-  assert.equal(result.projectPageId, 'pp1');
-  assert.equal(touched, false);
-});
-
-test('a project page left behind by a failed earlier attempt is found by title, not duplicated', async () => {
-  let created = 0;
-  const deps = baseDeps({
-    getVaultSite: async () => ({ space_id: 's1', space_key: 'VATVAULT', homepage_id: 'h1' }),
-    findPageByTitle: async () => ({ id: 'pp-old' }),
-    createProjectPage: async () => { created += 1; return { id: 'pp-new' }; }
-  });
-  const result = await ensureVaultSpace(7, deps);
-  assert.equal(result.projectPageId, 'pp-old');
-  assert.equal(created, 0);
-});
-
-test('a row from the old per-project design is re-pointed at the site vault', async () => {
-  const updates = [];
-  const deps = baseDeps({
-    getVaultSite: async () => ({ space_id: 's1', space_key: 'VATVAULT', homepage_id: 'h1' }),
-    getVaultSpace: async () => ({ space_id: 'old', space_key: 'VLTENG', project_page_id: null }),
-    insertVaultSpace: async () => { throw new Error('must update, not insert'); },
-    setVaultProjectPage: async (args) => updates.push(args)
-  });
-  await ensureVaultSpace(7, deps);
-  assert.deepEqual(updates, [{ projectId: 7, spaceId: 's1', spaceKey: 'VATVAULT', projectPageId: 'pp1' }]);
-});
-
-test('two first-time provisions racing on the site row converge on the recorded one', async () => {
-  let reads = 0;
-  const deps = baseDeps({
-    getVaultSite: async () => (++reads === 1 ? null : { space_id: 's-winner', space_key: 'VATVAULT', homepage_id: 'h1' }),
-    insertVaultSite: async () => { throw new Error('Duplicate entry'); }
-  });
-  const result = await ensureVaultSpace(7, deps);
-  assert.equal(result.spaceId, 's-winner');
-});
 
 test('lockAttachmentDeletion removes attachment-delete grants, records the scheme and who held each grant', async () => {
   const calls = [];
@@ -179,40 +94,33 @@ test('a lockdown setting that cannot be read counts as OFF', async () => {
 });
 
 test('provisionVault with the lockdown ON runs every step and reports no errors on success', async () => {
-  const deps = baseDeps({ projectConfig: async () => ({ vault: { lockAttachmentDeletion: true } }) });
+  const deps = baseDeps({
+    getVaultSpace: async () => ({ permission_locked_at: null }),
+    projectConfig: async () => ({ vault: { lockAttachmentDeletion: true } })
+  });
   const result = await provisionVault(7, deps);
   assert.deepEqual(result.errors, []);
-  assert.equal(result.space.projectPageId, 'pp1');
   assert.equal(result.lockdownEnabled, true);
   assert.equal(result.lockdown.schemeId, 10000);
 });
 
-test('provisionVault never throws and records every failure when space creation fails', async () => {
-  const calls = [];
+test('provisionVault never throws and records error when ensureVaultProjectRow fails', async () => {
   const deps = baseDeps({
-    lockdownEnabled: true,
-    createSpace: async () => { throw new Error('confluence down'); },
-    tryAppend: async (event) => calls.push(event.eventType)
+    ensureVaultProjectRow: async () => { throw new Error('db down'); }
   });
   const result = await provisionVault(7, deps);
-  assert.equal(result.space, null);
-  // The project row is stubbed away here, so every later step has nothing to act on.
-  assert.deepEqual(result.errors.map(e => e.step), ['ensureVaultSpace', 'ensureAppDeleteGrant', 'lockAttachmentDeletion']);
-  assert.equal(result.lockdown, null);
-  assert.ok(calls.includes('VAULT_SPACE_CREATE_FAILED'));
-  assert.ok(calls.includes('ATTACHMENT_DELETE_LOCK_FAILED'));
+  assert.deepEqual(result.errors.map(e => e.step), ['ensureVaultProjectRow', 'ensureAppDeleteGrant']);
 });
 
-test('provisionVault records the lockdown failure independently of the space result', async () => {
+test('provisionVault records the lockdown failure independently', async () => {
   let space = null;
   const deps = baseDeps({
     lockdownEnabled: true,
     getVaultSpace: async () => space,
-    insertVaultSpace: async (args) => { space = { space_id: args.spaceId, project_page_id: args.projectPageId, app_delete_granted_at: 5 }; },
+    ensureVaultProjectRow: async () => { space = { app_delete_granted_at: 5 }; return true; },
     getProjectPermissionScheme: async () => { throw new Error('jira down'); }
   });
   const result = await provisionVault(7, deps);
-  assert.equal(result.space.projectPageId, 'pp1');
   assert.equal(result.lockdown, null);
   assert.deepEqual(result.errors.map(e => e.step), ['lockAttachmentDeletion'], 'a recorded app grant costs no scheme read');
 });
@@ -221,7 +129,7 @@ test('a locked project costs no scheme read on the hourly re-run', async () => {
   let schemeRead = false;
   const deps = baseDeps({
     lockdownEnabled: true,
-    getVaultSpace: async () => ({ space_id: 's1', project_page_id: 'pp1', permission_locked_at: 123, app_delete_granted_at: 124 }),
+    getVaultSpace: async () => ({ permission_locked_at: 123, app_delete_granted_at: 124 }),
     getProjectPermissionScheme: async () => { schemeRead = true; return { id: 1, permissions: [] }; }
   });
   const result = await provisionVault(7, deps);
@@ -235,7 +143,7 @@ test('turning the lockdown on again reads the scheme and removes grants a person
   const deps = baseDeps({
     lockdownEnabled: true,
     forceLock: true,
-    getVaultSpace: async () => ({ space_id: 's1', project_page_id: 'pp1', permission_locked_at: 123, app_delete_granted_at: 124 }),
+    getVaultSpace: async () => ({ permission_locked_at: 123, app_delete_granted_at: 124 }),
     getProjectPermissionScheme: async () => ({ id: 10000, name: 'Default', permissions: [{ id: 9, permission: 'DELETE_ALL_ATTACHMENTS' }] }),
     attachmentDeleteGrantIds: (scheme) => scheme.permissions.map(p => p.id),
     removeAttachmentDeleteGrants: async ({ grantIds }) => removed.push(...grantIds),
@@ -250,7 +158,7 @@ test('turning the lockdown on again reads the scheme and removes grants a person
 test('lockdown audit payload includes otherProjectKeys sharing the scheme', async () => {
   let auditEvent = null;
   const deps = baseDeps({
-    getVaultSpace: async () => ({ space_id: 's1' }),
+    getVaultSpace: async () => ({}),
     getProjectPermissionScheme: async () => ({ id: 10000, name: 'Default', permissions: [{ id: 1, permission: 'DELETE_OWN_ATTACHMENTS' }] }),
     attachmentDeleteGrantIds: (scheme) => scheme.permissions.map((p) => p.id),
     getProjectsUsingPermissionScheme: async () => ['ENG', 'SEC'],
@@ -264,7 +172,7 @@ test('lockdown audit payload includes otherProjectKeys sharing the scheme', asyn
 test('the app keeps its own right to delete: its grant is added first and never removed', async () => {
   const calls = [];
   const deps = baseDeps({
-    getVaultSpace: async () => ({ space_id: 's1' }),
+    getVaultSpace: async () => ({}),
     getProjectPermissionScheme: async () => ({ id: 10000, name: 'Default', permissions: [
       { id: 1, permission: 'DELETE_ALL_ATTACHMENTS', holder: { type: 'projectRole', value: '10002' } }] }),
     hasAppDeleteGrant: () => false,
@@ -286,7 +194,7 @@ test('the app keeps its own right to delete: its grant is added first and never 
 test('a refused app grant is audited, its time recorded, and nothing removed', async () => {
   const calls = [];
   const deps = baseDeps({
-    getVaultSpace: async () => ({ space_id: 's1' }),
+    getVaultSpace: async () => ({}),
     hasAppDeleteGrant: () => false,
     grantAppAttachmentDelete: async () => { throw new Error('403'); },
     markAppDeleteGranted: async () => calls.push('granted'),
@@ -302,7 +210,7 @@ test('a refused app grant is audited, its time recorded, and nothing removed', a
 test('ensureAppDeleteGrant is one read for a project whose grant is recorded', async () => {
   let schemeRead = false;
   const deps = baseDeps({
-    getVaultSpace: async () => ({ space_id: 's1', app_delete_granted_at: 5 }),
+    getVaultSpace: async () => ({ app_delete_granted_at: 5 }),
     getProjectPermissionScheme: async () => { schemeRead = true; return { id: 1, permissions: [] }; }
   });
   const result = await ensureAppDeleteGrant(7, deps);
@@ -310,14 +218,11 @@ test('ensureAppDeleteGrant is one read for a project whose grant is recorded', a
   assert.equal(schemeRead, false);
 });
 
-test('on an Object Store site no Confluence space is made, and the grant still goes ahead on the project row', async () => {
+test('provisionVault provisions the Jira project row and attachment-delete grant', async () => {
   const calls = [];
   let space = null;
   const deps = baseDeps({
-    vaultTier: async () => 'OBJECT_STORE',
-    createSpace: async () => { throw new Error('must not create a Confluence space'); },
-    getVaultSite: async () => { throw new Error('must not look for a Confluence vault'); },
-    ensureVaultProjectRow: async args => { calls.push(['row', args.projectId]); space = { space_id: null }; return true; },
+    ensureVaultProjectRow: async args => { calls.push(['row', args.projectId]); space = {}; return true; },
     getVaultSpace: async () => space,
     hasAppDeleteGrant: () => false,
     grantAppAttachmentDelete: async () => calls.push(['grant'])
@@ -325,21 +230,5 @@ test('on an Object Store site no Confluence space is made, and the grant still g
   const result = await provisionVault(7, deps);
   assert.deepEqual(result.errors, []);
   assert.equal(result.storage, 'OBJECT_STORE');
-  assert.equal(result.space, null);
   assert.deepEqual(calls, [['row', 7], ['grant']]);
-});
-
-test('a Confluence vault that cannot be made yet does not hold up the app grant', async () => {
-  const calls = [];
-  let space = null;
-  const deps = baseDeps({
-    createSpace: async () => { throw new Error('confluence down'); },
-    ensureVaultProjectRow: async () => { calls.push('row'); space = { space_id: null }; return true; },
-    getVaultSpace: async () => space,
-    hasAppDeleteGrant: () => false,
-    grantAppAttachmentDelete: async () => calls.push('grant')
-  });
-  const result = await provisionVault(7, deps);
-  assert.deepEqual(result.errors.map(e => e.step), ['ensureVaultSpace']);
-  assert.deepEqual(calls, ['row', 'grant']);
 });

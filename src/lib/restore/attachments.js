@@ -9,7 +9,7 @@ import { isReadableCopy, describeLocation } from '../vaultLocation.js';
  *
  *   · A recorded file that is missing is RE-UPLOADED from the vault. Its vaulted
  *     bytes are checked against the SHA-256 taken when they were vaulted before
- *     anything is sent to Jira, so a copy altered in Confluence is refused, not
+ *     anything is sent to Jira, so a copy altered in the vault is refused, not
  *     restored. Jira gives the upload a new id; once the upload is read back and
  *     its hash matches, the new id is recorded as standing for the original
  *     (lib/attachmentIdentity.js), and from then on it IS the approved file to
@@ -119,6 +119,10 @@ export async function restoreAttachments({ issueKey, issueId, sourceIssueId = is
 
   for (const file of missing) {
     const copy = copies.get(String(file.id));
+    if (copy?.storage === 'CONFLUENCE') {
+      refuse(file, 'stored in Confluence, which is no longer supported');
+      continue;
+    }
     if (!isReadableCopy(copy)) {
       refuse(file, 'No copy of this file is in the vault, so it cannot be put back. Ask whoever removed it to attach it again.');
       continue;
@@ -131,7 +135,10 @@ export async function restoreAttachments({ issueKey, issueId, sourceIssueId = is
         // Recorded, but gone from where it was kept: a fact about this file,
         // not the system, so it is named rather than retried.
         if (Number(error?.status) === 404) {
-          refuse(file, `The vaulted copy is missing from ${describeLocation(copy)}, so it cannot be put back.`);
+          const reason = String(error?.detail ?? error?.message ?? '').includes('stored in Confluence, which is no longer supported')
+            ? 'stored in Confluence, which is no longer supported'
+            : `The vaulted copy is missing from ${describeLocation(copy)}, so it cannot be put back.`;
+          refuse(file, reason);
           continue;
         }
         throw error;
@@ -180,7 +187,7 @@ export async function restoreAttachments({ issueKey, issueId, sourceIssueId = is
       const kept = await deps.preserve({ issueId: Number(issueId), file, buffer: bytes }).catch(() => null);
       await deps.audit('ATTACHMENT_REMOVED_BY_RESTORE', { issueKey, attachmentId: jiraId, filename: file.filename,
         size: file.size ?? null, contentHash, author: file.author?.accountId ?? null, created: file.created ?? null,
-        vaultCopy: kept ? { storage: kept.storage ?? null, confluenceAttachmentId: kept.confluenceAttachmentId ?? null,
+        vaultCopy: kept ? { storage: kept.storage ?? null,
           objectKey: kept.objectKey ?? null } : null }, Number(issueId));
       await deps.remove(jiraId);
       removed.push({ id: jiraId, filename: describeFile(file) });

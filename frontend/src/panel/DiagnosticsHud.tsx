@@ -81,15 +81,12 @@ interface ServerDiagnosticsResult {
     capturedAt: number;
   }>;
   vault?: {
-    tier?: { tier?: string; reason?: string } | null;
-    confluencePageId: string | null;
-    pageCreatedAt: number | null;
+    storage?: string;
     attachmentCount: number;
     attachments?: Array<{
       jiraAttachmentId: string;
       filename: string;
       contentHash: string;
-      confluenceAttachmentId: string | null;
       storage?: string;
       objectKey?: string | null;
       mediaId?: string | null;
@@ -643,17 +640,16 @@ export default function DiagnosticsHud({
                       )}
                     </div>
 
-                    {/* Vault: Confluence or Forge Object Store */}
+                    {/* Vault: Forge Object Store */}
                     <div style={{ padding: 6, background: '#fff', border: '1px solid #dfe1e6', borderRadius: 3 }}>
                       <strong>Vault:</strong>
                       {serverDiag.vault ? (
                         <div style={{ marginTop: 2 }}>
-                          <div>Site storage: {serverDiag.vault.tier?.tier ?? 'Not decided'}{serverDiag.vault.tier?.reason ? ` (${serverDiag.vault.tier.reason})` : ''}</div>
-                          <div>Page: {serverDiag.vault.confluencePageId ? `Linked (${serverDiag.vault.confluencePageId})` : 'None'}</div>
+                          <div>Storage: Forge Object Store</div>
                           <div>Vaulted Files: {serverDiag.vault.attachmentCount}</div>
                           {(serverDiag.vault.attachments ?? []).slice(0, 5).map(a => (
                             <div key={`${a.jiraAttachmentId}-${a.vaultedAt}`} style={{ color: '#6b778c' }}>
-                              {a.filename}: {a.storage ?? 'CONFLUENCE'}{a.mediaId ? '' : ', no media id'}
+                              {a.filename}: {a.storage ?? 'OBJECT_STORE'}{a.mediaId ? '' : ', no media id'}
                             </div>
                           ))}
                         </div>

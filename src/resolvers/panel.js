@@ -10,7 +10,6 @@ import * as report from '../usecases/report.js';
 import * as signing from '../usecases/signing.js';
 import * as harness from './harness.js';
 import { defineWebAuthnResolvers } from '../usecases/webauthn.js';
-import * as confluence from '../usecases/confluence.js';
 import { wrapWithHarness } from '../lib/harnessLogger.js';
 
 const Resolver = ForgeResolver.default ?? ForgeResolver;
@@ -36,11 +35,7 @@ resolver.define('signing:context', ({ payload, context }) => signing.signingCont
 resolver.define('harness:logAction', ({ payload, context }) => harness.logAction({ payload, context }));
 resolver.define('harness:inspectIssue', ({ payload, context }) => harness.inspectIssue({ payload, context }));
 
-// Confluence endpoints
-resolver.define('confluence:getSpaceRole', confluence.getSpaceRole);
-resolver.define('confluence:getPageStatus', confluence.getPageStatus);
-resolver.define('confluence:protectPage', confluence.protectPage);
-resolver.define('confluence:checkOut', confluence.checkOut);
+
 
 defineWebAuthnResolvers(resolver);
 const definitions = resolver.getDefinitions();

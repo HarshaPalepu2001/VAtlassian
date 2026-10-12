@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { STORAGE, objectKeyFor } from './vaultLocation.js';
 
 /**
- * THE VAULT ON A SITE WITHOUT CONFLUENCE: the Forge Object Store.
+ * THE ATTACHMENT VAULT: the Forge Object Store.
  *
  * It keeps the app inside the customer's Atlassian tenant (Runs on Atlassian),
  * holds an object of up to 1 GB, and keeps it until it is deleted — there is no

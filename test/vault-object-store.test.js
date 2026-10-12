@@ -27,11 +27,11 @@ test('keys are content addresses, kept apart from the page-governance snapshots'
   assert.throws(() => objectKeyFor('not-a-hash'));
 });
 
-test('a copy is readable only where it says it lives', () => {
+test('a copy is readable only if it lives in the Forge Object Store with an object key', () => {
   assert.equal(isReadableCopy({ storage: 'OBJECT_STORE', object_key: 'k' }), true);
-  assert.equal(isReadableCopy({ storage: 'OBJECT_STORE', confluence_attachment_id: 'c', confluence_page_id: 'p' }), false);
-  assert.equal(isReadableCopy({ confluence_attachment_id: 'c', confluence_page_id: 'p' }), true, 'a row from before tiers is a Confluence copy');
-  assert.equal(isReadableCopy({ storage: 'CONFLUENCE', confluence_attachment_id: 'c' }), false, 'no page to read it from');
+  assert.equal(isReadableCopy({ storage: 'OBJECT_STORE' }), false, 'no object key');
+  assert.equal(isReadableCopy({ storage: 'LEGACY' }), false, 'legacy copies are no longer readable');
+  assert.equal(isReadableCopy({ legacy_attachment_id: 'c', legacy_page_id: 'p' }), false, 'legacy copies are no longer readable');
   assert.equal(isReadableCopy(null), false);
   assert.equal(describeLocation({ storage: STORAGE.OBJECT_STORE }), 'the Forge Object Store');
 });

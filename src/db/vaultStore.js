@@ -4,7 +4,7 @@ import { STORAGE, isReadableCopy } from '../lib/vaultLocation.js';
 
 export async function getVaultSpace(projectId, query = executeQuery) {
   const rows = await query(
-    `SELECT project_id, space_id, space_key, project_page_id, permission_scheme_id, permission_locked_at, app_delete_granted_at,
+    `SELECT project_id, permission_scheme_id, permission_locked_at, app_delete_granted_at,
             app_delete_checked_at, created_at, created_by FROM va_vault_space WHERE project_id = ?`,
     [projectId]
   );
@@ -12,60 +12,27 @@ export async function getVaultSpace(projectId, query = executeQuery) {
   return rows.data?.[0] ?? null;
 }
 
-/** The site vault, when `spaceId` is it; null for any other space. */
-export async function getVaultSiteBySpaceId(spaceId, query = executeQuery) {
-  const rows = await query(
-    'SELECT space_id, space_key, homepage_id, created_at, created_by FROM va_vault_site WHERE space_id = ?',
-    [String(spaceId)]
-  );
-  if (!rows?.result) throw rows?.error ?? new Error('Vault site storage is unavailable');
-  return rows.data?.[0] ?? null;
-}
-
-/** THE one vault space for this site (see lib/vaultConfluence.js). */
-const SITE_ROW = 'SITE';
-
-export async function getVaultSite(query = executeQuery) {
-  const rows = await query(
-    'SELECT space_id, space_key, homepage_id, created_at, created_by FROM va_vault_site WHERE id = ?',
-    [SITE_ROW]
-  );
-  if (!rows?.result) throw rows?.error ?? new Error('Vault site storage is unavailable');
-  return rows.data?.[0] ?? null;
-}
-
-export async function insertVaultSite({ spaceId, spaceKey, homepageId, createdBy, now = Date.now() }, query = executeQuery) {
-  const rows = await query(
-    'INSERT INTO va_vault_site (id, space_id, space_key, homepage_id, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?)',
-    [SITE_ROW, spaceId, spaceKey, homepageId ?? null, now, createdBy]
-  );
-  if (!rows?.result) throw rows?.error ?? new Error('Failed to record the vault space');
-}
-
 /** How long a refused app grant is left before the backfill asks Jira again. */
 export const APP_GRANT_RETRY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Projects with an ACTIVE baseline-capturing rule whose vault is not complete
- * — no project page yet, or the app's own grant to delete attachments (which a
- * rejection needs to remove a file added after approval) not yet in place.
- * The hourly backfill provisions these, so rules saved before vaulting
- * existed, and any attempt that failed, are picked up without anyone
- * re-saving a rule.
+ * — the app's own grant to delete attachments (which a rejection needs to
+ * remove a file added after approval) not yet in place. The hourly backfill
+ * provisions these, so rules saved before vaulting existed, and any attempt
+ * that failed, are picked up without anyone re-saving a rule.
  *
  * The attachment-delete LOCKDOWN is not part of "complete": it is a per-project
  * choice, off by default (projectsNeedingLockdown). A grant Jira refused counts
  * as done for a day, so a site that will never allow it is not asked hourly.
  */
-export async function projectsNeedingVault({ limit = 10, now = Date.now(), objectStoreOnly = false } = {}, query = executeQuery) {
-  // A site whose vault is the Object Store has no Confluence page to make.
-  const page = objectStoreOnly ? '' : 'vs.project_page_id IS NOT NULL AND ';
+export async function projectsNeedingVault({ limit = 10, now = Date.now() } = {}, query = executeQuery) {
   const rows = await query(
     `SELECT DISTINCT ct.project_id FROM va_controlled_transition ct
       WHERE ct.state = 'ACTIVE' AND ct.capture_baseline = 1
         AND ct.project_id NOT IN (
           SELECT vs.project_id FROM va_vault_space vs
-           WHERE ${page}(vs.app_delete_granted_at IS NOT NULL OR vs.app_delete_checked_at > ?))
+           WHERE vs.app_delete_granted_at IS NOT NULL OR vs.app_delete_checked_at > ?)
       ORDER BY ct.project_id LIMIT ${limitClause(limit)}`,
     [now - APP_GRANT_RETRY_MS]
   );
@@ -94,31 +61,22 @@ export async function projectsNeedingLockdown(projectIds, query = executeQuery) 
   return (rows.data ?? []).map(row => Number(row.project_id));
 }
 
-export async function setVaultProjectPage({ projectId, spaceId, spaceKey, projectPageId }, query = executeQuery) {
+export async function insertVaultSpace({ projectId, createdBy, now = Date.now() }, query = executeQuery) {
   const rows = await query(
-    'UPDATE va_vault_space SET space_id = ?, space_key = ?, project_page_id = ? WHERE project_id = ?',
-    [spaceId, spaceKey, projectPageId, projectId]
-  );
-  if (!rows?.result) throw rows?.error ?? new Error('Failed to link the project vault page');
-}
-
-export async function insertVaultSpace({ projectId, spaceId, spaceKey, projectPageId = null, createdBy, now = Date.now() }, query = executeQuery) {
-  const rows = await query(
-    'INSERT INTO va_vault_space (project_id, space_id, space_key, project_page_id, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?)',
-    [projectId, spaceId ?? null, spaceKey ?? null, projectPageId, now, createdBy]
+    'INSERT INTO va_vault_space (project_id, created_at, created_by) VALUES (?, ?, ?)',
+    [projectId, now, createdBy]
   );
   if (!rows?.result) throw rows?.error ?? new Error('Failed to record vault space');
 }
 
 /**
- * The project's row, with no vault space: a project on a Jira-only site, or
- * one whose Confluence vault could not be made yet. The app's delete grant and
- * the lockdown are recorded on it all the same. A row already there is kept.
+ * The project's row in va_vault_space. The app's delete grant and the
+ * lockdown are recorded on it. A row already there is kept.
  */
 export async function ensureVaultProjectRow({ projectId, createdBy = 'system', now = Date.now() }, query = executeQuery) {
   if (await getVaultSpace(projectId, query)) return false;
   try {
-    await insertVaultSpace({ projectId, spaceId: null, spaceKey: null, createdBy, now }, query);
+    await insertVaultSpace({ projectId, createdBy, now }, query);
     return true;
   } catch (error) {
     // Two provisions racing: the loser finds the winner's row.
@@ -160,23 +118,6 @@ export async function markAppDeleteChecked({ projectId, now = Date.now() }, quer
   if (!rows?.result) throw rows?.error ?? new Error('Failed to record the refused app attachment-delete grant');
 }
 
-export async function getVaultPage(issueId, query = executeQuery) {
-  const rows = await query(
-    'SELECT issue_id, project_id, confluence_page_id, created_at FROM va_vault_page WHERE issue_id = ?',
-    [issueId]
-  );
-  if (!rows?.result) throw rows?.error ?? new Error('Vault page storage is unavailable');
-  return rows.data?.[0] ?? null;
-}
-
-export async function insertVaultPage({ issueId, projectId, confluencePageId, now = Date.now() }, query = executeQuery) {
-  const rows = await query(
-    'INSERT INTO va_vault_page (issue_id, project_id, confluence_page_id, created_at) VALUES (?, ?, ?, ?)',
-    [issueId, projectId, confluencePageId, now]
-  );
-  if (!rows?.result) throw rows?.error ?? new Error('Failed to record vault page');
-}
-
 export async function isAttachmentVaulted({ baselineId, jiraAttachmentId }, query = executeQuery) {
   const rows = await query(
     'SELECT 1 FROM va_vault_attachment WHERE baseline_id = ? AND jira_attachment_id = ?',
@@ -187,17 +128,17 @@ export async function isAttachmentVaulted({ baselineId, jiraAttachmentId }, quer
 }
 
 export async function insertVaultAttachment(
-  { baselineId, issueId, jiraAttachmentId, filename, contentHash, confluenceAttachmentId = null, mediaId = null,
-    storage = STORAGE.CONFLUENCE, objectKey = null, now = Date.now() },
+  { baselineId, issueId, jiraAttachmentId, filename, contentHash, mediaId = null,
+    storage = STORAGE.OBJECT_STORE, objectKey = null, now = Date.now() },
   query = executeQuery
 ) {
   const id = newId().toString('hex');
   const rows = await query(
     `INSERT INTO va_vault_attachment
-       (id, baseline_id, issue_id, jira_attachment_id, filename, content_hash, confluence_attachment_id, media_id, vaulted_at,
+       (id, baseline_id, issue_id, jira_attachment_id, filename, content_hash, media_id, vaulted_at,
         storage, object_key)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, baselineId, issueId, jiraAttachmentId, filename, contentHash, confluenceAttachmentId ?? null, mediaId, now,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, baselineId, issueId, jiraAttachmentId, filename, contentHash, mediaId, now,
       storage, objectKey ?? null]
   );
   if (!rows?.result) throw rows?.error ?? new Error('Failed to record vaulted attachment');
@@ -206,20 +147,19 @@ export async function insertVaultAttachment(
 
 /**
  * The newest vaulted copy of each of `attachmentIds` on `issueId`, from any
- * baseline, with the vault page it sits on. A Jira attachment never changes,
- * so every copy of one id is a copy of the same bytes; the newest is simply
- * the one most likely to still be there. A copy that names nowhere to read it
- * from (lib/vaultLocation.js isReadableCopy) gives way to an older one that
- * does. Map: Jira id -> row, with `storage` and `object_key`.
+ * baseline. A Jira attachment never changes, so every copy of one id is a copy
+ * of the same bytes; the newest is simply the one most likely to still be
+ * there. A copy that names nowhere to read it from (lib/vaultLocation.js
+ * isReadableCopy) gives way to an older one that does. Map: Jira id -> row,
+ * with `storage` and `object_key`.
  */
 export async function vaultedCopies({ issueId, attachmentIds }, query = executeQuery) {
   const ids = [...new Set((attachmentIds ?? []).map(String).filter(Boolean))];
   if (ids.length === 0) return new Map();
   const rows = await query(
-    `SELECT va.jira_attachment_id, va.filename, va.content_hash, va.confluence_attachment_id,
-            va.baseline_id, va.vaulted_at, va.media_id, va.storage, va.object_key, vp.confluence_page_id
+    `SELECT va.jira_attachment_id, va.filename, va.content_hash,
+            va.baseline_id, va.vaulted_at, va.media_id, va.storage, va.object_key
        FROM va_vault_attachment va
-       LEFT JOIN va_vault_page vp ON vp.issue_id = va.issue_id
       WHERE va.issue_id = ? AND va.jira_attachment_id IN (${ids.map(() => '?').join(', ')})
       ORDER BY va.vaulted_at DESC`,
     [issueId, ...ids]
@@ -230,7 +170,7 @@ export async function vaultedCopies({ issueId, attachmentIds }, query = executeQ
     const id = String(row.jira_attachment_id);
     const media = newest.get(id)?.media_id ?? null;
     if (!newest.has(id) || (!isReadableCopy(newest.get(id)) && isReadableCopy(row))) {
-      newest.set(id, { ...row, storage: row.storage ?? STORAGE.CONFLUENCE, media_id: row.media_id ?? media });
+      newest.set(id, { ...row, storage: row.storage ?? STORAGE.OBJECT_STORE, media_id: row.media_id ?? media });
     }
     // A copy vaulted before media ids were recorded borrows one from another
     // copy of the same file: one Jira id is one media file.
