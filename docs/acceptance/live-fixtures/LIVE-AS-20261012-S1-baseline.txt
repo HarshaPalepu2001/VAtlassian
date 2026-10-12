@@ -1,0 +1,3 @@
+LIVE-AS-20261012 S1 baseline attachment
+marker: S1-FILE-BRAVO
+Grandchild file, vaulted by the Epic capture.

@@ -1,0 +1,3 @@
+LIVE-AS-20261012 C1 baseline attachment
+marker: C1-FILE-ALPHA
+This file must come back byte for byte.
