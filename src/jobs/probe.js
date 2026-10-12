@@ -98,6 +98,144 @@ function authorised(request) {
   return timingSafeEqual(createHash('sha256').update(given).digest(), createHash('sha256').update(secret).digest());
 }
 
+async function liveAttachmentRetrievalTest(issue, { uploadTest = false } = {}) {
+  const results = {
+    syntheticObjectStoreRoundtrip: null,
+    endToEndJiraAttachmentTest: null,
+    jiraAttachmentsTested: []
+  };
+
+  try {
+    const testBytes = Buffer.from(`Live Forge Object Store probe byte test: ${new Date().toISOString()}`);
+    const testHash = sha256(testBytes);
+    const vault = await defaultVaultObjectStore();
+    const put = await vault.putContent({ buffer: testBytes, hash: testHash });
+    const get = await vault.getContent(put.objectKey);
+    const getHash = sha256(get);
+    results.syntheticObjectStoreRoundtrip = {
+      ok: getHash === testHash && get.length === testBytes.length,
+      bytesLength: get.length,
+      objectKey: put.objectKey,
+      reused: put.reused,
+      hashMatch: getHash === testHash
+    };
+  } catch (err) {
+    results.syntheticObjectStoreRoundtrip = {
+      ok: false,
+      error: String(err?.message ?? err),
+      status: err?.status ?? null
+    };
+  }
+
+  if (uploadTest) {
+    const e2e = {};
+    let createdAttachmentId = null;
+    try {
+      const filename = `vatlassian-live-test-${Date.now()}.txt`;
+      const originalPayload = Buffer.from(`VAtlassian Live Jira Attachment Test Content Generated at ${new Date().toISOString()}`);
+      const expectedHash = sha256(originalPayload);
+      e2e.filename = filename;
+      e2e.expectedSize = originalPayload.length;
+      e2e.expectedHash = expectedHash;
+
+      const boundary = '----VAtlassianTest' + Math.random().toString(36).slice(2);
+      const multipartBody = Buffer.concat([
+        Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: text/plain\r\n\r\n`, 'utf8'),
+        originalPayload,
+        Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8')
+      ]);
+      const uploadRes = await api.asApp().requestJira(route`/rest/api/3/issue/${issue.key}/attachments`, {
+        method: 'POST',
+        headers: {
+          'X-Atlassian-Token': 'no-check',
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          Accept: 'application/json'
+        },
+        body: multipartBody
+      });
+      e2e.jiraUploadStatus = uploadRes.status;
+      if (!uploadRes.ok) {
+        throw new Error(`Jira attachment upload failed: HTTP ${uploadRes.status}`);
+      }
+      const createdList = await uploadRes.json();
+      const created = Array.isArray(createdList) ? createdList[0] : createdList;
+      createdAttachmentId = created?.id;
+      e2e.createdAttachmentId = createdAttachmentId;
+
+      const downloadRes = await api.asApp().requestJira(route`/rest/api/3/attachment/content/${createdAttachmentId}`);
+      e2e.jiraDownloadStatus = downloadRes.status;
+      if (!downloadRes.ok) {
+        throw new Error(`Jira attachment download failed: HTTP ${downloadRes.status}`);
+      }
+      const downloadedBytes = Buffer.from(await downloadRes.arrayBuffer());
+      const downloadedHash = sha256(downloadedBytes);
+      e2e.jiraDownloadedBytes = downloadedBytes.length;
+      e2e.jiraDownloadedHash = downloadedHash;
+      e2e.jiraRetrievalMatches = (downloadedHash === expectedHash && downloadedBytes.length === originalPayload.length);
+
+      const vault = await defaultVaultObjectStore();
+      const put = await vault.putContent({ buffer: downloadedBytes, hash: downloadedHash });
+      e2e.objectStorePut = { ok: true, objectKey: put.objectKey, reused: put.reused };
+
+      const vaultedBytes = await vault.getContent(put.objectKey);
+      const vaultedHash = sha256(vaultedBytes);
+      e2e.objectStoreRetrievedBytes = vaultedBytes.length;
+      e2e.objectStoreRetrievedHash = vaultedHash;
+      e2e.objectStoreRetrievalMatches = (vaultedHash === expectedHash && vaultedBytes.length === originalPayload.length);
+
+      e2e.overallSuccess = e2e.jiraRetrievalMatches && e2e.objectStoreRetrievalMatches;
+
+      if (createdAttachmentId) {
+        const delRes = await api.asApp().requestJira(route`/rest/api/3/attachment/${createdAttachmentId}`, { method: 'DELETE' });
+        e2e.cleanupStatus = delRes.status;
+      }
+    } catch (err) {
+      e2e.overallSuccess = false;
+      e2e.error = String(err?.message ?? err);
+      if (createdAttachmentId) {
+        await api.asApp().requestJira(route`/rest/api/3/attachment/${createdAttachmentId}`, { method: 'DELETE' }).catch(() => {});
+      }
+    }
+    results.endToEndJiraAttachmentTest = e2e;
+  }
+
+  for (const a of issue.fields.attachment ?? []) {
+    const item = { id: a.id, filename: a.filename, size: a.size };
+    try {
+      const res = await api.asApp().requestJira(route`/rest/api/3/attachment/content/${a.id}`);
+      item.jiraDownloadStatus = res.status;
+      if (!res.ok) {
+        item.jiraDownloadError = `HTTP ${res.status}`;
+        results.jiraAttachmentsTested.push(item);
+        continue;
+      }
+      const bytes = Buffer.from(await res.arrayBuffer());
+      item.jiraBytesDownloaded = bytes.length;
+      item.jiraContentHash = sha256(bytes);
+
+      const vault = await defaultVaultObjectStore();
+      const put = await vault.putContent({ buffer: bytes, hash: item.jiraContentHash });
+      item.objectStorePut = { ok: true, objectKey: put.objectKey, reused: put.reused };
+
+      const retrieved = await vault.getContent(put.objectKey);
+      const retrievedHash = sha256(retrieved);
+      item.objectStoreGet = {
+        ok: true,
+        bytesRetrieved: retrieved.length,
+        hashMatch: retrievedHash === item.jiraContentHash
+      };
+      item.overallSuccess = item.objectStoreGet.hashMatch && retrieved.length === bytes.length;
+    } catch (err) {
+      item.error = String(err?.message ?? err);
+      item.status = err?.status ?? null;
+      item.overallSuccess = false;
+    }
+    results.jiraAttachmentsTested.push(item);
+  }
+
+  return results;
+}
+
 export async function handler(request) {
   if (!authorised(request)) return json(403, { error: 'forbidden' });
   const issueKey = request?.queryParameters?.issue?.[0];
@@ -114,6 +252,25 @@ export async function handler(request) {
     attachments.push({ id: a.id, filename: a.filename, size: a.size, mimeType: a.mimeType, created: a.created,
       author: a.author?.displayName, mediaIdProbe: await mediaIdOf(a.id) });
   }
+
+  const runMigration = request?.queryParameters?.runMigration?.[0] === 'true';
+  let migrationResult = null;
+  if (runMigration) {
+    try {
+      const { run } = await import('./migrate.js');
+      migrationResult = await run();
+    } catch (err) {
+      migrationResult = { ok: false, error: String(err?.message ?? err) };
+    }
+  }
+
+  const testAttachment = request?.queryParameters?.testAttachment?.[0] === 'true';
+  const uploadTest = request?.queryParameters?.uploadTest?.[0] === 'true';
+  let liveRetrievalTest = null;
+  if (testAttachment) {
+    liveRetrievalTest = await liveAttachmentRetrievalTest(issue, { uploadTest });
+  }
+
   return json(200, {
     issue: { key: issue.key, id: issueId, projectId: issue.fields.project?.id, issueTypeId: issue.fields.issuetype?.id },
     appAccountId: me?.accountId ?? null,
@@ -126,6 +283,8 @@ export async function handler(request) {
       WHERE project_id = ? AND field_id = 'attachment'`, [Number(issue.fields.project?.id)]),
     vaultLedger: await rows(`SELECT event_type, payload, occurred_at FROM va_audit WHERE issue_id = ?
       AND event_type LIKE 'ATTACHMENT%' ORDER BY occurred_at DESC LIMIT 20`, [issueId]),
-    deletePermission: await deleteGrants(issue.fields.project?.id)
+    deletePermission: await deleteGrants(issue.fields.project?.id),
+    migrationResult,
+    liveRetrievalTest
   });
 }
