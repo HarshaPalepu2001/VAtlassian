@@ -2497,19 +2497,20 @@ test('the review window says what it compares against, with tabs and the decisio
  assert.ok(foot.contains(clickButton('Approve changes')));assert.ok(foot.contains(clickButton('Reject and restore')));
 });
 
-test('the change timeline scrubs to the closest recorded edit',async()=>{
- const picked=[];
+test('the change timeline uses a continuous normalized scrubber',async()=>{
  const fields=[
   {...scalarField('summary','Summary','T-1'),attribution:[{at:2000,authorName:'Sam'}]},
   {...scalarField('priority','Priority','T-1'),attribution:[{at:8000,authorName:'Priya'}]}
  ];
- await renderInto(h(ChangeTimeline,{fields,baselineAt:1000,now:10000,onPick:id=>picked.push(id)}));
+ await renderInto(h(ChangeTimeline,{fields,baselineAt:1000,now:10000}));
  const slider=container.querySelector('input[type="range"][aria-label="Scrub through changes"]');
  assert.ok(slider,'a timeline needs a movable slider');
- await act(()=>typeInto(slider,'7900'));
- assert.equal(picked.at(-1),'priority');
- await act(()=>typeInto(slider,'2100'));
- assert.equal(picked.at(-1),'summary');
+ assert.equal(slider.min,'0');
+ assert.equal(slider.max,'10000');
+ await act(()=>typeInto(slider,'5555'));
+ assert.equal(slider.value,'5555','the thumb follows an in-progress drag');
+ await act(()=>typeInto(slider,'3333'));
+ assert.equal(slider.value,'3333','the thumb moves back without waiting for release');
 });
 
 test('the change timeline lets a reviewer reach every field edited at one instant',async()=>{
