@@ -10,3 +10,6 @@ frontend/dist/
 # live signed tunnel token — it is a credential and must never be committed.
 .forge/
 .container-service-assets/
+
+# Requirements setup: inspection reports and created-object state (site data).
+scripts/requirements-setup/.out/
