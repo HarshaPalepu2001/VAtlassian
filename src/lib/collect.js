@@ -354,6 +354,10 @@ async function recordAll({
 
   const nextReview = {
     ...result.review,
+    // Waiting since the first unrecorded change, not since the latest re-read:
+    // a comment on an item already awaiting a decision records nothing new.
+    last_drift_at: inserted === 0 && review.state === REVIEW_STATE.DRIFTED && review.last_drift_at != null
+      ? review.last_drift_at : result.review.last_drift_at,
     state: queueable ? REVIEW_STATE.DRIFTED : REVIEW_STATE.BASELINED,
     last_drift_by: materialities.length > 0 ? (actorAccountId ?? null) : review.last_drift_by,
     last_changelog_id: failed ? review.last_changelog_id : (highestChangelogId(entries) ?? review.last_changelog_id)

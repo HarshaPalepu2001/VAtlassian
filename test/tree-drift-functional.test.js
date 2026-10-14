@@ -647,3 +647,18 @@ test('an update to an issue with a tree baseline or none is left to the tree col
   assert.equal(flat, 0);
   assert.equal(results.length, 1);
 });
+
+test('a later event on an already drifted item keeps when it started waiting', async () => {
+  // A comment or worklog fires an update event; the item is re-read and still
+  // differs from its baseline, but nothing new is recorded. It is not newly
+  // waiting, and My approvals must not say "1 minute ago".
+  const f = flatFixture();
+  const seen = new Set();
+  f.recordDrift = async row => { const key = `${row.changelog_id}:${row.field_id}`;
+    if (seen.has(key)) return { inserted: false }; seen.add(key); f.driftRows.push(row); return { inserted: true, driftId: 'd1' }; };
+  await collect({ issueId: 1, issueKey: 'FEAT-1', now: 1000 });
+  assert.equal(f.review.last_drift_at, 1000);
+  await collect({ issueId: 1, issueKey: 'FEAT-1', now: 9000 });
+  assert.equal(f.review.state, 'DRIFTED');
+  assert.equal(f.review.last_drift_at, 1000);
+});
