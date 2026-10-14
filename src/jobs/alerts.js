@@ -103,7 +103,7 @@ export async function run({ request = defaultCreate } = {}) {
     // 11.300(d) is written against.
     console.error('alerts: NO ALERT DESTINATION CONFIGURED — security alerts are undelivered', JSON.stringify({
       undelivered: queue.length, critical,
-      fix: 'Set the alert project and issue type under Apps -> Electronic Signatures -> Settings'
+      fix: 'Set the alert project and work item type under Jira settings -> Apps -> VAtlassian -> Control health'
     }));
     return { ok: false, reason: 'NO_DESTINATION', pending: queue.length, critical };
   }

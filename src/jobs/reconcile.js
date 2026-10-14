@@ -9,13 +9,18 @@ import { expireStale } from '../db/approvalStore.js';
  * the rest.
  */
 export async function sweep({ now = Date.now(), detectedVia = DETECTED_VIA.RECONCILE,
-  batch = 40, due = dueTreeRoots, collector = collectTree } = {}) {
+  batch = 40, due = dueTreeRoots, collector = collectTree, deadline = Infinity, clock = Date.now } = {}) {
   const started = Date.now();
   const items = await due(batch);
   let examined = 0;
   let withDrift = 0;
   let errors = 0;
+  let deferred = 0;
   for (const item of items) {
+    // A scheduled function is killed at its time limit, taking every job after
+    // it down too. Trees not started now are the least recently checked next
+    // time, so stopping early only defers them.
+    if (clock() >= deadline) { deferred++; continue; }
     try {
       const result = await collector({rootIssueId:item.issue_id, rootIssueKey:item.issue_key, detectedVia, now});
       examined++;
@@ -26,7 +31,7 @@ export async function sweep({ now = Date.now(), detectedVia = DETECTED_VIA.RECON
       console.error(`reconcile: issue ${item.issue_id} failed`, error);
     }
   }
-  return {ok:errors === 0, examined, withDrift, errors, elapsedMs:Date.now() - started};
+  return {ok:errors === 0, examined, withDrift, errors, deferred, elapsedMs:Date.now() - started};
 }
 
 export async function run(options = {}) {

@@ -90,7 +90,7 @@ export async function listLedger(req, overrides) {
       const actor = row.actor_account_id === 'system' ? null : users.get(row.actor_account_id);
       return {
         occurredAt: row.occurred_at,
-        actorName: row.actor_account_id === 'system' ? 'System (validator)' : (payload.actorName ?? actor?.displayName ?? null),
+        actorName: row.actor_account_id === 'system' ? 'System' : (payload.actorName ?? actor?.displayName ?? null),
         eventType: row.event_type,
         payload
       };
@@ -103,7 +103,7 @@ export async function listLedger(req, overrides) {
       return {
         seq: row.seq,
         occurredAt: row.occurred_at,
-        actorName: row.actor_account_id === 'system' ? 'System (validator)' : (actor?.displayName ?? null),
+        actorName: row.actor_account_id === 'system' ? 'System' : (actor?.displayName ?? null),
         eventType: row.event_type,
         entryHash: row.entry_hash,
         payload,

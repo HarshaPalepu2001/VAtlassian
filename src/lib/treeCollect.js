@@ -1,12 +1,13 @@
 import api, { route } from '@forge/api';
 import { OUTCOME, REVIEW_STATE, isStaleLock } from './interception.js';
 import { controlledFields } from '../db/configStore.js';
-import { getReview, applyObservation } from '../db/itemStateStore.js';
+import { getReview, applyObservation, touch } from '../db/itemStateStore.js';
 import { voidOthers } from '../db/approvalStore.js';
 import { tryAppend } from '../db/store.js';
 import { EVENT } from './ledger.js';
 import { activeRootsForNode, readBaselineTree } from '../db/baselineTreeStore.js';
-import { replaceTreeDrift } from '../db/treeDriftStore.js';
+import { replaceTreeDrift, readTreeDrift } from '../db/treeDriftStore.js';
+import { sha256Hex } from './hash.js';
 import { createTreeReader } from './tree/jira.js';
 import { readStableTree } from './tree/stableRead.js';
 import { planTreeCapture } from './tree/capturePlan.js';
@@ -167,17 +168,41 @@ export async function collectTree({ rootIssueId, rootIssueKey, detectedVia = DET
   const changes = measured.filter(c => c.kind !== 'FIELD_CHANGED' || c.logicalNodeId === rootLogicalNodeId
     || !owned.has(c.logicalNodeId));
 
-  if (changes.length === 0) return { outcome: OUTCOME.NO_CHANGE };
+  // Advancing the check time is what moves the sweep on: dueTreeRoots takes
+  // the least recently checked first, so a clean tree left unstamped is picked
+  // again every hour and the trees behind it are never reached.
+  if (changes.length === 0) {
+    await touch(rootIssueId, now);
+    return { outcome: OUTCOME.NO_CHANGE };
+  }
 
-  const driftRows = changes.map(c => ({
-    logicalNodeId: c.logicalNodeId,
-    fieldId: c.kind,
-    fieldName: null,
-    baselineDigest: null,
-    currentDigest: null,
-    materiality: 'MAJOR',
-    detectedAt: now
-  }));
+  // Each row carries what it saw: a digest over the changed field ids and their
+  // current values (or the old and new parent, for a move). That is what lets a
+  // re-read tell "the same drift, still undecided" from "changed again".
+  const currentNodes = new Map(plannedCurrentTree.nodes.map(node => [node.logicalNodeId, node]));
+  const driftRows = changes.map(c => {
+    const fields = c.kind === 'FIELD_CHANGED' ? [...(c.fields ?? [])].sort() : null;
+    const digests = currentNodes.get(c.logicalNodeId)?.digests ?? {};
+    return {
+      logicalNodeId: c.logicalNodeId,
+      fieldId: c.kind,
+      fieldName: c.kind === 'NODE_MOVED' ? `${c.from ?? ''}>${c.to ?? ''}` : null,
+      baselineDigest: null,
+      currentDigest: fields ? sha256Hex(JSON.stringify(fields.map(f => [f, digests[f] ?? null]))) : null,
+      materiality: 'MAJOR',
+      detectedAt: now
+    };
+  });
+
+  // THE SAME DRIFT, READ AGAIN. The hourly sweep re-reads every drifted tree;
+  // when what it finds is exactly what is already recorded and still awaiting a
+  // decision, nothing happened. Recording it again reset "waiting since" to now,
+  // wrote a ledger row per tree per hour, and voided pending approvals.
+  if (review.state === REVIEW_STATE.DRIFTED
+      && sameDrift(await readTreeDrift(review.baseline_id).catch(() => null), driftRows)) {
+    await touch(rootIssueId, now);
+    return { outcome: OUTCOME.NO_CHANGE, unchangedDrift: true };
+  }
 
   // The durable queue counters use the same reviewer-facing unit as the diff:
   // one changed field, or one structural tree change when no field list exists.
@@ -277,4 +302,13 @@ export async function collectAffectedTrees(event, deps = { affectedTreeRoots, co
 export async function ownFlatBaseline(issueId, read = activeBaseline) {
   const baseline = await read(issueId);
   return Boolean(baseline && !baseline.tree_hash);
+}
+
+const driftKey = row => [row.logicalNodeId, row.fieldId, row.fieldName ?? '', row.currentDigest ?? ''].join('|');
+
+/** Is the recorded drift set exactly this one? Unreadable rows are never a match. */
+function sameDrift(recorded, rows) {
+  if (!Array.isArray(recorded) || recorded.length !== rows.length) return false;
+  const seen = new Set(recorded.map(driftKey));
+  return rows.every(row => seen.has(driftKey(row)));
 }

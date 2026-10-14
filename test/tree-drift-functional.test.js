@@ -33,7 +33,7 @@ const modules = {
   'db/store.js': ['tryAppend', 'newId', 'throwing'],
   'db/observationStore.js': ['recordObservation'],
   'db/baselineTreeStore.js': ['activeRootsForNode', 'readBaselineTree'],
-  'db/treeDriftStore.js': ['replaceTreeDrift'],
+  'db/treeDriftStore.js': ['replaceTreeDrift', 'readTreeDrift'],
   'lib/restore/recall.js': ['recallToReview', 'recordRecallFailure']
 };
 const hooks = registerHooks({
@@ -118,7 +118,11 @@ function baseFixture({ baselineChildren = [{ id: '2', summary: 'story' }], liveC
       .map(id => [Number(id), f.childBaselines.get(Number(id))])),
     activeRootsForNode: async () => [],
     readBaselineTree: async () => f.baselineTree,
-    replaceTreeDrift: async (baselineId, driftRows) => { replaceTreeDriftCalls.push({ baselineId, driftRows }); },
+    storedDrift: [],
+    touches: [],
+    replaceTreeDrift: async (baselineId, driftRows) => { replaceTreeDriftCalls.push({ baselineId, driftRows }); f.storedDrift = driftRows; },
+    readTreeDrift: async () => f.storedDrift,
+    touch: async (issueId, now) => { f.touches.push({ issueId, now }); },
     tryAppend: async (event) => { tryAppendCalls.push(event); },
     request: async (identity, url, options = {}) => {
       const ok = body => ({ status: 200, json: async () => body });
@@ -311,13 +315,61 @@ test('an unchanged tree is NO_CHANGE and writes nothing', async () => {
 });
 
 test('repeated and out-of-order collection converges on the same one aggregate drift set', async () => {
-  const f = baseFixture({ liveChildren: [{ id: '2', summary: 'story' }, { id: '3', summary: 'new' }] });
-  const first = await collectTree({ rootIssueId: 1, rootIssueKey: 'FEAT-1', eventId: 'e1', now: 1000 });
-  const second = await collectTree({ rootIssueId: 1, rootIssueKey: 'FEAT-1', eventId: 'e2', now: 2000 });
-  assert.equal(f.replaceTreeDriftCalls.length, 2, 'each collection replaces, it does not append to the last one');
+  const live = [{ id: '2', summary: 'story' }, { id: '3', summary: 'new' }];
+  const f = baseFixture({ liveChildren: live });
+  const first = await collectTree({ rootIssueId: 1, rootIssueKey: 'FEAT-1', eventId: 'e2', now: 2000 });
+  const g = baseFixture({ liveChildren: live });
+  const second = await collectTree({ rootIssueId: 1, rootIssueKey: 'FEAT-1', eventId: 'e1', now: 1000 });
   const kindsOf = call => call.driftRows.map(r => r.fieldId).sort();
-  assert.deepEqual(kindsOf(f.replaceTreeDriftCalls[0]), kindsOf(f.replaceTreeDriftCalls[1]));
+  assert.equal(f.replaceTreeDriftCalls.length, 1, 'each collection replaces, it does not append');
+  assert.deepEqual(kindsOf(f.replaceTreeDriftCalls[0]), kindsOf(g.replaceTreeDriftCalls[0]));
   assert.deepEqual(first.kinds.sort(), second.kinds.sort());
+});
+
+test('re-reading drift that is already recorded changes nothing but the check time', async () => {
+  // The hourly sweep re-reads every drifted tree. Recording the same drift
+  // again reset "waiting since" to now (My approvals showed weeks-old items
+  // as "1 minute ago"), added a ledger row per tree per hour, and voided
+  // pending approvals although nothing had changed.
+  const f = baseFixture({ liveChildren: [{ id: '2', summary: 'changed story' }] });
+  let voided = 0; f.voidOthers = async () => { voided++; return 0; };
+  const first = await collectTree({ rootIssueId: 1, rootIssueKey: 'FEAT-1', detectedVia: 'RECONCILE', now: 1000 });
+  assert.equal(first.outcome, 'DRIFT_RECORDED');
+  const appends = f.tryAppendCalls.length, replaces = f.replaceTreeDriftCalls.length;
+  const second = await collectTree({ rootIssueId: 1, rootIssueKey: 'FEAT-1', detectedVia: 'SWEEP', now: 5000 });
+  assert.equal(second.outcome, 'NO_CHANGE');
+  assert.equal(f.review.last_drift_at, 1000, 'waiting since the first observation');
+  assert.equal(f.tryAppendCalls.length, appends, 'no second ledger row');
+  assert.equal(f.replaceTreeDriftCalls.length, replaces);
+  assert.equal(voided, 1);
+  assert.deepEqual(f.touches.at(-1), { issueId: 1, now: 5000 });
+});
+
+test('a further edit to an already drifted field is recorded again', async () => {
+  const f = baseFixture({ liveChildren: [{ id: '2', summary: 'changed story' }] });
+  await collectTree({ rootIssueId: 1, rootIssueKey: 'FEAT-1', now: 1000 });
+  globalThis.vaFlow = baseFixture({ liveChildren: [{ id: '2', summary: 'changed again' }] });
+  Object.assign(globalThis.vaFlow, { review: f.review, storedDrift: f.storedDrift });
+  const result = await collectTree({ rootIssueId: 1, rootIssueKey: 'FEAT-1', now: 7000 });
+  assert.equal(result.outcome, 'DRIFT_RECORDED');
+  assert.equal(globalThis.vaFlow.review.last_drift_at, 7000);
+});
+
+test('an unchanged tree still advances its check time so the sweep moves on', async () => {
+  const f = baseFixture();
+  await collectTree({ rootIssueId: 1, rootIssueKey: 'FEAT-1', now: 3000 });
+  assert.deepEqual(f.touches, [{ issueId: 1, now: 3000 }]);
+});
+
+test('the sweep stops starting trees once its deadline has passed', async () => {
+  let clock = 0; const calls = [];
+  const result = await sweep({ due: async () => [{ issue_id: 1 }, { issue_id: 2 }, { issue_id: 3 }],
+    collector: async args => { calls.push(args.rootIssueId); clock += 10; return { outcome: 'NO_CHANGE' }; },
+    deadline: 15, clock: () => clock });
+  assert.deepEqual(calls, [1, 2]);
+  assert.equal(result.examined, 2);
+  assert.equal(result.deferred, 1);
+  assert.equal(result.ok, true);
 });
 
 test('reconcile.sweep enumerates active tree roots and runs the aggregate collector once per root', async () => {
