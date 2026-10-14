@@ -19,6 +19,7 @@ export default function TotpEnrollment() {
   const [busy, setBusy] = useState(false);
   const [isEnrolled, setIsEnrolled] = useState<boolean | null>(null);
   const [isLocked, setIsLocked] = useState(false);
+  const [recovery, setRecovery] = useState<Recovery>({ resetGrant: null, administrators: null, onlyAdministrator: false });
   const [qrUri, setQrUri] = useState<string | null>(null);
   const [code, setCode] = useState('');
   const [message, setMessage] = useState<{ type: 'success' | 'error' | 'warning'; text: string } | null>(null);
@@ -26,10 +27,15 @@ export default function TotpEnrollment() {
   const checkStatus = async () => {
     try {
       const response = await invoke('totp:checkStatus') as
-        { success: boolean; isEnrolled: boolean; state?: string; error?: string };
+        { success: boolean; isEnrolled: boolean; state?: string; error?: string } & Partial<Recovery>;
       if (response.success) {
         setIsEnrolled(response.isEnrolled);
         setIsLocked(response.state === 'LOCKED');
+        setRecovery({
+          resetGrant: response.resetGrant ?? null,
+          administrators: response.administrators ?? null,
+          onlyAdministrator: response.onlyAdministrator === true
+        });
       } else {
         setMessage({ type: 'error', text: response.error || 'Could not check your authenticator.' });
       }
@@ -81,6 +87,12 @@ export default function TotpEnrollment() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const refresh = async () => {
+    setBusy(true);
+    setMessage(null);
+    try { await checkStatus(); } finally { setBusy(false); }
   };
 
   if (loading && isEnrolled === null) return <Loading label="Checking your authenticator…" />;
@@ -141,17 +153,22 @@ export default function TotpEnrollment() {
           </Stack>
         </Card>
       ) : isLocked ? (
-        <SectionMessage appearance="error" title="Setup is locked">
-          <p>
-            Too many incorrect codes were entered while confirming this authenticator. Setup is
-            locked until an administrator resets it — this is not something you can retry your
-            way out of, by design.
-          </p>
-          <p style={{ marginTop: '12px' }}>
-            Ask an VAtlassian administrator to reset it under{' '}
-            <strong>Apps → VAtlassian → Lockouts</strong>.
-          </p>
-        </SectionMessage>
+        <Stack>
+          <SectionMessage appearance="error" title="Your authenticator is locked">
+            <p>
+              Too many incorrect codes were entered, so it can no longer sign. This is not
+              something you can retry your way out of, by design: an administrator has to
+              authorize setting it up again.
+            </p>
+          </SectionMessage>
+          <ReplaceCard
+            recovery={recovery}
+            busy={busy}
+            label="Set up my authenticator again"
+            onStart={startEnrolment}
+            onRefresh={refresh}
+          />
+        </Stack>
       ) : isEnrolled ? (
         <Stack>
           <SectionMessage appearance="success" title="Your authenticator is active">
@@ -166,9 +183,13 @@ export default function TotpEnrollment() {
               already given are unaffected — they are a record of a past act and are never
               re-verified against a credential.
             </p>
-            <Button onClick={startEnrolment} isDisabled={busy}>
-              {busy ? 'Starting…' : 'Set up a new authenticator'}
-            </Button>
+            <ReplaceCard
+              recovery={recovery}
+              busy={busy}
+              label="Set up a new authenticator"
+              onStart={startEnrolment}
+              onRefresh={refresh}
+            />
           </Card>
         </Stack>
       ) : (
@@ -186,5 +207,70 @@ export default function TotpEnrollment() {
         </Card>
       )}
     </Page>
+  );
+}
+
+type Recovery = {
+  resetGrant: { expiresAt: number } | null;
+  /** Other active VAtlassian administrators, or null when the roster could not be read. */
+  administrators: string[] | null;
+  onlyAdministrator: boolean;
+};
+
+const RECOVERY_PAGE = 'Jira settings → Apps → VAtlassian → Credentials & recovery';
+
+/**
+ * Replacing a working (or locked) authenticator takes an administrator's reset
+ * grant — one person cannot re-register their own signature. So the button is
+ * offered only while a grant is waiting; otherwise the card says who can issue
+ * one and where, instead of offering a button the server will refuse.
+ */
+function ReplaceCard({ recovery, busy, label, onStart, onRefresh }: {
+  recovery: Recovery; busy: boolean; label: string;
+  onStart: () => void; onRefresh: () => void;
+}) {
+  if (recovery.resetGrant) {
+    return (
+      <Stack>
+        <SectionMessage appearance="success" title="An administrator has authorized a replacement">
+          <p>
+            You can set up a new authenticator until{' '}
+            {new Date(recovery.resetGrant.expiresAt).toLocaleString()}. The authorization works once.
+          </p>
+        </SectionMessage>
+        <div className="va-row">
+          <Button appearance="primary" onClick={onStart} isDisabled={busy}>
+            {busy ? 'Starting…' : label}
+          </Button>
+        </div>
+      </Stack>
+    );
+  }
+  const others = recovery.administrators;
+  return (
+    <Stack>
+      <SectionMessage appearance="information" title="An administrator needs to authorize this first">
+        {recovery.onlyAdministrator ? (
+          <p>
+            You are the only VAtlassian administrator, and nobody can authorize their own reset.
+            Add a second administrator under <strong>Jira settings → Apps → VAtlassian →
+            Administrators</strong>, then ask them to issue your reset under{' '}
+            <strong>Credentials &amp; recovery</strong>.
+          </p>
+        ) : (
+          <p>
+            Ask{' '}
+            {others && others.length
+              ? <strong>{others.join(', ')}</strong>
+              : others ? 'a Jira administrator to appoint a VAtlassian administrator, then ask them' : 'a VAtlassian administrator'}
+            {' '}to issue you a reset under <strong>{RECOVERY_PAGE}</strong>. The reset lasts
+            24 hours; come back here once it is issued.
+          </p>
+        )}
+      </SectionMessage>
+      <div className="va-row">
+        <Button onClick={onRefresh} isDisabled={busy}>{busy ? 'Checking…' : 'Check again'}</Button>
+      </div>
+    </Stack>
   );
 }

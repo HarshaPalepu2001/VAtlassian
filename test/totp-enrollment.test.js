@@ -28,3 +28,26 @@ test('reset grant must be atomically redeemed before replacement',async()=>{
  let writes=0;const {api}=fake({read:async()=>({state:'ACTIVE',version:0}),grant:async()=>({grant_id:'x',expires_at:now+1}),redeem:async()=>false,write:async()=>{writes++;return true;}});
  assert.equal((await api.enrol({context:{accountId:'alice'}})).success,false);assert.equal(writes,0);
 });
+test('status says whether an administrator has authorized a replacement',async()=>{
+ const {api}=fake({read:async()=>({state:'ACTIVE',version:0}),grant:async()=>({grant_id:'x',expires_at:now+60000,redeemed_at:null}),
+  administrators:async()=>[{accountId:'bob',displayName:'Bob'}]});
+ const r=await api.checkStatus({context:{accountId:'alice'}});
+ assert.equal(r.success,true);assert.equal(r.state,'ACTIVE');assert.deepEqual(r.resetGrant,{expiresAt:now+60000});
+ assert.deepEqual(r.administrators,['Bob']);assert.equal(r.onlyAdministrator,false);
+});
+test('status ignores an expired grant and names who can issue a reset',async()=>{
+ const {api}=fake({read:async()=>({state:'LOCKED',version:0}),grant:async()=>({grant_id:'x',expires_at:now-1,redeemed_at:null}),
+  administrators:async()=>[{accountId:'alice',displayName:'Alice'},{accountId:'bob',displayName:'Bob'}]});
+ const r=await api.checkStatus({context:{accountId:'alice'}});
+ assert.equal(r.resetGrant,null);assert.deepEqual(r.administrators,['Bob']);assert.equal(r.onlyAdministrator,false);
+});
+test('status flags the sole administrator, who nobody can reset yet',async()=>{
+ const {api}=fake({read:async()=>({state:'ACTIVE',version:0}),administrators:async()=>[{accountId:'alice',displayName:'Alice'}]});
+ const r=await api.checkStatus({context:{accountId:'alice'}});
+ assert.deepEqual(r.administrators,[]);assert.equal(r.onlyAdministrator,true);
+});
+test('status still answers when the administrator roster cannot be read',async()=>{
+ const {api}=fake({read:async()=>({state:'ACTIVE',version:0}),administrators:async()=>{throw new Error('down');}});
+ const r=await api.checkStatus({context:{accountId:'alice'}});
+ assert.equal(r.success,true);assert.equal(r.isEnrolled,true);assert.equal(r.administrators,null);assert.equal(r.onlyAdministrator,false);
+});

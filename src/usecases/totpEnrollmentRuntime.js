@@ -4,6 +4,12 @@ import { affectedRows, toBinaryParam } from '../lib/db.js';
 export async function enrollmentRuntime() {
   const deps = await totpRuntime();
   return {...deps,
+    administrators: async () => {
+      const ids = ((await deps.query(`SELECT account_id FROM va_admin WHERE state = 'ACTIVE' ORDER BY created_at`)).data ?? [])
+        .map(r => r.account_id);
+      const users = await (await import('../lib/directory.js')).lookupUsers(ids);
+      return ids.map(accountId => ({accountId, displayName:users.get(accountId)?.displayName ?? null}));
+    },
     grant: async accountId => (await deps.query(`SELECT TO_BASE64(grant_id) AS grant_id, expires_at, redeemed_at
       FROM va_credential_reset_grant WHERE account_id = ? AND redeemed_at IS NULL ORDER BY issued_at DESC LIMIT 1`,[accountId])).data[0] ?? null,
     redeem: async (grant,now) => affectedRows(await deps.query(`UPDATE va_credential_reset_grant SET redeemed_at = ?

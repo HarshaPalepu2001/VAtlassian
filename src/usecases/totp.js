@@ -1,5 +1,5 @@
 import { enrol as makeEnrollment, provisioningUri } from '../lib/totp.js';
-import { enrolmentDecision } from '../lib/credentialRecovery.js';
+import { enrolmentDecision, grantUsable } from '../lib/credentialRecovery.js';
 import { deviceStatus as statusOf, daysBetween } from '../lib/deviceCheck.js';
 import { verifyTotp } from '../lib/approval/totpVerification.js';
 
@@ -18,7 +18,22 @@ export function createTotpUsecases(deps) {
   return {
     checkStatus: safe(async (_, accountId) => {
       const row = await deps.read(accountId);
-      return {success:true, state:row?.state ?? 'NONE', isEnrolled:row?.state === 'ACTIVE'};
+      const state = row?.state ?? 'NONE';
+      // A working credential can only be replaced on an administrator's grant,
+      // so the page has to say whether one is waiting and who could issue it —
+      // otherwise its only button is one the server will refuse.
+      const needsGrant = state === 'ACTIVE' || state === 'LOCKED';
+      const [grant, roster] = needsGrant
+        ? await Promise.all([deps.grant(accountId).catch(() => null), deps.administrators?.().catch(() => null) ?? null])
+        : [null, null];
+      const usable = grantUsable(grant, deps.now());
+      const others = Array.isArray(roster) ? roster.filter(a => a.accountId !== accountId) : null;
+      return {success:true, state, isEnrolled:state === 'ACTIVE',
+        resetGrant: usable ? {expiresAt:Number(grant.expires_at)} : null,
+        administrators: others ? others.map(a => a.displayName ?? 'A VAtlassian administrator') : null,
+        // Nobody may authorize their own reset, so the sole administrator has
+        // to appoint a second one before their authenticator can be replaced.
+        onlyAdministrator: Array.isArray(roster) && others.length === 0 && roster.length > 0};
     }),
     deviceStatus: safe(async (_, accountId) => {
       const status = statusOf(await deps.read(accountId));
