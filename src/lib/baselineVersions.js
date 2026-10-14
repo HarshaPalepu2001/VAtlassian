@@ -83,7 +83,7 @@ export function compareBaselineSnapshots(beforeSnapshot, afterSnapshot, currentF
     if (!oldNode || !newNode) {
       fields.push(nodeChange(newNode ?? oldNode, Boolean(newNode)));
     }
-    const issueKey = newNode?.issueKey ?? oldNode?.issueKey ?? String(nodeId);
+    const issueKey = newNode?.issueKey ?? oldNode?.issueKey ?? 'Unnamed work item';
     if (oldNode && newNode && (oldNode.parentLogicalNodeId ?? null) !== (newNode.parentLogicalNodeId ?? null)) {
       const parentName = (parentId, nodes) => parentId == null ? 'Root' : nodes.get(parentId)?.issueKey ?? 'Unavailable parent';
       fields.push({

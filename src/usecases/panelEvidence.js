@@ -199,8 +199,12 @@ export async function compareVersions(args) { return respond(async () => {
     id: node.currentIssueId ?? node.originalIssueId })) });
   const allowedIds = new Set((checks?.nodes ?? []).map(node => String(node.id)));
   allowedIds.add(String(issueId));
+  // A single-issue baseline is saved without its key, and a node with no key
+  // was labelled with its internal 64-character id. The root's key is known.
+  const named = node => node.issueKey ? node
+    : String(node.currentIssueId ?? node.originalIssueId) === String(issueId) ? { ...node, issueKey: issue.key } : node;
   const visible = snapshot => ({ ...snapshot,
-    nodes: snapshot.nodes.filter(node => allowedIds.has(String(node.currentIssueId ?? node.originalIssueId))) });
+    nodes: snapshot.nodes.filter(node => allowedIds.has(String(node.currentIssueId ?? node.originalIssueId))).map(named) });
   // A deleted or now restricted historical child has no current browse grant.
   // Keep its content private, but do not label a partial comparison an exact match.
   const incomplete = visible(from).nodes.length !== from.nodes.length

@@ -762,6 +762,25 @@ test('version comparison reads two saved versions, while refusing unpublished ve
   assert.equal(denied.reason, 'ISSUE_ACCESS_DENIED');
 });
 
+test('version comparison names the work item by its key, never by its internal node id', async () => {
+  const { f, rootId } = familyFixture({ liveChild: 'captured by parent' });
+  const first = { ...await f.activeBaseline(), version: 1, baseline_id: Buffer.alloc(16, 4) };
+  const latest = await f.activeBaseline();
+  f.baselineByVersion = async (_issueId, version) => Number(version) === 1 ? first : latest;
+  // A saved node that carries no issue key — how a single-issue baseline is read.
+  f.readBaselineTree = async id => {
+    const value = Buffer.from(id).equals(first.baseline_id) ? 'first' : 'latest';
+    return { nodes: [{ logicalNodeId: rootId, issueKey: null, originalIssueId: 10, currentIssueId: 10,
+      parentLogicalNodeId: null, fieldDigests: JSON.stringify(project({ summary: value }, f.fields.slice(0, 1)).digests) }],
+    values: { [rootId]: { summary: value } } };
+  };
+  const result = await compareVersions({ payload: { issueKey: 'T-10', fromVersion: 1, toVersion: 3 }, context: { accountId: 'reviewer-1' } });
+  assert.equal(result.error, undefined, JSON.stringify(result));
+  assert.equal(result.fields[0].issueKey, 'T-10');
+  assert.equal(result.fields[0].group.issueKey, 'T-10');
+  assert.doesNotMatch(JSON.stringify(result.fields.map(field => [field.issueKey, field.fieldName, field.group?.issueKey])), new RegExp(rootId));
+});
+
 test('version comparison hides historical descendants the viewer cannot browse', async () => {
   const { f, rootId, childId } = familyFixture({ liveChild: 'captured by parent' });
   const latest = await f.activeBaseline();

@@ -184,7 +184,7 @@ export function buildPayload({ issue, baseline, diff }) {
       summary: f.summary,
       ...(f.materiality === MATERIALITY.COSMETIC || f.retained === false
         ? {}
-        : { before: renderValue(f.before, f.kind), after: renderValue(f.after, f.kind) })
+        : { before: renderValue(f.before, f.kind, f.valueLabels), after: renderValue(f.after, f.kind, f.valueLabels) })
     }));
 
   return {
@@ -213,9 +213,16 @@ export function buildPayload({ issue, baseline, diff }) {
   };
 }
 
-function renderValue(v, kind) {
+/** "Low (id 4)" for an identifier the diff could name; the identifier stays, as in the panel. */
+function named(v, labels) {
+  const label = (typeof v === 'string' || typeof v === 'number') ? labels?.[String(v)] : null;
+  return label && label !== String(v) ? `${label} (id ${v})` : v;
+}
+
+function renderValue(v, kind, labels = null) {
   if (v == null) return null;
-  const text = kind === 'adf' ? adfPlainText(v) : (typeof v === 'string' ? v : JSON.stringify(v));
+  const value = Array.isArray(v) ? v.map(item => named(item, labels)) : named(v, labels);
+  const text = kind === 'adf' ? adfPlainText(v) : (typeof value === 'string' ? value : JSON.stringify(value));
   const flat = String(text).replace(/\s+/g, ' ').trim();
   return flat.length <= VALUE_BUDGET ? flat : `${flat.slice(0, VALUE_BUDGET)}… [truncated]`;
 }
