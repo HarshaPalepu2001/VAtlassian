@@ -4,6 +4,17 @@ export function ancestorDriftMessage(found) {
     + `This work item cannot move until they are approved or reverted on ${found.issueKey}.`;
 }
 
+/**
+ * Has Forge refused to act as this person because they never granted the app
+ * consent? @forge/api's asUser() throws this for anyone who has not clicked
+ * "Allow access" — every new user, on every new site. Forge shows its consent
+ * screen only when the error leaves the resolver, so a catch-all that turns it
+ * into a message strands the person on "no access" with nothing to click.
+ */
+export function needsUserConsent(error) {
+  return error?.name === 'NEEDS_AUTHENTICATION_ERR';
+}
+
 export const DENY = {
   NO_DECISION: 'This transition needs a reviewer\'s approval first. Open the VAtlassian panel on this work item, review the changes, and choose Approve — then run this transition again.',
   DECISION_EXPIRED: 'The review decision expired before this transition was performed. Open the VAtlassian panel and approve again.',

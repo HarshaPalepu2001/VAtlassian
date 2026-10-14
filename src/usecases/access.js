@@ -1,4 +1,4 @@
-import { DENY } from '../lib/errors.js';
+import { DENY, needsUserConsent } from '../lib/errors.js';
 
 /**
  * THE THREE PRIMITIVES EVERY RESOLVER SHARES, AND NOTHING ELSE.
@@ -33,6 +33,7 @@ export function serialise(value) {
 export async function respond(operation) {
   try { return serialise(await operation()); }
   catch (error) {
+    if (needsUserConsent(error)) throw error;
     const reason = error.reason ?? 'ERROR';
     return { error: error.userMessage ?? DENY[reason] ?? error.message ?? String(error), reason };
   }

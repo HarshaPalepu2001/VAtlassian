@@ -1,3 +1,4 @@
+import { needsUserConsent } from '../lib/errors.js';
 // Production dependencies are loaded only when invoked; tests inject the same contracts.
 export async function adminDependencies(overrides, profile = '') {
   if (overrides) return overrides;
@@ -91,6 +92,8 @@ export async function runAdmin(req, action, overrides, profile = '', { bootstrap
     const success = result?.success ?? result?.ok ?? true;
     return { ...result, success, ok: success };
   } catch (error) {
+    // Rethrown so Forge can ask the person to allow access (lib/errors.js).
+    if (needsUserConsent(error)) throw error;
     return { success: false, ok: false, error: error.message ?? 'Administration failed.' };
   }
 }

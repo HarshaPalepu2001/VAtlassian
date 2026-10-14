@@ -1,7 +1,7 @@
 import { providerFor } from '../lib/approval/registry.js';
 import { meetsAssurance, isAssuranceLevel, effectiveAssurance, controlledAuthenticationMethod } from '../lib/approval/levels.js';
 import { makeApproval, validEvidence } from '../lib/approval/record.js';
-import { FailClosed, DENY, ancestorDriftMessage } from '../lib/errors.js';
+import { FailClosed, DENY, ancestorDriftMessage, needsUserConsent } from '../lib/errors.js';
 import { canonical } from '../lib/hash.js';
 import { createChallengePayload, challengeContextHash } from '../lib/approval/challenge.js';
 import { writeChallenge, getChallenge, markChallengeConsumed } from '../db/challengeStore.js';
@@ -40,6 +40,8 @@ function checkPolicy(ct) {
       || ![true, false, 0, 1, '0', '1'].includes(ct.capture_baseline)) fail('NOT_CONFIGURED');
 }
 function failure(error, context = {}) {
+  // Forge asks the person to allow access only if this leaves the resolver.
+  if (needsUserConsent(error)) throw error;
   if (!error?.reason) console.error('approval: unhandled failure', {
     ...context,
     name: error?.name ?? 'Error',

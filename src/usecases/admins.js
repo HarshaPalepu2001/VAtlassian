@@ -1,4 +1,5 @@
 import { runAdmin, query, audit } from './adminRuntime.js';
+import { needsUserConsent } from '../lib/errors.js';
 
 export async function check(req, overrides) {
   return runAdmin(req, async deps => {
@@ -7,8 +8,13 @@ export async function check(req, overrides) {
     const isAdmin = rows.some(r => r.account_id === req.context.accountId && r.state === 'ACTIVE');
     // Only asked when it changes what the console may show. A permission read
     // that fails is not standing: it denies the roster page rather than
-    // opening it on an unverified claim.
-    const isJiraAdmin = isAdmin ? false : await deps.isJiraAdmin().catch(() => false);
+    // opening it on an unverified claim. A read refused for want of the
+    // person's consent is the exception — it must reach Forge, which then asks
+    // them to allow access, or a new Jira administrator is told "no access".
+    const isJiraAdmin = isAdmin ? false : await deps.isJiraAdmin().catch(error => {
+      if (needsUserConsent(error)) throw error;
+      return false;
+    });
     return { isAdmin, isJiraAdmin, needsBootstrap: rows.length === 0 };
   }, overrides, '', { bootstrap: true });
 }
