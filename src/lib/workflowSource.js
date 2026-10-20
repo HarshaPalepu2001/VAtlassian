@@ -79,6 +79,15 @@ export async function readWorkflowForPair({ projectId, issueTypeId }, { request 
       const toStatusId = statusIds.get(String(transition.toStatusReference));
       const links = [];
       for (const link of transition.links ?? []) {
+        // Jira includes a layout-only link such as `{ toPort: 1 }` on an
+        // INITIAL transition. Creation has no source status to resolve, and
+        // the admin picker never offers INITIAL transitions, so preserve the
+        // layout link instead of treating its intentionally absent source as
+        // an incomplete directed edge.
+        if (transition.type === 'INITIAL' && link?.fromStatusReference == null) {
+          links.push(link);
+          continue;
+        }
         const fromStatusId = statusIds.get(String(link.fromStatusReference));
         if (!fromStatusId) {
           console.error(`workflowSource: unknown source status reference for ${projectId}/${issueTypeId}`);

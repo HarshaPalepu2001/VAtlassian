@@ -221,6 +221,27 @@ test('Jira status references become status ids before an edge is offered', async
     [{ fromStatusId: '10004', toStatusId: '10006' }]);
 });
 
+test('Jira initial transition layout links without a source status do not invalidate the workflow read', async () => {
+  const workflow = await readWorkflowForPair({ projectId: '1', issueTypeId: '2' }, {
+    request: async () => ({ ok: true, json: async () => ({
+      statuses: [{ id: '10004', statusReference: '10004' }, { id: '10006', statusReference: '10006' }],
+      workflows: [{
+        id: 'wf', name: 'Software workflow',
+        statuses: [{ statusReference: '10004' }, { statusReference: '10006' }],
+        transitions: [
+          { id: '1', name: 'Create', type: 'INITIAL', toStatusReference: '10004', links: [{ toPort: 1 }], validators: [] },
+          { id: '31', name: 'Approve', type: 'DIRECTED', toStatusReference: '10006',
+            links: [{ fromStatusReference: '10004' }], validators: [fixtureGateValidator()] }
+        ]
+      }]
+    }) })
+  });
+
+  assert.ok(workflow);
+  assert.deepEqual(workflow.transitions[0].links, [{ toPort: 1 }]);
+  assert.equal(workflow.transitions[1].links[0].fromStatusReference, '10004');
+});
+
 test('a controlled edge can be saved from Jira’s documented numeric status-reference response', async () => {
   const workflow = await readWorkflowForPair({ projectId: '1', issueTypeId: '2' }, {
     request: async () => ({ ok: true, json: async () => ({

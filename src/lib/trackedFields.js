@@ -130,6 +130,125 @@ async function readIssueTypeFields(projectId, issueTypeId, sink) {
   return true;
 }
 
+export function screenIdsForIssueType({ issueTypeId, mappings = [], screenSchemes = [], workflow = null }) {
+  const mapping = mappings.find((item) => String(item.issueTypeId) === String(issueTypeId))
+    ?? mappings.find((item) => String(item.issueTypeId) === 'default');
+  const scheme = mapping && screenSchemes.find((item) => String(item.id) === String(mapping.screenSchemeId));
+  const ids = new Set(Object.values(scheme?.screens ?? {}).filter(Boolean).map(String));
+  for (const transition of workflow?.transitions ?? []) {
+    const screenId = transition?.transitionScreen?.parameters?.screenId ?? transition?.transitionScreen?.id;
+    if (screenId) ids.add(String(screenId));
+  }
+  return [...ids];
+}
+
+/**
+ * Add fields from every configured create/edit/view and transition screen.
+ * Jira's create-metadata endpoint deliberately reports only the create screen;
+ * without this union, a retirement-only rationale or review-only classification
+ * can never be selected for retention even though it is authored content.
+ */
+async function readProjectScreenFields(projectId, issueTypeIds, sink) {
+  const client = api.asApp();
+  const { readWorkflowForPair } = await import('./workflowSource.js');
+  const failed = (step, response) => {
+    console.warn(`trackedFields: ${step} failed while reading project screens`, response?.status);
+    return false;
+  };
+  const projectSchemes = await client.requestJira(
+    route`/rest/api/3/issuetypescreenscheme/project?projectId=${projectId}`
+  );
+  if (!projectSchemes.ok) return failed('work type screen scheme', projectSchemes);
+  const projectBody = await projectSchemes.json();
+  const issueTypeScreenSchemeId = projectBody.values?.[0]?.issueTypeScreenScheme?.id;
+  if (!issueTypeScreenSchemeId) {
+    console.warn('trackedFields: Jira returned no work type screen scheme for project', projectId);
+    return false;
+  }
+
+  const mappings = [];
+  let startAt = 0;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const response = await client.requestJira(
+      route`/rest/api/3/issuetypescreenscheme/mapping?issueTypeScreenSchemeId=${issueTypeScreenSchemeId}&startAt=${startAt}&maxResults=${PAGE_SIZE}`
+    );
+    if (!response.ok) return failed('work type screen mappings', response);
+    const body = await response.json();
+    const batch = body.values ?? [];
+    mappings.push(...batch);
+    if (!batch.length || body.isLast || (body.total != null && mappings.length >= body.total)) break;
+    startAt += batch.length;
+  }
+
+  const relevantSchemeIds = new Set();
+  for (const issueTypeId of issueTypeIds) {
+    const mapping = mappings.find((item) => String(item.issueTypeId) === String(issueTypeId))
+      ?? mappings.find((item) => String(item.issueTypeId) === 'default');
+    if (mapping?.screenSchemeId) relevantSchemeIds.add(String(mapping.screenSchemeId));
+  }
+
+  const screenSchemes = [];
+  for (const screenSchemeId of relevantSchemeIds) {
+    const response = await client.requestJira(
+      route`/rest/api/3/screenscheme?id=${screenSchemeId}&startAt=0&maxResults=${PAGE_SIZE}`
+    );
+    if (!response.ok) {
+      failed(`screen scheme ${screenSchemeId}`, response);
+      continue;
+    }
+    const body = await response.json();
+    screenSchemes.push(...(body.values ?? []));
+  }
+
+  const workflows = new Map();
+  const CONCURRENCY = 5;
+  for (let i = 0; i < issueTypeIds.length; i += CONCURRENCY) {
+    const batch = issueTypeIds.slice(i, i + CONCURRENCY);
+    const values = await Promise.all(batch.map(async (issueTypeId) => [
+      issueTypeId,
+      await readWorkflowForPair({ projectId, issueTypeId })
+    ]));
+    for (const [issueTypeId, workflow] of values) workflows.set(String(issueTypeId), workflow);
+  }
+
+  const screenIds = new Set();
+  for (const issueTypeId of issueTypeIds) {
+    for (const screenId of screenIdsForIssueType({
+      issueTypeId,
+      mappings,
+      screenSchemes,
+      workflow: workflows.get(String(issueTypeId))
+    })) screenIds.add(screenId);
+  }
+
+  const screenFields = new Map();
+  const allScreenIds = [...screenIds];
+  for (let i = 0; i < allScreenIds.length; i += CONCURRENCY) {
+    const batch = allScreenIds.slice(i, i + CONCURRENCY);
+    await Promise.all(batch.map(async (screenId) => {
+      const tabsResponse = await client.requestJira(route`/rest/api/3/screens/${screenId}/tabs`);
+      if (!tabsResponse.ok) return;
+      const tabs = await tabsResponse.json();
+      for (const tab of tabs ?? []) {
+        const fieldsResponse = await client.requestJira(route`/rest/api/3/screens/${screenId}/tabs/${tab.id}/fields`);
+        if (!fieldsResponse.ok) continue;
+        for (const field of await fieldsResponse.json()) {
+          if (field?.id) screenFields.set(String(field.id), field);
+        }
+      }
+    }));
+  }
+
+  const catalogueResponse = await client.requestJira(route`/rest/api/3/field`);
+  const catalogue = catalogueResponse.ok ? await catalogueResponse.json() : [];
+  const catalogueById = new Map((catalogue ?? []).map((field) => [String(field.id), field]));
+  for (const [id, field] of screenFields) {
+    if (!sink.has(id)) sink.set(id, { ...field, ...catalogueById.get(id), id });
+  }
+  console.info('trackedFields: project screen discovery', JSON.stringify({ projectId, issueTypes: issueTypeIds.length, screens: screenIds.size, fields: screenFields.size }));
+  return true;
+}
+
 /**
  * Jira's field catalogue for a project scope.
  *
@@ -159,6 +278,8 @@ export async function readScopeFields(projectId, issueTypeId) {
       const batch = issueTypes.slice(i, i + CONCURRENCY);
       await Promise.all(batch.map((it) => readIssueTypeFields(projectId, it, fieldMap)));
     }
+
+    await readProjectScreenFields(projectId, issueTypes, fieldMap);
 
     return Array.from(fieldMap.values());
   } catch (e) {

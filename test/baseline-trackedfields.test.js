@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { fieldsToAdopt, scopeFromIssue, SCOPE_BASIS } from '../src/lib/trackedFields.js';
+import { fieldsToAdopt, scopeFromIssue, screenIdsForIssueType, SCOPE_BASIS } from '../src/lib/trackedFields.js';
 import { IGNORED_FIELDS } from '../src/lib/content.js';
 
 /**
@@ -172,4 +172,23 @@ test('the same declared rows and the same reads always produce the same scope', 
 
   assert.deepEqual(a.fields.map((f) => f.field_id), b.fields.map((f) => f.field_id));
   assert.equal(a.basis, b.basis);
+});
+
+test('field discovery includes create edit view and transition screens for the exact work type', () => {
+  const screenIds = screenIdsForIssueType({
+    issueTypeId: '10718',
+    mappings: [
+      { issueTypeId: 'default', screenSchemeId: '12013' },
+      { issueTypeId: '10718', screenSchemeId: '12082' }
+    ],
+    screenSchemes: [{ id: 12082, screens: { default: 12799, create: 12797, edit: 12798, view: 12799 } }],
+    workflow: {
+      transitions: [
+        { transitionScreen: { parameters: { screenId: '12802' } } },
+        { transitionScreen: { id: '12801' } }
+      ]
+    }
+  });
+
+  assert.deepEqual(screenIds.sort(), ['12797', '12798', '12799', '12801', '12802']);
 });
