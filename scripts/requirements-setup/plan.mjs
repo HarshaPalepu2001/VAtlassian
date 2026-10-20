@@ -53,10 +53,37 @@ export const PLAN = {
       { key: 'superseded', name: 'Superseded', statusCategory: 'DONE', editable: false, lockAttachments: true }
     ],
     transitions: [
-      { name: 'Make current', from: ['registered'], to: 'current', controlled: { role: 'APPROVER', captureBaseline: true } },
+      { name: 'Make current', from: ['registered'], to: 'current', controlled: { role: 'APPROVER', captureBaseline: true }, requireFields: ['identifier', 'version', 'issuer', 'received', 'hash'] },
       { name: 'Supersede', from: ['current'], to: 'superseded', controlled: { role: 'APPROVER', captureBaseline: false } }
     ],
-    layout: { registered: [0, 0], current: [300, 0], superseded: [600, 0] }
+    layout: { registered: [0, 0], current: [300, 0], superseded: [600, 0] },
+    // The provenance of the PDF. Filled in while Registered; frozen from Current.
+    fields: [
+      { key: 'identifier', name: 'Document Identifier', kind: 'text',
+        description: 'The issuer\'s own number for this document, e.g. SRS-0042.' },
+      { key: 'version', name: 'Document Version', kind: 'text',
+        description: 'The issuer\'s version or revision of this document, e.g. 2.1 or Rev C.' },
+      { key: 'issuer', name: 'Document Issuer', kind: 'text',
+        description: 'Who issued the document: customer, regulator, standards body or internal team.' },
+      { key: 'received', name: 'Received Date', kind: 'date',
+        description: 'When this version of the document was received.' },
+      // Typed by the registrar today. VAtlassian's baseline hashes the attached
+      // bytes itself; this field is the issuer's or registrar's declared hash.
+      { key: 'hash', name: 'Source Hash', kind: 'text',
+        description: 'SHA-256 of the attached PDF as received.' }
+    ],
+    screens: {
+      create: ['summary', 'f:identifier', 'f:version', 'f:issuer', 'f:received', 'f:hash', 'description', 'attachment', 'assignee', 'labels'],
+      edit: ['summary', 'f:identifier', 'f:version', 'f:issuer', 'f:received', 'f:hash', 'description', 'attachment', 'assignee', 'labels', 'issuelinks'],
+      view: ['summary', 'f:identifier', 'f:version', 'f:issuer', 'f:received', 'f:hash', 'description', 'attachment', 'assignee', 'reporter', 'labels', 'issuelinks']
+    }
+  },
+
+  // Screen names for the global work types (screens.mjs). Screens are global
+  // in Jira; the fields on them reach only the projects in their contexts.
+  screenNames: {
+    requirements: { create: 'VAtlassian Requirements Create', edit: 'VAtlassian Requirements Edit', view: 'VAtlassian Requirements View', rework: 'VAtlassian Requirements Rework', retire: 'VAtlassian Requirements Retire', revision: 'VAtlassian Requirements Revision', scheme: 'VAtlassian Requirements Screen Scheme' },
+    sourceDocument: { create: 'VAtlassian Source Document Create', edit: 'VAtlassian Source Document Edit', view: 'VAtlassian Source Document View', scheme: 'VAtlassian Source Document Screen Scheme' }
   },
 
   // statusCategory uses the Jira workflows API vocabulary: TODO | IN_PROGRESS | DONE.

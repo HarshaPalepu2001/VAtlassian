@@ -10,8 +10,9 @@
  *  - Nothing existing is modified. Existing statuses, the reused Acceptance
  *    Criteria field, the signature field and VAT's permission grants are only
  *    READ or REFERENCED. New schemes are attached only to the new project.
- *  - The single exception is a field THIS SCRIPT created: its default global
- *    context is replaced by one scoped to the new project + work type.
+ *  - A field THIS SCRIPT created keeps Jira's mandatory default global
+ *    context. A project/work-type context holds its scoped variant/options,
+ *    while the project's screen scheme controls where the field is displayed.
  *  - Every created id is written to .out/state.<host>.json the moment it
  *    exists, so a re-run skips it and nothing is ever created twice.
  *  - A "REQ: "-prefixed object that exists but is NOT in the state file stops
@@ -26,6 +27,8 @@ import { randomUUID } from 'node:crypto';
 import { createClient } from './jira.mjs';
 import { PLAN } from './plan.mjs';
 import { OUT, openLedger, isPending } from './state.mjs';
+import { planFieldContext } from './field-context.mjs';
+import { findCustomFieldsByName, findReusableCustomField } from './field-discovery.mjs';
 
 const APPLY = process.argv.includes('--apply');
 const jira = createClient({ write: APPLY });
@@ -88,7 +91,9 @@ for (const f of PLAN.fields) {
   fieldId[f.key] = await ensure('field', f.name, {
     allowForeign: !!f.reuseIfGlobal,
     existing: async () => {
-      const matches = allFields.filter((x) => x.custom && lc(x.name) === lc(f.name));
+      const matches = f.reuseIfGlobal
+        ? [await findReusableCustomField(jira, f.name)].filter(Boolean)
+        : await findCustomFieldsByName(jira, f.name);
       if (matches.length > 1) throw new Error(`Several custom fields are named "${f.name}" (${matches.map((m) => m.id).join(', ')}).`);
       const m = matches[0];
       if (!m) return null;
@@ -310,16 +315,12 @@ for (const f of PLAN.fields) {
   if (!createdId('field', f.name)) { if (!isPending(fid)) log(`  skip    "${f.name}" (existing field, left as is)`); else log(`  SCOPE   "${f.name}" → ${PLAN.project.key} / ${PLAN.issueType.name}${f.options ? `; options: ${f.options.join(', ')}` : ''}`); continue; }
   if (isPending(projectId) || isPending(typeId)) { log(`  SCOPE   "${f.name}" → ${PLAN.project.key} / ${PLAN.issueType.name}`); continue; }
   const contexts = await jira.all(`/rest/api/3/field/${fid}/context`);
-  let ours = contexts.find((c) => c.name === ctxName);
-  if (!ours) {
+  const contextPlan = planFieldContext({ contexts, scopedName: ctxName });
+  let ours = contextPlan.scopedContext;
+  if (contextPlan.createScopedContext) {
     if (!APPLY) { log(`  SCOPE   "${f.name}" → ${PLAN.project.key} / ${PLAN.issueType.name}`); continue; }
     ours = await jira.post(`/rest/api/3/field/${fid}/context`, { name: ctxName, description: 'VAtlassian Requirements pilot.', projectIds: [String(projectId)], issueTypeIds: [String(typeId)] });
     log(`  scoped  "${f.name}" → context ${ours.id}`);
-  }
-  for (const c of contexts.filter((c) => c.isGlobalContext && c.id !== ours.id)) {
-    if (!APPLY) { log(`  REMOVE  default global context of "${f.name}" (field created by this script)`); continue; }
-    await jira.del(`/rest/api/3/field/${fid}/context/${c.id}`);
-    log(`  removed default global context ${c.id} of "${f.name}"`);
   }
   if (f.options) {
     const have = new Set((await jira.all(`/rest/api/3/field/${fid}/context/${ours.id}/option`)).map((o) => o.value));

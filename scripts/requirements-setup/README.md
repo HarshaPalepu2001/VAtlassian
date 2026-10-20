@@ -25,8 +25,17 @@ The scripts never print or store the token.
 3. `node scripts/requirements-setup/attach-project.mjs --project <KEY> [--apply]` —
    adds both work types to an existing company-managed project and maps them to
    their workflows. Refuses shared schemes, existing mappings and existing items.
-4. `node scripts/requirements-setup/setup.mjs [--apply]` — the full dedicated
-   `REQ` project (fields, screens, schemes). Not run; it predates steps 2–3.
+4. `node scripts/requirements-setup/screens.mjs --project <KEY> [--apply]` — the
+   custom fields of both work types (scoped to that project and work type),
+   their create/edit/view screens, the Requirements transition screens, a screen
+   scheme per work type mapped in the project's work type screen scheme, and the
+   transition screens and "filled in" validators on both workflows. Refuses a
+   shared work type screen scheme and existing mappings.
+5. `node scripts/requirements-setup/link-types.mjs [--apply]` — creates the
+   planned site-wide trace link types, reusing an existing exact-name type
+   without modifying it.
+6. `node scripts/requirements-setup/setup.mjs [--apply]` — the full dedicated
+   `REQ` project (fields, screens, schemes). Not run; it predates steps 2–5.
 
 `plan.mjs` holds every name, status, transition and field as data.
 
