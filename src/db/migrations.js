@@ -1082,8 +1082,8 @@ export const MIGRATIONS = [
     ADD COLUMN IF NOT EXISTS planning_snapshot MEDIUMTEXT NULL,
     ADD COLUMN IF NOT EXISTS creation_key CHAR(64) NULL,
     ADD COLUMN IF NOT EXISTS creation_fingerprint CHAR(64) NULL,
-    ADD COLUMN IF NOT EXISTS creation_event_id CHAR(32) NULL,
-    ADD UNIQUE KEY uq_tm_run_creation (creation_key)` },
+    ADD COLUMN IF NOT EXISTS creation_event_id CHAR(32) NULL;
+  CREATE UNIQUE INDEX IF NOT EXISTS uq_tm_run_creation ON tm_run (creation_key)` },
   ...BUG_MIGRATIONS,
   ...PLANNING_MIGRATIONS.map((migration, index) => ({ ...migration,
     id: `v${119 + index}_${migration.id.replace(/^tm-planning-/, 'tm_').replaceAll('-', '_')}` })),
