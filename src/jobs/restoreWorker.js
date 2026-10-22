@@ -15,6 +15,7 @@ import { baselinePolicy } from '../lib/baselinePolicy.js';
 import { baselineDecisionMeaning } from '../lib/approval/challenge.js';
 import { CAUSE } from '../lib/evidence/versionEvidence.js';
 import { createTreeReader } from '../lib/tree/jira.js';
+import { testManagementExclusion } from '../testmgmt/treeExclusion.js';
 import { readStableTree } from '../lib/tree/stableRead.js';
 import { planTreeCapture } from '../lib/tree/capturePlan.js';
 import { readTreeWithNodeFields, fieldScope } from '../lib/tree/nodeFields.js';
@@ -31,6 +32,7 @@ import { enqueueRestore } from '../lib/restore/queue.js';
 import { withRequestCache } from '../lib/cache.js';
 import { harnessLog } from '../lib/harnessLogger.js';
 import { applyOverlay } from '../lib/approval/mixedDecision.js';
+import { baselineLinkPolicy, treeLinkPolicyResolver, hydrateLinkPolicyNodes, serialiseLinkPolicy } from '../lib/linkPolicy.js';
 
 const WORKER_BATCH = 25;
 
@@ -72,6 +74,29 @@ function mixedOf(restore) {
   const detail = restore?.detail;
   const mixed = Array.isArray(detail) ? detail[0]?.mixed : detail?.mixed;
   return mixed && typeof mixed === 'object' && mixed.overlay && typeof mixed.overlay === 'object' ? mixed : null;
+}
+
+/** A queued decision cannot adopt a later child baseline's exclusion rules. */
+function pinLinkPolicies(restore, prepared) {
+  const detail = Array.isArray(restore?.detail) ? restore.detail[0] : restore?.detail;
+  const saved = detail?.linkPolicies;
+  const nodes = prepared.baselineTree?.nodes ?? [];
+  const policyFor = treeLinkPolicyResolver(prepared.baselineTree, baselineLinkPolicy(prepared.baseline));
+  const stale = () => { throw new Error('The stored link policy changed after this restore was reviewed. Review the changes and decide again.'); };
+  if (saved !== undefined && (!saved || typeof saved !== 'object' || Array.isArray(saved)
+    || Object.keys(saved).length !== nodes.length)) stale();
+  const frozen = {};
+  for (const node of nodes) {
+    const policy = policyFor(node);
+    // Jobs written before snapshots existed are exactly v1, just like old baselines.
+    const expected = saved === undefined ? { version: 1 } : saved[node.logicalNodeId];
+    if (saved !== undefined && !Object.hasOwn(saved, node.logicalNodeId)) stale();
+    if (serialiseLinkPolicy(policy) !== serialiseLinkPolicy(expected)) stale();
+    frozen[node.logicalNodeId] = policy;
+  }
+  prepared.linkPolicyFor = policyFor;
+  prepared.policyFor = policyFor;
+  return frozen;
 }
 
 const PUBLICATION_INCOMPLETE = {
@@ -154,22 +179,25 @@ async function defaultPrepare({ restore, baseline }) {
   ]);
   const editmeta = editResponse.ok ? (await editResponse.json()).fields ?? {} : {};
   const { fields } = scopeFromIssue({ declared, issueFields: issue.fields, editmetaFields: editmeta });
-  const reader = createTreeReader({ api: forgeApi, route });
+  const reader = createTreeReader({ api: forgeApi, route, exclude: testManagementExclusion });
   const stable = await readTreeWithNodeFields({ readStableTree, readTree: reader.read.bind(reader),
     rootIssueKey: issue.key, rootFields: fields });
   const { fieldsFor } = stable;
-  const captured = planTreeCapture({ rootIssueId: issue.id, nodes: stable.tree.nodes, controlledFields: fields, fieldsFor });
   const baselineValues = await readAllValues(Number(issue.id), Number(baseline.version));
   const resolvedBaseline = await resolveBaselineTree({ baseline, baselineValues,
     rootLogicalNodeId: logicalNodeId(issue.id), baselineById, readBaselineTree });
   if (!resolvedBaseline) throw new Error('Restore cannot reconstruct the signed governing baseline tree.');
+  const baselineTree = await withChildBaselines({ parentBaseline: resolvedBaseline.governingBaseline,
+    baselineTree: resolvedBaseline.tree, activeBaselines, readAllValues, readBaselineTree });
+  const policyFor = treeLinkPolicyResolver(baselineTree, baselineLinkPolicy(baseline));
+  stable.tree.nodes = await hydrateLinkPolicyNodes(stable.tree.nodes, policyFor);
+  const captured = planTreeCapture({ rootIssueId: issue.id, nodes: stable.tree.nodes, controlledFields: fields, fieldsFor, policyFor });
   return {
     issue, issueId: Number(issue.id), projectId, config, fields, fieldsFor, ruleScope,
     // The same tree the reviewer rejected against (usecases/panelAccess.js):
     // each child that carries its own latest baseline stands as that baseline,
     // so verification checks each issue against its own record.
-    baseline, baselineTree: await withChildBaselines({ parentBaseline: resolvedBaseline.governingBaseline,
-      baselineTree: resolvedBaseline.tree, activeBaselines, readAllValues, readBaselineTree }),
+    baseline, baselineTree, policyFor, linkPolicy: baselineLinkPolicy(baseline), linkPolicyFor: policyFor,
     currentTree: { nodes: captured.nodes, values: captured.values },
     reader, forgeApi
   };
@@ -178,6 +206,9 @@ async function defaultPrepare({ restore, baseline }) {
 async function defaultExecute({ restoreId, restore, prepared, plan, maxActions }) {
   const jiraAdapters = createRestoreAdapters({ api: prepared.forgeApi, route,
     actorAccountId: restore?.actor_account_id ?? 'system', approvalId: restore?.approval_id ?? null,
+    policyForIssue: (issue, context) => (prepared.linkPolicyFor ?? prepared.policyFor
+      ?? treeLinkPolicyResolver(prepared.baselineTree, baselineLinkPolicy(prepared.baseline)))({
+      ...issue, logicalNodeId: context?.logicalNodeId }),
     // A link is changed only when its other end's approved state agrees
     // (lib/restore/linkConflicts.js).
     approvedLinksOf: approvedLinksResolver({ baselineTree: prepared.baselineTree }) });
@@ -229,8 +260,11 @@ async function defaultCaptureMixed({ restore, approval, prepared, baseline }) {
   const issue = await response.json();
   const stable = await readTreeWithNodeFields({ readStableTree, readTree, rootIssueKey: issue.key,
     rootFields: prepared.fields, extraFieldIds: ['status', 'parent', 'security'] });
+  const linkPolicy = baselineLinkPolicy(approval);
+  const linkPolicyFor = treeLinkPolicyResolver(prepared.baselineTree, linkPolicy);
+  stable.tree.nodes = await hydrateLinkPolicyNodes(stable.tree.nodes, linkPolicyFor);
   const expectedTreeHash = planTreeCapture({ rootIssueId: issue.id, nodes: stable.tree.nodes,
-    controlledFields: prepared.fields, fieldsFor: stable.fieldsFor }).treeHash;
+    controlledFields: prepared.fields, fieldsFor: stable.fieldsFor, linkPolicy, policyFor: linkPolicyFor }).treeHash;
   // The baseline's own recorded rule, mapped exactly as prepareApproval maps it.
   const frozen = baselinePolicy(baseline);
   const gate = { transition_id: frozen.transitionId, from_status_id: frozen.reviewStatusId,
@@ -239,7 +273,7 @@ async function defaultCaptureMixed({ restore, approval, prepared, baseline }) {
     capture_baseline: true };
   const actor = { accountId: restore.actor_account_id, displayName: approval.actor_name ?? approval.printed_name ?? null };
   const checked = { issue, issueId: Number(issue.id), projectId: prepared.projectId, fields: prepared.fields,
-    ruleScope: prepared.ruleScope, gate, baseline, baselineTree: prepared.baselineTree };
+    ruleScope: prepared.ruleScope, gate, baseline, baselineTree: prepared.baselineTree, linkPolicy, linkPolicyFor };
   const capture = await captureDriftBaseline({ checked, approval, actor, cause: CAUSE.MIXED_DECISION,
     readTree, expectedTreeHash });
   if (capture.captured) await publishBaselineSideEffects({ capture, checked, approval, actor });
@@ -297,6 +331,7 @@ export async function runRestoreWorker(eventOrBody, overrides = {}) {
     const mixed = approval.decision === 'MIXED' ? mixedOf(restore) : null;
     if (approval.decision === 'MIXED' && !mixed) throw new Error('The field decisions this restore belongs to are unavailable');
     const prepared = await deps.prepare({ restore, approval, baseline, body });
+    const linkPolicies = pinLinkPolicies(restore, prepared);
     // Verify against what the reviewer decided: the approved baseline, with each
     // APPROVED field at the digest they saw. Rebuilt from the frozen overlay,
     // never from live values, so an edit to an approved field after signing
@@ -382,6 +417,7 @@ export async function runRestoreWorker(eventOrBody, overrides = {}) {
       refused: executed.refused ?? [],
       unmatched: publication === 'INCOMPLETE' ? [...unmatched, PUBLICATION_INCOMPLETE] : unmatched,
       verification: verified, actionPlan: plan.steps,
+      ...(Object.values(linkPolicies).some(policy => policy.version === 2) ? { linkPolicies } : {}),
       ...(mixed ? { mixed, publication } : {}) }];
     await deps.finishRestore({ restoreId, now: Date.now(), counters, state, detail });
     harnessLog('RESTORE', 'worker:finished', { restoreId: idBase64(restoreId), state,

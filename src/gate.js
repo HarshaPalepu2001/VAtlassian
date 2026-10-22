@@ -5,6 +5,7 @@ import { normalizeCode } from './lib/totp.js';
 import { EVENT } from './lib/ledger.js';
 import { withRequestCache } from './lib/cache.js';
 import { harnessLog } from './lib/harnessLogger.js';
+import { guardMessage } from './testmgmt/executionGuard.js';
 
 export function submittedApprovalToken(fields) {
   if (!fields || typeof fields !== 'object') return null;
@@ -27,8 +28,8 @@ export function rawCodeSubmitted(fields) {
 /** The approval content hash is costly for a tree baseline (it reads the whole
  *  tree), so the runtime hands it over as a thunk and only a signature check
  *  pays for it. A plain value is accepted too. */
-async function contentHashOf(snapshot) {
-  return typeof snapshot.contentHash === 'function' ? snapshot.contentHash() : snapshot.contentHash;
+async function contentHashOf(snapshot, approval) {
+  return typeof snapshot.contentHash === 'function' ? snapshot.contentHash(approval) : snapshot.contentHash;
 }
 
 /**
@@ -128,6 +129,15 @@ export function createGate(deps) {
         });
       }
 
+      // TEST EXECUTIONS. Done only when every run is terminal and every failed
+      // run has its bug (testmgmt/executionGuard.js). A guard that could not be
+      // read fails closed. This is test management's own control, so a project
+      // switched off for baselines does not switch it off.
+      if (snapshot.testGuard?.error) return deny('TEST_RUNS_OPEN', 'TEST_GUARD_UNREADABLE');
+      if (snapshot.testGuard?.open?.length) {
+        return deny('TEST_RUNS_OPEN', 'TEST_RUNS_OPEN', { message: guardMessage(snapshot.testGuard.open) });
+      }
+
       // ── The edge: a signature only where VAtlassian controls it ──────────
       //
       // Jira's workflow-validator Lambda payload does not include transition.id.
@@ -165,7 +175,7 @@ export function createGate(deps) {
       const required = effectiveAssurance(policy.required_assurance);
       if (!meetsAssurance(approval.assurance_level, required)) return deny('INSUFFICIENT_ASSURANCE', 'ASSURANCE_FLOOR', { obtained: approval.assurance_level, required });
       const evidenceValid = validEvidence(approval);
-      const recomputedHash = evidenceValid ? await contentHashOf(snapshot) : null;
+      const recomputedHash = evidenceValid ? await contentHashOf(snapshot, approval) : null;
       if (!evidenceValid || approval.content_hash !== recomputedHash) {
         return deny('CONTENT_CHANGED', 'CONTENT_OR_EVIDENCE_CHANGED', { hashes: { evidenceValid,
           approvalHash: approval.content_hash ?? null, recomputedHash, basis: snapshot.hashBasis?.() ?? null } });

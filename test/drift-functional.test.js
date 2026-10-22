@@ -10,6 +10,7 @@ import { totpFixture } from './helpers/approval-fixture.js';
 // Run real preparation, challenge/signature verification, application, capture,
 // diff, restoration and validator. Replace only Jira and persistence boundaries.
 const modules = {
+  'testmgmt/store.js': ['readProject', 'listProjects', 'bugIssueIdsAmong', 'listOpenRunsForExecution'],
   'db/configStore.js': ['controlledFields','projectConfig','gateActiveOutOf','gatedTransition','listGatedTransitions','declaredFieldRows','seedControlledFields','countControlledFields'],
   'db/baselineStore.js': ['activeBaseline','activeBaselines','valueBatches','readAllValues','baselineForApproval','baselineById','currentVersion','writeBaseline'],
   'db/itemStateStore.js': ['getReview','acquire','release','upsertBaselined'],
@@ -45,6 +46,7 @@ const { createApprovalUsecases } = await import('../src/usecases/approval.js');
 const { prepareApproval, applyApproval } = await import('../src/usecases/drift.js');
 const { writeCapturedBaseline } = await import('../src/lib/capture.js');
 const { DENY } = await import('../src/lib/errors.js');
+const { snapshot } = await import('../src/usecases/panelAccess.js');
 
 const clone = value => structuredClone(value);
 const now = () => 1700000000000;
@@ -68,6 +70,8 @@ function fixture() {
     required_assurance:'ESIGNATURE',controlled_fields_hash:'c'.repeat(64),
     transition_at:now()-1000,approval_id:Buffer.alloc(16,2) };
   const f = {
+    readProject: async () => null, listProjects: async () => [], bugIssueIdsAmong: async () => new Set(),
+    listOpenRunsForExecution: async () => [],
     issue, fields, values, baselines:[baseline], saved:new Map([[1,clone(values)]]), rows:[], challenges:new Map(),
     review:{state:'DRIFTED',version:1,baseline_version:1,baseline_id:baseline.baseline_id,drift_count:1},
     drift:[{baseline_version:1,field_id:'summary',approval_id:null}], writes:[], audits:[], restores:[],
@@ -243,6 +247,34 @@ function fixture() {
   f.issue.fields.summary='reviewed drift';
   return f;
 }
+
+test('new full native approval freezes v2 while standing v1 evidence and later configuration remain independent', async () => {
+  const f = fixture();
+  f.fields.push({ field_id: 'issuelinks', field_name: 'Links', field_kind: 'LINKS', materiality: 'MAJOR', store_values: true, writable: true });
+  f.values.issuelinks = [];
+  f.saved.get(1).issuelinks = [];
+  const original = project(f.values, f.fields);
+  Object.assign(f.baselines[0], { content_hash: original.contentHash, field_digests: JSON.stringify(original.digests) });
+  f.issue.fields.issuelinks = [{ id: '100', type: { id: '90' }, inwardIssue: { id: '11', key: 'T-11',
+    fields: { project: { id: '1' }, issuetype: { id: '2' } } } }];
+  f.readProject = async () => ({ enabled: true, sourceLinkTypeId: '90', testTypeId: '2' });
+  const reviewed = await snapshot({ issue: f.issue, actor: { accountId: 'trusted' }, includeChangelog: false });
+  const prepared = await prepareApproval({ issue: f.issue, actor: { accountId: 'trusted' }, decision: 'APPROVE', expectedEvidenceHash: reviewed.evidenceHash });
+  assert.equal(prepared.evidenceHash, reviewed.evidenceHash);
+  assert.notEqual(prepared.contentHash, reviewed.contentHash, 'new signature explicitly uses a new hash domain');
+  const result = await f.sign({ expectedEvidenceHash: reviewed.evidenceHash });
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(JSON.parse(f.rows[0].link_policy).version, 2);
+  assert.equal(JSON.parse(f.baselines.at(-1).link_policy).version, 2);
+  assert.equal(f.baselines[0].link_policy, undefined, 'old approval is never reinterpreted');
+  assert.deepEqual(f.saved.get(2).issuelinks, [], 'source has no approved opinion about Test-owned links');
+  f.readProject = async () => ({ enabled: true, sourceLinkTypeId: '95', testTypeId: '99' });
+  const current = await snapshot({ issue: f.issue, actor: { accountId: 'trusted' }, includeChangelog: false });
+  assert.equal(current.driftCount, 0, 'later config does not change the stored policy');
+  f.issue.fields.issuelinks.push({ id: '101', type: { id: '92' }, outwardIssue: { id: '12' } });
+  const changed = await snapshot({ issue: f.issue, actor: { accountId: 'trusted' }, includeChangelog: false });
+  assert.ok(changed.driftCount > 0, 'ordinary relationships remain governed');
+});
 
 test('aggregate tree evidence accepts the verified hash and rejects a stale hash', async () => {
   const f = fixture();

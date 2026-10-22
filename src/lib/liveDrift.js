@@ -1,6 +1,7 @@
 import { driftedFields } from './interception.js';
 import { scopeFromIssue } from './trackedFields.js';
 import { harnessLog } from './harnessLogger.js';
+import { baselineLinkPolicy, hydrateLinkPolicyIssue } from './linkPolicy.js';
 
 /**
  * WHICH TRACKED FIELDS OF THIS WORK ITEM NO LONGER MATCH ITS ACTIVE BASELINE?
@@ -54,7 +55,9 @@ export async function baselineDrift({ baseline, issueId, issueFields, declared, 
     && issueId != null && Number(baseline.issue_id) === Number(issueId);
   const comparedFields = parentOutsideTree && issueFields && typeof issueFields === 'object'
     ? { ...issueFields, parent: null } : issueFields;
-  const result = driftedFields({ baselineDigests, issueFields: comparedFields, controlledFields });
+  const linkPolicy = baselineLinkPolicy(baseline);
+  const hydrated = await hydrateLinkPolicyIssue({ id: issueId, fields: comparedFields }, linkPolicy);
+  const result = driftedFields({ baselineDigests, issueFields: hydrated.fields, controlledFields, linkPolicy, issue: hydrated });
   return { ...result, diagnostics: explain({ baseline, result, baselineDigests, digestSource, rootDigestError,
     scopeFieldCount: controlledFields.length, parentOutsideTree }) };
 }

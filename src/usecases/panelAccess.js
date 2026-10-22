@@ -9,6 +9,7 @@ import { project } from '../lib/content.js';
 import { diffIssue } from '../lib/diff/index.js';
 import { fetchChangelog } from '../lib/changelog.js';
 import { createTreeReader } from '../lib/tree/jira.js';
+import { testManagementExclusion } from '../testmgmt/treeExclusion.js';
 import { readStableTree } from '../lib/tree/stableRead.js';
 import { planTreeCapture } from '../lib/tree/capturePlan.js';
 import { logicalNodeId } from '../lib/tree/model.js';
@@ -21,6 +22,7 @@ import { resolveBaselineTree } from '../lib/tree/scopedBaseline.js';
 import { readBaselineTree, activeRootsForNode } from '../db/baselineTreeStore.js';
 import { maxMateriality } from '../lib/materiality.js';
 import { canonicaliseIssue } from '../lib/attachmentIdentity.js';
+import { baselineLinkPolicy, hydrateLinkPolicyIssue, hydrateLinkPolicyNodes, treeLinkPolicyResolver } from '../lib/linkPolicy.js';
 import { fail, actorFrom, serialise, respond } from './access.js';
 
 export { fail, actorFrom, serialise, respond };
@@ -93,9 +95,11 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
   const restoreEditmeta = requireAuthority && baseline
     ? await overrideEditmeta(issue.key) ?? editmeta
     : editmeta;
-  const projection = project(issue.fields, fields);
+  const linkPolicy = baselineLinkPolicy(baseline);
+  issue = await hydrateLinkPolicyIssue(issue, linkPolicy);
+  const projection = project(issue.fields, fields, { issue, linkPolicy });
   const diff = baseline && !baseline.tree_hash ? diffIssue({ baseline, baselineValues, currentFields: issue.fields,
-    controlledFields: fields, driftRows, changelogEntries: changelog.entries }) : null;
+    controlledFields: fields, driftRows, changelogEntries: changelog.entries, issue, linkPolicy }) : null;
   if (diff) {
     diff.historyTruncated = changelog.truncated === true;
     diff.historyUnavailable = changelog.failed === true;
@@ -126,25 +130,12 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
   if (useTree) {
     const stable = await readTreeWithNodeFields({
       readStableTree,
-      readTree: createTreeReader({ api, route }).read,
+      readTree: createTreeReader({ api, route, exclude: testManagementExclusion }).read,
       rootIssueKey: issue.key,
       rootFields: fields
     });
     fieldsFor = stable.fieldsFor;
     tree = stable.tree;
-    
-    const plan = planTreeCapture({
-      rootIssueId: issue.id,
-      nodes: tree.nodes,
-      controlledFields: fields,
-      fieldsFor
-    });
-    currentTree = { nodes: plan.nodes, values: plan.values };
-    tree = {
-      ...stable.tree,
-      nodes: stable.tree.nodes.map(n => ({ ...n, logicalNodeId: logicalNodeId(n.id) }))
-    };
-    treeHash = plan.treeHash;
     
     const resolvedBaseline = await resolveBaselineTree({ baseline, baselineValues,
       rootLogicalNodeId: logicalNodeId(issue.id), baselineById, readBaselineTree });
@@ -155,6 +146,13 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
       baselineTree = await withChildBaselines({ parentBaseline: resolvedBaseline.governingBaseline,
         baselineTree: resolvedBaseline.tree, activeBaselines, readAllValues, readBaselineTree });
     }
+    const policyFor = treeLinkPolicyResolver(baselineTree, linkPolicy);
+    const nodes = await hydrateLinkPolicyNodes(stable.tree.nodes, policyFor);
+    const plan = planTreeCapture({ rootIssueId: issue.id, nodes,
+      controlledFields: fields, fieldsFor, linkPolicy, policyFor });
+    currentTree = { nodes: plan.nodes, values: plan.values };
+    tree = { ...stable.tree, nodes: nodes.map(n => ({ ...n, logicalNodeId: logicalNodeId(n.id) })) };
+    treeHash = plan.treeHash;
     if (baselineTree) {
       treeDiff = diffTree({ baselineTree, currentTree, controlledFields: fields, scopeFor: fieldsFor });
     }
@@ -173,7 +171,7 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
   const reviewDriftCount = reviewDiff?.changedFieldCount ?? treeDiff?.changes?.length ?? 0;
   return { issue, actor, issueId, projectId, issueTypeId, config, baseline, review, gate,
     coveredBy, eligible, fields, ruleScope: scoped.ruleScope, editmeta, restoreEditmeta, baselineValues, driftRows, diff,
-    contentHash: useTree ? treeHash : projection.contentHash, digests: projection.digests,
+    contentHash: useTree ? treeHash : projection.contentHash, digests: projection.digests, linkPolicy,
     evidenceHash: useTree ? treeHash : evidenceHash, baselineVersion: baseline?.version ?? 0,
     tree, currentTree, baselineTree, treeDiff, treeHash, fieldsFor,
     reviewDiff, driftCount: useTree ? reviewDriftCount : Math.max(driftRows.length, diff?.changedFieldCount ?? 0), reportHash: null };

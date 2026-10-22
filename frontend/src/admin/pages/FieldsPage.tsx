@@ -9,6 +9,26 @@ import type { AvailableField, ControlledField, Project } from '../types';
 import FieldClassification from './FieldClassification';
 import { searchFields, type FieldHit } from '../fieldSearch';
 type Setup = Result & { controlled: (ControlledField & { pinned?: boolean; declared?: boolean })[]; excluded: AvailableField[]; available: AvailableField[]; storage?: { storedBytes: number; items: number } };
+type SyncBatch = Result & { added?: number; screens?: { ok: boolean; total: number | null; nextOffset: number | null } | null };
+// The server reads a project's Jira screens in batches so one request stays
+// inside its time limit; each batch's fields are saved as it goes. Ask for the
+// next batch until none is left. The cap only guards against a loop that never
+// ends; 50 batches is 3,000 screens.
+const MAX_SYNC_BATCHES = 50;
+async function syncAllScreens(projectId: string): Promise<Result> {
+  let added = 0;
+  let screenOffset = 0;
+  for (let batch = 0; batch < MAX_SYNC_BATCHES; batch++) {
+    const r = assertResult(await invoke<SyncBatch>('admin:syncFields', { projectId, issueTypeId: '*', screenOffset }));
+    added += r.added ?? 0;
+    const screens = r.screens;
+    const done = `${added} field${added === 1 ? '' : 's'} added.`;
+    if (!screens?.ok) return { ...r, note: `${done} Jira's screens could not be read, so fields that appear only on edit, view or transition screens were not checked. Sync again shortly.` };
+    if (screens.nextOffset == null) return { ...r, note: `${done} All ${screens.total ?? 0} Jira screens checked.` };
+    screenOffset = screens.nextOffset;
+  }
+  return { ok: true, note: `${added} fields added. Stopped after ${MAX_SYNC_BATCHES} batches of screens; Sync again to continue.` } as Result;
+}
 export default function FieldsPage({ projects }: { projects: Project[] }) {
   const [projectId, setProject] = useState('');
   const [data, setData] = useState<Setup | null>(null);
@@ -40,7 +60,7 @@ export default function FieldsPage({ projects }: { projects: Project[] }) {
       <Field label="Project"><Select value={projectId} disabled={busy || ai} onChange={setProject} placeholder="Choose a project" options={projects.map(p => ({ value: p.id, label: p.name }))} /></Field>
       {error && <Notice danger>{error} <Button isDisabled={busy} onClick={load}>Retry</Button></Notice>}
       {message && <Notice>{message}</Notice>}
-      {projectId && !ai && <div className="va-row"><Button isDisabled={busy || !data} onClick={() => setAi(true)}>Classify fields with AI</Button><Button isDisabled={busy || !data} onClick={() => mutate(() => invoke<Result>('admin:syncFields', { projectId, issueTypeId: '*' }))}>Sync fields</Button></div>}
+      {projectId && !ai && <div className="va-row"><Button isDisabled={busy || !data} onClick={() => setAi(true)}>Classify fields with AI</Button><Button isDisabled={busy || !data} onClick={() => mutate(() => syncAllScreens(projectId))}>Sync fields</Button></div>}
       {ai ? <FieldClassification key={projectId} projectId={projectId} onClose={() => setAi(false)} onSaved={note => { setMessage(note); setAi(false); void load(); }} /> : data ? <>
         <Card><div className="va-row"><Badge tone="brand">{data.controlled.length} tracked</Badge><Badge>{data.excluded.length} excluded</Badge><Badge tone="warning">{data.available.length} unreviewed</Badge></div>
           {data.storage && <p>Site-wide storage: {(data.storage.storedBytes / 1048576).toFixed(2)} MiB across {data.storage.items} work items</p>}

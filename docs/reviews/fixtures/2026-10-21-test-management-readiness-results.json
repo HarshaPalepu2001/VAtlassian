@@ -1,0 +1,49 @@
+{
+  "localReproductions": 6,
+  "results": [
+    {
+      "probe": "unsigned terminal closure after authentication exception",
+      "state": "NOT_EXECUTED",
+      "closureSignatures": 0,
+      "blockingRuns": 0,
+      "blockingRunsDuringAuthentication": 0
+    },
+    {
+      "probe": "completed version signature stranded before state write",
+      "state": "PUBLISHED",
+      "signatureCount": 1,
+      "nextStep": null,
+      "canSign": false,
+      "addRun": "NO_SIGNED_VERSION"
+    },
+    {
+      "probe": "deleted evidence still permits signed passing run",
+      "state": "SIGNED",
+      "result": "PASSED",
+      "evidenceHashesRead": 1,
+      "remainingAttachments": 0
+    },
+    {
+      "probe": "duplicate bug while Jira search still lags beyond settle interval",
+      "jiraIssuesCreated": 2,
+      "recordedIssue": "BUG-2",
+      "state": "CREATED"
+    },
+    {
+      "probe": "same-project Story accepted as bug repair",
+      "repairedType": "Story",
+      "bugState": "CREATED",
+      "blockingRuns": 0,
+      "linksCreated": 0
+    },
+    {
+      "probe": "countersignature completes before earlier signature ledger rollback",
+      "state": "SIGNED",
+      "remainingSignatureSteps": [
+        1
+      ],
+      "testerSignResult": "LEDGER_UNAVAILABLE",
+      "blockingRuns": 0
+    }
+  ]
+}

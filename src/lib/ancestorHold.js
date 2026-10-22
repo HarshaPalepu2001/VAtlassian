@@ -28,8 +28,14 @@ export { ancestorDriftMessage } from './errors.js';
 export const MAX_ANCESTOR_DEPTH = 8;
 
 export async function driftedAncestor(issue, deps, { maxDepth = MAX_ANCESTOR_DEPTH, surface = 'ancestor' } = {}) {
-  const seen = new Set([String(issue?.id)]);
+  // A test-management issue was never signed through its parent: it sits
+  // outside the parent's governed tree (testmgmt/treeExclusion.js), so the
+  // parent's drift does not hold it. `exempt` is absent in older callers, and
+  // asked only when there is a parent to be held by.
   let parent = issue?.fields?.parent ?? null;
+  if (!parent?.key) return null;
+  if (deps.exempt && await deps.exempt(issue)) return null;
+  const seen = new Set([String(issue?.id)]);
   for (let depth = 1; parent?.key && depth <= maxDepth; depth += 1) {
     const ancestor = await deps.readIssue(parent.key);
     if (!ancestor?.id || seen.has(String(ancestor.id))) return null;
@@ -78,7 +84,8 @@ export async function viewerAncestorDeps() {
     if (!response?.ok) throw new Error(`ancestor ${key} unreadable (${response?.status})`);
     return identity.canonicaliseIssue(await response.json());
   };
+  const { testManagementRole } = await import('../testmgmt/treeExclusion.js');
   return { readIssue, projectConfig: config.projectConfig, activeBaseline: baselines.activeBaseline,
     activeRootsForNode: trees.activeRootsForNode, controlledFields: config.controlledFields,
-    rootNodeDigests: trees.rootNodeDigests };
+    rootNodeDigests: trees.rootNodeDigests, exempt: async issue => !!(await testManagementRole(issue)) };
 }

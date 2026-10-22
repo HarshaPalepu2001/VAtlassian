@@ -25,6 +25,7 @@ import { STORAGE, objectKeyFor } from './vaultLocation.js';
  * matched to the memory those functions are given in manifest.yml.
  */
 export const MAX_VAULT_BYTES = 250 * 1024 * 1024;
+export const MAX_VAULT_RANGE_BYTES = 1024 * 1024;
 
 function failure(status, message) {
   const error = new Error(message);
@@ -59,6 +60,41 @@ export function createVaultObjectStore({ fos, fetch }) {
       const res = await fetch(upload.url, { method: 'PUT', headers: { 'content-type': 'application/octet-stream' }, body: buffer });
       if (!res.ok) throw failure(res.status >= 500 || res.status === 429 ? 503 : res.status, `The Forge Object Store refused the upload (${res.status}).`);
       return { storage: STORAGE.OBJECT_STORE, objectKey, reused: false };
+    },
+
+    /**
+     * Bounded downloads use the HTTP Range support documented for createDownloadUrl:
+     * https://developer.atlassian.com/platform/forge/storage-reference/object-store-api/
+     * A server ignoring Range must never cause us to consume the full object.
+     */
+    async getContentRange(objectKey, { offset, length, totalBytes }) {
+      if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || !Number.isSafeInteger(totalBytes)
+        || offset < 0 || length < 1 || length > MAX_VAULT_RANGE_BYTES || totalBytes < 0
+        || totalBytes > MAX_VAULT_BYTES || offset > totalBytes) throw failure(416, 'Invalid vault download range.');
+      const end = Math.min(totalBytes, offset + length);
+      if (offset === end) {
+        let metadata;
+        try { metadata = await fos.get(objectKey); }
+        catch { throw failure(503, 'The Forge Object Store metadata could not be read.'); }
+        if (!metadata) throw failure(404, `No object ${objectKey} is in the Forge Object Store.`);
+        if (Number(metadata.size) !== totalBytes) throw failure(416, 'The retained object size changed.');
+        return Buffer.alloc(0);
+      }
+      let download;
+      try { download = await fos.createDownloadUrl(objectKey); }
+      catch { throw failure(503, 'The Forge Object Store download address could not be read.'); }
+      if (!download?.url) throw failure(404, `No object ${objectKey} is in the Forge Object Store.`);
+      const response = await fetch(download.url, { headers: { Range: `bytes=${offset}-${end - 1}` } });
+      if (response.status === 404) throw failure(404, `No object ${objectKey} is in the Forge Object Store.`);
+      if (response.status === 416) throw failure(416, 'The retained object no longer contains this range.');
+      if (response.status !== 206) throw failure(503, `The Forge Object Store did not return a partial download (${response.status}).`);
+      const range = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers?.get?.('content-range') ?? '');
+      const contentLength = response.headers?.get?.('content-length');
+      if (!range || Number(range[1]) !== offset || Number(range[2]) !== end - 1 || Number(range[3]) !== totalBytes
+        || (contentLength != null && Number(contentLength) !== end - offset)) throw failure(416, 'The retained object range or size changed.');
+      const bytes = Buffer.from(await response.arrayBuffer());
+      if (bytes.length !== end - offset) throw failure(416, 'The retained object download was truncated.');
+      return bytes;
     },
 
     /** The bytes stored under `objectKey`. 404 when the object is gone, 503 for anything else. */

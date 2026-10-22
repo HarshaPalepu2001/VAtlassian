@@ -1,5 +1,5 @@
-import { canonical, sha256Hex } from '../hash.js';
-import { normaliseField } from '../content.js';
+import { normaliseField, fieldDigest } from '../content.js';
+import { governedLinks } from '../linkPolicy.js';
 
 /**
  * The pure half of a restore: what an outcome means, and what digest a written
@@ -40,7 +40,8 @@ export const RESTORE_STATE = {
  * test/restore.test.js asserts they agree, for every field kind, so the pair
  * cannot silently drift apart.
  */
-export function digestOf(field, value) {
+export function digestOf(field, value, context = {}) {
+  if (field.field_kind === 'LINKS') value = governedLinks(value, context);
   let normalised;
   try {
     normalised = normaliseField(field.field_kind, value);
@@ -50,7 +51,7 @@ export function digestOf(field, value) {
     // recoverable, where refusing to write is not.
     normalised = value ?? null;
   }
-  return sha256Hex(canonical({ f: field.field_id, k: field.field_kind, v: normalised }));
+  return fieldDigest(field, normalised, context);
 }
 
 /**

@@ -4,6 +4,7 @@ import { encodeValue } from '../lib/valuestore.js';
 import { valueBatches } from './baselineStore.js';
 import { controlledFieldsHash } from '../lib/baselinePolicy.js';
 import { FailClosed } from '../lib/errors.js';
+import { serialiseLinkPolicy } from '../lib/linkPolicy.js';
 
 /**
  * A BASELINE FOR EVERY CHILD, WRITTEN BY ITS PARENT'S CAPTURE.
@@ -69,6 +70,7 @@ export function planChildBaselines({ treePlan, rootIssueId, fieldsFor, nodeOf, p
         transition_at: parent.transitionAt,
         captured_at: parent.capturedAt,
         fidelity: 'EXACT'
+        ,...((node.linkPolicy ?? parent.linkPolicy) ? { link_policy: serialiseLinkPolicy(node.linkPolicy ?? parent.linkPolicy) } : {})
       }];
     });
 }
@@ -103,15 +105,16 @@ async function insertRow(row, baselineId, valueBytes, query) {
      (baseline_id, issue_id, project_id, issue_type_id, version, state, content_hash,
       field_digests, transition_id, from_status_id, to_status_id, approved_by, approved_name,
       transition_at, captured_at, assurance_level, approval_id, fidelity, field_count, value_bytes,
-      required_role, required_assurance, controlled_fields_hash, captured_by_baseline_id)
-     VALUES (FROM_BASE64(?), ?, ?, ?, ?, 'CAPTURING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FROM_BASE64(?), ?, ?, ?, ?, ?, ?, FROM_BASE64(?))`,
+      required_role, required_assurance, controlled_fields_hash, captured_by_baseline_id${row.link_policy ? ', link_policy' : ''})
+     VALUES (FROM_BASE64(?), ?, ?, ?, ?, 'CAPTURING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FROM_BASE64(?), ?, ?, ?, ?, ?, ?, FROM_BASE64(?)${row.link_policy ? ', ?' : ''})`,
     [
       toBinaryParam(baselineId), row.issue_id, row.project_id, row.issue_type_id, row.version,
       row.content_hash, row.field_digests, row.transition_id, row.from_status_id, row.to_status_id,
       row.approved_by, row.approved_name, row.transition_at, row.captured_at, row.assurance_level,
       row.approval_id ? toBinaryParam(Buffer.from(row.approval_id)) : null, row.fidelity, row.field_count, valueBytes,
       row.required_role, row.required_assurance, row.controlled_fields_hash,
-      toBinaryParam(Buffer.from(row.captured_by_baseline_id))
+      toBinaryParam(Buffer.from(row.captured_by_baseline_id)),
+      ...(row.link_policy ? [serialiseLinkPolicy(row.link_policy)] : [])
     ]
   );
 }

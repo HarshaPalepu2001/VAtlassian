@@ -1,6 +1,7 @@
 import { project } from '../content.js';
 import { canonical, sha256Hex } from '../hash.js';
 import { linkKey, keyAtOtherEnd } from '../restore/linkConflicts.js';
+import { governedLinks, excludesLink, normaliseLinkPolicy } from '../linkPolicy.js';
 
 /**
  * ONE LINK CHANGE, ONE DECISION (decided 2026-09-28).
@@ -47,10 +48,12 @@ const otherIssueOf = link => link?.inwardIssue ?? link?.outwardIssue ?? null;
  * ([] when it had no record; null when that record's links cannot be read,
  * which decides nothing). `after` is what this approval signed.
  */
-export function linkDecisionJobs({ issue, tracksLinks, before, after, approval }) {
+export function linkDecisionJobs({ issue, tracksLinks, before, after, approval, linkPolicy = approval?.link_policy ?? approval?.linkPolicy }) {
   if (!tracksLinks || !Array.isArray(before) || !Array.isArray(after)) return [];
   const byOther = new Map();
-  for (const change of linkChanges(before, after)) {
+  // Both sides of the comparison use the policy this approval actually signed.
+  // A relationship outside that policy expresses no decision about either endpoint.
+  for (const change of linkChanges(governedLinks(before, { linkPolicy, issue }), governedLinks(after, { linkPolicy, issue }))) {
     const other = otherIssueOf(change.link);
     const otherId = Number(other?.id);
     if (!Number.isSafeInteger(otherId) || otherId <= 0 || String(otherId) === String(issue.id)) continue;
@@ -68,33 +71,35 @@ export function linkDecisionJobs({ issue, tracksLinks, before, after, approval }
  * The same link as the other issue lists it: the side flips and the issue it
  * names becomes the one that decided.
  */
-function mirrorOf(link, decidedOn) {
+export function mirrorLinkChange(link, decidedOn) {
   const side = link.inwardIssue ? 'outwardIssue' : 'inwardIssue';
-  return { id: link.id, type: link.type, [side]: { id: String(decidedOn.id), key: decidedOn.key } };
+  return { id: link.id, type: link.type, [side]: { id: String(decidedOn.id), key: decidedOn.key,
+    ...(decidedOn.fields ? { fields: decidedOn.fields } : {}) } };
 }
 
 /**
  * The other issue's approved links with the decided changes applied, or null
  * when its record already agrees (nothing to record).
  */
-export function applyLinkChanges({ links, decidedOn, changes }) {
+export function applyLinkChanges({ links, decidedOn, changes, selfIssue, linkPolicy }) {
   const current = new Map((links ?? []).map(link => [linkKey(link), link]));
   let changed = false;
   for (const { change, link } of changes ?? []) {
+    const mirrored = mirrorLinkChange(link, decidedOn);
+    if (excludesLink({ linkPolicy, issue: selfIssue, link: mirrored })) continue;
     const key = keyAtOtherEnd(link, decidedOn.id);
-    if (change === 'add' && !current.has(key)) { current.set(key, mirrorOf(link, decidedOn)); changed = true; }
+    if (change === 'add' && !current.has(key)) { current.set(key, mirrored); changed = true; }
     if (change === 'remove' && current.has(key)) { current.delete(key); changed = true; }
   }
   return changed ? [...current.values()] : null;
 }
 
-const linkDigest = links => project({ issuelinks: links }, [LINKS_FIELD]).digests.issuelinks;
-
 /** A single-issue record with only its links replaced, hashed as capture hashes it. */
-export function deriveFlatRecord({ values, digests, links }) {
-  const nextDigests = { ...digests, issuelinks: linkDigest(links) };
+export function deriveFlatRecord({ values, digests, links, linkPolicy, issue }) {
+  const projection = project({ issuelinks: links }, [LINKS_FIELD], { linkPolicy, issue });
+  const nextDigests = { ...digests, issuelinks: projection.digests.issuelinks };
   return {
-    values: { ...values, issuelinks: links },
+    values: { ...values, issuelinks: projection.raw.issuelinks },
     digests: nextDigests,
     contentHash: sha256Hex(canonical(nextDigests))
   };
@@ -113,20 +118,25 @@ export function treeHashOf(nodes) {
  * A tree record with only its ROOT's links replaced. Children and structure
  * are copied as recorded: this decision is about the root's link, nothing else.
  */
-export function deriveTreeRecord({ tree, links }) {
+export function deriveTreeRecord({ tree, links, linkPolicy, issue }) {
   const rootIndex = tree.nodes.findIndex(node => node.parentLogicalNodeId == null);
   if (rootIndex < 0) throw new Error('The recorded tree has no root node.');
   const root = tree.nodes[rootIndex];
+  const rootPolicy = normaliseLinkPolicy(root.linkPolicy ?? tree.linkPolicy ?? linkPolicy);
+  const rootIssue = issue ?? { id: String(root.currentIssueId ?? root.originalIssueId), key: root.issueKey,
+    fields: { project: { id: root.projectId }, issuetype: { id: root.issueTypeId } } };
   const digests = typeof root.fieldDigests === 'string' ? JSON.parse(root.fieldDigests) : root.fieldDigests;
-  const flat = deriveFlatRecord({ values: tree.values?.[root.logicalNodeId] ?? {}, digests, links });
+  const flat = deriveFlatRecord({ values: tree.values?.[root.logicalNodeId] ?? {}, digests, links, linkPolicy: rootPolicy, issue: rootIssue });
   const nodes = tree.nodes.map((node, index) => index === rootIndex
-    ? { ...node, contentHash: flat.contentHash, fieldDigests: JSON.stringify(flat.digests) }
+    ? { ...node, contentHash: flat.contentHash, fieldDigests: JSON.stringify(flat.digests),
+      ...(rootPolicy.version === 2 || node.linkPolicy ? { linkPolicy: rootPolicy } : {}) }
     : node);
   return {
     nodes,
     values: { ...tree.values, [root.logicalNodeId]: flat.values },
     treeHash: treeHashOf(nodes),
-    rootLogicalNodeId: root.logicalNodeId
+    rootLogicalNodeId: root.logicalNodeId,
+    ...(rootPolicy.version === 2 || tree.linkPolicy ? { linkPolicy: rootPolicy } : {})
   };
 }
 

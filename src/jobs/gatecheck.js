@@ -57,16 +57,17 @@ const ACTIVE = 'ACTIVE';
  *  is pure and is imported by tests on its own; pulling the Forge runtime into
  *  that import would make the pure half of this file untestable without it. */
 async function loadIo() {
-  const [workflowSource, alertStore] = await Promise.all([
+  const [workflowSource, alertStore, directory] = await Promise.all([
     import('../lib/workflowSource.js'),
-    import('../db/alertStore.js')
+    import('../db/alertStore.js'), import('../lib/directory.js')
   ]);
   return {
     readWorkflowForPair: workflowSource.readWorkflowForPair,
     defaultRequest: workflowSource.defaultRequest,
     runtimeAppId: workflowSource.runtimeAppId,
     MODULE_KEY: workflowSource.MODULE_KEY,
-    enqueue: alertStore.enqueue
+    enqueue: alertStore.enqueue,
+    lookupStatuses: directory.lookupStatuses
   };
 }
 
@@ -111,7 +112,7 @@ async function loadActiveBaselinePairs() {
  * string form, because project_id may come back as a number from one table and
  * a string from another and they are still the same project.
  */
-export function pairsToCheck({ rows = [], baselinePairs = [] } = {}) {
+export function pairsToCheck({ rows = [], baselinePairs = [], tmExecutionPairs = [] } = {}) {
   const pairs = new Map();
   for (const group of groupByPair(rows)) {
     pairs.set(`${group.projectId}:${group.issueTypeId}`, {
@@ -132,7 +133,37 @@ export function pairsToCheck({ rows = [], baselinePairs = [] } = {}) {
       rows: []
     });
   }
+  for (const tm of tmExecutionPairs) {
+    if (tm?.project_id == null || tm?.issue_type_id == null) continue;
+    const key = `${tm.project_id}:${tm.issue_type_id}`;
+    const existing = pairs.get(key);
+    if (existing) existing.testManagementExecution = true;
+    else pairs.set(key, { projectId: tm.project_id, issueTypeId: tm.issue_type_id,
+      project_id: tm.project_id, issue_type_id: tm.issue_type_id, rows: [],
+      testManagementExecution: true, testManagementOnly: true });
+  }
   return [...pairs.values()];
+}
+
+async function loadEnabledTestManagementPairs() {
+  const res = await executeQuery('SELECT project_id, execution_type_id AS issue_type_id FROM tm_project WHERE enabled = 1');
+  if (!res.result) throw new Error('gatecheck: could not read enabled test-management execution pairs');
+  return res.data ?? [];
+}
+
+/** Unknown status metadata cannot clear a previous execution-health finding. */
+export function testManagementWorkflowFindings({ workflow, group, statuses, appId, moduleKey = 'va-gate' }) {
+  if (!Array.isArray(workflow?.transitions)) throw new Error('Execution workflow transitions unreadable');
+  const done = workflow.transitions.filter(transition => {
+    if (transition.type === 'INITIAL') return false;
+    const category = statuses?.get(String(transition.toStatusReference))?.category;
+    if (!category) throw new Error('Execution workflow destination status unreadable');
+    return String(category).toLowerCase() === 'done';
+  });
+  return diffWorkflow({ rows: [], scope: group, workflow: { ...workflow, transitions: done }, appId, moduleKey })
+    .map(finding => finding.type !== FINDING.HOLD_ABSENT ? finding : ({ ...finding,
+      key: finding.key.replace(/^HOLD_ABSENT:/, 'TM_EXECUTION_GATE_ABSENT:'), type: 'TM_EXECUTION_GATE_ABSENT',
+      detail: `Test Execution workflow "${workflow.name}" has a Done route without an enabled VAtlassian Approval validator (transition ${finding.transitionId}). Runs can bypass their completion guard on this route. Reattach the validator before treating this project as enforced.` }));
 }
 
 async function readOpenFindingKeys() {
@@ -191,26 +222,28 @@ async function audit(eventType, payload) {
   }
 }
 
-export async function run({ request, appId } = {}) {
+export async function run({ request, appId, tmExecutionPairs: providedTestManagementPairs } = {}) {
   const started = Date.now();
   const now = started;
-  const { readWorkflowForPair, defaultRequest, runtimeAppId, MODULE_KEY, enqueue } = await loadIo();
+  const { readWorkflowForPair, defaultRequest, runtimeAppId, MODULE_KEY, enqueue, lookupStatuses } = await loadIo();
   request ??= defaultRequest;
   appId ??= runtimeAppId();
 
   const rows = await loadActiveControlledTransitions();
   const baselinePairs = await loadActiveBaselinePairs();
+  const tmExecutionPairs = providedTestManagementPairs ?? await loadEnabledTestManagementPairs();
   // Nothing controlled AND nothing baselined: no workflow has anything for
   // va-gate to do, so there is nothing to check. Rows alone are not enough to
   // stop here — baselines still depend on the validator for their drift hold.
-  if (rows.length === 0 && baselinePairs.length === 0) {
-    const summary = { ok: true, pairs: 0, findings: 0, note: 'no ACTIVE controlled transitions or baselines', ms: 0 };
+  if (rows.length === 0 && baselinePairs.length === 0 && tmExecutionPairs.length === 0) {
+    const summary = { ok: true, pairs: 0, findings: 0, note: 'no ACTIVE controlled transitions, baselines or enabled test management', ms: 0 };
     console.log('gatecheck:', JSON.stringify(summary));
     return summary;
   }
 
   const previouslyOpen = await readOpenFindingKeys();
-  const groups = pairsToCheck({ rows, baselinePairs });
+  const groups = pairsToCheck({ rows, baselinePairs, tmExecutionPairs });
+  const statuses = tmExecutionPairs.length ? await lookupStatuses() : null;
 
   const seen = new Map();          // finding key -> finding
   const evaluatedPairs = new Set(); // "projectId:issueTypeId" actually read
@@ -222,18 +255,23 @@ export async function run({ request, appId } = {}) {
       unreadable += 1;
       continue; // NOT evaluated — its findings must survive untouched.
     }
+    let executionFindings = [];
+    if (group.testManagementExecution) {
+      try { executionFindings = testManagementWorkflowFindings({ workflow, group, statuses, appId, moduleKey: MODULE_KEY }); }
+      catch { unreadable += 1; continue; }
+    }
     evaluatedPairs.add(`${group.projectId}:${group.issueTypeId}`);
 
     // `scope` only matters when the pair has no rows: it is how a
     // baselines-only pair's HOLD_ABSENT findings know which pair they are for.
-    const findings = diffWorkflow({
+    const findings = group.testManagementOnly ? [] : diffWorkflow({
       rows: group.rows,
       scope: group,
       workflow,
       appId,
       moduleKey: MODULE_KEY
     });
-    for (const f of findings) seen.set(f.key, f);
+    for (const f of [...findings, ...executionFindings]) seen.set(f.key, f);
   }
 
   // --- Record what is wrong now ------------------------------------------

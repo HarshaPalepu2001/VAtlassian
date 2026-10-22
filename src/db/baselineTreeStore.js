@@ -1,8 +1,9 @@
 import * as store from './store.js';
-import { executeQuery, affectedRows, toBinaryParam, fromBinaryColumn } from '../lib/db.js';
+import { executeQuery, affectedRows, toBinaryParam, fromBinaryColumn, isUnknownColumn } from '../lib/db.js';
 import { encodeValue, decodeValue } from '../lib/valuestore.js';
 import { FailClosed } from '../lib/errors.js';
 import { clearVersionEvidence } from './evidenceStore.js';
+import { normaliseLinkPolicy, serialiseLinkPolicy } from '../lib/linkPolicy.js';
 
 export async function beginTreeBaseline({ baseline, resume = null, query = store.throwing }) {
   if (resume) {
@@ -31,10 +32,10 @@ export async function beginTreeBaseline({ baseline, resume = null, query = store
       field_digests, transition_id, from_status_id, to_status_id, approved_by, approved_name,
       transition_at, captured_at, assurance_level, approval_id, fidelity, field_count, value_bytes,
       tree_hash, node_count, edge_count, total_field_count,
-      required_role, required_assurance, controlled_fields_hash
+      required_role, required_assurance, controlled_fields_hash${baseline.link_policy ? ', link_policy' : ''}
     ) VALUES (
       FROM_BASE64(?), ?, ?, ?, ?, 'CAPTURING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FROM_BASE64(?),
-      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${baseline.link_policy ? ', ?' : ''}
     )`,
     [
       toBinaryParam(baselineId), baseline.issue_id, baseline.project_id,
@@ -44,7 +45,8 @@ export async function beginTreeBaseline({ baseline, resume = null, query = store
       baseline.transition_at, baseline.captured_at, baseline.assurance_level,
       baseline.approval_id ? toBinaryParam(baseline.approval_id) : null, baseline.fidelity, baseline.field_count, 0,
       baseline.tree_hash, 0, 0, 0,
-      baseline.required_role, baseline.required_assurance, baseline.controlled_fields_hash
+      baseline.required_role, baseline.required_assurance, baseline.controlled_fields_hash,
+      ...(baseline.link_policy ? [serialiseLinkPolicy(baseline.link_policy)] : [])
     ]
   );
   return { baselineId, version: Number(baseline.version) };
@@ -73,19 +75,21 @@ export async function writeTreeCapture({ baselineId, treeHash, nodes, values, qu
   const nodeCount = nodes.length;
 
   for (const batch of chunked(nodes, NODE_BATCH)) {
-    const placeholders = batch.map(() => '(FROM_BASE64(?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
+    const withPolicy = batch.some(node => node.linkPolicy != null);
+    const placeholders = batch.map(() => `(FROM_BASE64(?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${withPolicy ? ', ?' : ''})`).join(', ');
     const params = [];
     for (const node of batch) {
       params.push(
         bId, node.logicalNodeId, node.originalIssueId, node.currentIssueId, node.issueKey,
         node.parentLogicalNodeId || null, node.projectId, node.issueTypeId, node.contentHash,
-        node.fieldDigests || '{}', node.nodeOrder ?? 0
+        node.fieldDigests || '{}', node.nodeOrder ?? 0,
+        ...(withPolicy ? [node.linkPolicy == null ? null : JSON.stringify(normaliseLinkPolicy(node.linkPolicy))] : [])
       );
     }
     await query(
       `INSERT INTO va_baseline_node (
         baseline_id, logical_node_id, original_issue_id, current_issue_id, issue_key,
-        parent_logical_node_id, project_id, issue_type_id, content_hash, field_digests, node_order
+        parent_logical_node_id, project_id, issue_type_id, content_hash, field_digests, node_order${withPolicy ? ', link_policy' : ''}
       ) VALUES ${placeholders}
       ON DUPLICATE KEY UPDATE logical_node_id = logical_node_id`,
       params
@@ -211,17 +215,18 @@ export async function rootNodeDigests(baselineId, issueId, query = store.throwin
 
 export async function readBaselineTree(baselineId, query = store.throwing) {
   const bId = toBinaryParam(baselineId);
-  const dbNodes = await query(
-    `SELECT logical_node_id AS logicalNodeId, original_issue_id AS originalIssueId,
-            current_issue_id AS currentIssueId, issue_key AS issueKey,
-            parent_logical_node_id AS parentLogicalNodeId, project_id AS projectId,
-            issue_type_id AS issueTypeId, content_hash AS contentHash,
-            field_digests AS fieldDigests, node_order AS nodeOrder
-     FROM va_baseline_node
-     WHERE baseline_id = FROM_BASE64(?)
-     ORDER BY node_order ASC`,
-    [bId]
-  );
+  const select = tier => `SELECT n.logical_node_id AS logicalNodeId, n.original_issue_id AS originalIssueId,
+            n.current_issue_id AS currentIssueId, n.issue_key AS issueKey,
+            n.parent_logical_node_id AS parentLogicalNodeId, n.project_id AS projectId,
+            n.issue_type_id AS issueTypeId, n.content_hash AS contentHash,
+            n.field_digests AS fieldDigests, n.node_order AS nodeOrder${tier === 2 ? ', COALESCE(n.link_policy, b.link_policy) AS linkPolicy' : tier === 1 ? ', b.link_policy AS linkPolicy' : ''}
+     FROM va_baseline_node n${tier ? ' JOIN va_baseline b ON b.baseline_id = n.baseline_id' : ''}
+     WHERE n.baseline_id = FROM_BASE64(?) ORDER BY n.node_order ASC`;
+  let dbNodes;
+  for (const tier of [2, 1, 0]) {
+    try { dbNodes = await query(select(tier), [bId]); break; }
+    catch (error) { if (!isUnknownColumn(error) || tier === 0) throw error; }
+  }
 
   const valueRows = await query(
     `SELECT logical_node_id, field_id, seq, encoding, raw_bytes, chunk AS data
@@ -251,6 +256,7 @@ export async function readBaselineTree(baselineId, query = store.throwing) {
   }
 
   const nodes = dbNodes.map(node => {
+    if (node.linkPolicy != null) node.linkPolicy = normaliseLinkPolicy(node.linkPolicy);
     if (node.fieldDigests == null) return node;
     Object.defineProperties(node, {
       parentLogicalId: { value: node.parentLogicalNodeId ?? null, enumerable: false },
@@ -258,7 +264,7 @@ export async function readBaselineTree(baselineId, query = store.throwing) {
     });
     return node;
   });
-  return { nodes, values };
+  return { nodes, values, ...(nodes[0]?.linkPolicy ? { linkPolicy: nodes[0].linkPolicy } : {}) };
 }
 
 /**

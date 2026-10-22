@@ -17,6 +17,7 @@ const GateConfig=lazy(()=>import('./gate/GateConfig'));
 const ReviewWindow=lazy(()=>import('./review/ReviewWindow'));
 const WebAuthnPopup=lazy(()=>import('./panel/WebAuthnPopup'));
 const ApprovalField=lazy(()=>import('./field/ApprovalField'));
+const TestPanel=lazy(()=>import('./testmgmt/TestPanel'));
 
 type Context = Awaited<ReturnType<typeof view.getContext>>;
 function isWebAuthnPopup() {
@@ -34,6 +35,7 @@ function App() {
   else switch (context.moduleKey) {
     case 'va-device-approval-field': screen = <ApprovalField context={context as any} />; break;
     case 'va-panel': screen = <IssuePanel />; break;
+    case 'va-test': screen = <TestPanel />; break;
     case 'va-context': screen = <IssueContext />; break;
     case 'va-worklist': screen = <QueueList />; break;
     case 'va-admin': screen = <AdminConsole />; break;

@@ -9,18 +9,29 @@ import { readStableTree } from '../tree/stableRead.js';
 import { readTreeWithNodeFields, scopeForItem } from '../tree/nodeFields.js';
 import { planTreeCapture } from '../tree/capturePlan.js';
 import { createTreeReader } from '../tree/jira.js';
+import { testManagementExclusion, testManagementRole } from '../../testmgmt/treeExclusion.js';
+import { executionGuard } from '../../testmgmt/executionGuard.js';
+import { baselineLinkPolicy, hydrateLinkPolicyIssue, hydrateLinkPolicyNodes } from '../linkPolicy.js';
+
+/** A status's category key ('new', 'indeterminate', 'done'). Read as the app: categories are not secret. */
+async function statusCategory(api, route, statusId) {
+  const response = await api.asApp().requestJira(route`/rest/api/3/status/${statusId}`);
+  if (!response?.ok) throw new FailClosed('SERVICE_UNAVAILABLE');
+  return (await response.json())?.statusCategory?.key ?? null;
+}
 import { baselineDrift, logLiveDrift } from '../liveDrift.js';
 import { linkDecisionsPending } from '../../db/linkPendingStore.js';
 import { canonicaliseIssue } from '../attachmentIdentity.js';
 import { hashBasis } from '../hashBasis.js';
 import { driftedAncestor, ownDrift } from '../ancestorHold.js';
 
-export async function approvalContentHash({ issue, declared, modifiedFields = {}, activeBaseline, readTree }) {
+export async function approvalContentHash({ issue, declared, modifiedFields = {}, activeBaseline, readTree, linkPolicy = null, readIssue }) {
   const { fields } = scopeFromIssue({ declared, issueFields: issue.fields, editmetaFields: {} });
   // A child baseline captured by its parent has no tree_hash of its own, but
   // its panel signs the child's recursive subtree (panelAccess.snapshot).
   if (!activeBaseline?.tree_hash && !activeBaseline?.captured_by_baseline_id) {
-    return { fields, mode: 'flat', contentHash: project({ ...issue.fields, ...modifiedFields }, fields).contentHash };
+    const hydrated = await hydrateLinkPolicyIssue({ ...issue, fields: { ...issue.fields, ...modifiedFields } }, linkPolicy, readIssue);
+    return { fields, mode: 'flat', contentHash: project(hydrated.fields, fields, { issue: hydrated, linkPolicy }).contentHash };
   }
   if (typeof readTree !== 'function') throw new FailClosed('SERVICE_UNAVAILABLE');
   const rootIssueId = issue.issueId ?? issue.id;
@@ -28,11 +39,11 @@ export async function approvalContentHash({ issue, declared, modifiedFields = {}
   // capture compute it (lib/tree/nodeFields.js), or no signature would match.
   const stable = await readTreeWithNodeFields({ readStableTree, readTree, rootIssueKey: issue.issueKey ?? issue.key,
     rootFields: fields });
-  const nodes = stable.tree.nodes.map(node => String(node.id) === String(rootIssueId)
+  const nodes = await hydrateLinkPolicyNodes(stable.tree.nodes.map(node => String(node.id) === String(rootIssueId)
     ? { ...node, fields: { ...issue.fields, ...node.fields, ...modifiedFields } }
-    : node);
+    : node), () => linkPolicy, readIssue);
   return { fields, mode: 'tree', contentHash: planTreeCapture({ rootIssueId, nodes, controlledFields: fields,
-    fieldsFor: stable.fieldsFor }).treeHash };
+    fieldsFor: stable.fieldsFor, linkPolicy }).treeHash };
 }
 
 async function shared() {
@@ -69,7 +80,8 @@ function liveReads({ api, route, config, baselines, rootNodeDigests, activeRoots
     return canonicaliseIssue(await response.json());
   };
   const ancestorDeps = { readIssue, projectConfig: config.projectConfig, activeBaseline: baselines.activeBaseline,
-    activeRootsForNode, controlledFields: config.controlledFields, rootNodeDigests };
+    activeRootsForNode, controlledFields: config.controlledFields, rootNodeDigests,
+    exempt: async issue => !!(await testManagementRole(issue)) };
   return { readIssue, ancestorDeps };
 }
 
@@ -313,21 +325,30 @@ export async function gateRuntime() {
           .catch(error => { ancestorDriftError = error?.reason ?? error?.message ?? 'UNREADABLE'; return null; });
       }
 
+      // A test execution reaches Done only with every run terminal and every
+      // failed run's bug created (testmgmt/executionGuard.js). Reported, not
+      // thrown, like the ancestor read: gate.js refuses on it in order.
+      let testGuard = null;
+      try {
+        testGuard = await executionGuard({ issue, readStatusCategory: () => statusCategory(api, route, toStatusId) });
+      } catch { testGuard = { error: true }; }
+
       const edge = await resolve({ issue, fromStatusId, toStatusId, transitionId, approvalId, configuredTransitionId });
       // The approval content hash reads the whole tree for a tree baseline, so
       // it is computed only when a signature is actually being checked.
       let basis = null;
-      const contentHash = async () => {
-        const computed = await approvalContentHash({ issue, declared, modifiedFields, activeBaseline: active,
+      const contentHash = async approval => {
+        const linkPolicy = baselineLinkPolicy(approval);
+        const computed = await approvalContentHash({ issue, declared, modifiedFields, activeBaseline: active, linkPolicy,
           readTree: active?.tree_hash || active?.captured_by_baseline_id
-            ? createTreeReader({ api, route }).read : null });
+            ? createTreeReader({ api, route, exclude: testManagementExclusion }).read : null });
         basis = hashBasis({ mode: computed.mode, scopeSource: scope.source, scopeIssueTypeId: scope.issueTypeId,
-          fields: computed.fields, issue });
+          fields: computed.fields, issue, linkPolicy });
         return computed.contentHash;
       };
       return { ...issue, ...edge, health, item, contentHash, hashBasis: () => basis, driftCount: drift.changed.length, linkPending,
         driftedFields: drift.changed, driftDiagnostics: drift.diagnostics ?? null, driftScope: scope,
-        ancestorDrift, ancestorDriftError };
+        ancestorDrift, ancestorDriftError, testGuard };
     }
   };
 }

@@ -99,6 +99,7 @@ const hooks = registerHooks({
         const count = result && result.data && result.data.affectedRows;
         return typeof count === 'number' ? count : null;
       }
+      export const isUnknownColumn = error => error?.code === 'ER_BAD_FIELD_ERROR';
       export async function executeQuery(sql, params) { return globalThis.vaTransitionPolicy.query(sql, params); }
     ` };
     return next(url, context);

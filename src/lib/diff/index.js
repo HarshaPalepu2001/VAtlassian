@@ -1,4 +1,5 @@
-import { normaliseField, digestsEquivalent } from '../content.js';
+import { normaliseField, digestsEquivalent, fieldDigest } from '../content.js';
+import { baselineLinkPolicy, governedLinks } from '../linkPolicy.js';
 import { canonical, sha256Hex } from '../hash.js';
 import { diffField, presentationKind, withAttachmentDetails, extractMediaMap } from './fields.js';
 import { classify, maxMateriality, MATERIALITY } from '../materiality.js';
@@ -43,7 +44,7 @@ export function diffIssue({
   currentFields = {},
   controlledFields = [],
   driftRows = [],
-  changelogEntries = []
+  changelogEntries = [], issue = null, linkPolicy = baselineLinkPolicy(baseline)
 }) {
   const fieldIds = controlledFields.map((f) => f.field_id);
   const attribution = attributionByField(changelogEntries, fieldIds);
@@ -69,8 +70,10 @@ export function diffIssue({
 
     const retained = Object.prototype.hasOwnProperty.call(baselineValues, field.field_id);
 
-    const beforeRaw = baselineValues[field.field_id];
-    const afterRaw = currentFields[field.field_id];
+    const filter = value => field.field_kind === 'LINKS' && value !== undefined
+      ? governedLinks(value, { linkPolicy, issue: issue ?? { fields: currentFields } }) : value;
+    const beforeRaw = filter(baselineValues[field.field_id]);
+    const afterRaw = filter(currentFields[field.field_id]);
     const displayKind = presentationKind(field.field_kind, beforeRaw, afterRaw);
 
     // Compared NORMALISED, written back RAW. Normalisation sorts multi-values
@@ -83,7 +86,7 @@ export function diffIssue({
 
     let digestChanged = true;
     if (!retained) {
-      const currentDigest = sha256Hex(canonical({ f: field.field_id, k: field.field_kind, v: after }));
+      const currentDigest = fieldDigest(field, after, { linkPolicy });
       digestChanged = !digestsEquivalent(field.field_id, bDigests[field.field_id], currentDigest);
     }
 

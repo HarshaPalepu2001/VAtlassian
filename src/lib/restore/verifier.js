@@ -3,6 +3,7 @@ import { project, digestsEquivalent } from '../content.js';
 import { OUTCOME } from './executor.js';
 import { canonicaliseIssue, danglingMediaPointers } from '../attachmentIdentity.js';
 import { identityRecords } from '../../db/vaultStore.js';
+import { hydrateLinkPolicyIssue } from '../linkPolicy.js';
 
 /**
  * Proving the restore worked.
@@ -39,7 +40,7 @@ import { identityRecords } from '../../db/vaultStore.js';
  * a reviewer.
  */
 export async function verifyRestore({ api, issueKey, controlledFields, baselineDigests, detail, expectedStatusId = null,
-  readIdentity = identityRecords }) {
+  readIdentity = identityRecords, linkPolicy = null }) {
   let current, currentStatusId, raw, issueId;
   try {
     const res = await api.asApp().requestJira(route`/rest/api/3/issue/${issueKey}?fields=*all`);
@@ -53,7 +54,12 @@ export async function verifyRestore({ api, issueKey, controlledFields, baselineD
     // confirmed as the approved original only once its alias is recorded,
     // which happens after its bytes matched the vault's hash.
     const body = await canonicaliseIssue(read, { read: readIdentity });
-    current = body.fields ?? {};
+    const hydrated = await hydrateLinkPolicyIssue(body, linkPolicy, async ref => {
+      const response = await api.asApp().requestJira(route`/rest/api/3/issue/${ref}?fields=project,issuetype`);
+      if (!response.ok) throw new Error('Linked work item could not be checked');
+      return response.json();
+    });
+    current = hydrated.fields ?? {};
     currentStatusId = current.status?.id == null ? null : String(current.status.id);
   } catch (e) {
     console.error('restore: verification read failed', issueKey, e);
@@ -74,7 +80,7 @@ export async function verifyRestore({ api, issueKey, controlledFields, baselineD
     };
   }
 
-  const { digests } = project(current, controlledFields);
+  const { digests } = project(current, controlledFields, { linkPolicy, issue: { id: issueId, fields: current } });
 
   const verified = detail.map((d) => {
     if (d.outcome !== OUTCOME.SUCCEEDED) return { ...d, verified: false };

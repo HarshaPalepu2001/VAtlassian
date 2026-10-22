@@ -39,11 +39,14 @@ const modules = {
 const hooks = registerHooks({
   resolve(specifier, context, next) {
     if (specifier === '@forge/api') return { url: 'fixture:api', shortCircuit: true };
+    // Test-management tables are not part of these scenarios: no project has it enabled.
+    if (specifier.startsWith('.') && context.parentURL && new URL(specifier, context.parentURL).pathname.endsWith('/testmgmt/store.js')) return { url: 'fixture:tm-store', shortCircuit: true };
     const resolved = specifier.startsWith('.') ? new URL(specifier, context.parentURL).pathname : specifier;
     const key = Object.keys(modules).find(k => resolved.endsWith('/' + k));
     return key ? { url: 'fixture:' + key, shortCircuit: true } : next(specifier, context);
   },
   load(url, context, next) {
+    if (url === 'fixture:tm-store') return { format: 'module', shortCircuit: true, source: 'export const listProjects = async () => []; export const bugIssueIdsAmong = async () => new Set(); export const listRunsForExecution = async () => []; export const listBugsFor = async () => [];' };
     if (url === 'fixture:api') {
       return {
         format: 'module', shortCircuit: true, source: `

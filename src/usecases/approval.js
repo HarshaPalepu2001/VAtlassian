@@ -198,6 +198,7 @@ export function createApprovalUsecases(deps) {
       phase = 'write-challenge';
       const challengeId = await challenges.write(chRow);
       return { success: true, challengeId: challengeId.toString('hex'), nonce: chRow.nonce, meaning: chRow.meaning, requiredAssurance: effectiveAssurance(ct.required_assurance), expiresAt: chRow.expires_at,
+        ...(prepared.linkPolicy?.version === 2 ? { linkPolicyNotice: 'This approval records the test link rules: a Test owns its Verifies links. Linked source approvals exclude those links; other issue links remain controlled.' } : {}),
         ...(prepared.mixed ? { mixed: { approve: prepared.mixed.approvedIds, reject: prepared.mixed.rejectedIds,
           evidenceHash: prepared.evidenceHash ?? null } } : {}) };
     } catch (error) {
@@ -289,7 +290,7 @@ export function createApprovalUsecases(deps) {
         proof, now: deps.now(), baselineId: workflowTransition ? null : prepared.baseline?.baseline_id,
         baselineVersion: workflowTransition ? null : prepared.baselineVersion,
         coversFromHash: workflowTransition ? null : prepared.baseline?.content_hash,
-        driftCount: prepared.driftCount, reportHash: prepared.reportHash, note: payload.note || null,
+        driftCount: prepared.driftCount, reportHash: prepared.reportHash, note: payload.note || null, linkPolicy: prepared.linkPolicy,
         ...(prepared.mixed ? { decisionMap: canonical(prepared.mixed.decisions), decisionMapHash: prepared.mixed.mapHash } : {}) });
       await deps.record(row);
       await deps.audit({ eventType: 'APPROVAL_RECORDED', actorAccountId: accountId, issueId: issue.issueId, approvalId: row.approval_id,
@@ -341,7 +342,8 @@ export function createApprovalUsecases(deps) {
       checkPolicy(ct);
       if (!meetsAssurance(row.assurance_level, effectiveAssurance(ct.required_assurance))) fail('INSUFFICIENT_ASSURANCE');
       if (!await deps.eligible({ accountId, projectId: issue.projectId, issueTypeId: issue.issueTypeId, role: ct.required_role })) fail('NOT_ELIGIBLE');
-      const prepared = await deps.prepare({ issue, actor: await deps.actor(accountId), decision: 'APPROVE', forTransition: true, transition });
+      const prepared = await deps.prepare({ issue, actor: await deps.actor(accountId), decision: 'APPROVE', forTransition: true, transition,
+        linkPolicy: row.link_policy ?? null });
       if (prepared.contentHash !== row.content_hash) fail('CONTENT_CHANGED');
       return { success: true, approvalId: payload.approvalId, ...await deps.performTransition(issue, transition, row) };
     } catch (error) { return failure(error); }

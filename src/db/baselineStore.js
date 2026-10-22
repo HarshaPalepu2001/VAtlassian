@@ -3,6 +3,7 @@ import { newId, throwing } from './store.js';
 import { FailClosed } from '../lib/errors.js';
 import { encodeValue, decodeValue } from '../lib/valuestore.js';
 import { writeVersionEvidence, clearVersionEvidence } from './evidenceStore.js';
+import { serialiseLinkPolicy } from '../lib/linkPolicy.js';
 
 export { encodeValue, decodeValue };
 
@@ -40,7 +41,7 @@ const BASELINE_COLUMNS = `${CAPTURED_BY_COLUMNS},
  * without the newer columns (null), rather than refuse them all for five minutes.
  */
 async function selectBaselines(query, sqlFor, params) {
-  const tiers = [BASELINE_COLUMNS, CAPTURED_BY_COLUMNS, LEGACY_COLUMNS];
+  const tiers = [`${BASELINE_COLUMNS}, link_policy`, BASELINE_COLUMNS, CAPTURED_BY_COLUMNS, LEGACY_COLUMNS];
   for (let i = 0; ; i += 1) {
     try {
       return await query(sqlFor(tiers[i]), params);
@@ -219,8 +220,8 @@ export async function writeBaseline({ baseline, values, raw, writable, resume = 
      (baseline_id, issue_id, project_id, issue_type_id, version, state, content_hash,
       field_digests, transition_id, from_status_id, to_status_id, approved_by, approved_name,
       transition_at, captured_at, assurance_level, approval_id, fidelity, field_count, value_bytes,
-      required_role, required_assurance, controlled_fields_hash)
-     VALUES (FROM_BASE64(?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FROM_BASE64(?), ?, ?, ?, ?, ?, ?)`,
+      required_role, required_assurance, controlled_fields_hash${baseline.link_policy ? ', link_policy' : ''})
+     VALUES (FROM_BASE64(?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FROM_BASE64(?), ?, ?, ?, ?, ?, ?${baseline.link_policy ? ', ?' : ''})`,
     [
       toBinaryParam(baselineId),
       baseline.issue_id,
@@ -244,7 +245,8 @@ export async function writeBaseline({ baseline, values, raw, writable, resume = 
       totalBytes,
       baseline.required_role,
       baseline.required_assurance,
-      baseline.controlled_fields_hash
+      baseline.controlled_fields_hash,
+      ...(baseline.link_policy ? [serialiseLinkPolicy(baseline.link_policy)] : [])
     ]
   );
 

@@ -190,7 +190,8 @@ test('between deploy and migration, baseline reads fall back to the columns that
     if (sql.includes('captured_by_baseline_id')) throw Object.assign(new Error("Unknown column 'captured_by_baseline_id'"), { code: 'ER_BAD_FIELD_ERROR' });
     return [{ baseline_id: Buffer.alloc(16, 1).toString('base64'), approval_id: null }];
   });
-  assert.equal(seen.length, 3, 'newest columns first, then each older set');
+  assert.equal(seen.length, 4, 'link policy first, then the three older column sets');
+  assert.ok(seen[0].includes('link_policy'));
   assert.equal(row.captured_by_baseline_id, null);
   // v068 alone missing: captured_by is still read.
   const partial = await baselineByVersion(1, 2, async sql => {

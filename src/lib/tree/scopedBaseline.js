@@ -7,6 +7,8 @@
  * the child's own row supplies the clicked root's approved values.
  */
 
+import { baselineLinkPolicy } from '../linkPolicy.js';
+
 function parseDigests(value) {
   if (value && typeof value === 'object') return value;
   try {
@@ -61,6 +63,11 @@ export function effectiveScopedBaselineTree({ governedTree, rootLogicalNodeId, o
   const nodes = scoped.nodes.map(node => node.logicalNodeId === rootLogicalNodeId
     ? copyNode(node, null, digests)
     : node);
+  const root = nodes.find(node => node.logicalNodeId === rootLogicalNodeId);
+  const ownPolicy = baselineLinkPolicy(ownBaseline);
+  if (root && (root.linkPolicy?.version === 2 || ownPolicy.version === 2)) {
+    Object.defineProperty(root, 'linkPolicy', { value: ownPolicy, enumerable: true, configurable: true, writable: true });
+  }
   return {
     ...scoped,
     nodes,

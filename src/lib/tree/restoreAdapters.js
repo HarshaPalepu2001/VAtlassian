@@ -1,6 +1,7 @@
 import { findLinkConflicts, LinkConflictError } from '../restore/linkConflicts.js';
 import { restoreAttachments, pointAtLiveFiles, explainRichTextRefusal } from '../restore/attachments.js';
 import { adfMediaIds } from '../attachmentIdentity.js';
+import { governedLinks, hydrateLinkPolicyIssue } from '../linkPolicy.js';
 
 export class JiraRestoreError extends Error {
   constructor({ operation, status, detail }) {
@@ -66,8 +67,14 @@ const PERMISSION_FOR_KIND = {
  * entries an attachment restore writes.
  */
 export function createRestoreAdapters({ api, route, actorAccountId = 'system', approvalId = null, attachmentDeps = null,
-  approvedLinksOf = null }) {
+  approvedLinksOf = null, linkPolicy = null, policyForIssue = null }) {
   const request = (path, options) => api.asApp().requestJira(path, options);
+  const readScope = async ref => {
+    const response = await request(route`/rest/api/3/issue/${ref}?fields=project,issuetype`);
+    if (!ok(response)) throw new JiraRestoreError({ operation: 'READ_LINKS', status: Number(response?.status) || null,
+      detail: 'The linked work item could not be checked, so no links were changed.' });
+    return responseBody(response);
+  };
   return {
     /**
      * A recursive hierarchy can span more than one Jira project. Checking
@@ -175,12 +182,12 @@ export function createRestoreAdapters({ api, route, actorAccountId = 'system', a
       return pointAtLiveFiles(fields, record, { liveJiraIds });
     },
 
-    async restoreLinks(issueIdOrKey, target) {
+    async restoreLinks(issueIdOrKey, target, context = {}) {
       if (!Array.isArray(target)) {
         throw new JiraRestoreError({ operation: 'RESTORE_LINKS', status: null,
           detail: 'The approved issue-link list is not complete.' });
       }
-      const read = await request(route`/rest/api/3/issue/${issueIdOrKey}?fields=issuelinks`, { headers: { Accept: 'application/json' } });
+      const read = await request(route`/rest/api/3/issue/${issueIdOrKey}?fields=issuelinks,project,issuetype`, { headers: { Accept: 'application/json' } });
       if (!ok(read)) throw new JiraRestoreError({ operation: 'READ_LINKS', status: Number(read.status) || null,
         detail: errorText(await responseBody(read)) });
       const body = await responseBody(read);
@@ -190,11 +197,15 @@ export function createRestoreAdapters({ api, route, actorAccountId = 'system', a
           detail: 'Jira omitted the current issue links; no links were changed.' });
       }
 
-      const desired = new Map(target.map(link => [linkIdentity(link), link]));
-      const existing = new Map(current.map(link => [linkIdentity(link), link]));
+      const policy = policyForIssue ? policyForIssue(body, context) : linkPolicy;
+      const cache = new Map();
+      const actual = await hydrateLinkPolicyIssue(body, policy, readScope, cache);
+      const expected = await hydrateLinkPolicyIssue({ ...body, fields: { ...body.fields, issuelinks: target } }, policy, readScope, cache);
+      const desired = new Map(governedLinks(expected.fields.issuelinks, { linkPolicy: policy, issue: expected }).map(link => [linkIdentity(link), link]));
+      const existing = new Map(governedLinks(actual.fields.issuelinks, { linkPolicy: policy, issue: actual }).map(link => [linkIdentity(link), link]));
       // A link belongs to both ends (../restore/linkConflicts.js). A change the
       // other end's approved state forbids is left exactly as it is.
-      const conflicts = await findLinkConflicts({ selfIssueId: body?.id ?? issueIdOrKey,
+      const conflicts = await findLinkConflicts({ selfIssueId: body?.id ?? issueIdOrKey, selfIssue: actual, readIssue: readScope,
         additions: [...desired].filter(([key]) => !existing.has(key)).map(([, link]) => link),
         removals: [...existing].filter(([key]) => !desired.has(key)).map(([, link]) => link),
         approvedLinksOf });

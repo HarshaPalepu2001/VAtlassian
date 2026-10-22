@@ -125,10 +125,10 @@ test('v075-v087 stay in the list: they may already have run on a site', () => {
   }
 });
 
-test('migration ids are unique and the list ends at v108_remove_confluence', () => {
+test('migration ids are unique and include the manual-test schema through rerun provenance', () => {
   const ids = MIGRATIONS.map(m => m.id);
   assert.equal(new Set(ids).size, ids.length);
-  assert.equal(MIGRATIONS.at(-1).id, 'v108_remove_confluence');
+  assert.equal(MIGRATIONS.at(-1).id, 'v136_baseline_node_link_policy');
 });
 
 test('v108 drops Confluence governance and vault tables, columns, and tier config', () => {

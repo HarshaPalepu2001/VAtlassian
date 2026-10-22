@@ -85,7 +85,7 @@ async function run({ issueId, issueKey, detectedVia, actorAccountId, eventId, ev
   // took this baseline over the screen-scoped set, so measuring drift over a
   // wider one compares the approved state against fields it never recorded.
   const lookupKey = issueKey ?? review.issue_key;
-  const issue = await readIssue(lookupKey);
+  let issue = await readIssue(lookupKey);
   if (!issue) return { outcome: 'UNREADABLE' };
 
   const key = issue.key;
@@ -143,12 +143,15 @@ async function run({ issueId, issueKey, detectedVia, actorAccountId, eventId, ev
   if (fields.length === 0) return { outcome: 'NO_TRACKED_FIELDS' };
   if (!baseline) return { outcome: 'ERROR', error: 'BASELINE_UNREADABLE' };
 
+  const linkPolicy = baselineLinkPolicy(baseline);
+  issue = await hydrateLinkPolicyIssue(issue, linkPolicy);
+
   const result = observe({
     prior: review,
     baselineDigests: baseline ? safeParse(baseline.field_digests) : null,
     issueFields: issue.fields,
     controlledFields: fields,
-    now
+    now, linkPolicy, issue
   });
   // Even an untracked-field update verifies and records the full projection.
   await recordObservation({ issueId, baseline, fields, issueFields: issue.fields,
@@ -196,7 +199,7 @@ async function run({ issueId, issueKey, detectedVia, actorAccountId, eventId, ev
       return recordAll({
         issueId, issueKey: key, projectId, issueTypeId,
         review, baseline, fields, config, result, detectedVia, actorAccountId, now,
-        issueFields: issue.fields
+        issueFields: { ...issue.fields, issuelinks: governedLinks(issue.fields.issuelinks, { linkPolicy, issue }) }
       });
 
     default:
@@ -472,3 +475,4 @@ function safeParse(json) {
 // for both the single-issue and aggregate-tree collectors. It is a separate
 // module rather than more of this file because this file is already at the
 // lib/ line ceiling test/resolver-wiring.test.js enforces.
+import { baselineLinkPolicy, hydrateLinkPolicyIssue, governedLinks } from './linkPolicy.js';

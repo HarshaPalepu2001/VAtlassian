@@ -2,6 +2,7 @@ import { FailClosed } from '../errors.js';
 import { project } from '../content.js';
 import { canonical, sha256Hex } from '../hash.js';
 import { logicalNodeId, TREE_LIMIT } from './model.js';
+import { normaliseLinkPolicy } from '../linkPolicy.js';
 
 function withPlanningAliases(node, digests) {
   // Existing in-memory tree diff consumers use these names. Keeping the
@@ -18,14 +19,15 @@ function withPlanningAliases(node, digests) {
  * issue type's Controlled Fields (./nodeFields.js). Without it every node uses
  * `controlledFields`, exactly as before per-node tracking.
  */
-export function planTreeCapture({ rootIssueId, nodes, controlledFields, fieldsFor = () => controlledFields }) {
+export function planTreeCapture({ rootIssueId, nodes, controlledFields, fieldsFor = () => controlledFields,
+  linkPolicy, policyFor = () => linkPolicy }) {
   if (!Array.isArray(nodes) || nodes.length === 0) throw new FailClosed('MISSING_ROOT');
   if (nodes.length > TREE_LIMIT) throw new FailClosed('TREE_LIMIT_EXCEEDED');
 
   const planned = nodes.map(node => {
     if (node?.id == null || !node.fields) throw new FailClosed('MISSING_ROOT');
     const own = fieldsFor(node) ?? [];
-    const projection = project(node.fields, own);
+    const projection = project(node.fields, own, { linkPolicy: policyFor(node), issue: node });
     if (Object.keys(projection.raw).length !== own.length) {
       throw new FailClosed('BASELINE_VALUES_REQUIRED');
     }
@@ -79,6 +81,8 @@ export function planTreeCapture({ rootIssueId, nodes, controlledFields, fieldsFo
     contentHash: node.contentHash,
     fieldDigests: JSON.stringify(node.digests),
     nodeOrder
+    ,...(normaliseLinkPolicy(policyFor(node.source)).version === 2 || normaliseLinkPolicy(linkPolicy).version === 2
+      ? { linkPolicy: normaliseLinkPolicy(policyFor(node.source)) } : {})
   }, node.digests));
   const values = Object.fromEntries(planned.map(node => [node.logicalNodeId, node.raw]));
   const treeHash = sha256Hex(canonical(durableNodes.map(node => ({

@@ -3,6 +3,7 @@ import { diffTree } from './diff.js';
 import { logicalNodeId } from './model.js';
 import { harnessLog } from '../harnessLogger.js';
 import { unionFieldIds } from './nodeFields.js';
+import { hydrateLinkPolicyNodes, treeLinkPolicyResolver } from '../linkPolicy.js';
 
 const parentOf = node => node?.parentLogicalNodeId ?? node?.parentLogicalId ?? node?.parent ?? null;
 
@@ -54,15 +55,17 @@ function describeChange(change, { nodeKeys, fieldNames, baselineDigestsById, obs
 
 export async function verifyTreeRestore({
   readStableTree, readTree, rootIssueKey, baselineTree, controlledFields, fieldsFor = () => controlledFields,
-  replacements = [], expectedRootStatusId = null
+  replacements = [], expectedRootStatusId = null, readIssue
 }) {
   // Each node is verified over its OWN fields (./nodeFields.js), so the read
   // fetches every field any node of the approved tree tracks.
+  const storedPolicyFor = treeLinkPolicyResolver(baselineTree);
+  const needsScope = (baselineTree?.nodes ?? []).some(node => storedPolicyFor(node).version === 2);
   const fieldIds = [...new Set([
     ...controlledFields.map(field => String(field.field_id)),
     ...unionFieldIds(baselineTree?.nodes, fieldsFor),
     'parent',
-    'status'
+    'status', ...(needsScope ? ['project', 'issuetype'] : [])
   ])];
   let liveTree;
   try {
@@ -92,6 +95,17 @@ export async function verifyTreeRestore({
     putIdentity(realToLogical, replacement.newIssueKey, replacement.logicalNodeId);
   }
 
+  const policyFor = node => storedPolicyFor({ ...node,
+    logicalNodeId: realToLogical.get(String(node.id)) ?? realToLogical.get(String(node.key)) ?? node.logicalNodeId });
+  try { liveTree.nodes = await hydrateLinkPolicyNodes(liveTree.nodes, policyFor, readIssue); }
+  catch (error) {
+    harnessLog('RESTORE', 'verify:readFailed', { rootIssueKey, error: error?.message }, 'ERROR');
+    return { matches: false, replacements, progress: false, statusMatches: false, changes: [],
+      unmatched: [{ logicalNodeId: null, issueKey: rootIssueKey, kind: 'READ_FAILED', fieldId: null,
+        fieldName: null, expected: null, actual: null,
+        reason: 'The linked work items could not be checked, so this restore could not be confirmed.' }] };
+  }
+
   const currentNodes = liveTree.nodes.map(node => {
     const mapped = realToLogical.get(String(node.id)) ?? realToLogical.get(String(node.key));
     const currentLogicalNodeId = mapped ?? logicalNodeId(node.id);
@@ -104,7 +118,7 @@ export async function verifyTreeRestore({
       parentLogicalId,
       projectId: Number(node.fields?.project?.id),
       issueTypeId: String(node.fields?.issuetype?.id ?? ''),
-      digests: project(node.fields ?? {}, fieldsFor(node) ?? []).digests
+      digests: project(node.fields ?? {}, fieldsFor(node) ?? [], { issue: node, linkPolicy: policyFor(node) }).digests
     };
   });
 

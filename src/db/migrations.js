@@ -3,6 +3,13 @@
  * Traceability seams (reserved names only): va_trace_node, va_trace_edge, va_trace_run.
  * Configuration namespace reserved: trace.*. Baseline baseline_id is the trace anchor.
  */
+import { PLANNING_MIGRATIONS } from '../testmgmt/planningMigrations.js';
+import { REPORT_MIGRATIONS } from '../testmgmt/reportMigrations.js';
+import { BUG_MIGRATIONS } from '../testmgmt/bugStore.js';
+import { RETEST_MIGRATIONS } from '../testmgmt/retestMigrations.js';
+import { SOURCE_LINK_MIGRATIONS } from '../testmgmt/sourceLinkMigrations.js';
+import { BASELINE_LINK_POLICY_MIGRATIONS } from './baselineLinkPolicyMigrations.js';
+
 export const MIGRATIONS = [
   { id: 'v001_config', sql: `CREATE TABLE IF NOT EXISTS va_config (
     cfg_key    VARCHAR(64)  NOT NULL,
@@ -942,5 +949,148 @@ export const MIGRATIONS = [
     ALTER TABLE va_vault_space DROP COLUMN IF EXISTS space_id;
     ALTER TABLE va_vault_space DROP COLUMN IF EXISTS space_key;
     ALTER TABLE va_vault_space DROP COLUMN IF EXISTS project_page_id;
-    DELETE FROM va_config WHERE cfg_key = 'vault:tier'` }
+    DELETE FROM va_config WHERE cfg_key = 'vault:tier'` },
+  // ── Test management (spec 2026-10-20-test-management-first-design.md) ──
+  // One row per enabled project: which Jira types are tests, executions and
+  // bugs, and the two sign-off chains the client configured.
+  { id: 'v109_tm_project', sql: `CREATE TABLE IF NOT EXISTS tm_project (
+    project_id BIGINT NOT NULL,
+    enabled TINYINT NOT NULL DEFAULT 0,
+    test_type_id VARCHAR(32) NOT NULL,
+    execution_type_id VARCHAR(32) NOT NULL,
+    plan_type_id VARCHAR(32) NULL,
+    defect_type_id VARCHAR(32) NOT NULL,
+    link_type_name VARCHAR(255) NOT NULL,
+    run_chain TEXT NOT NULL,
+    version_chain TEXT NOT NULL,
+    revision INT NOT NULL DEFAULT 1,
+    updated_at BIGINT NOT NULL,
+    updated_by VARCHAR(128) NOT NULL,
+    PRIMARY KEY (project_id)
+  )` },
+  // A test's working copy. Free to edit; never executed for the record.
+  { id: 'v110_tm_test_draft', sql: `CREATE TABLE IF NOT EXISTS tm_test_draft (
+    test_issue_id BIGINT NOT NULL,
+    project_id BIGINT NOT NULL,
+    content MEDIUMTEXT NOT NULL,
+    revision INT NOT NULL DEFAULT 1,
+    updated_at BIGINT NOT NULL,
+    updated_by VARCHAR(128) NOT NULL,
+    PRIMARY KEY (test_issue_id)
+  )` },
+  // A published version is frozen: content and digest never change after the
+  // insert. Only its state moves, PUBLISHED → SIGNED or REJECTED.
+  { id: 'v111_tm_test_version', sql: `CREATE TABLE IF NOT EXISTS tm_test_version (
+    version_id CHAR(32) NOT NULL,
+    test_issue_id BIGINT NOT NULL,
+    project_id BIGINT NOT NULL,
+    version_no INT NOT NULL,
+    content MEDIUMTEXT NOT NULL,
+    digest CHAR(64) NOT NULL,
+    chain TEXT NOT NULL,
+    chain_digest CHAR(64) NOT NULL,
+    state VARCHAR(16) NOT NULL,
+    published_by VARCHAR(128) NOT NULL,
+    published_at BIGINT NOT NULL,
+    signed_at BIGINT NULL,
+    PRIMARY KEY (version_id),
+    UNIQUE KEY uq_tm_version_no (test_issue_id, version_no),
+    KEY idx_tm_version_state (test_issue_id, state)
+  )` },
+  // One run of one signed test version inside a Test Execution issue.
+  { id: 'v112_tm_run', sql: `CREATE TABLE IF NOT EXISTS tm_run (
+    run_id CHAR(32) NOT NULL,
+    execution_issue_id BIGINT NOT NULL,
+    project_id BIGINT NOT NULL,
+    test_issue_id BIGINT NOT NULL,
+    test_version_id CHAR(32) NOT NULL,
+    test_digest CHAR(64) NOT NULL,
+    environment VARCHAR(255) NOT NULL,
+    configuration VARCHAR(255) NOT NULL,
+    release_id VARCHAR(32) NULL,
+    release_name VARCHAR(255) NULL,
+    chain TEXT NOT NULL,
+    chain_digest CHAR(64) NOT NULL,
+    state VARCHAR(16) NOT NULL,
+    result VARCHAR(16) NOT NULL,
+    steps MEDIUMTEXT NOT NULL,
+    revision INT NOT NULL DEFAULT 1,
+    frozen_digest CHAR(64) NULL,
+    retest_of CHAR(32) NULL,
+    created_by VARCHAR(128) NOT NULL,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    PRIMARY KEY (run_id),
+    KEY idx_tm_run_execution (execution_issue_id, created_at),
+    KEY idx_tm_run_test (test_issue_id, state)
+  )` },
+  // Every test-management signature. The key makes each chain step signable
+  // exactly once; a second insert for the same step is refused by the database.
+  { id: 'v113_tm_signature', sql: `CREATE TABLE IF NOT EXISTS tm_signature (
+    subject_kind VARCHAR(24) NOT NULL,
+    subject_id CHAR(32) NOT NULL,
+    step_index INT NOT NULL,
+    account_id VARCHAR(128) NOT NULL,
+    printed_name VARCHAR(255) NOT NULL,
+    role VARCHAR(32) NOT NULL,
+    label VARCHAR(64) NOT NULL,
+    meaning VARCHAR(255) NOT NULL,
+    decision VARCHAR(16) NOT NULL,
+    reason TEXT NULL,
+    content_hash CHAR(64) NOT NULL,
+    assurance_level VARCHAR(24) NOT NULL,
+    signed_at BIGINT NOT NULL,
+    PRIMARY KEY (subject_kind, subject_id, step_index)
+  )` },
+  // The one automatic bug per failed run. The row is written BEFORE Jira is
+  // called, so a timeout can be reconciled instead of retried blind.
+  { id: 'v114_tm_bug', sql: `CREATE TABLE IF NOT EXISTS tm_bug (
+    run_id CHAR(32) NOT NULL,
+    project_id BIGINT NOT NULL,
+    parent_issue_id BIGINT NULL,
+    marker VARCHAR(64) NOT NULL,
+    state VARCHAR(16) NOT NULL,
+    issue_id BIGINT NULL,
+    issue_key VARCHAR(64) NULL,
+    attempts INT NOT NULL DEFAULT 0,
+    last_error VARCHAR(255) NULL,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    PRIMARY KEY (run_id),
+    KEY idx_tm_bug_issue (issue_id),
+    KEY idx_tm_bug_state (project_id, state)
+  )` },
+  { id: 'v115_tm_signature_durability', sql: `ALTER TABLE tm_signature
+    ADD COLUMN IF NOT EXISTS state VARCHAR(16) NOT NULL DEFAULT 'LEGACY',
+    ADD COLUMN IF NOT EXISTS audit_event_id CHAR(32) NULL,
+    ADD COLUMN IF NOT EXISTS audit_seq BIGINT NULL,
+    ADD COLUMN IF NOT EXISTS audit_hash CHAR(64) NULL` },
+  // Old rows count only if their exact signer, subject, step and content can
+  // be matched to an existing ledger event. Unmatched legacy rows fail closed.
+  { id: 'v116_tm_signature_legacy_proof', sql: `UPDATE tm_signature s JOIN va_audit a
+    ON a.actor_account_id = s.account_id
+      AND a.event_type IN ('TM_SIGNED', 'TM_REJECTED', 'TM_NOT_EXECUTED')
+      AND JSON_UNQUOTE(JSON_EXTRACT(a.payload, '$.kind')) = s.subject_kind
+      AND JSON_UNQUOTE(JSON_EXTRACT(a.payload, '$.subjectId')) = s.subject_id
+      AND CAST(JSON_UNQUOTE(JSON_EXTRACT(a.payload, '$.stepIndex')) AS UNSIGNED) = s.step_index
+      AND JSON_UNQUOTE(JSON_EXTRACT(a.payload, '$.contentHash')) = s.content_hash
+    SET s.state = 'ACTIVE', s.audit_seq = a.seq, s.audit_hash = a.entry_hash
+    WHERE s.state = 'LEGACY'` },
+  { id: 'v117_tm_run_snapshots', sql: `ALTER TABLE tm_run
+    ADD COLUMN IF NOT EXISTS resolved_steps MEDIUMTEXT NULL,
+    ADD COLUMN IF NOT EXISTS iterations MEDIUMTEXT NULL,
+    ADD COLUMN IF NOT EXISTS planning_snapshot MEDIUMTEXT NULL,
+    ADD COLUMN IF NOT EXISTS creation_key CHAR(64) NULL,
+    ADD COLUMN IF NOT EXISTS creation_fingerprint CHAR(64) NULL,
+    ADD COLUMN IF NOT EXISTS creation_event_id CHAR(32) NULL,
+    ADD UNIQUE KEY uq_tm_run_creation (creation_key)` },
+  ...BUG_MIGRATIONS,
+  ...PLANNING_MIGRATIONS.map((migration, index) => ({ ...migration,
+    id: `v${119 + index}_${migration.id.replace(/^tm-planning-/, 'tm_').replaceAll('-', '_')}` })),
+  ...REPORT_MIGRATIONS,
+  { id: 'v127_tm_version_publication', sql: 'ALTER TABLE tm_test_version ADD COLUMN IF NOT EXISTS publish_event_id CHAR(32) NULL' },
+  { id: 'v128_tm_audit_event_lookup', sql: 'CREATE INDEX IF NOT EXISTS idx_tm_audit_event ON va_audit (event_id)' },
+  ...RETEST_MIGRATIONS.map((migration, index) => ({ ...migration, id: `v${129 + index}_${migration.id.replaceAll('-', '_')}` })),
+  ...SOURCE_LINK_MIGRATIONS,
+  ...BASELINE_LINK_POLICY_MIGRATIONS
 ];

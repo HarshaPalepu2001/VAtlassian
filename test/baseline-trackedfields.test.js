@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { fieldsToAdopt, scopeFromIssue, screenIdsForIssueType, SCOPE_BASIS } from '../src/lib/trackedFields.js';
+import { adoptScreenFields, fieldsToAdopt, screenBatch, SCREEN_BATCH, scopeFromIssue, screenIdsForIssueType, SCOPE_BASIS } from '../src/lib/trackedFields.js';
 import { IGNORED_FIELDS } from '../src/lib/content.js';
 
 /**
@@ -191,4 +191,43 @@ test('field discovery includes create edit view and transition screens for the e
   });
 
   assert.deepEqual(screenIds.sort(), ['12797', '12798', '12799', '12801', '12802']);
+});
+
+test('a screen field without a catalogue entry is never adopted, so it cannot be recorded with the wrong kind', () => {
+  const sink = new Map([['summary', { id: 'summary', name: 'Summary' }]]);
+  const screenFields = new Map([
+    ['customfield_1', { id: 'customfield_1', name: 'Rationale' }],
+    ['customfield_2', { id: 'customfield_2', name: 'Unknown to the catalogue' }],
+    ['summary', { id: 'summary', name: 'Screen copy' }]
+  ]);
+  const catalogue = [
+    { id: 'customfield_1', name: 'Rationale', schema: { type: 'string', custom: 'textarea' } },
+    { id: 'summary', name: 'Summary', schema: { type: 'string' } }
+  ];
+
+  assert.equal(adoptScreenFields({ screenFields, catalogue, sink }), 1);
+  assert.deepEqual(sink.get('customfield_1').schema, { type: 'string', custom: 'textarea' });
+  assert.equal(sink.has('customfield_2'), false);
+  assert.equal(sink.get('summary').name, 'Summary');
+  assert.equal(adoptScreenFields({ screenFields, catalogue: [], sink: new Map() }), 0);
+});
+
+test('screens are read in batches that cover every screen exactly once', () => {
+  const ids = Array.from({ length: 130 }, (_, i) => String(12000 + i)).reverse();
+  const seen = [];
+  let offset = 0;
+  let batches = 0;
+  while (offset != null) {
+    const batch = screenBatch(ids, offset);
+    assert.ok(batch.ids.length <= SCREEN_BATCH);
+    assert.equal(batch.total, 130);
+    seen.push(...batch.ids);
+    offset = batch.nextOffset;
+    batches++;
+  }
+  assert.equal(batches, 3);
+  assert.deepEqual(seen, [...ids].sort((a, b) => Number(a) - Number(b)));
+  assert.deepEqual(screenBatch(['7', '7', '3'], 0), { ids: ['3', '7'], total: 2, nextOffset: null });
+  assert.deepEqual(screenBatch(['1', '2'], 99), { ids: [], total: 2, nextOffset: null });
+  assert.deepEqual(screenBatch(['1', '2'], -4).ids, ['1', '2']);
 });

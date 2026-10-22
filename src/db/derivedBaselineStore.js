@@ -36,6 +36,7 @@ async function withNextVersion(issueId, attempt) {
 
 function rowFor(source, approval, now, version) {
   return {
+    ...(source.link_policy ? { link_policy: source.link_policy } : {}),
     issue_id: Number(source.issue_id),
     project_id: Number(source.project_id),
     issue_type_id: String(source.issue_type_id),

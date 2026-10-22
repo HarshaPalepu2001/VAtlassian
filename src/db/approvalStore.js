@@ -1,4 +1,4 @@
-import { executeQuery, toBinaryParam, fromBinaryColumn, limitClause, affectedRows } from '../lib/db.js';
+import { executeQuery, toBinaryParam, fromBinaryColumn, limitClause, affectedRows, isUnknownColumn } from '../lib/db.js';
 import { APPROVAL_STATE, APPROVAL_TTL_MS, DECISION } from '../lib/approval/record.js';
 export { APPROVAL_STATE, APPROVAL_TTL_MS, DECISION };
 
@@ -6,13 +6,16 @@ const columns = ['approval_id','issue_id','issue_key','project_id','issue_type_i
   'decision','state','actor_account_id','account_id','actor_name','printed_name','decided_at','signed_at','created_at',
   'expires_at','consumed_at','from_status_id','to_status_id','transition_id','signer_role','meaning','content_hash',
   'covers_from_hash','covers_to_hash','drift_count','report_hash','note','assurance_level','provider_id',
-  'provider_ref','provider_evidence','evidence_hash','decision_map','decision_map_hash'];
+  'provider_ref','provider_evidence','evidence_hash','decision_map','decision_map_hash','link_policy'];
 const binary = new Set(['approval_id','baseline_id']);
 const selection = columns.map(key => binary.has(key) ? `TO_BASE64(${key}) AS ${key}` : key).join(', ');
 const encode = value => value == null ? null : toBinaryParam(value);
 const decode = row => row ? { ...row, approval_id: fromBinaryColumn(row.approval_id), baseline_id: fromBinaryColumn(row.baseline_id) } : null;
 async function query(sql, params) {
-  const result = await executeQuery(sql, params);
+  let result = await executeQuery(sql, params);
+  if (!result.result && isUnknownColumn(result.error) && /^SELECT\s/i.test(sql) && sql.includes('link_policy')) {
+    result = await executeQuery(sql.replace(/, link_policy\b/g, ''), params);
+  }
   if (!result.result) throw result.error ?? new Error('Approval storage unavailable');
   return result;
 }
@@ -20,8 +23,9 @@ async function query(sql, params) {
 /** The single insert owner. A durable row starts unusable, even if audit fails. */
 export async function recordApproval(row) {
   if (row.state !== APPROVAL_STATE.VOID) throw new TypeError('Approval must start VOID');
-  await query(`INSERT INTO va_approval (${columns.join(', ')}) VALUES (${columns.map(key => binary.has(key) ? 'FROM_BASE64(?)' : '?').join(', ')})`,
-    columns.map(key => binary.has(key) ? encode(row[key]) : row[key] ?? null));
+  const written = row.link_policy == null ? columns.filter(k => k !== 'link_policy') : columns;
+  await query(`INSERT INTO va_approval (${written.join(', ')}) VALUES (${written.map(key => binary.has(key) ? 'FROM_BASE64(?)' : '?').join(', ')})`,
+    written.map(key => binary.has(key) ? encode(row[key]) : row[key] ?? null));
   return row;
 }
 export async function activateApproval({ approvalId, now, state = APPROVAL_STATE.PENDING }) {

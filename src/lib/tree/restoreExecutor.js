@@ -213,7 +213,7 @@ export async function executeTreeRestore({
         }
         if (legacyLinks !== undefined) {
           if (typeof adapters.restoreLinks !== 'function') throw new Error('Link restore adapter is unavailable');
-          await adapters.restoreLinks(target, legacyLinks);
+          await adapters.restoreLinks(target, legacyLinks, { logicalNodeId: step.logicalNodeId });
         }
       } else if (step.kind === 'REPOINT_RICH_TEXT') {
         if (target == null) throw new Error('Rich-text restore target is unavailable');
@@ -228,7 +228,7 @@ export async function executeTreeRestore({
         }
       } else if (step.kind === 'RESTORE_LINKS') {
         if (target == null) throw new Error('Link restore target is unavailable');
-        await adapters.restoreLinks(target, step.links ?? []);
+        await adapters.restoreLinks(target, step.links ?? [], { logicalNodeId: step.logicalNodeId });
       } else if (step.kind === 'RESTORE_ATTACHMENTS') {
         if (target == null) throw new Error('Attachment restore target is unavailable');
         if (typeof adapters.restoreAttachments !== 'function') throw new Error('Attachment restore adapter is unavailable');

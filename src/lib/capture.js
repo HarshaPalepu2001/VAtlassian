@@ -5,15 +5,16 @@ import { assignReviewer } from './reviewer.js';
 import { controlledFields, projectConfig, gatedTransition } from '../db/configStore.js';
 import { writeBaseline, currentVersion, baselineForApproval, activeBaselines } from '../db/baselineStore.js';
 import { upsertBaselined, getReview } from '../db/itemStateStore.js';
-import { executeQuery, fromBinaryColumn } from './db.js';
 import { tryAppend, isDuplicateKey } from '../db/store.js';
 import { EVENT } from './ledger.js';
 import { scopeFromIssue } from './trackedFields.js';
-import { meetsAssurance } from './approval/levels.js';
+import { approvalFrom, recentConsumedApproval } from './captureApproval.js';
+export { approvalFrom } from './captureApproval.js';
 import { controlledFieldsHash, requireBaselineProvenance } from './baselinePolicy.js';
 import { readTreeWithNodeFields, fieldScope } from './tree/nodeFields.js';
 import { canonicaliseIssue, recordedAttachments } from './attachmentIdentity.js';
 import { FailClosed } from './errors.js';
+import { baselineLinkPolicy, hydrateLinkPolicyIssue, hydrateLinkPolicyNodes, serialiseLinkPolicy } from './linkPolicy.js';
 import { versionEvidence, linkRows, trackedLinks, linkedIssueIds, CAUSE } from './evidence/versionEvidence.js';
 import { treeCaptureEvidence, nodeSecurityLevels } from './evidence/treeEvidence.js';
 import { writeVersionEvidence, pinChildVersions, recordNodeSecurity } from '../db/evidenceStore.js';
@@ -133,13 +134,16 @@ export async function writeCapturedBaseline({ issueId, issueKey, projectId, issu
     }
   }
   let version = existing?.version ?? (await deps.currentVersion(issueId)) + 1;
+  const linkPolicy = baselineLinkPolicy(approver);
+  issueFields = (await hydrateLinkPolicyIssue({ id: issueId, fields: { ...issueFields,
+    project: { id: projectId }, issuetype: { id: issueTypeId } } }, linkPolicy)).fields;
   const plan = planCapture({ issueId, issueKey, projectId, issueTypeId, version,
     controlledFields: fields, issueFields, editmetaFields, transitionAt, capturedAt,
     actorId: approver.accountId, actorName: approver.displayName ?? 'Unknown',
     transitionId: String(transitionId ?? ''), fromStatusId, toStatusId,
     requiredRole, requiredAssurance,
     approvalId: approver.approvalId, assuranceLevel: approver.assuranceLevel,
-    changelogEntries, changelogFailed });
+    changelogEntries, changelogFailed, linkPolicy });
   try {
     requireBaselineProvenance(plan.baseline);
   } catch (error) {
@@ -163,7 +167,7 @@ export async function writeCapturedBaseline({ issueId, issueKey, projectId, issu
   const writesVersion = !existing || existing.state === 'CAPTURING';
   let evidence = null;
   if (writesVersion) {
-    const links = trackedLinks(fields, issueFields);
+    const links = trackedLinks(fields, issueFields, { linkPolicy, issue: { id: issueId, fields: issueFields } });
     const others = linkedIssueIds(links);
     const otherVersions = others.length ? await deps.activeBaselines(others) : new Map();
     evidence = {
@@ -210,36 +214,16 @@ export async function writeCapturedBaseline({ issueId, issueKey, projectId, issu
     attachments: recordedAttachments(plan.raw, fields) };
 }
 
-async function recentConsumedApproval(issueId, fromStatusId, toStatusId, at) {
-  const result = await executeQuery(`SELECT TO_BASE64(approval_id) AS approval_id,
-    actor_account_id, actor_name, assurance_level, decision, state, content_hash
-    FROM va_approval WHERE issue_id = ? AND state = 'CONSUMED' AND decision = 'APPROVE'
-    AND from_status_id = ? AND to_status_id = ? AND consumed_at >= ? AND consumed_at <= ?
-    ORDER BY consumed_at DESC LIMIT 1`, [issueId, fromStatusId, toStatusId, at - 120000, at + 1000]);
-  if (!result.result) throw result.error;
-  const row = result.data[0];
-  return row ? { ...row, approval_id: fromBinaryColumn(row.approval_id) } : null;
-}
-
 async function readJson(path) {
   const response = await api.asApp().requestJira(path);
   return response.ok ? response.json() : null;
-}
-
-export function approvalFrom(record, requiredAssurance = 'NATIVE_TRANSITION') {
-  if (!record?.approval_id) return { ok: false, reason: 'NO_APPROVAL' };
-  if (record.decision !== 'APPROVE' || record.state !== 'CONSUMED') return { ok: false, reason: 'NO_APPROVAL' };
-  if (!meetsAssurance(record.assurance_level, requiredAssurance)) return { ok: false, reason: 'INSUFFICIENT_ASSURANCE' };
-  return { ok: true, approver: { accountId: record.actor_account_id ?? record.account_id,
-    displayName: record.actor_name ?? record.printed_name, approvalId: record.approval_id,
-    assuranceLevel: record.assurance_level, contentHash: record.content_hash } };
 }
 
 
 
 // `expectedTreeHash`: a per-field decision signs the candidate hash but captures its verified post-restore state.
 export async function writeCapturedTreeBaseline({
-  rootIssue, policy, approval, controlledFields, transitionAt, ruleScope = null, cause = CAUSE.OWN_TRANSITION, deps = {}, expectedTreeHash = null
+  rootIssue, policy, approval, controlledFields, transitionAt, ruleScope = null, cause = CAUSE.OWN_TRANSITION, deps = {}, expectedTreeHash = null, linkPolicyFor = null
 }) {
   const services = {
     baselineForApproval,
@@ -354,9 +338,12 @@ export async function writeCapturedTreeBaseline({
     rootIssueKey: rootIssue.key, rootFields: controlledFields, extraFieldIds: ['status', 'parent', 'security']
   });
   const { fieldsFor } = stable;
+  const linkPolicy = baselineLinkPolicy(approval);
+  const policyFor = linkPolicyFor ?? (() => linkPolicy);
+  stable.tree.nodes = await hydrateLinkPolicyNodes(stable.tree.nodes, policyFor);
   const nodeOf = issueId => stable.tree.nodes.find(node => Number(node.id) === Number(issueId));
   const treePlan = services.planTreeCapture({
-    rootIssueId: rootIssue.id, nodes: stable.tree.nodes, controlledFields, fieldsFor
+    rootIssueId: rootIssue.id, nodes: stable.tree.nodes, controlledFields, fieldsFor, linkPolicy, policyFor
   });
   if (treePlan.treeHash !== (expectedTreeHash ?? approval.content_hash)) {
     return { captured: false, reason: 'CONTENT_CHANGED' };
@@ -393,6 +380,7 @@ export async function writeCapturedTreeBaseline({
     node_count: treePlan.nodeCount,
     edge_count: treePlan.edgeCount,
     total_field_count: treePlan.totalFieldCount
+    ,...(serialiseLinkPolicy(linkPolicy) ? { link_policy: serialiseLinkPolicy(linkPolicy) } : {})
   };
 
   const reserved = existing
@@ -421,7 +409,7 @@ export async function writeCapturedTreeBaseline({
   const childRows = planChildBaselines({ treePlan, rootIssueId: rootIssue.id, fieldsFor, nodeOf,
     parent: { baselineId: reserved.baselineId, approvalId: approval.approvalId, accountId: approval.accountId,
       displayName: approval.displayName, assuranceLevel: approval.assuranceLevel, policy,
-      transitionAt, capturedAt },
+      transitionAt, capturedAt, linkPolicy },
     nextVersion: childRowsNeeded(treePlan, rootIssue.id)
       ? await services.nextVersions(treePlan.nodes.map(node => node.currentIssueId ?? node.originalIssueId))
       : () => 1 });
@@ -435,7 +423,7 @@ export async function writeCapturedTreeBaseline({
     rootIssueId: rootIssue.id, parentBaselineId: reserved.baselineId, parentVersion: version,
     rootDigests: rootNode.fieldDigests, controlledFields, children, nodeOf, fieldsFor, ruleScope, cause, policy, approval,
     transitionAt, signedAt: capturedAt, controlledFieldsHash: provenance.controlled_fields_hash,
-    activeBaselines: services.activeBaselines }) });
+    activeBaselines: services.activeBaselines, linkPolicyFor: policyFor }) });
   if (children.length) {
     await services.pinChildVersions({ parentBaselineId: reserved.baselineId,
       pins: children.map(child => ({ issueId: child.issue_id, baselineId: child.baseline_id, version: child.version })) });

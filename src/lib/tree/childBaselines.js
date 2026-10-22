@@ -1,4 +1,5 @@
 import { logicalNodeId } from './model.js';
+import { baselineLinkPolicy } from '../linkPolicy.js';
 
 /**
  * A CHILD'S OWN BASELINE, SEEN FROM ITS PARENT'S TREE.
@@ -102,7 +103,9 @@ async function graftOwnedBranches({ parentBaseline, baselineTree, activeBaseline
     const ownRoot = own?.nodes?.find(node => parentIdOf(node) == null);
     if (!ownRoot) continue;
     const below = descendantsOf(tree, nodeId);
-    const branch = own.nodes.filter(node => node !== ownRoot);
+    const branch = own.nodes.filter(node => node !== ownRoot)
+      .map(node => Object.create(Object.getPrototypeOf(node), { ...Object.getOwnPropertyDescriptors(node),
+        linkPolicy: { value: node.linkPolicy ?? baselineLinkPolicy(child), enumerable: true, configurable: true, writable: true } }));
     const values = { ...(tree.values ?? {}) };
     for (const id of below) delete values[id];
     for (const node of branch) {
@@ -180,6 +183,7 @@ export async function withChildBaselines({ parentBaseline, baselineTree: signedT
     values[node.logicalNodeId] = own.record.values;
     const replaced = {
       ...node,
+      linkPolicy: baselineLinkPolicy(own.child),
       fieldDigests: JSON.stringify(own.record.digests),
       ownBaseline: {
         version: Number(own.child.version),

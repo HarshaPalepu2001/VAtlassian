@@ -1,0 +1,208 @@
+{
+  "reviews": [
+    {
+      "status": "review_completed",
+      "findings": [
+        {
+          "severity": "minor",
+          "fileName": "frontend/src/testmgmt/RetestControls.tsx",
+          "title": "Give the user a way out after a `NEEDSREPAIR` result.",
+          "startLine": 77,
+          "endLine": 87
+        },
+        {
+          "severity": "minor",
+          "fileName": "src/testmgmt/messages.js",
+          "title": "Add messages for the new failure reasons. Without them, users see \"service could not be reached\".",
+          "startLine": 24,
+          "endLine": 29
+        },
+        {
+          "severity": "major",
+          "fileName": "src/usecases/testExecution.js",
+          "title": "The execution view checks the full plan proof again for every run.",
+          "startLine": 65,
+          "endLine": 77
+        },
+        {
+          "severity": "major",
+          "fileName": "src/usecases/testPlanning.js",
+          "title": "The planning view checks every revision in full on each load.",
+          "startLine": 124,
+          "endLine": 136
+        },
+        {
+          "severity": "major",
+          "fileName": "src/testmgmt/planning.js",
+          "title": "Skip placeholder substitution when the version has no dataset.",
+          "startLine": 98,
+          "endLine": 105
+        },
+        {
+          "severity": "major",
+          "fileName": "src/usecases/testEvidence.js",
+          "title": "Every chunk request reads and hashes the whole retained object.",
+          "startLine": 31,
+          "endLine": 42
+        },
+        {
+          "severity": "minor",
+          "fileName": "src/usecases/testRunSigning.js",
+          "title": "Legacy evidence blocks a run that is already in `SIGNING` with no way to recover.",
+          "startLine": 46,
+          "endLine": 46
+        },
+        {
+          "severity": "minor",
+          "fileName": "src/usecases/testManagementAdmin.js",
+          "title": "A workflow or status read error now blocks the whole admin configuration page.",
+          "startLine": 47,
+          "endLine": 47
+        }
+      ]
+    },
+    {
+      "status": "review_completed",
+      "findings": [
+        {
+          "severity": "major",
+          "fileName": "frontend/src/testmgmt/ExecutionView.tsx",
+          "title": "A definite server refusal locks the Add run form with no way out.",
+          "startLine": 57,
+          "endLine": 60
+        }
+      ]
+    },
+    {
+      "scope": "Native Jira integration",
+      "status": "review_completed",
+      "reviewedFiles": [
+        "frontend/src/admin/pages/TestManagementPage.tsx",
+        "frontend/src/field/ApprovalField.tsx",
+        "frontend/src/panel/sections/ApprovalControls.tsx",
+        "frontend/src/testmgmt/CoverageView.tsx",
+        "frontend/src/testmgmt/ExecutionView.tsx",
+        "frontend/src/testmgmt/TestView.tsx",
+        "frontend/src/testmgmt/types.ts",
+        "frontend/test/testmgmt-hardening.test.mjs",
+        "src/db/approvalStore.js",
+        "src/db/approvedLinks.js",
+        "src/db/baselineStore.js",
+        "src/db/baselineTreeStore.js",
+        "src/db/childBaselineStore.js",
+        "src/db/derivedBaselineStore.js",
+        "src/db/migrations.js",
+        "src/db/observationStore.js",
+        "src/gate.js",
+        "src/jobs/linkWorker.js",
+        "src/jobs/restoreWorker.js",
+        "src/jobs/runner.js",
+        "src/lib/approval/challenge.js",
+        "src/lib/approval/linkPropagation.js",
+        "src/lib/approval/record.js",
+        "src/lib/approval/runtime.js",
+        "src/lib/baseline.js",
+        "src/lib/capture.js",
+        "src/lib/collect.js",
+        "src/lib/content.js",
+        "src/lib/diff/index.js",
+        "src/lib/hashBasis.js",
+        "src/lib/interception.js",
+        "src/lib/liveDrift.js",
+        "src/lib/restore/executor.js",
+        "src/lib/restore/linkConflicts.js",
+        "src/lib/restore/outcome.js",
+        "src/lib/restore/verifier.js",
+        "src/lib/tree/capturePlan.js",
+        "src/lib/tree/childBaselines.js",
+        "src/lib/tree/restoreAdapters.js",
+        "src/lib/tree/restoreExecutor.js",
+        "src/lib/tree/restoreVerifier.js",
+        "src/lib/tree/reviewDiff.js",
+        "src/lib/tree/scopedBaseline.js",
+        "src/lib/treeCollect.js",
+        "src/testmgmt/coverage.js",
+        "src/testmgmt/messages.js",
+        "src/testmgmt/runtime.js",
+        "src/testmgmt/sourceRuntime.js",
+        "src/testmgmt/sources.js",
+        "src/testmgmt/store.js",
+        "src/usecases/approval.js",
+        "src/usecases/drift.js",
+        "src/usecases/panelAccess.js",
+        "src/usecases/restoreActions.js",
+        "src/usecases/testAuthoring.js",
+        "src/usecases/testCoverage.js",
+        "src/usecases/testManagementAdmin.js",
+        "test/baseline-storage.test.js",
+        "test/drift-functional.test.js",
+        "test/jobs-runner.test.js",
+        "test/migrations.test.js",
+        "test/testmgmt-coverage-summary.test.js",
+        "test/testmgmt-manual-journeys.test.js",
+        "test/testmgmt-source-decisions.test.js",
+        "test/transition-policy.test.js",
+        "test/tree-storage.test.js",
+        "test/vault-object-range.test.js",
+        "src/db/baselineLinkPolicyMigrations.js",
+        "src/lib/approval/linkPolicy.js",
+        "src/lib/captureApproval.js",
+        "src/lib/linkPolicy.js",
+        "src/testmgmt/linkPolicyConfig.js",
+        "src/testmgmt/nativeLinkAuthority.js",
+        "src/testmgmt/sourceLinkJob.js",
+        "src/testmgmt/sourceLinkMigrations.js",
+        "src/testmgmt/sourceLinkRuntime.js",
+        "src/testmgmt/sourceLinkStore.js",
+        "src/testmgmt/sourceLinkSync.js",
+        "test/approval-link-policy.test.js",
+        "test/baseline-link-policy-v2.test.js",
+        "test/link-propagation-policy.test.js",
+        "test/queued-restore-link-policy.test.js",
+        "test/restore-link-policy-v2.test.js",
+        "test/testmgmt-native-link-authority.test.js",
+        "test/testmgmt-source-link-job.test.js",
+        "test/testmgmt-source-link-runner.test.js",
+        "test/testmgmt-source-link-store.test.js",
+        "test/testmgmt-source-link-sync.test.js",
+        "test/testmgmt-source-runtime-policy.test.js"
+      ],
+      "findings": [
+        {
+          "severity": "major",
+          "fileName": "src/testmgmt/sourceLinkSync.js",
+          "title": "Allow a prior intent with a null `typeId` and no sources.",
+          "startLine": 28,
+          "endLine": 29
+        },
+        {
+          "severity": "minor",
+          "fileName": "src/db/approvedLinks.js",
+          "title": "Return no opinion for an in-tree v2 node that does not track `issuelinks`.",
+          "startLine": 68,
+          "endLine": 70
+        }
+      ]
+    },
+    {
+      "scope": "Native review corrections and final integration changes",
+      "status": "review_completed",
+      "reviewedFiles": [
+        "frontend/test/testmgmt-hardening.test.mjs",
+        "src/db/approvedLinks.js",
+        "src/lib/capture.js",
+        "src/lib/evidence/treeEvidence.js",
+        "src/lib/evidence/versionEvidence.js",
+        "src/testmgmt/sourceLinkSync.js",
+        "test/baseline-link-policy-v2.test.js",
+        "test/drift-functional.test.js",
+        "test/restore-link-policy-v2.test.js",
+        "test/testmgmt-admin.test.js",
+        "test/testmgmt-source-link-sync.test.js"
+      ],
+      "findings": []
+    }
+  ],
+  "scope": "Implementation delta against preserved pre-edit snapshot; second pass covers subsequent changes",
+  "followup": "Both native findings corrected with RED/GREEN regressions; final independent follow-up completed with zero findings. Full final verification passed after fixes."
+}

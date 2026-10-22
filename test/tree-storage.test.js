@@ -12,6 +12,29 @@ import { replaceTreeDrift, readTreeDrift } from '../src/db/treeDriftStore.js';
 import { claimRestoreStep, finishRestoreStep, recordReplacement } from '../src/db/restoreTreeStore.js';
 import { baselineByVersion, baselineHistory } from '../src/db/baselineStore.js';
 
+test('tree storage retains explicit v1 nodes within v2 roots and reads the node policy first', async () => {
+  const policies = [{ version: 2, verifiesTypeId: '90', testTypes: [{ projectId: 1, issueTypeId: '2' }], internalTypeIds: [] }, { version: 1 }];
+  const nodes = policies.map((linkPolicy, index) => ({ logicalNodeId: String(index), originalIssueId: index + 1,
+    currentIssueId: index + 1, issueKey: `T-${index + 1}`, parentLogicalNodeId: index ? '0' : null,
+    projectId: 1, issueTypeId: '3', contentHash: 'a'.repeat(64), fieldDigests: '{}', nodeOrder: index, linkPolicy }));
+  let persisted;
+  const baselineId = Buffer.alloc(16, 1);
+  await writeTreeCapture({ baselineId, treeHash: 'b'.repeat(64), nodes, values: {}, query: async (sql, params) => {
+    if (sql.includes('INSERT INTO va_baseline_node ')) { assert.match(sql, /link_policy/); persisted = params; }
+    return [];
+  } });
+  assert.deepEqual(JSON.parse(persisted[11]), policies[0]);
+  assert.deepEqual(JSON.parse(persisted[23]), policies[1]);
+  const read = await readBaselineTree(baselineId, async sql => {
+    if (sql.includes('FROM va_baseline_node n')) {
+      assert.match(sql, /COALESCE\(n.link_policy, b.link_policy\)/);
+      return nodes.map(n => ({ ...n, linkPolicy: JSON.stringify(n.linkPolicy) }));
+    }
+    return [];
+  });
+  assert.deepEqual(read.nodes.map(n => n.linkPolicy), policies);
+});
+
 test('activeRootsForNode returns only complete active baselines', async (t) => {
   const baselineIdBuffer = Buffer.alloc(16, 1);
   const baselineIdBase64 = baselineIdBuffer.toString('base64');

@@ -61,10 +61,10 @@ export const OUTCOME = {
  * in observe() below: an absence of digests is not evidence of a match, and
  * concluding "clean" from it would report a corrupt baseline as an approved one.
  */
-export function driftedFields({ baselineDigests, issueFields, controlledFields }) {
+export function driftedFields({ baselineDigests, issueFields, controlledFields, linkPolicy, issue }) {
   const fields = controlledFields ?? [];
   const ids = fields.map((f) => f.field_id);
-  const { contentHash, digests } = project(issueFields, fields);
+  const { contentHash, digests } = project(issueFields, fields, { linkPolicy, issue });
 
   let bDigests = baselineDigests;
   if (typeof bDigests === 'string') {
@@ -82,7 +82,7 @@ export function driftedFields({ baselineDigests, issueFields, controlledFields }
   }
 }
 
-export function observe({ prior, baselineDigests, issueFields, controlledFields, now }) {
+export function observe({ prior, baselineDigests, issueFields, controlledFields, now, linkPolicy, issue }) {
   if (controlledFields.length === 0) return { outcome: OUTCOME.NOT_CONTROLLED, review: prior };
   if (!prior?.baseline_id) return { outcome: OUTCOME.NO_BASELINE, review: prior };
   if ((prior.state === REVIEW_STATE.RESTORING || prior.state === REVIEW_STATE.DECIDING) && !isStaleLock(prior, now)) return { outcome: OUTCOME.BUSY, review: prior };
@@ -96,7 +96,7 @@ export function observe({ prior, baselineDigests, issueFields, controlledFields,
     }
   }
 
-  const { contentHash, digests: currentDigests } = project(issueFields, controlledFields);
+  const { contentHash, digests: currentDigests } = project(issueFields, controlledFields, { linkPolicy, issue });
 
   // ── ONE COMPARISON, USED FOR BOTH DECISIONS ────────────────────────────────
   //
@@ -126,7 +126,7 @@ export function observe({ prior, baselineDigests, issueFields, controlledFields,
   // successful capture self-corrects.
   // driftedFields() is the single definition, shared with the panel summary so
   // the two can never disagree about what counts as drift.
-  const changes = driftedFields({ baselineDigests: bDigests, issueFields, controlledFields }).changed;
+  const changes = driftedFields({ baselineDigests: bDigests, issueFields, controlledFields, linkPolicy, issue }).changed;
 
   if (changes.length === 0) {
     // Returning values by hand does not erase the outstanding review decision.

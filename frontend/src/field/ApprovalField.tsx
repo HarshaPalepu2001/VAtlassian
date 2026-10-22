@@ -258,6 +258,7 @@ export default function ApprovalField({ context }: { context?: { extension?: { i
             </Notice>
           )}
 
+          {action.capturesBaseline && <p className="va-secondary">This approval also records the configured test link rules. Where enabled, a Test owns its Verifies links and linked source approvals exclude those relationships.</p>}
           <Affirmation checked={affirmed} onChange={setAffirmed} disabled={busy || !deviceReady}>
             {`I, ${signerName ?? 'the signer'}, have reviewed ${issue?.key ?? 'this work item'} and I declare: ${action.meaning ?? 'Approved'}. I am signing as ${action.requiredRole ?? 'approver'} and I understand this electronic signature is the legally binding equivalent of my handwritten signature.`}
           </Affirmation>

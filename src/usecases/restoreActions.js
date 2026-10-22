@@ -10,11 +10,13 @@ import { markDecided } from '../db/driftStore.js';
 import { release } from '../db/itemStateStore.js';
 import { tryAppend } from '../db/store.js';
 import { EVENT } from '../lib/ledger.js';
+import { baselineLinkPolicy, treeLinkPolicyResolver } from '../lib/linkPolicy.js';
 
 import { executeTreeRestore } from '../lib/tree/restoreExecutor.js';
 import { verifyTreeRestore, explainRefusals } from '../lib/tree/restoreVerifier.js';
 import { claimRestoreAction, finishRestoreAction, recordReplacement, readReplacements, readRestoreActions } from '../db/restoreTreeStore.js';
 import { createTreeReader } from '../lib/tree/jira.js';
+import { testManagementExclusion } from '../testmgmt/treeExclusion.js';
 import { readStableTree } from '../lib/tree/stableRead.js';
 import { createRestoreAdapters } from '../lib/tree/restoreAdapters.js';
 import { planTreeRestore } from '../lib/tree/restorePlan.js';
@@ -43,12 +45,16 @@ export async function queueRestore({ prepared, actor, approval, mixed = null, st
   }
   const plan = mixed ? mixed.restore : planTreeRestore({ baselineTree: prepared.baselineTree, currentTree: prepared.currentTree,
     controlledFields: prepared.fields, fieldsFor: prepared.fieldsFor });
+  const policyFor = treeLinkPolicyResolver(prepared.baselineTree, baselineLinkPolicy(prepared.baseline));
+  const linkPolicies = Object.fromEntries(prepared.baselineTree.nodes.map(node => [node.logicalNodeId, policyFor(node)]));
   const restoreId = await stores.startRestore({
     approvalId: approval.approval_id, issueId: prepared.issueId, projectId: prepared.projectId,
     baselineId: prepared.baseline.baseline_id, baselineVersion: prepared.baseline.version,
     actorAccountId: actor.accountId, now, state: 'QUEUING', totalSteps: plan.steps.length,
     actionPlan: plan.steps,
-    detail: { actionPlan: plan.steps, ...(mixed ? { mixed: { overlay: mixed.overlay, mapHash: mixed.mapHash,
+    detail: { actionPlan: plan.steps,
+      ...(Object.values(linkPolicies).some(policy => policy.version === 2) ? { linkPolicies } : {}),
+      ...(mixed ? { mixed: { overlay: mixed.overlay, mapHash: mixed.mapHash,
       approved: mixed.approvedIds, rejected: mixed.rejectedIds } } : {}) },
     candidateDigests: prepared.digests ?? {}
   });
@@ -123,9 +129,11 @@ export async function performRestore({ prepared, actor, approval }) {
 
   try {
     if (isTree) {
-      const treeReader = createTreeReader({ api: forgeApi, route });
+      const treeReader = createTreeReader({ api: forgeApi, route, exclude: testManagementExclusion });
       const jiraAdapters = createRestoreAdapters({ api: forgeApi, route,
         actorAccountId: actor.accountId, approvalId: approval.approval_id,
+        policyForIssue: (issue, context) => treeLinkPolicyResolver(baselineTree, baselineLinkPolicy(baseline))({
+          ...issue, logicalNodeId: context?.logicalNodeId }),
         approvedLinksOf: approvedLinksResolver({ baselineTree }) });
       const adapters = {
         claimRestoreAction,
@@ -186,10 +194,12 @@ export async function performRestore({ prepared, actor, approval }) {
         } }];
     } else {
       const executed = await executeRestore({ api: forgeApi, plan, issueKey: issue.key, issueId,
+        issue, linkPolicy: baselineLinkPolicy(baseline),
         controlledFields: fields, ...config.restore,
         actorAccountId: actor.accountId, approvalId: approval.approval_id,
         approvedLinksOf: approvedLinksResolver() });
       const verified = await verifyRestore({ api: forgeApi, issueKey: issue.key, controlledFields: fields,
+        linkPolicy: baselineLinkPolicy(baseline),
         baselineDigests: typeof baseline.field_digests === 'string' ? JSON.parse(baseline.field_digests) : baseline.field_digests,
         detail: executed.detail, expectedStatusId: null });
       detail = verified.detail;

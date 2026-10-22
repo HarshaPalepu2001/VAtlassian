@@ -356,17 +356,19 @@ export function normaliseField(kind, value, issueFields = null) {
  *                and strips ADF localIds); writing a normalised value back into
  *                Jira would be a second, silent edit.
  */
-export function project(issueFields, controlledFields) {
+export function project(issueFields, controlledFields, context = {}) {
   const values = {};
   const raw = {};
   const digests = {};
 
   for (const field of [...controlledFields].sort((a, b) => (a.field_id < b.field_id ? -1 : 1))) {
     const { field_id, field_kind } = field;
-    const rawValue = issueFields?.[field_id];
+    const original = issueFields?.[field_id];
+    const rawValue = field_kind === FIELD_KIND.LINKS
+      ? governedLinks(original, { ...context, issue: context.issue ?? { fields: issueFields } }) : original;
     const normalised = normaliseField(field_kind, rawValue, issueFields);
 
-    digests[field_id] = sha256Hex(canonical({ f: field_id, k: field_kind, v: normalised }));
+    digests[field_id] = fieldDigest(field, normalised, context);
 
     // THE BOUNDARY. Nothing but an explicit store_values = true puts customer
     // content into `values`/`raw`, and therefore into the database.
@@ -379,6 +381,13 @@ export function project(issueFields, controlledFields) {
   // Computed from digests alone, so toggling retention never changes a hash.
   const contentHash = sha256Hex(canonical(digests));
   return { contentHash, digests, values, raw };
+}
+
+/** Shared by projection, diff, derived baselines and restore suppression. */
+export function fieldDigest(field, normalised, { linkPolicy } = {}) {
+  const policy = normaliseLinkPolicy(linkPolicy);
+  return sha256Hex(canonical({ f: field.field_id, k: field.field_kind, v: normalised,
+    ...(field.field_kind === FIELD_KIND.LINKS && policy.version === 2 ? { linkPolicy: policy } : {}) }));
 }
 
 /**
@@ -490,3 +499,4 @@ export function inferFieldKind(schema) {
   }
   return FIELD_KIND.SCALAR;
 }
+import { governedLinks, normaliseLinkPolicy } from './linkPolicy.js';

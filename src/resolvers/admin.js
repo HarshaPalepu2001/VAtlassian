@@ -1,9 +1,13 @@
 import ForgeResolver from '@forge/resolver';
 import * as admin from '../usecases/admin.js';
+import * as testAdmin from '../usecases/testManagementAdmin.js';
 import { wrapWithHarness } from '../lib/harnessLogger.js';
 const resolver = new (ForgeResolver.default ?? ForgeResolver)();
 
 resolver.define('admin:check', req => admin.check(req));
+resolver.define('admin:tm:get', req => testAdmin.getTestManagementConfig(req));
+resolver.define('admin:tm:save', req => testAdmin.saveTestManagementConfig(req));
+resolver.define('admin:tm:repairBug', req => testAdmin.repairTestBug(req));
 resolver.define('admin:bootstrap', req => admin.bootstrap(req));
 resolver.define('admin:runMigrations', req => admin.runMigrations(req));
 resolver.define('admin:listAdmins', req => admin.listAdmins(req));

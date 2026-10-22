@@ -65,9 +65,11 @@ export async function syncFields(req, overrides) {
   const { syncTrackedFields } = deps;
   const accountId = context.accountId;
   const scope = fieldScope(payload);
+  const offset = Number(payload?.screenOffset ?? 0);
   return syncTrackedFields({
     ...scope,
-    accountId
+    accountId,
+    screenOffset: Number.isInteger(offset) && offset > 0 ? offset : 0
   });
  }, overrides, 'fields');
 }

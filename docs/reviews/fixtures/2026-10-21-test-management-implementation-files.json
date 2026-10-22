@@ -1,0 +1,787 @@
+{
+  "files": [
+    {
+      "path": "frontend/src/admin/pages/TestManagementPage.tsx",
+      "sha256": "19ee17f67346690643a1d176d99076b9184b5a6ff3ddd8d39056b9b3262f9bb9",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "frontend/src/field/ApprovalField.tsx",
+      "sha256": "d66843afd6d84e75125318411a06f361f99d159f588cb1806e6d929bb178b3c0",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "frontend/src/panel/sections/ApprovalControls.tsx",
+      "sha256": "348518da0a2921e6e34d967fe464010584d391a457d75e14bd8b1034139acfdd",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "frontend/src/testmgmt/CoverageView.tsx",
+      "sha256": "73ffeb0be4bd176cec0a8fbd79f24930fa8d6aa465777ba7da1a693f1d5d7178",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "frontend/src/testmgmt/DatasetEditor.tsx",
+      "sha256": "0039bda97a75268631e1793ad8b2059e3ea76d5362af50ba2d1c887c75cc9550",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "frontend/src/testmgmt/EvidenceDownload.tsx",
+      "sha256": "1d33b7024da64b9e1daf8407e9340cf562074259b00a92d35a03829593e87c92",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "frontend/src/testmgmt/ExecutionSummary.tsx",
+      "sha256": "dbf4db095301dd49ed62dc55d107b5d7f9eac0b144fbcfb609103bde3cd82f81",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "frontend/src/testmgmt/ExecutionView.tsx",
+      "sha256": "d27c1c2833b776a36b155405cb5bd8c928101d0a80f26d44c10b50f7cd05135d",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "frontend/src/testmgmt/PlanningView.tsx",
+      "sha256": "73868faf3f92169336af8727c51227be6df6b6d7471e22283dc4427344f2c4be",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "frontend/src/testmgmt/RetestControls.tsx",
+      "sha256": "adc8db56a06db7c35048ba41458c3f6d18e60f6034cf6acdc2c51e4ea1979858",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "frontend/src/testmgmt/SourceDecisions.tsx",
+      "sha256": "df1719489864a2a81c27ff0b57e62483807cff7565c463976a68cf28007ee6e4",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "frontend/src/testmgmt/TestPanel.tsx",
+      "sha256": "3713966f9cecb2f06e83c19388aadfcf3d85db5f3c385c4d6a01472838272022",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "frontend/src/testmgmt/TestView.tsx",
+      "sha256": "34e73be0ab040d32e981751a6436fcfd40549f9612b4f2af4c9cd147884de7d4",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "frontend/src/testmgmt/types.ts",
+      "sha256": "fbce5a015eb3dad510b24491161f50fe6821ee042221ee176fbe56a07534882c",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "frontend/test/testmgmt-hardening.test.mjs",
+      "sha256": "3846eca92bff12c1aa42f789db8dc380f205cef123e864d3f7f4dc8b05397523",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "frontend/test/testmgmt-planning.test.mjs",
+      "sha256": "3bcbec02839b23b1d9916bed4f23438e92346fe3e0560f7808573bcb7ae8a335",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "frontend/test/testmgmt-retest.test.mjs",
+      "sha256": "1c52dd54bd564dc77bebf900e50aab5695f9c3788f60cb1a45f79d1997433daa",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/.DS_Store",
+      "sha256": "3d7cd453c7a0d815c7c452ed143e014d74d04462b9cf3851aff7c69c09c5a2f1",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/db/approvalStore.js",
+      "sha256": "e197cd2df928d6e848d5ef685a13be44ceba171f470d0b0475959297fb4bc298",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/db/approvedLinks.js",
+      "sha256": "af97b8599037f665b1cef6076bd754591e2c6e9279a5a2b8b894918f2c91a30b",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/db/baselineLinkPolicyMigrations.js",
+      "sha256": "586780c0273f1bc5cb53d452bddd830668721770c3e5cb2a11c08c06788fa880",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/db/baselineStore.js",
+      "sha256": "c196e418c0434be519d61de2e711f2bbbb2d872617bf6426de9a0dad9ec14e01",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/db/baselineTreeStore.js",
+      "sha256": "44c32988489fba9c2709624d5d7134eb56bd006daee580bdbd815815ba579f70",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/db/childBaselineStore.js",
+      "sha256": "705aed8afb49e8508f9612ca071d2c73fc06673a1c0820952777165bee74a0f9",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/db/derivedBaselineStore.js",
+      "sha256": "a20003971d96fcda18195b294e8e885fe65beb176727bed8fcfcf4efb70a38f2",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/db/migrations.js",
+      "sha256": "837c84ab4da464c3df1fa9adae55999b3d9552f2086985f4e89b1e2276149ee6",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/db/observationStore.js",
+      "sha256": "0907e74c878d5da778e54bc169b004ede44cf088f755e47d4bb683d59506a361",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/gate.js",
+      "sha256": "609487b62999bc7d51137740bca46a6830d59a35ae340c65065b6efe4662fc68",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/jobs/gatecheck.js",
+      "sha256": "a31e4e41453af3779bbcfac84d4279866c0689ba1af24e55898ea897eb997e63",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/jobs/linkWorker.js",
+      "sha256": "91f1c5ba34a9e6c2be933a2e870042d6b60302b557a1300d35668c1594ed5af0",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/jobs/restoreWorker.js",
+      "sha256": "75733dedc94c11e161b789acaf328cca18ab72130b01d94a1cc2efb6c163fc53",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/jobs/runner.js",
+      "sha256": "ac2510bb87e0703acc619e7899ce8fd5c2ced393e65ddd1b0e5ebcf334df509e",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/lib/.DS_Store",
+      "sha256": "a98f90f3fa9546874facbae9cd02b83ca808578338433b4b8bb172da0c64e199",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/lib/approval/challenge.js",
+      "sha256": "098f445eb87f9e37bd05de5b21bfd9b73d66dac4ba09c9cce3cbb517156df5d5",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/lib/approval/linkPolicy.js",
+      "sha256": "4688a00a8af35edb50bf2411499d1aacec6795e38b48b078373b6b318fd2e837",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/lib/approval/linkPropagation.js",
+      "sha256": "a0ba40ad88dbed513a82e8bf9307b95f6deb734ddcdeeecdf72f1ba30137bab8",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/lib/approval/record.js",
+      "sha256": "7dde6ea9bdf8a21c59c02c770de3130f68b957663aabfd12717717b45191d219",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/lib/approval/runtime.js",
+      "sha256": "796f11b2b55ea0534d7f3f4c0284d506ccdcd1d66253941b2936c1f17b0030e2",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/lib/baseline.js",
+      "sha256": "2e4176fb4f19fd72840e99b3bbdf1b8816629ddf59faa4de29f06b7db19ffe92",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/lib/capture.js",
+      "sha256": "039336659eb2833ad842d0b16c692a739f0a928b4e17d3cc048314accc894769",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/lib/captureApproval.js",
+      "sha256": "f1ea579985e04b916e12d9955b2b110302b2936062db0f2f123cdd70cbfe6ffe",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/lib/collect.js",
+      "sha256": "575bec64a1b116c5641d086021a075a2844ee6591883cd575df3cbcd9056ca01",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/lib/content.js",
+      "sha256": "207719ed98faa19310ec5aa75710440826467566a3c337a24ea1e4538d6ab57c",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/lib/diff/index.js",
+      "sha256": "6ab52c5f5fb4bf08d947871cce803edcbdff2e3fd295d7eeed81afab09436832",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/lib/evidence/treeEvidence.js",
+      "sha256": "70db4a564f2553449c34f677e21b5af30c76da9a693e5cdd693a6a4324bf316d",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/lib/evidence/versionEvidence.js",
+      "sha256": "2281b624da863d382a40fae516e3d93516eb21922428288320d80009d1315365",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/lib/hashBasis.js",
+      "sha256": "da7ad9278fc05783d0ee049ba2fb7b624b3984e59c114e763e0096cabac8362d",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/lib/interception.js",
+      "sha256": "e9a0124d4c6e41c9e170cccef1fea9c270efc1a5e0b7cd4f85d987622d21d125",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/lib/linkPolicy.js",
+      "sha256": "d985ec619b1823afcb93cc8e4d704bc17fcab26893e49fd9c3a4aee087f9e609",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/lib/liveDrift.js",
+      "sha256": "3372743f817fe06bacdf0235eb00a20ae5670f818dc4ecd56f28df6481122bcf",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/lib/restore/executor.js",
+      "sha256": "4e664ef9d49640b0ee8b9e0932abc858854fdde25d49cf2fd7487bf853b403c2",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/lib/restore/linkConflicts.js",
+      "sha256": "b7a4abd92a229e9586780872d02eb6b104f12c62f262ebbd0ac7a0ed1dd27e2e",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/lib/restore/outcome.js",
+      "sha256": "5e141167ec8939c4813e094c0023821851fbfaaec65c6ed1ca26219b6059feba",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/lib/restore/verifier.js",
+      "sha256": "898c425b36f97ea8074c52c6f14105765f2a0c74d8474d12c320ed895e987204",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/lib/tree/capturePlan.js",
+      "sha256": "37c21f9495ea8d3b75ab32196370a006542a67c2f4dccb0a5347eace5de01c40",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/lib/tree/childBaselines.js",
+      "sha256": "40ea6b14c1918e2e1693ab86178449c7ee842194793604b9b7ada3ec1cae28ed",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/lib/tree/restoreAdapters.js",
+      "sha256": "0cef4ce6a008b7af6101b7c8acb3a8fa9131d026cb22e0859a1b90f0adbc0be5",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/lib/tree/restoreExecutor.js",
+      "sha256": "abee18fa6e7ce367de690fdc30085e9560e6fc98c1d879cd951dafb6988180ab",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/lib/tree/restoreVerifier.js",
+      "sha256": "7d8ef7957ac8eded2b9534d1673d362cc961871da23b1ec928418391469a984e",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/lib/tree/reviewDiff.js",
+      "sha256": "45b710ca5a5daccaf45b08df4064231cd0f30b4421d2d665b8643e7b6af811a2",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/lib/tree/scopedBaseline.js",
+      "sha256": "2edfb6502ea3935e5cd3ddfda8a3a64e204753379f353e4d6375889062d3e4e7",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/lib/treeCollect.js",
+      "sha256": "93592acc89d06be6724c3bf6c9c51c8de35b9d26460494db6a416c392aafae81",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/lib/vaultObjectStore.js",
+      "sha256": "191d19d37fa795d46fb6b6ee169730401b2d0807b8d3de08b69de0436ba36eb1",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/resolvers/testManagement.js",
+      "sha256": "699ae888a9ebafadb3a277a3b0bd163e5cfe7defe5e5804fd706bea4e87d80bd",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/testmgmt/bug.js",
+      "sha256": "36b057041eb78214185914214617565f85b011541daa17ee72f0037da0842104",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/testmgmt/bugStore.js",
+      "sha256": "b38bfc05fa3cbf6758d5d9146c851e31df7b7203a007d011a4cf2bc0464514b2",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/testmgmt/chain.js",
+      "sha256": "2623d316d6f6354ebd7e102b95759989e8f8b6125c51363fb3c612209cb423f2",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/testmgmt/content.js",
+      "sha256": "c81ad90a71f6595f784e75e516b2c04cf3675f4c216cd0da1f2481f812d08676",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/testmgmt/coverage.js",
+      "sha256": "060424a4cf80470fbdbadd0275cf955c287c94f11e78f65f016c0ca4a1c9ea9d",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/testmgmt/evidence.js",
+      "sha256": "94dcdefbdf2f95c9fea41125acbbfddd85389d6a46a9e2ca4bc0f16bf4396969",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/testmgmt/executionGuard.js",
+      "sha256": "8e5844c103d0fefbbb865a50b05e72d749ee9874a0b5356e9eefbcf60ecad498",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/testmgmt/jira.js",
+      "sha256": "5976ea3d9930f69530f956c2e5333435c94c929cff9cd81954c96cb69c2e652b",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/testmgmt/linkPolicyConfig.js",
+      "sha256": "c1ebcd91bc95f8e5f46ac76553725733c5d312454d7ab318cd6ef7be3764ae25",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/testmgmt/messages.js",
+      "sha256": "52315b1ad5cd3a9fd533087349ea0eae5b747b64a77f33d380202f03d7cc5791",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/testmgmt/nativeLinkAuthority.js",
+      "sha256": "b6cf06cd2e149f0bdfe8831c8f6f1fb1462343e38cfb9f047a482368b34e9e8b",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/testmgmt/planning.js",
+      "sha256": "548ef13088816212a4960baff7e850b7a9e5d0bf1aa8702499021918ba1f8b4b",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/testmgmt/planningMigrations.js",
+      "sha256": "71d7e9cb91181effd7b9206806db4f8cb13e883e63879d016a66ef5c2fbd5fac",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/testmgmt/planningStore.js",
+      "sha256": "196cb1a91be28d20a0ce4053c064ef2bac4e302f5c08a20e206fcbf1b86546cb",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/testmgmt/proof.js",
+      "sha256": "25e6be332827513ab616d5a38ee72878d54acb0e90502b20633b6d8cd431aa87",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/testmgmt/reportMigrations.js",
+      "sha256": "c9f398b0833755fdd791e67a40905efb6927ccc040dda8a7ce9b27b428e636fe",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/testmgmt/reportStore.js",
+      "sha256": "2550586d5c4ff33d2397253b7a0eef8ca94d150778f4e4c53faff32081895217",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/testmgmt/requestReads.js",
+      "sha256": "1fe37889c4f57abb0fee9ad4c9d50944accc132cbb7dad238a331cac301fd0b5",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/testmgmt/retestJira.js",
+      "sha256": "4a1727082d5a1be88f6753beaf338dfaf350a83215e037762022c19951402ef5",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/testmgmt/retestMigrations.js",
+      "sha256": "6f1897aa2cb667694414634ab8089ce23776265d59fef7375098e49dca88d1e4",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/testmgmt/retestStore.js",
+      "sha256": "d92b87b9e71e7bbf46a870af722cd47ec311d4e98ef93a118767195481b04750",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/testmgmt/runtime.js",
+      "sha256": "f129631661b28c9573a8c241ff00236a2971deb8509b8a018ff9746b01b6962d",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/testmgmt/signing.js",
+      "sha256": "c25139f4a772ac80177a655b2d81e71ef36d369eb95a26021216b8cee2ffd2e0",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/testmgmt/sourceDecisions.js",
+      "sha256": "4021912e9f3392497f8a194190bade73ac71ec0fc7938f11ed33531801e973f8",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/testmgmt/sourceLinkJob.js",
+      "sha256": "f1f092eec4e511cb1ef06df4df4b0e20d117530cbcc58ddab7583cccb208a076",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/testmgmt/sourceLinkMigrations.js",
+      "sha256": "89715dcf320f457adc752aeaf797753819314df429592e16f6470561a27e72b3",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/testmgmt/sourceLinkRuntime.js",
+      "sha256": "c625d2291cb4a8e1a5c7097f90f059a0bfeebe05abec7ee42544545716fa1cdd",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/testmgmt/sourceLinkStore.js",
+      "sha256": "907f965186459d7264b76808a6ef6fa690cd9e2824625c6ea2d33ad82ca748be",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/testmgmt/sourceLinkSync.js",
+      "sha256": "dcefb7762743e5aa87176991da7e87ce368ce83ead274b0446a629a641ff3043",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/testmgmt/sourceRuntime.js",
+      "sha256": "d1cd605c42f7bd0fa784a4c334d6d1c8aa9d79f90dcef58e115daf50b108e2e4",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/testmgmt/sources.js",
+      "sha256": "5e1c442d6f513b533ab0ee21a2a9e8ceb0472598f4d77750aaf8c1bb9d3681f6",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/testmgmt/store.js",
+      "sha256": "f12c2397f3794ef9753ff435b6d46a27ab17b6775a108134056179bf20e0b72e",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/testmgmt/summary.js",
+      "sha256": "e92ec9c6c5086f4dd31b32c6f66edda34570270967df26faa0f3b6d3bd1d92fe",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/testmgmt/treeExclusion.js",
+      "sha256": "2bd5dee1c8b5ab08f7212404c71512c9160d48b8e0da14d07faf6f66bf485648",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/usecases/approval.js",
+      "sha256": "8a75d6e383974452edbe58b6a6d763b574710bfbb6853122e9fbb0846b034420",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/usecases/drift.js",
+      "sha256": "9094086711fe59c5bc131b40f9c18fb2f117b950d0d445d8eb29043003edf21f",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/usecases/panelAccess.js",
+      "sha256": "456bd728073a8f45d602fa0b7835a1125f53ead86bc0d54c4d7cf3ea5617039f",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/usecases/restoreActions.js",
+      "sha256": "1b03fb7d5a16875a6d938bd7e76604bf0ef7ed47daad28436d1d0038a1b39dd2",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/usecases/testAuthoring.js",
+      "sha256": "53e0f683c654de4ef1fff88941481d28725748680ed39243c29f724eb97568d9",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/usecases/testContext.js",
+      "sha256": "fefc861feb44b00038022e381912996bcfe24ef1d962ac087d870e81d9f5cc26",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/usecases/testCoverage.js",
+      "sha256": "d1ee8039d46f9d1e6556e9875fc5877e69a0d81cf344555d5b5d7a3287f12379",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/usecases/testEvidence.js",
+      "sha256": "d4e812c95dc8af6470e5c122ade01c04ae96bbe8ae0f882a5d103d2173ffbc71",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/usecases/testExecution.js",
+      "sha256": "2c272e11613df7ddd8a6792bf5a39bc759badbfcdb2eaa135852b6547353e192",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/usecases/testManagementAdmin.js",
+      "sha256": "4e09f964413e638c0dc2b2766bea46b04382a92b552f10042ce5ed1cb2d69c28",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/usecases/testPlanExecution.js",
+      "sha256": "e985ac561d7c8db25e62b406d01f77b87a05200e1eb88bd348365c3ff4363105",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/usecases/testPlanning.js",
+      "sha256": "92eda6df8231c343945c94d41e3f493181e7ae91c7a1fcc0da2126299c086cc6",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/usecases/testRetest.js",
+      "sha256": "9fe3053f1bdb3f28d41c986b36af57350a402db7bd5080d4963ec3a531d12cb0",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "src/usecases/testRunSigning.js",
+      "sha256": "766e4bf2c5533c8cccda815615a89bc1d194ee5baaaeb6e1d4955f66320c5ad0",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "src/usecases/testSummary.js",
+      "sha256": "61322ec6d543517436d3422f626cf296e84b17e898f645e7a8ba5c2881217041",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/.DS_Store",
+      "sha256": "2818a9c8a4cf5bcc41389e66d4a1d6e9599f089697648acbf720c8f4e468505d",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/approval-link-policy.test.js",
+      "sha256": "3ea5fb111a2ef7b3df4f21daca69ffc7cc0c6172cc364afc03cfbd2017661b83",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/baseline-link-policy-v2.test.js",
+      "sha256": "2d1c3e7b0f038532e56947c8d1c39d99e229064cb1b1bb066721b0c9d50a2a3d",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/baseline-storage.test.js",
+      "sha256": "f7c040341e3d826cf742f47ead8adb390beed52925f68a81baa69923a0e20c5b",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "test/drift-functional.test.js",
+      "sha256": "4303743166008a5e7ebcf8789f191692c3cb4afe45d8c51d113566635ef6d25d",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "test/fixtures/sample-harness.log",
+      "sha256": "0ca8d134ba7f4ec5b2c6d105f7d358c02b83848f305116ae5e7b89993def0fbc",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/helpers/tm-planning-world.js",
+      "sha256": "390c3cf7a19c5d1a1eae435a2c0d95b54a6e3265d90a5ebc699afbadb5934c1c",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/helpers/tm-retest-world.js",
+      "sha256": "4308dc743c7376de870f47e03292ddfc8e4d1b304033303aa498a8e6d61f59cc",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/helpers/tm-world.js",
+      "sha256": "c7035171e2f79fae256f3100298881fd31c27bc617df22fbee9345a69f5f32c7",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "test/jobs-runner.test.js",
+      "sha256": "e1a5b1f2ed81860cb4682898fa8943b9d3061d54902f1d2007ffcc9b70b213e2",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "test/link-propagation-policy.test.js",
+      "sha256": "c9abfd0cda839b069c40beca27b90e06f12e99ac26242084b1911181ad52f4bc",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/migrations.test.js",
+      "sha256": "57a479fabb837bac521c72eed705a686c7a71efc5811bdd1c92e80afed1f35ab",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "test/queued-restore-link-policy.test.js",
+      "sha256": "b298aa00c5a6b4eaad68965e4ba6f39405df085ecc07a6c3f2b37311b2b4b8b8",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/restore-link-policy-v2.test.js",
+      "sha256": "ce1c91098a817378fb12bd1cde4a2a332492f188735f742b4d1ffcb519460f70",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/testmgmt-admin-health.test.js",
+      "sha256": "68edc7b45efcac77849731fe1abf185deced4168eca02c033ce01794d64950c6",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/testmgmt-admin.test.js",
+      "sha256": "5b77e3cb9ba7ed1b27b2812dd5c2874a80ae5a70f6a503cd2dd337ab7c1e7920",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "test/testmgmt-bug-store.test.js",
+      "sha256": "c8864483cc6425b8b0fe3cae9d07544a6180f031e46106dac7bbdcc8db75d713",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/testmgmt-coverage-summary.test.js",
+      "sha256": "a6f336846c8a0614e4729f1783acd4a5eb829b7e43e120cd379b1b04c8a75aef",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/testmgmt-evidence-range.test.js",
+      "sha256": "1cefe0a0db0ec5f73b49c697aad6366403cfd520ca0a974f9baf295c2f6c25c6",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/testmgmt-evidence-retrieval.test.js",
+      "sha256": "ed708dfa2a00456164ab0f39c6b9a3f634e012575149e7689174a1c9ad0c487a",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/testmgmt-evidence.test.js",
+      "sha256": "cdb1bdb20697ede8a4056cdb90bb8b5ce8ba23520b14dac595497e0af88ac146",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/testmgmt-hardening.test.js",
+      "sha256": "31de2e5597f4aea6ba11305b6dc1f086356da4104984bea0b804969bee2eecd6",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/testmgmt-jira-hardening.test.js",
+      "sha256": "88c507ce4d21d09df5cffafe84eb37f181ea3f7bb0ef94ebbdcfae953f989bde",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/testmgmt-manual-journeys.test.js",
+      "sha256": "d0a5a1a9a93fa5957a9b8a113973826de9175267009994cc33e51c9dcc74023c",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/testmgmt-native-link-authority.test.js",
+      "sha256": "736fa36f64107214f755b99fcea02536c2e44140e9a254a1ad33131ec9e6234f",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/testmgmt-plan-execution.test.js",
+      "sha256": "3f8346ab4ab8ff3dc3a2d267385fb49a5a98c2b929fcbc51761cc75b9a07f598",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/testmgmt-planning-store.test.js",
+      "sha256": "c37f667810525b6b50d9ade5d87ab19b10b435e41fc66c8cdc58c7be91299c49",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/testmgmt-planning.test.js",
+      "sha256": "0bae47750d73e7f74f17ef779768d4c4d39dda5d34d38aebe72d73f2cb519b17",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/testmgmt-request-reads.test.js",
+      "sha256": "3224ef3cc15cf17cc009b3ae8761dfa047378a4ad0734f48952ae3eec8d233f5",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/testmgmt-retest-store.test.js",
+      "sha256": "b330ce014b2b9bfeaf63293f9581bd1e3345b44816e5df66e4e18e0575572f57",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/testmgmt-retest.test.js",
+      "sha256": "33f80a171dbf53d7f34cc8c4dca6fbc53ae1607864343611cf013b8223179f4b",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/testmgmt-rules.test.js",
+      "sha256": "73e754885a7c6c02e69958600c008efa097bfcb2cb7a7bef46f3c2adb1beeaab",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "test/testmgmt-signing-durability.test.js",
+      "sha256": "188aa888ea7c34a1690785270791c3ada6637760d5d2edb7e61f80600c8038e6",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/testmgmt-source-decisions.test.js",
+      "sha256": "79e62d8b8e8de4fd14ad89f54526f1d3c5c59fe2e8bc4af5515aabd2affef13c",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/testmgmt-source-link-job.test.js",
+      "sha256": "53c00f09103b2433c8ee2e096092c6dc58eab86eb35f1ea28e1682249321799f",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/testmgmt-source-link-runner.test.js",
+      "sha256": "f68181895e08f325327ad060689a0c3b13a33600ccdc31e246c36885cd3da95c",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/testmgmt-source-link-store.test.js",
+      "sha256": "4caf510b556ec19973fcaaca2402c7812ca2aa70153631befbdca6800e7daa2f",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/testmgmt-source-link-sync.test.js",
+      "sha256": "8773ca5b1c885fcbe7f4706c4f2fe28e611968f36ec1dbb8895861d0c13ff3b2",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/testmgmt-source-runtime-policy.test.js",
+      "sha256": "2c4328d747f7f0299822d46d9f45f024b6bc7160dd1bd694fc38dab0d0f0a63a",
+      "newSinceSnapshot": true
+    },
+    {
+      "path": "test/transition-policy.test.js",
+      "sha256": "bb6f3c06847728247c283b4406e9183ab3904286b6f3def3891ce144094e1b46",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "test/tree-storage.test.js",
+      "sha256": "5d0e4bc2824e261c932bbf4e69e259c139e40d1f7a5ffd914ca11ecc07a937b9",
+      "newSinceSnapshot": false
+    },
+    {
+      "path": "test/vault-object-range.test.js",
+      "sha256": "aa64cf6af486f1b4d5cf7da6a6184b313e96d40fc4d0551234b39ea5b5ea120c",
+      "newSinceSnapshot": true
+    }
+  ],
+  "scope": "Implementation/test delta against preserved pre-edit snapshot; final native integration candidate",
+  "localVerification": {
+    "backend": 2028,
+    "ui": 289,
+    "imports": 255,
+    "build": "passed",
+    "independentNativeFollowup": "review_completed; zero findings"
+  }
+}

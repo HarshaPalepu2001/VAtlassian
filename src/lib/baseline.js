@@ -249,6 +249,7 @@ export function planCapture({
   requiredAssurance = null,
   assuranceLevel = null,
   approvalId = null,
+  linkPolicy = null,
   changelogEntries = [],
   changelogFailed = false
 }) {
@@ -260,7 +261,8 @@ export function planCapture({
     changelogFailed
   });
 
-  const { contentHash, digests, values, raw } = project(rewound.fields, controlledFields);
+  const { contentHash, digests, values, raw } = project(rewound.fields, controlledFields, { linkPolicy,
+    issue: { id: issueId, fields: { ...rewound.fields, project: { id: projectId }, issuetype: { id: issueTypeId } } } });
 
   const writable = {};
   for (const cf of controlledFields) {
@@ -296,6 +298,7 @@ export function planCapture({
       approval_id: approvalId,
       fidelity: rewound.fidelity,
       field_count: controlledFields.length
+      ,...(serialiseLinkPolicy(linkPolicy) ? { link_policy: serialiseLinkPolicy(linkPolicy) } : {})
     },
     digests,
     values,
@@ -305,3 +308,4 @@ export function planCapture({
     rewoundFields: rewound.rewoundFields
   };
 }
+import { serialiseLinkPolicy } from './linkPolicy.js';

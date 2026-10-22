@@ -38,12 +38,15 @@ const extra = {
 registerHooks({
   resolve(specifier, context, next) {
     if (specifier === '@forge/api') return { url: 'world:api', shortCircuit: true };
+    // Test-management tables are not part of these scenarios: no project has it enabled.
+    if (specifier.startsWith('.') && context.parentURL && new URL(specifier, context.parentURL).pathname.endsWith('/testmgmt/store.js')) return { url: 'world:tm-store', shortCircuit: true };
     if (specifier === '@forge/sql') return { url: 'world:sql', shortCircuit: true };
     const resolved = specifier.startsWith('.') ? new URL(specifier, context.parentURL).pathname : specifier;
     const key = Object.keys(mocked).find(k => resolved.endsWith('/src/' + k));
     return key ? { url: 'world:' + key, shortCircuit: true } : next(specifier, context);
   },
   load(url, context, next) {
+    if (url === 'world:tm-store') return { format: 'module', shortCircuit: true, source: 'export const listProjects = async () => []; export const bugIssueIdsAmong = async () => new Set(); export const listRunsForExecution = async () => []; export const listBugsFor = async () => []; export const listOpenRunsForExecution = async () => [];' };
     if (url === 'world:api') return { format: 'module', shortCircuit: true, source: `
       export const route = (s, ...v) => s.reduce((a, b, i) => a + b + (i < v.length ? encodeURIComponent(String(v[i])) : ''), '');
       const client = who => ({ requestJira: (...a) => globalThis.vaWorld.jira(who, ...a) });

@@ -1,6 +1,7 @@
 import { canonical, sha256Hex } from '../hash.js';
 import { FailClosed } from '../errors.js';
 import { FIELD_KIND } from '../content.js';
+import { governedLinks } from '../linkPolicy.js';
 
 /**
  * THE EVIDENCE OF ONE BASELINE VERSION, AS ROWS
@@ -177,10 +178,10 @@ export function derivedEvidence({ source, digests, signature }) {
 }
 
 /** The links a version records: only when it tracks a link field. */
-export function trackedLinks(fields, issueFields) {
+export function trackedLinks(fields, issueFields, linkContext = {}) {
   const field = (fields ?? []).find(f => f.field_kind === FIELD_KIND.LINKS);
   if (!field) return null;
-  return issueFields?.[field.field_id] ?? [];
+  return governedLinks(issueFields?.[field.field_id] ?? [], linkContext);
 }
 
 export function linkedIssueIds(links) {

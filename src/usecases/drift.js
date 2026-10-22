@@ -20,6 +20,8 @@ import api, { route } from '@forge/api';
 import { linkDecisionJobs } from '../lib/approval/linkPropagation.js';
 import { enqueueLinkDecisions } from '../lib/linkQueue.js';
 import { markLinkDecisionsPending, clearLinkDecisionPending } from '../db/linkPendingStore.js';
+import { prepareApprovalLinkPolicy } from '../lib/approval/linkPolicy.js';
+import { baselineLinkPolicy, hydrateLinkPolicyIssue } from '../lib/linkPolicy.js';
 
 export async function getState(args) { return respond(async () => {
   const state = await load(args); return { drift: state.diff, review: state.review };
@@ -62,7 +64,7 @@ export async function releaseFailedApproval({ locked, issueId, diff, driftCount,
 }
 
 /** Called internally by the sole approval writer; no approval is inserted here. */
-export async function prepareApproval({ issue, actor, decision, expectedEvidenceHash, forTransition = false, transition = null, allowBusy = false, decisions, now = Date.now() }) {
+export async function prepareApproval({ issue, actor, decision, expectedEvidenceHash, forTransition = false, transition = null, allowBusy = false, decisions, linkPolicy, now = Date.now() }) {
   const fresh = await readableIssue({ payload: { issueId: issue.id }, context: { accountId: actor.accountId } });
   const active = await activeBaseline(Number(fresh.id));
   // A workflow transition is authorised by the controlled transition it runs,
@@ -141,7 +143,7 @@ export async function prepareApproval({ issue, actor, decision, expectedEvidence
     prepared.plan = plan;
     if (mixed) prepared.mixed = mixed;
   } else if (decision === 'REJECT' || decision === 'MIXED') fail('NO_BASELINE');
-  return prepared;
+  return prepareApprovalLinkPolicy(prepared, { decision, linkPolicy });
 }
 
 /**
@@ -168,11 +170,17 @@ function linksBefore(checked) {
  * decision, whose own baseline is already durable.
  */
 async function queueLinkDecisions({ checked, approval, actor }) {
+  const before = linksBefore(checked);
+  const after = checked.issue?.fields?.issuelinks ?? [];
+  if (!Array.isArray(before)) return;
+  const hydrated = await hydrateLinkPolicyIssue({ ...checked.issue, fields: { ...checked.issue.fields,
+    issuelinks: [...before, ...after] } }, checked.linkPolicy);
+  const links = hydrated.fields.issuelinks;
   const jobs = linkDecisionJobs({
-    issue: { id: checked.issueId, key: checked.issue.key },
+    issue: { ...checked.issue, id: checked.issueId, key: checked.issue.key }, linkPolicy: checked.linkPolicy,
     tracksLinks: (checked.fields ?? []).some(field => field.field_id === 'issuelinks'),
-    before: linksBefore(checked),
-    after: checked.issue?.fields?.issuelinks ?? [],
+    before: links.slice(0, before.length),
+    after: links.slice(before.length),
     approval: { approvalId: Buffer.from(approval.approval_id).toString('base64'), accountId: actor.accountId,
       displayName: approval.actor_name ?? approval.printed_name ?? actor.displayName,
       assuranceLevel: approval.assurance_level, signerRole: approval.signer_role ?? null }
@@ -245,6 +253,7 @@ export async function captureDriftBaseline({ checked, approval, actor, cause, re
   const { tryAppend } = await import('../db/store.js');
   const { executeQuery } = await import('../lib/db.js');
   const { createTreeReader } = await import('../lib/tree/jira.js');
+  const { testManagementExclusion } = await import('../testmgmt/treeExclusion.js');
   const forge = await import('@forge/api');
   return writeCapturedTreeBaseline({
     rootIssue: checked.issue,
@@ -255,11 +264,13 @@ export async function captureDriftBaseline({ checked, approval, actor, cause, re
       approvalId: approval.approval_id,
       assuranceLevel: approval.assurance_level,
       content_hash: approval.content_hash,
+      linkPolicy: baselineLinkPolicy(approval),
     },
     controlledFields: checked.fields, ruleScope: checked.ruleScope, cause, expectedTreeHash,
+    linkPolicyFor: approval.decision === 'MIXED' ? checked.linkPolicyFor : null,
     transitionAt: approval.decided_at ?? approval.signed_at ?? Date.now(),
     deps: {
-      readTree: readTree ?? createTreeReader({ api: forge.default, route: forge.route }).read,
+      readTree: readTree ?? createTreeReader({ api: forge.default, route: forge.route, exclude: testManagementExclusion }).read,
       readStableTree,
       planTreeCapture,
       writeTreeCapture,
@@ -315,7 +326,8 @@ export async function applyApproval({ issue, actor, approval, prepared, resuming
   // (the approval row), never from anything the caller passes now.
   const decisions = approval.decision === 'MIXED' ? JSON.parse(approval.decision_map) : undefined;
   let fresh = await prepareApproval({ issue, actor, decision: approval.decision, decisions,
-    expectedEvidenceHash: resuming ? undefined : prepared?.evidenceHash, forTransition, transition, allowBusy: resuming });
+    expectedEvidenceHash: resuming ? undefined : prepared?.evidenceHash, forTransition, transition, allowBusy: resuming,
+    linkPolicy: baselineLinkPolicy(approval) });
   const assertPolicy = current => {
     const authoritative = current.approvalPolicy ?? current.gate;
     if (policy && ['required_role', 'required_assurance', 'meaning', 'capture_baseline']
@@ -344,7 +356,7 @@ export async function applyApproval({ issue, actor, approval, prepared, resuming
       // between the snapshot and this acquire. Re-read and retry once, but
       // keep the state allow-list so a live restore is never taken over.
       fresh = await prepareApproval({ issue, actor, decision: approval.decision, decisions,
-        expectedEvidenceHash: undefined, forTransition, transition, allowBusy: true });
+        expectedEvidenceHash: undefined, forTransition, transition, allowBusy: true, linkPolicy: baselineLinkPolicy(approval) });
       assertPolicy(fresh);
     }
     if (!locked) fail(fresh.review?.state === 'RESTORING' ? 'RESTORE_IN_PROGRESS' : 'ALREADY_DECIDING');
@@ -352,7 +364,7 @@ export async function applyApproval({ issue, actor, approval, prepared, resuming
   try {
     // Re-read after the CAS: a concurrent edit must not be silently accepted.
     const checked = await prepareApproval({ issue, actor, decision: approval.decision, decisions,
-      expectedEvidenceHash: fresh.evidenceHash, forTransition, transition, allowBusy: true });
+      expectedEvidenceHash: fresh.evidenceHash, forTransition, transition, allowBusy: true, linkPolicy: baselineLinkPolicy(approval) });
     if (!resuming && checked.contentHash !== approval.content_hash) fail('STALE_EVIDENCE');
     if (approval.decision === 'MIXED') {
       if (checked.mixed?.mapHash !== approval.decision_map_hash || checked.mixed.planHash !== fresh.mixed?.planHash) fail('STALE_EVIDENCE');
@@ -387,7 +399,8 @@ export async function applyApproval({ issue, actor, approval, prepared, resuming
           ruleScope: checked.ruleScope, cause, issueFields: checked.issue.fields, editmetaFields: checked.editmeta,
           transitionAt: approval.decided_at ?? approval.signed_at ?? Date.now(), capturedAt: Date.now(),
           approver: { accountId: actor.accountId, displayName: approval.actor_name ?? approval.printed_name ?? actor.displayName,
-            approvalId: approval.approval_id, assuranceLevel: approval.assurance_level, contentHash: approval.content_hash },
+            approvalId: approval.approval_id, assuranceLevel: approval.assurance_level, contentHash: approval.content_hash,
+            linkPolicy: baselineLinkPolicy(approval) },
           // A standalone ratification does not select a new workflow policy.
           // Preserve the policy edge so the next review can resolve its authority;
           // the approval itself still records the actual, unchanged Jira status.

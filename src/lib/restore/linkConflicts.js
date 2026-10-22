@@ -1,3 +1,5 @@
+import { excludesLink, hydrateLinkPolicyIssue } from '../linkPolicy.js';
+
 /**
  * AN ISSUE LINK IS ONE OBJECT WITH TWO OWNERS.
  *
@@ -54,7 +56,7 @@ export function keyAtOtherEnd(link, selfIssueId) {
  * when the item IS governed but its approved links cannot be read; that is
  * left to propagate, because guessing would be the failure this prevents.
  */
-export async function findLinkConflicts({ selfIssueId, additions = [], removals = [], approvedLinksOf }) {
+export async function findLinkConflicts({ selfIssueId, selfIssue = null, additions = [], removals = [], approvedLinksOf, readIssue }) {
   if (typeof approvedLinksOf !== 'function') return [];
   const conflicts = [];
   for (const [change, links] of [['add', additions], ['remove', removals]]) {
@@ -63,7 +65,17 @@ export async function findLinkConflicts({ selfIssueId, additions = [], removals 
       if (!end) continue;
       const approved = await approvedLinksOf(ref(end.issue));
       if (approved == null) continue;
-      const approvedHere = new Set(approved.map(linkKey)).has(keyAtOtherEnd(link, selfIssueId));
+      let links = approved;
+      if (!Array.isArray(approved)) {
+        const opposite = end.direction === 'inwardIssue' ? 'outwardIssue' : 'inwardIssue';
+        const reciprocal = { type: link.type, [opposite]: selfIssue ?? { id: String(selfIssueId) } };
+        const authority = await hydrateLinkPolicyIssue({ ...approved.issue,
+          fields: { ...approved.issue?.fields, issuelinks: [reciprocal] } }, approved.linkPolicy, readIssue);
+        if (excludesLink({ linkPolicy: approved.linkPolicy, issue: authority, link: authority.fields.issuelinks[0] })) continue;
+        links = approved.links;
+        if (!Array.isArray(links)) throw linkStateUnknown(ref(end.issue));
+      }
+      const approvedHere = new Set(links.map(linkKey)).has(keyAtOtherEnd(link, selfIssueId));
       if (change === 'add' ? !approvedHere : approvedHere) {
         conflicts.push({ change, link, otherIssueId: end.issue?.id ?? null, otherIssueKey: end.issue?.key ?? ref(end.issue) });
       }

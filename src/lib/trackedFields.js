@@ -130,6 +130,50 @@ async function readIssueTypeFields(projectId, issueTypeId, sink) {
   return true;
 }
 
+/**
+ * Screen fields join the scope only with their catalogue entry. The entry
+ * carries the `schema` that decides a field's kind, and a sync never rewrites
+ * an existing row — a field adopted without it would keep the wrong kind for
+ * good. No catalogue, no adoption; the next sync tries again.
+ *
+ * @returns the number of fields added to `sink`.
+ */
+export function adoptScreenFields({ screenFields, catalogue, sink }) {
+  const catalogueById = new Map((catalogue ?? []).map((field) => [String(field.id), field]));
+  let added = 0;
+  for (const [id, field] of screenFields) {
+    const entry = catalogueById.get(id);
+    if (!entry || sink.has(id)) continue;
+    sink.set(id, { ...field, ...entry, id });
+    added++;
+  }
+  return added;
+}
+
+/**
+ * Screens read per request, for the same reason as MAX_PAGES: an admin request
+ * has a time limit, and each screen costs one tabs read plus one read per tab.
+ * A project with more screens is read in batches — the Fields page's Sync asks
+ * for the next batch until none is left, and every batch's fields are adopted
+ * (persisted) as it goes, so no state is held between requests.
+ */
+export const SCREEN_BATCH = 60;
+
+/**
+ * One batch of a project's screens. Ids are sorted so that consecutive offsets
+ * cover every screen exactly once while the configuration stands still; a
+ * screen added between batches is picked up by the next Sync.
+ *
+ * @returns { ids, total, nextOffset } — nextOffset is null after the last batch.
+ */
+export function screenBatch(screenIds, offset = 0, size = SCREEN_BATCH) {
+  const all = [...new Set([...screenIds].map(String))].sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
+  const start = Number.isInteger(offset) && offset > 0 ? Math.min(offset, all.length) : 0;
+  const ids = all.slice(start, start + size);
+  const end = start + ids.length;
+  return { ids, total: all.length, nextOffset: end < all.length ? end : null };
+}
+
 export function screenIdsForIssueType({ issueTypeId, mappings = [], screenSchemes = [], workflow = null }) {
   const mapping = mappings.find((item) => String(item.issueTypeId) === String(issueTypeId))
     ?? mappings.find((item) => String(item.issueTypeId) === 'default');
@@ -148,12 +192,12 @@ export function screenIdsForIssueType({ issueTypeId, mappings = [], screenScheme
  * without this union, a retirement-only rationale or review-only classification
  * can never be selected for retention even though it is authored content.
  */
-async function readProjectScreenFields(projectId, issueTypeIds, sink) {
+async function readProjectScreenFields(projectId, issueTypeIds, sink, { offset = 0 } = {}) {
   const client = api.asApp();
   const { readWorkflowForPair } = await import('./workflowSource.js');
   const failed = (step, response) => {
     console.warn(`trackedFields: ${step} failed while reading project screens`, response?.status);
-    return false;
+    return { ok: false, total: null, nextOffset: null };
   };
   const projectSchemes = await client.requestJira(
     route`/rest/api/3/issuetypescreenscheme/project?projectId=${projectId}`
@@ -163,7 +207,7 @@ async function readProjectScreenFields(projectId, issueTypeIds, sink) {
   const issueTypeScreenSchemeId = projectBody.values?.[0]?.issueTypeScreenScheme?.id;
   if (!issueTypeScreenSchemeId) {
     console.warn('trackedFields: Jira returned no work type screen scheme for project', projectId);
-    return false;
+    return { ok: false, total: null, nextOffset: null };
   }
 
   const mappings = [];
@@ -221,8 +265,9 @@ async function readProjectScreenFields(projectId, issueTypeIds, sink) {
     })) screenIds.add(screenId);
   }
 
+  const batchPlan = screenBatch(screenIds, offset);
   const screenFields = new Map();
-  const allScreenIds = [...screenIds];
+  const allScreenIds = batchPlan.ids;
   for (let i = 0; i < allScreenIds.length; i += CONCURRENCY) {
     const batch = allScreenIds.slice(i, i + CONCURRENCY);
     await Promise.all(batch.map(async (screenId) => {
@@ -240,13 +285,10 @@ async function readProjectScreenFields(projectId, issueTypeIds, sink) {
   }
 
   const catalogueResponse = await client.requestJira(route`/rest/api/3/field`);
-  const catalogue = catalogueResponse.ok ? await catalogueResponse.json() : [];
-  const catalogueById = new Map((catalogue ?? []).map((field) => [String(field.id), field]));
-  for (const [id, field] of screenFields) {
-    if (!sink.has(id)) sink.set(id, { ...field, ...catalogueById.get(id), id });
-  }
-  console.info('trackedFields: project screen discovery', JSON.stringify({ projectId, issueTypes: issueTypeIds.length, screens: screenIds.size, fields: screenFields.size }));
-  return true;
+  if (!catalogueResponse.ok) return failed('field catalogue', catalogueResponse);
+  adoptScreenFields({ screenFields, catalogue: await catalogueResponse.json(), sink });
+  console.info('trackedFields: project screen discovery', JSON.stringify({ projectId, issueTypes: issueTypeIds.length, screens: batchPlan.total, offset, read: allScreenIds.length, fields: screenFields.size }));
+  return { ok: true, total: batchPlan.total, nextOffset: batchPlan.nextOffset };
 }
 
 /**
@@ -261,11 +303,22 @@ async function readProjectScreenFields(projectId, issueTypeIds, sink) {
  * mistake that narrowed three separate call sites to four hardcoded ids.
  */
 export async function readScopeFields(projectId, issueTypeId) {
+  return (await readScopeFieldsBatch(projectId, issueTypeId)).fields;
+}
+
+/**
+ * readScopeFields plus one batch of screens, starting at `screenOffset`.
+ * `screens.nextOffset` is null when the batch was the last one; `screens.ok`
+ * is false when the screen read failed, in which case the create-screen fields
+ * are still returned and nothing is claimed about the rest.
+ */
+export async function readScopeFieldsBatch(projectId, issueTypeId, { screenOffset = 0 } = {}) {
+  const none = { fields: [], screens: { ok: false, total: null, nextOffset: null } };
   try {
     let issueTypes = [issueTypeId];
     if (issueTypeId === '*') {
       const pRes = await api.asApp().requestJira(route`/rest/api/3/project/${projectId}`);
-      if (!pRes.ok) return [];
+      if (!pRes.ok) return none;
       const pBody = await pRes.json();
       if (Array.isArray(pBody.issueTypes)) {
         issueTypes = pBody.issueTypes.map((it) => String(it.id));
@@ -279,12 +332,12 @@ export async function readScopeFields(projectId, issueTypeId) {
       await Promise.all(batch.map((it) => readIssueTypeFields(projectId, it, fieldMap)));
     }
 
-    await readProjectScreenFields(projectId, issueTypes, fieldMap);
+    const screens = await readProjectScreenFields(projectId, issueTypes, fieldMap, { offset: screenOffset });
 
-    return Array.from(fieldMap.values());
+    return { fields: Array.from(fieldMap.values()), screens };
   } catch (e) {
     console.error('trackedFields: could not read Jira scope fields', e);
-    return [];
+    return none;
   }
 }
 
@@ -396,12 +449,13 @@ export function fieldsToAdopt(jiraFields, declared) {
  * @returns { ok, added, tracked, excluded, skipped }
  */
 export async function syncTrackedFields({
-  projectId, issueTypeId = '*', accountId, jiraFields = null, now = Date.now()
+  projectId, issueTypeId = '*', accountId, jiraFields = null, screenOffset = 0, now = Date.now()
 }) {
   const pid = Number(projectId);
   if (!Number.isFinite(pid)) return { ok: false, error: 'NO_PROJECT' };
 
-  const fields = jiraFields ?? await readScopeFields(projectId, issueTypeId);
+  const read = jiraFields ? { fields: jiraFields, screens: null } : await readScopeFieldsBatch(projectId, issueTypeId, { screenOffset });
+  const fields = read.fields;
   if (fields.length === 0) {
     // The catalogue read failed. Saying so beats reporting "0 added" as though
     // the project were already complete.
@@ -445,6 +499,7 @@ export async function syncTrackedFields({
     ok: true,
     added,
     tracked,
-    excluded: declared.filter((f) => f.state === 'EXCLUDED').length
+    excluded: declared.filter((f) => f.state === 'EXCLUDED').length,
+    screens: read.screens
   };
 }

@@ -29,7 +29,7 @@ type Receipt = { decision: Decision; meaning: string; note: string; level: Assur
   /** A per-field decision: the fields on each side, by name, and anything the reviewer must be told. */
   mixed?: { approved: string[]; rejected: string[]; notice?: string } };
 type Phase = 'challenge' | 'submit' | 'retry' | 'device';
-type Challenge = { id: string; nonce: string; decision: Decision; expiresAt: number; meaning: string; requiredAssurance?: AssuranceLevel;
+type Challenge = { id: string; nonce: string; decision: Decision; expiresAt: number; meaning: string; requiredAssurance?: AssuranceLevel; linkPolicyNotice?: string;
   /** A per-field decision: the exact map the server was asked about, re-sent verbatim at submit, and the fields it names. */
   decisions?: FieldDecision[]; fields?: DiffField[] };
 
@@ -201,7 +201,7 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
     const gen = begin('challenge', PROGRESS.preparing, decision);
     if (gen === null) return;
     try {
-      const result = assertResult(await invoke<Result & { challengeId: string; nonce: string; meaning: string; expiresAt: number; requiredAssurance: AssuranceLevel }>('signature:challenge', approvalPayload({
+      const result = assertResult(await invoke<Result & { challengeId: string; nonce: string; meaning: string; expiresAt: number; requiredAssurance: AssuranceLevel; linkPolicyNotice?: string }>('signature:challenge', approvalPayload({
         issueKey: targetKey,
         transitionId: reviewingDrift ? undefined : transition?.transitionId,
         toStatusId: reviewingDrift ? undefined : transition?.toStatusId,
@@ -210,6 +210,7 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
       })));
       recordHarnessEvent('UI', 'challenge:received', { challengeId: result.challengeId, requiredAssurance: result.requiredAssurance, issueKey: targetKey });
       patch(gen, { challenge: { id: result.challengeId, nonce: result.nonce, decision, expiresAt: result.expiresAt, meaning: result.meaning, requiredAssurance: result.requiredAssurance,
+        linkPolicyNotice: result.linkPolicyNotice,
         ...(mixed ? { decisions: mixed.decisions, fields: mixed.fields } : {}) } });
     } catch (e) {
       recordHarnessEvent('ERROR', 'challenge:failed', { decision, issueKey: targetKey }, e);
@@ -373,6 +374,7 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
         <p className="va-attest__eyebrow">{mixedSheet ? 'Saving your field decisions' : decline ? 'Rejecting these changes' : 'Approving this work item'}</p>
         <p className="va-attest__label">What your signature means</p>
         <p className="va-attest__meaning">{session.challenge.meaning}</p>
+        {session.challenge.linkPolicyNotice && <p>{session.challenge.linkPolicyNotice}</p>}
       </div>
       <div className="va-attest__body">
         {selector}

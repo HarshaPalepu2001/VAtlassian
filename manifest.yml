@@ -30,6 +30,12 @@ modules:
       resolver:
         function: panel-resolver
       title: VAtlassian
+    - key: va-test
+      icon: https://developer.atlassian.com/platform/forge/images/issue-panel-icon.svg
+      resource: main-ui
+      resolver:
+        function: test-resolver
+      title: Test management
   jira:issueContext:
     - key: va-context
       resource: main-ui
@@ -147,6 +153,8 @@ modules:
               route: transitions
             - title: Controlled fields
               route: fields
+            - title: Test management
+              route: test-management
         - header: Evidence
           pages:
             - title: Audit ledger
@@ -230,6 +238,8 @@ modules:
       handler: resolvers/panel.handler
     - key: admin-resolver
       handler: resolvers/admin.handler
+    - key: test-resolver
+      handler: resolvers/testManagement.handler
     - key: totp-resolver
       handler: resolvers/totp.handler
     - key: gate

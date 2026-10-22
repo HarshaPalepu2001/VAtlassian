@@ -29,7 +29,8 @@
 export const ROLE = {
   REVIEWER: 'REVIEWER',
   APPROVER: 'APPROVER',
-  QA: 'QA'
+  QA: 'QA',
+  TESTER: 'TESTER'
 };
 
 /**
@@ -55,6 +56,11 @@ export const ROLES = [
     id: ROLE.QA,
     label: 'QA',
     help: 'For workflows where the exit from review is a quality check rather than an editorial one.'
+  },
+  {
+    id: ROLE.TESTER,
+    label: 'Tester',
+    help: 'Executes test runs and signs them as executed. Used by test-management sign-off chains.'
   }
 ];
 

@@ -4,13 +4,14 @@ import { project } from '../lib/content.js';
 import { canonical, sha256Hex } from '../lib/hash.js';
 import { encodeValue } from '../lib/valuestore.js';
 import { valueBatches } from './baselineStore.js';
+import { baselineLinkPolicy } from '../lib/linkPolicy.js';
 
 /** Event payloads are wake-ups, not historical values. Record what was READ,
  * separately from the event timestamp, and never claim an intermediate edit
  * that Jira had already overwritten before delivery was captured exactly. */
 export function observationPlan({ issueId, baseline, fields, issueFields, eventId, eventAt,
   actorAccountId, observedAt, detectedVia }) {
-  const projection = project(issueFields, fields);
+  const projection = project(issueFields, fields, { linkPolicy: baselineLinkPolicy(baseline), issue: { id: issueId, fields: issueFields } });
   const baselineDigests = typeof baseline.field_digests === 'string'
     ? JSON.parse(baseline.field_digests) : baseline.field_digests;
   const compared = fields.filter(f => Object.hasOwn(baselineDigests ?? {}, f.field_id));

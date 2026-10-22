@@ -15,7 +15,14 @@ const omitted = (fields, f) => !OPTIONAL_FIELDS.has(f) && !(f in fields);
  * approval hash, restore and its verification — sees a restored file as the
  * approved one. One lookup per read, none when no node has an attachment.
  */
-export function createTreeReader({ api, route, canonicalise = canonicaliseItems }) {
+/**
+ * `exclude(children) → Set<issueId>` names children that are not part of the
+ * tree, together with everything below them. The runtime passes
+ * testmgmt/treeExclusion.js (test-management issues sit outside their parent's
+ * governed tree, owner decision 11); a reader built without it walks every
+ * descendant, as before.
+ */
+export function createTreeReader({ api, route, canonicalise = canonicaliseItems, exclude = null }) {
   return {
     async read(rootIssueKey, fieldIds) {
       const nodes = [];
@@ -75,7 +82,9 @@ export function createTreeReader({ api, route, canonicalise = canonicaliseItems 
           const searchData = await searchRes.json();
 
           const issues = searchData.issues || [];
+          const excluded = exclude ? await exclude(issues) : null;
           for (const child of issues) {
+            if (excluded?.has(String(child.id))) continue;
             if (!child.fields) child.fields = {};
             if (!('parent' in child.fields)) child.fields.parent = null;
 

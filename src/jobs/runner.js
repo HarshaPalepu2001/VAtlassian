@@ -6,6 +6,7 @@ import { withRequestCache } from '../lib/cache.js';
 const jobs = {
   migrate: () => import('./migrate.js').then(m => m.run()),
   alerts: () => import('./alerts.js').then(m => m.run()),
+  sourceLinks: options => import('../testmgmt/sourceLinkJob.js').then(m => m.run(options)),
   reconcile: options => import('./reconcile.js').then(m => m.run(options)),
   rehash: options => import('./rehash.js').then(m => m.run(options)),
   gatecheck: () => import('./gatecheck.js').then(m => m.run()),
@@ -42,8 +43,11 @@ async function runList(names, implementations, options = {}) {
 /** Forge stops a scheduled function at 55 seconds. */
 const SWEEP_BUDGET_MS = { reconcile: 20000, rehash: 40000 };
 
-export function runFiveMinute(_request, { jobs: implementations = jobs } = {}) {
-  return withRequestCache(() => runList(['migrate', 'alerts'], implementations));
+export function runFiveMinute(_request, { jobs: implementations = jobs, now = Date.now } = {}) {
+  const deadline = now() + 45000;
+  return withRequestCache(() => runList(['migrate', 'alerts', 'sourceLinks'], implementations, {
+    sourceLinks: { deadline, maxIntents: 2, maxWrites: 10 }
+  }));
 }
 
 /**

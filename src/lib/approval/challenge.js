@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { FailClosed } from '../errors.js';
 import { canonical, sha256Hex } from '../hash.js';
+import { serialiseLinkPolicy } from '../linkPolicy.js';
 
 /** A stable signer-facing declaration derived from immutable baseline state. */
 export function baselineDecisionMeaning(decision, version) {
@@ -20,6 +21,7 @@ export function challengeContextHash({ issue, transition, prepared, policy }) {
     evidenceHash: prepared.evidenceHash ?? null, plan: prepared.plan ?? null, treeDiff: prepared.treeDiff ?? null,
     // Only a mixed decision carries one, so every whole-set hash is unchanged.
     ...(prepared.mixed ? { mixed: prepared.mixed.planHash } : {}),
+    ...(serialiseLinkPolicy(prepared.linkPolicy) ? { linkPolicy: serialiseLinkPolicy(prepared.linkPolicy) } : {}),
     policy: { meaning: policy.meaning, role: policy.required_role,
       assurance: policy.required_assurance, captureBaseline: !!Number(policy.capture_baseline) }
   }));

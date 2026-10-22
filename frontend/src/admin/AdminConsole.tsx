@@ -18,6 +18,7 @@ import CredentialsPage from './pages/CredentialsPage';
 import HealthPage from './pages/HealthPage';
 import ContentReviewPage from './pages/ContentReviewPage';
 import SettingsPage from './pages/SettingsPage';
+import TestManagementPage from './pages/TestManagementPage';
 
 const NAV_ITEMS: { id: AdminRoute; label: string }[] = [
   { id: 'settings', label: 'Settings' },
@@ -25,6 +26,7 @@ const NAV_ITEMS: { id: AdminRoute; label: string }[] = [
   { id: 'roles', label: 'Approver roles' },
   { id: 'transitions', label: 'Controlled transitions' },
   { id: 'fields', label: 'Controlled fields' },
+  { id: 'test-management', label: 'Test management' },
   { id: 'ledger', label: 'Audit ledger' },
   { id: 'retention', label: 'Export & retention' },
   { id: 'content-review', label: 'Content changes' },
@@ -121,7 +123,7 @@ export default function AdminConsole({ configure = false }: { configure?: boolea
   }
 
   const renderContent = () => {
-    const needsProjects = ['roles','transitions','fields','settings','health','retention','content-review'].includes(route ?? '');
+    const needsProjects = ['roles','transitions','fields','settings','health','retention','content-review','test-management'].includes(route ?? '');
     if (needsProjects && loadingProjects) return <Loading label="Loading projects…"/>;
     if (needsProjects && projectError) return <Page title="Project list unavailable"><Notice danger>{projectError}</Notice><button className="va-button" onClick={loadProjects}>Retry project list</button></Page>;
     switch (route) {
@@ -145,6 +147,8 @@ export default function AdminConsole({ configure = false }: { configure?: boolea
         return <ContentReviewPage projects={projects} />;
       case 'settings':
         return <SettingsPage projects={projects} />;
+      case 'test-management':
+        return <TestManagementPage projects={projects} />;
       default:
         return (
           <Page title="Page not found">

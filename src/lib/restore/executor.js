@@ -4,6 +4,7 @@ import { declareWrite } from '../../db/restoreStore.js';
 import { OUTCOME, RESTORE_STATE, digestOf, tally } from './outcome.js';
 import { restoreAttachments, pointAtLiveFiles, explainRichTextRefusal } from './attachments.js';
 import { adfMediaIds } from '../attachmentIdentity.js';
+import { governedLinks, hydrateLinkPolicyIssue } from '../linkPolicy.js';
 
 // Re-exported so callers keep importing the executor as one thing. The pure
 // definitions live in ./outcome.js because this file imports @forge/api and is
@@ -60,7 +61,7 @@ export async function executeRestore({
   attachmentDeps = null,
   // The other end's approved links, so a link restore never contradicts it
   // (./linkConflicts.js). Absent: no end is checked, as before.
-  approvedLinksOf = null
+  approvedLinksOf = null, linkPolicy = null, issue = null
 }) {
   const byId = new Map(controlledFields.map((f) => [f.field_id, f]));
   const detail = new Map();
@@ -96,7 +97,7 @@ export async function executeRestore({
       const batch = ids.slice(i, i + CONCURRENCY_LIMIT).map(async (fieldId) => {
         const field = byId.get(fieldId);
         if (!field) return;
-        const digest = digestOf(field, valueOf(fieldId));
+        const digest = digestOf(field, valueOf(fieldId), { linkPolicy, issue });
         try {
           await declareWrite({ issueId, fieldId, digest, now });
         } catch (e) {
@@ -257,7 +258,7 @@ export async function executeRestore({
   // ── Phase 2b: special handlers ────────────────────────────────────────────
   for (const step of plan.steps.filter((s) => s.strategy !== 'field' && s.strategy !== 'none' && s.strategy !== 'attachments')) {
     const result = await runHandler(client, {
-      strategy: step.strategy, issueKey, issueId, step, write, attachments, approvedLinksOf
+      strategy: step.strategy, issueKey, issueId, step, write, attachments, approvedLinksOf, linkPolicy
     });
     detail.set(step.fieldId, {
       fieldId: step.fieldId,
@@ -335,7 +336,7 @@ async function put(client, issueKey, { notifyUsers, override }, body) {
  * which is why the planner marks them SPECIAL and the dialog says so, rather
  * than letting a reviewer believe issue links restore as cleanly as a summary.
  */
-async function runHandler(client, { strategy, issueKey, issueId, step, write, attachments, approvedLinksOf = null }) {
+async function runHandler(client, { strategy, issueKey, issueId, step, write, attachments, approvedLinksOf = null, linkPolicy = null }) {
   switch (strategy) {
     case 'attachments':
       // Always as the app: the vault is private to it, and on a project whose
@@ -362,7 +363,7 @@ async function runHandler(client, { strategy, issueKey, issueId, step, write, at
     }
 
     case 'links':
-      return restoreLinks(client, issueKey, step.targetValue, { issueId, approvedLinksOf });
+      return restoreLinks(client, issueKey, step.targetValue, { issueId, approvedLinksOf, linkPolicy });
 
     case 'transition':
       // Status is restored by moving the item, not by writing a field, and the
@@ -409,21 +410,29 @@ function nameOf(byId, fieldId) {
  * API: https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-links/
  * Link IDs are ephemeral; recreated relationships acquire a new ID.
  */
-async function restoreLinks(client, issueKey, target, { issueId = null, approvedLinksOf = null } = {}) {
+async function restoreLinks(client, issueKey, target, { issueId = null, approvedLinksOf = null, linkPolicy = null } = {}) {
   try {
     if (!Array.isArray(target)) return { ok: false, reason: 'The stored issue links are not a complete raw link list.' };
-    const read = await client.requestJira(route`/rest/api/3/issue/${issueKey}?fields=issuelinks`);
+    const read = await client.requestJira(route`/rest/api/3/issue/${issueKey}?fields=issuelinks,project,issuetype`);
     if (!read.ok) return { ok: false, reason: `Issue links could not be read (HTTP ${read.status}).` };
     const body = await read.json();
     const current = body?.fields?.issuelinks;
     if (!Array.isArray(current)) return { ok: false, reason: 'Jira omitted the current issue links; no links were changed.' };
     // Validate both complete lists before any mutation. A malformed stored
     // entry must never become permission to delete a real relationship.
-    const desired = new Map(target.map(link => [linkIdentity(link), link]));
-    const existing = new Map(current.map(link => [linkIdentity(link), link]));
+    const readScope = async ref => {
+      const response = await client.requestJira(route`/rest/api/3/issue/${ref}?fields=project,issuetype`);
+      if (!response.ok) throw new Error('A linked work item could not be checked; no links were changed.');
+      return response.json();
+    };
+    const cache = new Map();
+    const actual = await hydrateLinkPolicyIssue(body, linkPolicy, readScope, cache);
+    const expected = await hydrateLinkPolicyIssue({ ...body, fields: { ...body.fields, issuelinks: target } }, linkPolicy, readScope, cache);
+    const desired = new Map(governedLinks(expected.fields.issuelinks, { linkPolicy, issue: expected }).map(link => [linkIdentity(link), link]));
+    const existing = new Map(governedLinks(actual.fields.issuelinks, { linkPolicy, issue: actual }).map(link => [linkIdentity(link), link]));
     // A link belongs to both ends: a change the other end's approved state
     // forbids is left exactly as it is, and the outcome says so.
-    const conflicts = await findLinkConflicts({ selfIssueId: body?.id ?? issueId ?? issueKey,
+    const conflicts = await findLinkConflicts({ selfIssueId: body?.id ?? issueId ?? issueKey, selfIssue: actual, readIssue: readScope,
       additions: [...desired].filter(([key]) => !existing.has(key)).map(([, link]) => link),
       removals: [...existing].filter(([key]) => !desired.has(key)).map(([, link]) => link),
       approvedLinksOf });

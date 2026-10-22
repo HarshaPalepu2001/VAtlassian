@@ -33,10 +33,11 @@ export function nodeSecurityLevels(nodes) {
  */
 export async function treeCaptureEvidence({ rootIssueId, parentBaselineId, parentVersion, rootDigests, controlledFields,
   children, nodeOf, fieldsFor, ruleScope, cause, policy, approval, transitionAt, signedAt, controlledFieldsHash,
-  activeBaselines }) {
+  activeBaselines, linkPolicyFor = () => null }) {
   const rootSource = nodeOf(rootIssueId);
-  const rootLinks = trackedLinks(controlledFields, rootSource?.fields);
-  const childLinks = children.map(child => trackedLinks(fieldsFor(nodeOf(child.issue_id)), nodeOf(child.issue_id)?.fields));
+  const linksFor = (node, fields) => trackedLinks(fields, node?.fields, { issue: node, linkPolicy: linkPolicyFor(node) });
+  const rootLinks = linksFor(rootSource, controlledFields);
+  const childLinks = children.map(child => linksFor(nodeOf(child.issue_id), fieldsFor(nodeOf(child.issue_id))));
   const linked = linkedIssueIds([...(rootLinks ?? []), ...childLinks.flatMap(links => links ?? [])]);
   const otherVersions = linked.length ? await activeBaselines(linked) : new Map();
   const approvers = [{ role: policy?.required_role, assurance: policy?.required_assurance }];

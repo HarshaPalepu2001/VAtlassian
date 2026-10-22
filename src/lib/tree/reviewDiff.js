@@ -40,9 +40,11 @@ export function treeReviewDiff({ baseline, baselineTree, currentTree, treeDiff, 
           ...baseline,
           ...(base?.ownBaseline ? { version: base.ownBaseline.version } : {}),
           field_digests: JSON.stringify(base?.digests ?? {})
+          ,...(base?.linkPolicy ? { linkPolicy: base.linkPolicy, link_policy: null } : {})
         },
         baselineValues: baselineTree?.values?.[change.logicalNodeId] ?? {},
         currentFields: currentTree?.values?.[change.logicalNodeId] ?? {},
+        issue: current ?? base,
         controlledFields: fieldsFor(current ?? base) ?? [],
         driftRows: [],
         // This resolver reads the root issue's changelog. Do not apply those

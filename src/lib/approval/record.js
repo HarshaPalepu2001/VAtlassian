@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { canonical, sha256Hex } from '../hash.js';
 import { isAssuranceLevel } from './levels.js';
+import { serialiseLinkPolicy } from '../linkPolicy.js';
 export const APPROVAL_STATE = Object.freeze({ PENDING: 'PENDING', CONSUMED: 'CONSUMED', VOID: 'VOID' });
 export const APPROVAL_TTL_MS = 15 * 60 * 1000;
 export const DECISION = Object.freeze({ APPROVE: 'APPROVE', REJECT: 'REJECT', MIXED: 'MIXED' });
@@ -25,6 +26,8 @@ export function makeApproval(input) {
     // Set only by a mixed drift decision: the exact field map that was signed.
     decision_map: input.decisionMap ?? null, decision_map_hash: input.decisionMapHash ?? null
   };
+  const linkPolicy = serialiseLinkPolicy(input.linkPolicy);
+  if (linkPolicy) row.link_policy = linkPolicy;
   row.evidence_hash = evidenceHash(row);
   if (!validEvidence(row)) throw new TypeError('Approval proof does not match record');
   return row;
@@ -36,6 +39,7 @@ export function evidenceHash(row) {
     'assurance_level','provider_id','provider_ref','provider_evidence','signed_at'];
   // Present only on a mixed decision, so whole-set evidence hashes are unchanged.
   if (row.decision_map_hash != null) keys.push('decision_map_hash');
+  if (row.link_policy != null) keys.push('link_policy');
   return sha256Hex(canonical(Object.fromEntries(keys.map(key => [key, row[key] == null ? null : String(row[key])]))));
 }
 export function validEvidence(row) {

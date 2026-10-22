@@ -6,7 +6,7 @@ test('scheduler executes every control and isolates thrown and returned failures
   assert.equal(existsSync(new URL('../src/jobs/runner.js', import.meta.url)), true, 'scheduler must be implemented');
   const runner = await import('../src/jobs/runner.js');
   const calls = [];
-  const names = ['migrate','alerts','reconcile','gatecheck','vaultBackfill','rehash','verify','seal','directoryReconcile','devicecheck','prune'];
+  const names = ['migrate','alerts','sourceLinks','reconcile','gatecheck','vaultBackfill','rehash','verify','seal','directoryReconcile','devicecheck','prune'];
   const jobs = Object.fromEntries(names.map(name => [name, async () => {
     calls.push(name);
     if (name === 'reconcile') throw new Error('Jira unavailable');
@@ -55,7 +55,7 @@ test('a job that does not complete is logged with what it returned', async () =>
   const runner = await import('../src/jobs/runner.js');
   const errors = []; const original = console.error; console.error = (...a) => errors.push(a.join(' '));
   try {
-    await runner.runFiveMinute({}, { jobs: { migrate: async () => ({ ok: false, failedAt: 'v050_x' }), alerts: async () => ({ ok: true }) } });
+    await runner.runFiveMinute({}, { jobs: { migrate: async () => ({ ok: false, failedAt: 'v050_x' }), alerts: async () => ({ ok: true }), sourceLinks: async () => ({ ok: true }) } });
   } finally { console.error = original; }
   assert.equal(errors.length, 1);
   assert.match(errors[0], /migrate/);

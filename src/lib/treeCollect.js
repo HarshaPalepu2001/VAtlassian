@@ -9,6 +9,7 @@ import { activeRootsForNode, readBaselineTree } from '../db/baselineTreeStore.js
 import { replaceTreeDrift, readTreeDrift } from '../db/treeDriftStore.js';
 import { sha256Hex } from './hash.js';
 import { createTreeReader } from './tree/jira.js';
+import { testManagementExclusion } from '../testmgmt/treeExclusion.js';
 import { readStableTree } from './tree/stableRead.js';
 import { planTreeCapture } from './tree/capturePlan.js';
 import { diffTree } from './tree/diff.js';
@@ -122,7 +123,7 @@ export async function collectTree({ rootIssueId, rootIssueKey, detectedVia = DET
     projectId: Number(review.project_id),
     issueTypeId: String(review.issue_type_id)
   });
-  const reader = createTreeReader({ api, route });
+  const reader = createTreeReader({ api, route, exclude: testManagementExclusion });
   let currentTree, fieldsFor;
   try {
     ({ tree: currentTree, fieldsFor } = await readTreeWithNodeFields({ readStableTree,
@@ -148,7 +149,9 @@ export async function collectTree({ rootIssueId, rootIssueKey, detectedVia = DET
   }
 
   const baselineTree = await readBaselineTree(review.baseline_id);
-  const plannedCurrentTree = planTreeCapture({ rootIssueId, nodes: currentTree.nodes, controlledFields: cFields, fieldsFor });
+  const policyFor = treeLinkPolicyResolver(baselineTree);
+  currentTree.nodes = await hydrateLinkPolicyNodes(currentTree.nodes, policyFor);
+  const plannedCurrentTree = planTreeCapture({ rootIssueId, nodes: currentTree.nodes, controlledFields: cFields, fieldsFor, policyFor });
 
   const measured = diffTree({ baselineTree, currentTree: plannedCurrentTree, controlledFields: cFields,
     scopeFor: fieldsFor }).changes;
@@ -312,3 +315,4 @@ function sameDrift(recorded, rows) {
   const seen = new Set(recorded.map(driftKey));
   return rows.every(row => seen.has(driftKey(row)));
 }
+import { hydrateLinkPolicyNodes, treeLinkPolicyResolver } from './linkPolicy.js';
