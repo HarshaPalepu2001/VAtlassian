@@ -171,7 +171,7 @@ export async function saveTestManagementConfig(req, overrides) {
       }
     }
     const next ={ projectId: String(p.projectId), enabled, testTypeId, executionTypeId, planTypeId, setTypeId, preconditionTypeId, defectTypeId,
-      linkTypeName, sourceLinkTypeId, runChain: runChain.chain, versionChain: versionChain.chain };
+      linkTypeName, sourceLinkTypeId, runChain: runChain.chain, versionChain: versionChain.chain, authorSeparation: p.authorSeparation === true };
     const saved = await t.saveProject(next, { expectedRevision: existing ? Number(p.expectedRevision) : 0,
       now: Date.now(), actor: req.context.accountId });
     if (!saved) throw new Error('Someone else changed this configuration since you opened it. Reload and try again.');

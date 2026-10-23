@@ -131,3 +131,15 @@ test('test management is not switched off, nor a type unmapped, while that type\
   assert.equal(ok.success, true, ok.error);
   assert.equal(free.saved[0].enabled, false);
 });
+
+test('the author rule is saved only when switched on explicitly, and is part of the audited configuration', async () => {
+  const off = world();
+  assert.equal((await saveTestManagementConfig(request(payload()), off.deps)).success, true);
+  assert.equal(off.saved[0].authorSeparation, false, 'absent means off, never a guess');
+  const on = world();
+  assert.equal((await saveTestManagementConfig(request(payload({ authorSeparation: true })), on.deps)).success, true);
+  assert.equal(on.saved[0].authorSeparation, true);
+  const truthy = world();
+  await saveTestManagementConfig(request(payload({ authorSeparation: 'yes' })), truthy.deps);
+  assert.equal(truthy.saved[0].authorSeparation, false, 'only a real true switches it on');
+});

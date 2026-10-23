@@ -4,8 +4,14 @@
  *
  * Independent review of a test specification (ISO 26262-8 clause 9, ASPICE
  * SWE.4–SWE.6, a GxP "second person") means its author never approves it.
- * This holds whatever the chain says: `distinctSigners` is about signers among
+ * This is separate from the chain: `distinctSigners` is about signers among
  * themselves, the author rule is about the content.
+ *
+ * The rule is the project's switch (`authorSeparation`, Test management page),
+ * read when someone signs, not when the version was published: switching it
+ * on covers every version still waiting for sign-off. Off is not compliant;
+ * it exists for single-person trials. Authors are recorded either way, and
+ * every signature's audit entry says whether the rule was on.
  *
  * The authors of a version are everyone who edited the draft, or published a
  * version, since the last signed one. Content that was published and never
@@ -55,7 +61,7 @@ export function authorsOf(version) {
   return Array.isArray(accounts) && accounts.length ? accounts : [version?.publishedBy].filter(Boolean);
 }
 
-/** Why this person may not sign this version, or null. */
-export function authorProblem(version, accountId) {
-  return authorsOf(version).includes(accountId) ? 'AUTHOR_CANNOT_SIGN' : null;
+/** Why this person may not sign this version, or null. Only while the project's rule is on. */
+export function authorProblem(version, accountId, enforced) {
+  return enforced === true && authorsOf(version).includes(accountId) ? 'AUTHOR_CANNOT_SIGN' : null;
 }

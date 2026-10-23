@@ -8,7 +8,7 @@ type ChainStep = { label: string; role: string; meaning: string };
 type Chain = { steps: ChainStep[]; distinctSigners: boolean };
 type Config = { enabled: boolean; testTypeId: string; executionTypeId: string; planTypeId: string | null;
   setTypeId: string | null; preconditionTypeId: string | null; defectTypeId: string;
-  linkTypeName: string; sourceLinkTypeId: string | null; runChain: Chain; versionChain: Chain; revision: number };
+  linkTypeName: string; sourceLinkTypeId: string | null; runChain: Chain; versionChain: Chain; authorSeparation?: boolean; revision: number };
 type Loaded = { success: boolean; error?: string; config: Config | null;
   project: { style: string | null; issueTypes: { id: string; name: string; subtask: boolean }[] };
   linkTypes: { id: string; name: string }[];
@@ -116,6 +116,13 @@ export default function TestManagementPage({ projects }: { projects: Project[] }
           {rolesError && <Notice danger>{rolesError}</Notice>}
           <ChainEditor title="Test version sign-off" scope="Test" chain={form.versionChain} roles={versionRoles.roles} busy={busy}
             onChange={c => setForm(f => f && { ...f, versionChain: c })} />
+          <Section title="Independent review">
+            <label><input type="checkbox" checked={form.authorSeparation === true} disabled={busy} aria-label="Authors cannot sign their own content"
+              onChange={e => setForm(f => f && { ...f, authorSeparation: e.target.checked })} /> Authors cannot sign their own test versions and plan revisions</label>
+            {form.authorSeparation === true
+              ? <p className="va-subtlest" style={{ fontSize: 12 }}>Anyone who edited or published the content since it was last signed must leave sign-off to someone else. This applies to everything still waiting for sign-off.</p>
+              : <Notice danger>Off: an author can approve their own test. This is not compliant (independent review, ISO 26262-8, ASPICE, GxP). Use it only for single-person trials, and switch it on before real use. Every signature records whether it was on.</Notice>}
+          </Section>
           <ChainEditor title="Test run sign-off" scope="Test Execution" chain={form.runChain} roles={runRoles.roles} busy={busy}
             onChange={c => setForm(f => f && { ...f, runChain: c })} />
           <div className="va-row" style={{ gap: 8 }}>

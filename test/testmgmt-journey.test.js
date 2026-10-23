@@ -87,6 +87,7 @@ test('the version signer cannot sign a step twice, the author cannot sign at all
   await assert.rejects(ctx.authoring.signVersion({ versionId: v.versionId, code: '123456', contentHash: 'f'.repeat(64) }, as(ctx.w, 'approver-1')), { reason: 'CONTENT_CHANGED' });
   await ctx.authoring.signVersion({ versionId: v.versionId, code: '123456', contentHash: v.digest }, as(ctx.w, 'approver-1'));
   await assert.rejects(ctx.authoring.signVersion({ versionId: v.versionId, code: '123456', contentHash: v.digest }, as(ctx.w, 'approver-1')), { reason: 'SAME_SIGNER' });
+  ctx.w.project.authorSeparation = true;
   await assert.rejects(ctx.authoring.signVersion({ versionId: v.versionId, code: '123456', contentHash: v.digest }, as(ctx.w, 'author-1')), { reason: 'AUTHOR_CANNOT_SIGN' });
   ctx.w.grants.push({ accountId: 'approver-2', role: 'APPROVER' });
   const done = await ctx.authoring.signVersion({ versionId: v.versionId, code: '123456', contentHash: v.digest }, as(ctx.w, 'approver-2'));

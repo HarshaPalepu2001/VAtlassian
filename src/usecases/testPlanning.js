@@ -131,7 +131,7 @@ export function createTestPlanning(deps) {
       const proof = actionable ? await verifyRevision(r, s) : await signatureProof('COLLECTION_REVISION', r, r.revisionId);
       const pending = deps.hasPendingSignatures ? await deps.hasPendingSignatures('COLLECTION_REVISION', r.revisionId) : false;
       const nextStep = proof.position.next == null ? null : { index: proof.position.next, ...proof.position.step };
-      const signBlocked = r.state === 'PUBLISHED' && nextStep ? authorProblem(r, actor.accountId) : null;
+      const signBlocked = r.state === 'PUBLISHED' && nextStep ? authorProblem(r, actor.accountId, s.project.authorSeparation) : null;
       const canSign = canEdit && !pending && r.state === 'PUBLISHED' && !!nextStep && !signBlocked && !separationProblem(r.chain, proof.signatures, actor.accountId)
         && await deps.isEligibleFor({ accountId: actor.accountId, projectId: s.projectId, issueTypeId: s.issue.fields.issuetype.id, role: nextStep.role });
       const memberLabels = {}; const preconditionLabels = {};
@@ -218,13 +218,13 @@ export function createTestPlanning(deps) {
     if (proof.position.corrupt) tmFail('CONTENT_CHANGED');
     if (proof.position.next != null) {
       if (!await deps.isEligibleFor({ accountId: actor.accountId, projectId: s.projectId, issueTypeId: s.issue.fields.issuetype.id, role: proof.position.step.role })) tmFail('NOT_ELIGIBLE');
-      const separation = authorProblem(r, actor.accountId) ?? separationProblem(r.chain, proof.signatures, actor.accountId); if (separation) tmFail(separation);
+      const separation = authorProblem(r, actor.accountId, s.project.authorSeparation) ?? separationProblem(r.chain, proof.signatures, actor.accountId); if (separation) tmFail(separation);
       if (decision === 'REJECT' && !String(reason ?? '').trim()) tmFail('REASON_REQUIRED');
       const me = await deps.myself();
       const result = await deps.recordSignature({ kind: 'COLLECTION_REVISION', subjectId: revisionId, stepIndex: proof.position.next,
         step: proof.position.step, signer: { accountId: actor.accountId, displayName: me?.displayName ?? actor.accountId },
         decision, reason: decision === 'REJECT' ? String(reason).trim() : null, contentHash: r.digest, code,
-        issueId: s.issue.id, payload: { revisionNo: r.revisionNo, role: s.role } }, deps);
+        issueId: s.issue.id, payload: { revisionNo: r.revisionNo, role: s.role, authorSeparation: s.project.authorSeparation === true, authors: authorsOf(r) } }, deps);
       if (!result.ok) { if (result.message) return { error: result.message, reason: result.reason }; tmFail(result.reason); }
     }
     const confirmed = await signatureProof('COLLECTION_REVISION', r, revisionId);

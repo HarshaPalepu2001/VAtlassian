@@ -48,6 +48,7 @@ function projectFrom(row) {
     defectTypeId: String(row.defect_type_id), linkTypeName: row.link_type_name,
     sourceLinkTypeId: row.source_link_type_id == null ? null : String(row.source_link_type_id),
     runChain: json(row.run_chain, null), versionChain: json(row.version_chain, null),
+    authorSeparation: Number(row.author_separation) === 1,
     revision: Number(row.revision), updatedAt: Number(row.updated_at), updatedBy: row.updated_by
   };
 }
@@ -63,17 +64,17 @@ export async function listProjects() {
 /** Insert or update with an expected revision; false when someone else saved first. */
 export async function saveProject(p, { expectedRevision, now, actor }) {
   const values = [p.enabled ? 1 : 0, p.testTypeId, p.executionTypeId, p.planTypeId ?? null, p.setTypeId ?? null, p.preconditionTypeId ?? null, p.defectTypeId,
-    p.linkTypeName, p.sourceLinkTypeId ?? null, JSON.stringify(p.runChain), JSON.stringify(p.versionChain), now, actor];
+    p.linkTypeName, p.sourceLinkTypeId ?? null, JSON.stringify(p.runChain), JSON.stringify(p.versionChain), p.authorSeparation ? 1 : 0, now, actor];
   if (!expectedRevision) {
     try {
       await q(`INSERT INTO tm_project (enabled, test_type_id, execution_type_id, plan_type_id, set_type_id, precondition_type_id, defect_type_id,
-        link_type_name, source_link_type_id, run_chain, version_chain, updated_at, updated_by, project_id, revision)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`, [...values, Number(p.projectId)]);
+        link_type_name, source_link_type_id, run_chain, version_chain, author_separation, updated_at, updated_by, project_id, revision)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`, [...values, Number(p.projectId)]);
       return true;
     } catch (error) { if (error.duplicate) return false; throw error; }
   }
   const result = await q(`UPDATE tm_project SET enabled = ?, test_type_id = ?, execution_type_id = ?, plan_type_id = ?, set_type_id = ?, precondition_type_id = ?,
-    defect_type_id = ?, link_type_name = ?, source_link_type_id = ?, run_chain = ?, version_chain = ?, updated_at = ?, updated_by = ?,
+    defect_type_id = ?, link_type_name = ?, source_link_type_id = ?, run_chain = ?, version_chain = ?, author_separation = ?, updated_at = ?, updated_by = ?,
     revision = revision + 1 WHERE project_id = ? AND revision = ?`, [...values, Number(p.projectId), Number(expectedRevision)]);
   return affected(result) === 1;
 }

@@ -64,7 +64,7 @@ export function createTestAuthoring(deps) {
       const needsProjection = v.versionId === latestSignedId && deps.sourceProjectionComplete ? !await deps.sourceProjectionComplete(v.versionId) : false;
       const sourceLinks = v.state === 'SIGNED' && deps.readSourceLinkIntent ? await deps.readSourceLinkIntent(v.versionId) : null;
       let canSign = false;
-      const signBlocked = v.state === 'PUBLISHED' && position.next != null ? authorProblem(v, actor.accountId) : null;
+      const signBlocked = v.state === 'PUBLISHED' && position.next != null ? authorProblem(v, actor.accountId, project.authorSeparation) : null;
       if (v.state === 'PUBLISHED' && !pending && position.next != null && !signBlocked) {
         canSign = !separationProblem(v.chain, own, actor.accountId)
           && await deps.isEligibleFor({ accountId: actor.accountId, projectId: project.projectId,
@@ -164,14 +164,15 @@ export function createTestAuthoring(deps) {
     if (position.next == null) tmFail('VERSION_NOT_PUBLISHED');
     if (!await deps.isEligibleFor({ accountId: actor.accountId, projectId: project.projectId,
       issueTypeId: issue.fields?.issuetype?.id, role: position.step.role })) tmFail('NOT_ELIGIBLE');
-    const separation = authorProblem(version, actor.accountId) ?? separationProblem(version.chain, signatures, actor.accountId);
+    const separation = authorProblem(version, actor.accountId, project.authorSeparation) ?? separationProblem(version.chain, signatures, actor.accountId);
     if (separation) tmFail(separation);
     if (decision === 'REJECT' && !String(reason ?? '').trim()) tmFail('REASON_REQUIRED');
     const me = await deps.myself();
     const recorded = await deps.recordSignature({ kind: 'TEST_VERSION', subjectId: versionId, stepIndex: position.next,
       step: position.step, signer: { accountId: actor.accountId, displayName: me?.displayName ?? actor.accountId },
       decision, reason: decision === 'REJECT' ? String(reason).trim() : null, contentHash: version.digest, code,
-      issueId: issue.id, payload: { versionNo: version.versionNo, testKey: issue.key } }, deps);
+      issueId: issue.id, payload: { versionNo: version.versionNo, testKey: issue.key, authorSeparation: project.authorSeparation === true,
+        authors: authorsOf(version) } }, deps);
     if (!recorded.ok) {
       if (recorded.message) return { error: recorded.message, reason: recorded.reason };
       tmFail(recorded.reason);

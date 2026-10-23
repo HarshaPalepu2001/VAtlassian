@@ -15,8 +15,9 @@ const EPIC = { id: '10', key: 'VAT-10' };
 const STEPS = [{ id: 's1', action: 'Power on', data: '', expected: 'Boots' }, { id: 's2', action: 'Read VIN', data: '', expected: 'VIN' }];
 const as = (w, accountId) => { w.viewer = accountId; return { accountId }; };
 
-function setup() {
+function setup({ authorSeparation = true } = {}) {
   const w = tmWorld();
+  w.project.authorSeparation = authorSeparation;
   w.addIssue('11', 'VAT-11', '1', { parent: EPIC });
   w.addIssue('12', 'VAT-12', '2', { parent: EPIC });
   w.grants.push({ accountId: 'ann', role: 'APPROVER' }, { accountId: 'bob', role: 'APPROVER' }, { accountId: 'cat', role: 'APPROVER' },
@@ -90,6 +91,7 @@ test('authorsFor reads a legacy draft by its last editor and keeps the list sort
 
 test('a plan revision editor or publisher cannot sign it', async () => {
   const w = planningWorld();
+  (await w.deps.readProject()).authorSeparation = true;
   const uc = createTestPlanning(w.deps);
   const saved = await uc.saveDraft({ issueKey: 'VAT-21', expectedRevision: 0, draft: { members: [{ testIssueId: '11' }],
     environment: 'Bench', configurations: [{ id: 'a', name: 'A' }], releaseId: '900' } }, { accountId: 'ann' });
@@ -102,6 +104,38 @@ test('a plan revision editor or publisher cannot sign it', async () => {
   }
   const signed = await uc.sign({ revisionId: r.revisionId, contentHash: r.digest, code: '123456' }, { accountId: 'cat' });
   assert.equal(signed.revisions[0].state, 'SIGNED');
+});
+
+test('with the project rule off, the author may sign, and the signature records that the rule was off', async () => {
+  const c = setup({ authorSeparation: false });
+  await save(c, 'ann');
+  const v = await publish(c, 'ann');
+  assert.equal(v.signBlocked, null);
+  assert.equal(v.canSign, true);
+  assert.equal((await sign(c, v, 'ann')).versions[0].state, 'SIGNED');
+  const signed = c.w.audit.find(e => e.eventType === 'TM_SIGNED' && e.payload.kind === 'TEST_VERSION');
+  assert.equal(signed.payload.authorSeparation, false);
+  assert.deepEqual(signed.payload.authors, ['ann']);
+});
+
+test('switching the rule on covers versions already waiting for sign-off', async () => {
+  const c = setup({ authorSeparation: false });
+  await save(c, 'ann');
+  const v = await publish(c, 'ann');
+  c.w.project.authorSeparation = true;
+  await assert.rejects(sign(c, v, 'ann'), { reason: 'AUTHOR_CANNOT_SIGN' });
+  await sign(c, v, 'bob');
+  assert.equal(c.w.audit.find(e => e.eventType === 'TM_SIGNED').payload.authorSeparation, true);
+});
+
+test('a project that never set the rule has it off', async () => {
+  const w = planningWorld();
+  const uc = createTestPlanning(w.deps);
+  const saved = await uc.saveDraft({ issueKey: 'VAT-21', expectedRevision: 0, draft: { members: [{ testIssueId: '11' }],
+    environment: 'Bench', configurations: [{ id: 'a', name: 'A' }], releaseId: '900' } }, { accountId: 'ann' });
+  const r = (await uc.publish({ issueKey: 'VAT-21', expectedRevision: saved.draft.revision }, { accountId: 'ann' })).revisions[0];
+  assert.equal(r.signBlocked, null);
+  assert.equal((await uc.sign({ revisionId: r.revisionId, contentHash: r.digest, code: '123456' }, { accountId: 'ann' })).revisions[0].state, 'SIGNED');
 });
 
 // ── step results ─────────────────────────────────────────────────────────

@@ -1100,5 +1100,7 @@ export const MIGRATIONS = [
   { id: 'v140_tm_collection_revision_authors', sql: 'ALTER TABLE tm_collection_revision ADD COLUMN IF NOT EXISTS authors TEXT NULL' },
   // A step-result change is effective only with its audit entry (usecases/testExecution.js#saveSteps).
   { id: 'v141_tm_run_step_event', sql: 'ALTER TABLE tm_run ADD COLUMN IF NOT EXISTS step_event_id CHAR(32) NULL' },
-  { id: 'v142_tm_run_step_prior', sql: 'ALTER TABLE tm_run ADD COLUMN IF NOT EXISTS step_prior MEDIUMTEXT NULL' }
+  { id: 'v142_tm_run_step_prior', sql: 'ALTER TABLE tm_run ADD COLUMN IF NOT EXISTS step_prior MEDIUMTEXT NULL' },
+  // The project's switch for the author rule; absent is off (testmgmt/authorship.js#authorProblem).
+  { id: 'v143_tm_project_author_separation', sql: 'ALTER TABLE tm_project ADD COLUMN IF NOT EXISTS author_separation TINYINT NULL' }
 ];

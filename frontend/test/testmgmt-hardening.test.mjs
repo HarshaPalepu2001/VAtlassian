@@ -293,3 +293,21 @@ test('the author of a published version is told someone else must sign it', asyn
   await mount(TestView, { model: m, onModel: () => {} });
   assert.match(container.textContent, /You wrote or published this version, so someone else must sign it/);
 });
+test('the author rule switch warns while off and is sent with the configuration', async () => {
+  const calls = [];
+  const data = { success: true, project: { style: 'classic', issueTypes: [{ id: '1', name: 'TestCase' }, { id: '2', name: 'TestExecution' }] },
+    config: { enabled: false, testTypeId: '1', executionTypeId: '2', planTypeId: null, setTypeId: null, preconditionTypeId: null, defectTypeId: '',
+      linkTypeName: 'Relates', sourceLinkTypeId: null, runChain: chain, versionChain: chain, authorSeparation: false, revision: 1 },
+    linkTypes: [], defaults: { runChain: chain, versionChain: chain, linkTypeName: 'Relates' }, repairs: { items: [], complete: true } };
+  await mount(Admin, { projects: [{ id: '100', name: 'Project', key: 'VAT' }] }, async (key, payload) => {
+    calls.push({ key, payload });
+    return key === 'admin:listAvailableRoles' ? { success: true, roles: ['QA'] } : key === 'admin:tm:save' ? { success: false, error: 'stop' } : data;
+  });
+  await act(() => { const select = container.querySelector('select'); select.value = '100'; select.dispatchEvent(new window.Event('change', { bubbles: true })); });
+  await until(() => !!container.querySelector('input[aria-label="Authors cannot sign their own content"]'));
+  assert.match(container.textContent, /Off: an author can approve their own test\. This is not compliant/);
+  await act(() => container.querySelector('input[aria-label="Authors cannot sign their own content"]').click());
+  assert.doesNotMatch(container.textContent, /This is not compliant/);
+  await act(() => [...container.querySelectorAll('button')].find(b => b.textContent === 'Save and enable').click()); await flush();
+  assert.equal(calls.find(c => c.key === 'admin:tm:save').payload.authorSeparation, true);
+});
