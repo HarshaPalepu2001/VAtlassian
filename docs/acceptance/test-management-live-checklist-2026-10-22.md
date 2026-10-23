@@ -41,18 +41,18 @@ Deferred: CI/JUnit upload, import/migration, AI, the ten-report center and the s
 
 ## Journeys
 
-| # | Journey | Expected |
-|---|---|---|
-| 1 | Test with no parent: write steps, save, publish | Publish refused: "no parent". |
-| 2 | Test under an Epic: steps, save, publish | Version 1, "Waiting for sign-off", digest shown. |
-| 3 | Sign v1 as an Approver with authenticator | v1 Signed; signer, time shown; ledger has TM_SIGNED. |
-| 4 | Publish again with no change | Refused: nothing changed. |
-| 5 | Edit a step, publish v2 | v2 waiting; v1 still Signed with the same digest. |
-| 6 | Execution under the Epic: add run of the test | Run uses v1 (latest signed), In progress. |
-| 7 | Add a run as someone without Tester | Refused: cannot sign step one. |
-| 8 | Record all steps Passed, sign as Tester | Run Signing; results read-only. |
-| 9 | Try to sign QA step as the same person | Refused: different person. |
-| 10 | QA signs | Run Signed, Passed, no bug. |
+| # | Journey | Expected | Result |
+|---|---|---|---|
+| 1 | Test with no parent: write steps, save, publish | Publish refused: "no parent". | **Pass** (`VAT-83` without parent: publish refused: "This work item has no parent...") |
+| 2 | Test under an Epic: steps, save, publish | Version 1, "Waiting for sign-off", digest shown. | In progress (`VAT-83`) |
+| 3 | Sign v1 as an Approver with authenticator | v1 Signed; signer, time shown; ledger has TM_SIGNED. | |
+| 4 | Publish again with no change | Refused: nothing changed. | |
+| 5 | Edit a step, publish v2 | v2 waiting; v1 still Signed with the same digest. | |
+| 6 | Execution under the Epic: add run of the test | Run uses v1 (latest signed), In progress. | |
+| 7 | Add a run as someone without Tester | Refused: cannot sign step one. | |
+| 8 | Record all steps Passed, sign as Tester | Run Signing; results read-only. | |
+| 9 | Try to sign QA step as the same person | Refused: different person. | |
+| 10 | QA signs | Run Signed, Passed, no bug. | |
 | 11 | New run: one step Failed, Tester signs, QA signs | One Bug created under the **test's Epic**, linked to test and execution, fix version = release. |
 | 12 | Check the Epic (if baselined) after 6 and 11 | Epic not drifted, not held. |
 | 13 | Run with a step Blocked: try to sign | Refused; close as not executed with reason works. |

@@ -67,6 +67,24 @@ export function transitionInput(payload = {}) {
 }
 
 /**
+ * Refuses a role nobody currently holds for this project and work item type,
+ * so nothing is ever required of a role granted to no one. Shared by
+ * controlled transitions and test-management sign-off chains.
+ */
+export async function requireRoleHolder(deps, { role, issueTypeId, projectId }) {
+  const holder = await deps.executeQuery(
+    `SELECT 1 FROM va_eligibility
+      WHERE state = 'ACTIVE' AND role = ? AND (issue_type_id = ? OR issue_type_id = '*')
+        AND (project_id = ? OR project_id IS NULL) LIMIT 1`,
+    [role, issueTypeId, projectId]
+  );
+  if (!holder.result) throw new Error('Could not verify eligible holders for this role.');
+  if (!(holder.data ?? []).length) {
+    throw new Error(`No one currently holds the "${role}" role for this scope. Grant it before requiring it.`);
+  }
+}
+
+/**
  * Revalidate a controlled transition against Jira's live workflow at save
  * time, rather than trusting whatever the admin picker read earlier.
  *
@@ -103,16 +121,7 @@ export async function verifyControlledTransition(input, deps, { excludeCtId = nu
     throw new Error(`Attach and enable the "${MODULE_KEY}" signature validator on this transition in Jira before controlling it.`);
   }
 
-  const holder = await deps.executeQuery(
-    `SELECT 1 FROM va_eligibility
-      WHERE state = 'ACTIVE' AND role = ? AND (issue_type_id = ? OR issue_type_id = '*')
-        AND (project_id = ? OR project_id IS NULL) LIMIT 1`,
-    [input.requiredRole, input.issueTypeId, input.projectId]
-  );
-  if (!holder.result) throw new Error('Could not verify eligible holders for this role.');
-  if (!(holder.data ?? []).length) {
-    throw new Error(`No one currently holds the "${input.requiredRole}" role for this scope. Grant it before requiring it.`);
-  }
+  await requireRoleHolder(deps, { role: input.requiredRole, issueTypeId: input.issueTypeId, projectId: input.projectId });
 
   const conflictParams = [input.projectId, input.issueTypeId, input.transitionId, input.fromStatusId];
   let conflictSql = `SELECT 1 FROM va_controlled_transition

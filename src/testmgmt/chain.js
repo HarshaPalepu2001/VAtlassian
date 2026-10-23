@@ -1,5 +1,5 @@
 import { canonical, sha256Hex } from '../lib/hash.js';
-import { isRole, ROLE } from '../lib/roles.js';
+import { ROLE } from '../lib/roles.js';
 import { ASSURANCE_LEVEL } from '../lib/approval/levels.js';
 
 /**
@@ -37,8 +37,12 @@ export const DEFAULT_VERSION_CHAIN = Object.freeze({
 });
 
 /**
- * A chain as stored, or the reason it is refused. Nothing is coerced: an
- * unknown role or an empty meaning is an error, never a default.
+ * A chain as stored, or the reason it is refused. Nothing is coerced: a
+ * missing role or an empty meaning is an error, never a default.
+ *
+ * A role is a name granted in Approver roles, matched exactly, as on a
+ * controlled transition (transitionsValidation.js#transitionInput). Whether
+ * anyone holds it is checked when the project's configuration is enabled.
  */
 export function validateChain(input) {
   const steps = Array.isArray(input?.steps) ? input.steps : null;
@@ -48,7 +52,8 @@ export function validateChain(input) {
   for (const step of steps) {
     const label = String(step?.label ?? '').trim();
     const meaning = String(step?.meaning ?? '').trim();
-    if (!isRole(step?.role)) return { error: 'CHAIN_ROLE_INVALID' };
+    const role = step?.role;
+    if (typeof role !== 'string' || !role || role.trim() !== role || role.length > 32) return { error: 'CHAIN_ROLE_INVALID' };
     if (!label || label.length > 64) return { error: 'CHAIN_LABEL_INVALID' };
     if (!meaning || meaning.length > 255) return { error: 'CHAIN_MEANING_INVALID' };
     clean.push({ label, role: String(step.role), meaning });

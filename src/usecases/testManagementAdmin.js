@@ -12,6 +12,9 @@
  *     because those types are then excluded from every tree read
  *     (testmgmt/treeExclusion.js) and nothing signed may be re-read under a
  *     different rule;
+ *   - every sign-off chain role is a role someone holds in Approver roles for
+ *     this project — on the Test type for test versions, on the Execution type
+ *     for runs — as a controlled transition's role must be;
  *   - every transition of the Execution workflow into a Done status carries an
  *     enabled va-gate, because the execution guard runs inside it
  *     (testmgmt/executionGuard.js) and a Done transition without it closes an
@@ -25,8 +28,8 @@
  */
 import { runAdmin, query, audit } from './adminRuntime.js';
 import { validateChain, DEFAULT_RUN_CHAIN, DEFAULT_VERSION_CHAIN } from '../testmgmt/chain.js';
-import { ROLES } from '../lib/roles.js';
 import { isOurGate, isDisabled } from '../lib/gateDrift.js';
+import { requireRoleHolder } from './transitionsValidation.js';
 import { verifyRunProof } from '../testmgmt/proof.js';
 
 const validProjectId = (v) => /^\d+$/.test(String(v ?? '')) && Number(v) > 0;
@@ -50,7 +53,7 @@ export async function getTestManagementConfig(req, overrides) {
       catch { missing = null; }
     }
     return {
-      success: true, project, linkTypes, roles: ROLES,
+      success: true, project, linkTypes,
       config: config ?? null,
       repairs, workflowHealth: { readable: missing !== null, missingDoneRoutes: missing ?? [] },
       defaults: { runChain: DEFAULT_RUN_CHAIN, versionChain: DEFAULT_VERSION_CHAIN, linkTypeName: 'Relates' }
@@ -148,6 +151,10 @@ export async function saveTestManagementConfig(req, overrides) {
       const screen = await t.createScreenFields(p.projectId, defectTypeId);
       if (!screen.has('labels')) throw new Error('Add the Labels field to the bug work type\'s create screen: the automatic bug is found again by its label.');
       if (!screen.has('parent')) throw new Error('The bug work type cannot have a parent in this project. The automatic bug is created under the test\'s parent (the Epic).');
+      // Test versions are signed on the Test, runs on the Execution: each
+      // role must be held there, as a controlled transition's role must be.
+      for (const step of versionChain.chain.steps) await requireRoleHolder(deps, { role: step.role, issueTypeId: testTypeId, projectId: String(p.projectId) });
+      for (const step of runChain.chain.steps) await requireRoleHolder(deps, { role: step.role, issueTypeId: executionTypeId, projectId: String(p.projectId) });
       const unguarded = await doneTransitionsWithoutGate(deps, p.projectId, executionTypeId);
       if (unguarded == null) throw new Error('The Test Execution workflow could not be read from Jira, so test management was not enabled. Try again.');
       if (unguarded.length) {

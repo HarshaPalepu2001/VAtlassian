@@ -11,7 +11,7 @@ type Config = { enabled: boolean; testTypeId: string; executionTypeId: string; p
   linkTypeName: string; sourceLinkTypeId: string | null; runChain: Chain; versionChain: Chain; revision: number };
 type Loaded = { success: boolean; error?: string; config: Config | null;
   project: { style: string | null; issueTypes: { id: string; name: string; subtask: boolean }[] };
-  linkTypes: { id: string; name: string }[]; roles: { id: string; label: string }[];
+  linkTypes: { id: string; name: string }[];
   defaults: { runChain: Chain; versionChain: Chain; linkTypeName: string };
   repairs?: { items: { runId: string; issueKey: string | null; lastError: string | null }[]; complete: boolean };
   workflowHealth?: { readable: boolean; missingDoneRoutes: string[] } };
@@ -70,7 +70,10 @@ export default function TestManagementPage({ projects }: { projects: Project[] }
   };
 
   const types = (data?.project.issueTypes ?? []).filter(t => !t.subtask).map(t => ({ value: t.id, label: t.name }));
-  const roles = (data?.roles ?? []).map(r => ({ value: r.id, label: r.label }));
+  // Test versions are signed on the Test, runs on the Execution.
+  const versionRoles = useGrantedRoles(projectId, form?.testTypeId || null);
+  const runRoles = useGrantedRoles(projectId, form?.executionTypeId || null);
+  const rolesError = versionRoles.error ?? runRoles.error;
 
   return (
     <Page eyebrow="Setup" title="Test management"
@@ -110,10 +113,11 @@ export default function TestManagementPage({ projects }: { projects: Project[] }
               Use work types that only test management uses. Tests, executions and their bugs sit outside their Epic's approved baseline, so creating them never holds the Epic.
             </p>
           </Section>
-          <ChainEditor title="Test version sign-off" chain={form.versionChain} roles={roles} busy={busy}
-            onChange={c => setForm({ ...form, versionChain: c })} />
-          <ChainEditor title="Test run sign-off" chain={form.runChain} roles={roles} busy={busy}
-            onChange={c => setForm({ ...form, runChain: c })} />
+          {rolesError && <Notice danger>{rolesError}</Notice>}
+          <ChainEditor title="Test version sign-off" scope="Test" chain={form.versionChain} roles={versionRoles.roles} busy={busy}
+            onChange={c => setForm(f => f && { ...f, versionChain: c })} />
+          <ChainEditor title="Test run sign-off" scope="Test Execution" chain={form.runChain} roles={runRoles.roles} busy={busy}
+            onChange={c => setForm(f => f && { ...f, runChain: c })} />
           <div className="va-row" style={{ gap: 8 }}>
             <button className="va-button va-button--primary" disabled={busy} onClick={() => save(true)}>{form.enabled ? 'Save' : 'Save and enable'}</button>
             {form.enabled && <button className="va-button" disabled={busy} onClick={() => save(false)}>Turn off</button>}
@@ -142,10 +146,36 @@ export default function TestManagementPage({ projects }: { projects: Project[] }
   );
 }
 
-function ChainEditor({ title, chain, roles, busy, onChange }: {
-  title: string; chain: Chain; roles: { value: string; label: string }[]; busy: boolean; onChange: (c: Chain) => void;
+/**
+ * Roles granted in Approver roles for this project and work type: the same
+ * list a controlled transition's "Who must sign" picker offers. Null until a
+ * work type is chosen and the list has loaded.
+ */
+function useGrantedRoles(projectId: string, issueTypeId: string | null) {
+  const [state, setState] = useState<{ roles: string[] | null; error: string | null }>({ roles: null, error: null });
+  useEffect(() => {
+    let active = true;
+    setState({ roles: null, error: null });
+    if (!projectId || !issueTypeId) return;
+    invoke<{ success: boolean; error?: string; roles?: string[] }>('admin:listAvailableRoles', { projectId, issueTypeId })
+      .then(res => { if (active) setState(res.success ? { roles: res.roles ?? [], error: null } : { roles: null, error: res.error ?? 'Could not load the roles.' }); })
+      .catch(e => { if (active) setState({ roles: null, error: e?.message ?? 'Could not load the roles.' }); });
+    return () => { active = false; };
+  }, [projectId, issueTypeId]);
+  return state;
+}
+
+function ChainEditor({ title, scope, chain, roles, busy, onChange }: {
+  title: string; scope: string; chain: Chain; roles: string[] | null; busy: boolean; onChange: (c: Chain) => void;
 }) {
   const set = (i: number, patch: Partial<ChainStep>) => onChange({ ...chain, steps: chain.steps.map((s, j) => (j === i ? { ...s, ...patch } : s)) });
+  // A role nobody holds any more is cleared, as on controlled transitions, so
+  // what is shown is what would be saved.
+  useEffect(() => {
+    if (roles && chain.steps.some(s => s.role && !roles.includes(s.role))) {
+      onChange({ ...chain, steps: chain.steps.map(s => (roles.includes(s.role) ? s : { ...s, role: '' })) });
+    }
+  }, [roles]);
   return (
     <Section title={title}>
       <table className="va-table">
@@ -154,13 +184,17 @@ function ChainEditor({ title, chain, roles, busy, onChange }: {
           <tr key={i}>
             <td>{i + 1}</td>
             <td><input className="va-input" value={s.label} disabled={busy} onChange={e => set(i, { label: e.target.value })} /></td>
-            <td><Select value={s.role} onChange={v => set(i, { role: v })} disabled={busy} placeholder="Role" options={roles} /></td>
+            <td><Select value={s.role} onChange={v => set(i, { role: v })} disabled={busy || !roles} placeholder="Choose a role…"
+              options={(roles ?? []).map(r => ({ value: r, label: r }))} /></td>
             <td><textarea className="va-input" rows={2} value={s.meaning} disabled={busy} onChange={e => set(i, { meaning: e.target.value })} /></td>
             <td><button className="va-button" disabled={busy || chain.steps.length === 1}
               onClick={() => onChange({ ...chain, steps: chain.steps.filter((_, j) => j !== i) })}>Remove</button></td>
           </tr>
         ))}</tbody>
       </table>
+      <p className="va-subtlest" style={{ fontSize: 12 }}>
+        Roles defined in Approver roles. Create a grant there first to add new roles. Roles must be granted on the {scope} work type.
+      </p>
       <div className="va-row" style={{ gap: 12, marginTop: 8, alignItems: 'center' }}>
         <button className="va-button" disabled={busy || chain.steps.length >= 6}
           onClick={() => onChange({ ...chain, steps: [...chain.steps, { label: '', role: '', meaning: '' }] })}>Add step</button>

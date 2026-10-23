@@ -133,6 +133,31 @@ test('repair submission carries the selected full run, existing bug and audit re
     { projectId: '100', runId: '1'.repeat(32), bugKey: 'VAT-50', reason: 'Checked Jira history' });
   assert.match(container.textContent, /Repair audited/);
 });
+test('chain role pickers offer the roles granted in Approver roles for the Test and Test Execution types', async () => {
+  const calls = [];
+  const runChain = { steps: [{ label: 'Executed by', role: 'TESTER', meaning: 'I ran it.' }, { label: 'Reviewed by', role: 'QA Lead', meaning: 'I reviewed it.' }], distinctSigners: true };
+  const data = { success: true, project: { style: 'classic', issueTypes: [{ id: '1', name: 'TestCase' }, { id: '2', name: 'TestExecution' }] },
+    config: { enabled: false, testTypeId: '1', executionTypeId: '2', planTypeId: null, setTypeId: null, preconditionTypeId: null, defectTypeId: '',
+      linkTypeName: 'Relates', sourceLinkTypeId: null, runChain, versionChain: chain, revision: 1 },
+    linkTypes: [], defaults: { runChain, versionChain: chain, linkTypeName: 'Relates' }, repairs: { items: [], complete: true } };
+  const granted = { 1: ['QA', 'Reviewer'], 2: ['QA Lead', 'Tester'] };
+  await mount(Admin, { projects: [{ id: '100', name: 'Project', key: 'VAT' }] }, async (key, payload) => {
+    calls.push({ key, payload });
+    return key === 'admin:listAvailableRoles' ? { success: true, roles: granted[payload.issueTypeId] } : data;
+  });
+  await act(() => { const select = container.querySelector('select'); select.value = '100'; select.dispatchEvent(new window.Event('change', { bubbles: true })); });
+  await until(() => container.querySelectorAll('table select option').length > 3);
+  const [version, executed, reviewed] = [...container.querySelectorAll('table select')];
+  const offered = select => [...select.options].map(o => o.value).filter(Boolean);
+  assert.deepEqual(offered(version), ['QA', 'Reviewer'], 'test versions are signed on the Test type');
+  assert.deepEqual(offered(executed), ['QA Lead', 'Tester'], 'runs are signed on the Test Execution type');
+  assert.deepEqual(calls.filter(c => c.key === 'admin:listAvailableRoles').map(c => c.payload).sort((a, b) => a.issueTypeId.localeCompare(b.issueTypeId)),
+    [{ projectId: '100', issueTypeId: '1' }, { projectId: '100', issueTypeId: '2' }]);
+  assert.equal(version.value, 'QA', 'a granted role stays chosen');
+  assert.equal(reviewed.value, 'QA Lead');
+  assert.equal(executed.value, '', 'a role nobody was granted is cleared, as on controlled transitions');
+  assert.match(container.textContent, /Roles defined in Approver roles\. Create a grant there first to add new roles\./);
+});
 function executionModel() { return { role: 'EXECUTION', issue: { id: '12', key: 'VAT-12', summary: 'Execution', done: true, status: 'Done' },
   parent: { id: '10', key: 'VAT-10' }, canEdit: false, releases: [], attachments: [], runChain: chain,
   runs: [{ runId: '1'.repeat(32), state: 'SIGNED', result: 'FAILED', revision: 1, test: { id: '11', key: 'VAT-11', hidden: false },

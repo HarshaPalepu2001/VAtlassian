@@ -60,6 +60,36 @@ test('an execution workflow or status that cannot be read refuses enablement, ne
   assert.equal(unreadable.saved.length + noStatuses.saved.length, 0);
 });
 
+test('each chain role must be held in the project for its work type before enabling, as on controlled transitions', async () => {
+  // Held: Approver on Test ('1'); Tester and QA Lead on Test Execution ('2'); all in project 100.
+  const held = new Set(['Approver|1|100', 'Tester|2|100', 'QA Lead|2|100']);
+  const chains = (version, run) => ({
+    versionChain: { steps: [{ label: 'Approved by', role: version, meaning: 'I approve it.' }], distinctSigners: true },
+    runChain: { steps: run.map(role => ({ label: role, role, meaning: 'I sign it.' })), distinctSigners: true }
+  });
+  const attempt = async (extra) => {
+    const { deps, saved } = world();
+    const original = deps.executeQuery;
+    deps.executeQuery = async (sql, params) => sql.includes('FROM va_eligibility')
+      ? { result: true, data: held.has(params.join('|')) ? [{ ok: 1 }] : [] } : original(sql, params);
+    return { result: await saveTestManagementConfig(request(payload(extra)), deps), saved };
+  };
+
+  const ok = await attempt(chains('Approver', ['Tester', 'QA Lead']));
+  assert.equal(ok.result.success, true, ok.result.error);
+  assert.deepEqual(ok.saved[0].runChain.steps.map(s => s.role), ['Tester', 'QA Lead']);
+
+  const versionOnExecutionRole = await attempt(chains('Tester', ['Tester', 'QA Lead']));
+  assert.equal(versionOnExecutionRole.result.error,
+    'No one currently holds the "Tester" role for this scope. Grant it before requiring it.', 'a test version is signed on the Test type');
+  const runOnTestRole = await attempt(chains('Approver', ['Tester', 'Approver']));
+  assert.match(runOnTestRole.result.error, /"Approver" role for this scope/, 'a run is signed on the Test Execution type');
+  assert.equal(versionOnExecutionRole.saved.length + runOnTestRole.saved.length, 0, 'a refused save changes nothing');
+
+  const off = await attempt({ ...chains('Nobody', ['Nobody']), enabled: false });
+  assert.equal(off.result.success, true, 'turning off never waits on a grant');
+});
+
 test('Verifies uses a stable existing type distinct from generic bug links', async () => {
   for (const [sourceLinkTypeId, expected] of [['10', true], ['20', false], ['999', false]]) {
     const { deps, saved } = world();

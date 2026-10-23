@@ -41,9 +41,16 @@ test('a run is signable only when every step has a result, N/A has a reason, and
 });
 
 // ── sign-off chains ─────────────────────────────────────────────────────────
-test('a chain is refused, never coerced, when a step has an unknown role or no meaning', () => {
+test('a chain step names a role from Approver roles exactly, as a controlled transition does', () => {
+  assert.equal(validateChain({ steps: [{ label: 'X', role: 'QA Lead', meaning: 'm' }] }).chain.steps[0].role, 'QA Lead');
+  assert.equal(validateChain({ steps: [{ label: 'X', role: 'tester', meaning: 'm' }] }).chain.steps[0].role, 'tester', 'never rewritten');
+});
+
+test('a chain is refused, never coerced, when a step has no usable role or no meaning', () => {
   assert.equal(validateChain({ steps: [] }).error, 'CHAIN_EMPTY');
-  assert.equal(validateChain({ steps: [{ label: 'X', role: 'tester', meaning: 'm' }] }).error, 'CHAIN_ROLE_INVALID');
+  for (const role of ['', ' QA', 'QA ', 'x'.repeat(33), undefined, 7]) {
+    assert.equal(validateChain({ steps: [{ label: 'X', role, meaning: 'm' }] }).error, 'CHAIN_ROLE_INVALID', JSON.stringify(role));
+  }
   assert.equal(validateChain({ steps: [{ label: 'X', role: 'TESTER', meaning: ' ' }] }).error, 'CHAIN_MEANING_INVALID');
   assert.deepEqual(validateChain(DEFAULT_RUN_CHAIN).chain.steps.map(s => s.role), ['TESTER', 'QA']);
 });
