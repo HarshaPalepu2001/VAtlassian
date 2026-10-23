@@ -11,7 +11,7 @@ async function fixture() {
   const saved = await planning.saveDraft({ issueKey: 'VAT-21', expectedRevision: 0,
     draft: { members: [{ testIssueId: '11' }], environment: 'Bench', configurations: [{ id: 'a', name: 'A' }], releaseId: '900' } }, actor);
   let model = await planning.publish({ issueKey: 'VAT-21', expectedRevision: saved.draft.revision }, actor);
-  model = await planning.sign({ revisionId: model.revisions[0].revisionId, contentHash: model.revisions[0].digest, code: '123456' }, actor);
+  model = await planning.sign({ revisionId: model.revisions[0].revisionId, contentHash: model.revisions[0].digest, code: '123456' }, { accountId: 'approver' });
   const r = model.revisions[0];
   const project = await w.deps.readProject(); project.executionTypeId = '2';
   w.deps.testManagementRole = async issue => ({ role: issue.fields.issuetype.id === '2' ? 'EXECUTION' : 'TEST', project });

@@ -3,6 +3,7 @@ import { tmFail, tmRespond } from '../testmgmt/messages.js';
 import { normaliseCollectionDraft, collectionContent } from '../testmgmt/planning.js';
 import { contentDigest } from '../testmgmt/content.js';
 import { chainDigest, chainPosition, separationProblem, validateChain } from '../testmgmt/chain.js';
+import { authorProblem, authorsFor, authorsOf, withEditor } from '../testmgmt/authorship.js';
 import { requestReads } from '../testmgmt/requestReads.js';
 
 const mapping = { PLAN: 'planTypeId', SET: 'setTypeId', PRECONDITION: 'preconditionTypeId' };
@@ -130,7 +131,8 @@ export function createTestPlanning(deps) {
       const proof = actionable ? await verifyRevision(r, s) : await signatureProof('COLLECTION_REVISION', r, r.revisionId);
       const pending = deps.hasPendingSignatures ? await deps.hasPendingSignatures('COLLECTION_REVISION', r.revisionId) : false;
       const nextStep = proof.position.next == null ? null : { index: proof.position.next, ...proof.position.step };
-      const canSign = canEdit && !pending && r.state === 'PUBLISHED' && !!nextStep && !separationProblem(r.chain, proof.signatures, actor.accountId)
+      const signBlocked = r.state === 'PUBLISHED' && nextStep ? authorProblem(r, actor.accountId) : null;
+      const canSign = canEdit && !pending && r.state === 'PUBLISHED' && !!nextStep && !signBlocked && !separationProblem(r.chain, proof.signatures, actor.accountId)
         && await deps.isEligibleFor({ accountId: actor.accountId, projectId: s.projectId, issueTypeId: s.issue.fields.issuetype.id, role: nextStep.role });
       const memberLabels = {}; const preconditionLabels = {};
       for (const m of r.content.members) {
@@ -139,7 +141,7 @@ export function createTestPlanning(deps) {
       for (const ref of r.content.preconditions) {
         const condition = await subject(ref.issueId, 'PRECONDITION'); preconditionLabels[ref.issueId] = { key: condition.issue.key, summary: condition.issue.fields?.summary ?? '' };
       }
-      out.push({ ...r, memberLabels, preconditionLabels, signatures: proof.signatures.map(sig => ({ stepIndex: sig.step_index, label: sig.label, role: sig.role,
+      out.push({ ...r, authors: authorsOf(r), signBlocked, memberLabels, preconditionLabels, signatures: proof.signatures.map(sig => ({ stepIndex: sig.step_index, label: sig.label, role: sig.role,
         decision: sig.decision, printedName: sig.printedName, meaning: sig.meaning, reason: sig.reason, signedAt: sig.signedAt,
         assuranceLevel: sig.assuranceLevel, contentHash: sig.contentHash })), nextStep, canSign,
         canRecover: canEdit && r.state === 'PUBLISHED' && (pending || proof.position.complete || proof.position.rejected) });
@@ -154,14 +156,17 @@ export function createTestPlanning(deps) {
     const clean = normaliseCollectionDraft(await resolveDraftReferences(draft, s), s.role);
     if (clean.error) tmFail(clean.error);
     await visibleDraft(clean.draft, s.project);
+    const current = await deps.readCollectionDraft(s.issue.id);
     const revision = await deps.saveCollectionDraft({ issueId: s.issue.id, projectId: s.projectId, role: s.role, content: clean.draft,
-      expectedRevision: Number(expectedRevision), now: deps.now(), actor: actor.accountId });
+      expectedRevision: Number(expectedRevision), now: deps.now(), actor: actor.accountId,
+      editors: withEditor(current?.editors, actor.accountId, Number(expectedRevision) + 1) });
     if (revision == null) tmFail('STALE');
     return view(issueKey, actor);
   }
   async function activatePublication(r, s, actor) {
     await deps.audit({ eventType: 'TM_COLLECTION_PUBLISHED', actorAccountId: actor.accountId, issueId: Number(s.issue.id),
-      payload: { revisionId: r.revisionId, revisionNo: r.revisionNo, digest: r.digest, role: s.role, chainDigest: r.chainDigest } });
+      payload: { revisionId: r.revisionId, revisionNo: r.revisionNo, digest: r.digest, role: s.role, chainDigest: r.chainDigest,
+        authors: authorsOf(r) } });
     if (!await deps.setCollectionRevisionState(r.revisionId, { from: 'PUBLISHING', to: 'PUBLISHED', now: deps.now() })) tmFail('PUBLICATION_PENDING');
   }
   async function publish({ issueKey, expectedRevision }, actor) {
@@ -194,7 +199,8 @@ export function createTestPlanning(deps) {
     if (same && latest.state !== 'REJECTED') tmFail('NO_CHANGES');
     const r = { revisionId: deps.newHexId(), issueId: String(s.issue.id), projectId: s.projectId, role: s.role,
       revisionNo: content.revisionNo, draftRevision: draft.revision, content, digest: contentDigest(content), chain: structuredClone(s.project.versionChain),
-      chainDigest: chainDigest(s.project.versionChain), publishedAt: deps.now(), publishedBy: actor.accountId };
+      chainDigest: chainDigest(s.project.versionChain), publishedAt: deps.now(), publishedBy: actor.accountId,
+      authors: authorsFor({ draft, history: list, publisher: actor.accountId }) };
     if (!await deps.insertCollectionRevision(r)) tmFail('STALE');
     try { await activatePublication(r, s, actor); } catch (error) { if (error.reason) throw error; tmFail('LEDGER_UNAVAILABLE'); }
     return view(issueKey, actor);
@@ -212,7 +218,7 @@ export function createTestPlanning(deps) {
     if (proof.position.corrupt) tmFail('CONTENT_CHANGED');
     if (proof.position.next != null) {
       if (!await deps.isEligibleFor({ accountId: actor.accountId, projectId: s.projectId, issueTypeId: s.issue.fields.issuetype.id, role: proof.position.step.role })) tmFail('NOT_ELIGIBLE');
-      const separation = separationProblem(r.chain, proof.signatures, actor.accountId); if (separation) tmFail(separation);
+      const separation = authorProblem(r, actor.accountId) ?? separationProblem(r.chain, proof.signatures, actor.accountId); if (separation) tmFail(separation);
       if (decision === 'REJECT' && !String(reason ?? '').trim()) tmFail('REASON_REQUIRED');
       const me = await deps.myself();
       const result = await deps.recordSignature({ kind: 'COLLECTION_REVISION', subjectId: revisionId, stepIndex: proof.position.next,

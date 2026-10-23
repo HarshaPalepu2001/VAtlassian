@@ -11,6 +11,7 @@ import { actorFrom } from './access.js';
 import { tmFail, tmRespond } from '../testmgmt/messages.js';
 import { normaliseDraft, publishProblem, versionContent, contentDigest } from '../testmgmt/content.js';
 import { chainDigest, chainPosition, separationProblem } from '../testmgmt/chain.js';
+import { authorProblem, authorsFor, authorsOf, withEditor } from '../testmgmt/authorship.js';
 
 const EMPTY_DRAFT = { objective: '', preconditions: '', steps: [], verifies: [], dataset: null };
 
@@ -63,13 +64,15 @@ export function createTestAuthoring(deps) {
       const needsProjection = v.versionId === latestSignedId && deps.sourceProjectionComplete ? !await deps.sourceProjectionComplete(v.versionId) : false;
       const sourceLinks = v.state === 'SIGNED' && deps.readSourceLinkIntent ? await deps.readSourceLinkIntent(v.versionId) : null;
       let canSign = false;
-      if (v.state === 'PUBLISHED' && !pending && position.next != null) {
+      const signBlocked = v.state === 'PUBLISHED' && position.next != null ? authorProblem(v, actor.accountId) : null;
+      if (v.state === 'PUBLISHED' && !pending && position.next != null && !signBlocked) {
         canSign = !separationProblem(v.chain, own, actor.accountId)
           && await deps.isEligibleFor({ accountId: actor.accountId, projectId: project.projectId,
             issueTypeId: issue.fields?.issuetype?.id, role: position.step.role });
       }
       out.push({ versionId: v.versionId, versionNo: v.versionNo, state: v.state, digest: v.digest,
         publishedBy: v.publishedBy, publishedAt: v.publishedAt, signedAt: v.signedAt, content: v.content,
+        authors: authorsOf(v), signBlocked,
         ...(sourceLinks ? { sourceLinks: { state: sourceLinks.state, problem: sourceLinks.problem } } : {}),
         chain: v.chain, signatures: own.map(describeSignature),
         nextStep: position.next != null ? { index: position.next, ...position.step } : null, canSign,
@@ -101,8 +104,10 @@ export function createTestAuthoring(deps) {
       const resolved = await deps.resolveTestSources(refs, { projectId, viewer: actor });
       clean.draft.verifies = resolved.map(ref => ({ issueId: ref.issueId, issueKey: ref.issueKey }));
     }
+    const current = await deps.readDraft(issue.id);
     const revision = await deps.saveDraft({ testIssueId: issue.id, projectId, content: clean.draft,
-      expectedRevision: Number(expectedRevision) || 0, now: deps.now(), actor: actor.accountId });
+      expectedRevision: Number(expectedRevision) || 0, now: deps.now(), actor: actor.accountId,
+      editors: withEditor(current?.editors, actor.accountId, (Number(expectedRevision) || 0) + 1) });
     if (revision == null) tmFail('STALE');
     return view(issueKey, actor);
   }
@@ -126,12 +131,13 @@ export function createTestAuthoring(deps) {
     if (latest && latest.state !== 'REJECTED' && comparable(latest.content) === comparable(content)) tmFail('NO_CHANGES');
     const version = { versionId: deps.newHexId(), testIssueId: issue.id, projectId: project.projectId,
       versionNo: content.versionNo, content, digest: contentDigest(content), chain: project.versionChain,
-      chainDigest: chainDigest(project.versionChain), publishedBy: actor.accountId, publishedAt: deps.now(), publishEventId: deps.newHexId() };
+      chainDigest: chainDigest(project.versionChain), publishedBy: actor.accountId, publishedAt: deps.now(), publishEventId: deps.newHexId(),
+      authors: authorsFor({ draft, history: versions, publisher: actor.accountId }) };
     if (!await deps.insertVersion(version)) tmFail('STALE');
     try {
       await deps.audit({ eventId: Buffer.from(version.publishEventId, 'hex'), eventType: 'TM_VERSION_PUBLISHED', actorAccountId: actor.accountId, issueId: Number(issue.id),
         payload: { versionId: version.versionId, versionNo: version.versionNo, digest: version.digest,
-          parentIssueId: parent.id, chainDigest: version.chainDigest } });
+          parentIssueId: parent.id, chainDigest: version.chainDigest, authors: version.authors.accounts } });
     } catch {
       await deps.deleteVersion(version.versionId).catch(() => {});
       tmFail('LEDGER_UNAVAILABLE');
@@ -158,7 +164,7 @@ export function createTestAuthoring(deps) {
     if (position.next == null) tmFail('VERSION_NOT_PUBLISHED');
     if (!await deps.isEligibleFor({ accountId: actor.accountId, projectId: project.projectId,
       issueTypeId: issue.fields?.issuetype?.id, role: position.step.role })) tmFail('NOT_ELIGIBLE');
-    const separation = separationProblem(version.chain, signatures, actor.accountId);
+    const separation = authorProblem(version, actor.accountId) ?? separationProblem(version.chain, signatures, actor.accountId);
     if (separation) tmFail(separation);
     if (decision === 'REJECT' && !String(reason ?? '').trim()) tmFail('REASON_REQUIRED');
     const me = await deps.myself();

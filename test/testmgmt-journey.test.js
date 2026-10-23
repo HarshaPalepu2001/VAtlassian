@@ -76,7 +76,7 @@ test('publishing the same content again is refused, and a signed version is neve
   assert.equal(contentDigest(view.versions[1].content), v1.digest);
 });
 
-test('the version signer cannot sign a step twice, and a changed hash is refused', async () => {
+test('the version signer cannot sign a step twice, the author cannot sign at all, and a changed hash is refused', async () => {
   const ctx = setup({ versionChain: { steps: [
     { label: 'Reviewed by', role: 'APPROVER', meaning: 'Reviewed.' }, { label: 'Approved by', role: 'APPROVER', meaning: 'Approved.' }
   ], distinctSigners: true } });
@@ -87,7 +87,9 @@ test('the version signer cannot sign a step twice, and a changed hash is refused
   await assert.rejects(ctx.authoring.signVersion({ versionId: v.versionId, code: '123456', contentHash: 'f'.repeat(64) }, as(ctx.w, 'approver-1')), { reason: 'CONTENT_CHANGED' });
   await ctx.authoring.signVersion({ versionId: v.versionId, code: '123456', contentHash: v.digest }, as(ctx.w, 'approver-1'));
   await assert.rejects(ctx.authoring.signVersion({ versionId: v.versionId, code: '123456', contentHash: v.digest }, as(ctx.w, 'approver-1')), { reason: 'SAME_SIGNER' });
-  const done = await ctx.authoring.signVersion({ versionId: v.versionId, code: '123456', contentHash: v.digest }, as(ctx.w, 'author-1'));
+  await assert.rejects(ctx.authoring.signVersion({ versionId: v.versionId, code: '123456', contentHash: v.digest }, as(ctx.w, 'author-1')), { reason: 'AUTHOR_CANNOT_SIGN' });
+  ctx.w.grants.push({ accountId: 'approver-2', role: 'APPROVER' });
+  const done = await ctx.authoring.signVersion({ versionId: v.versionId, code: '123456', contentHash: v.digest }, as(ctx.w, 'approver-2'));
   assert.equal(done.versions[0].state, 'SIGNED');
 });
 
@@ -143,7 +145,7 @@ test('a result recorded after the tester opened the run makes the signature fail
   const ctx = setup();
   await signedTest(ctx);
   const run = await runToSigning(ctx, ['PASSED', 'PASSED']);
-  await ctx.exec.recordStep({ runId: run.runId, expectedRevision: run.revision, stepId: 's2', status: 'FAILED', actual: 'late' }, as(ctx.w, 'tester-1'));
+  await ctx.exec.recordStep({ runId: run.runId, expectedRevision: run.revision, stepId: 's2', status: 'FAILED', actual: 'late', reason: 'Re-checked the readout' }, as(ctx.w, 'tester-1'));
   await assert.rejects(ctx.exec.signRun({ runId: run.runId, code: '123456', contentHash: run.contentHash }, as(ctx.w, 'tester-1')), { reason: 'CONTENT_CHANGED' });
   assert.equal(ctx.w.signatures.filter(s => s.subjectId === run.runId).length, 0);
 });

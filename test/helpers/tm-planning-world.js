@@ -27,9 +27,10 @@ export function planningWorld() {
     projectVersions: async () => [{ id: '900', name: 'Release 1' }],
     latestSignedVersion: async () => structuredClone(w.version), readVersion,
     readCollectionDraft: async (id) => structuredClone(w.drafts.get(String(id)) ?? null),
-    saveCollectionDraft: async ({ issueId, projectId, role, content, expectedRevision }) => {
+    saveCollectionDraft: async ({ issueId, projectId, role, content, expectedRevision, actor, editors }) => {
       const previous = w.drafts.get(String(issueId)); if ((previous?.revision ?? 0) !== expectedRevision) return null;
-      const revision = expectedRevision + 1; w.drafts.set(String(issueId), { issueId: String(issueId), projectId, role, content: structuredClone(content), revision }); return revision;
+      const revision = expectedRevision + 1; w.drafts.set(String(issueId), { issueId: String(issueId), projectId, role, content: structuredClone(content), revision,
+        updatedBy: actor, editors: structuredClone(editors ?? []) }); return revision;
     },
     listCollectionRevisions: async (id) => ({ items: [...w.revisions.values()].filter(r => r.issueId === String(id)).sort((a,b) => b.revisionNo-a.revisionNo).map(r => structuredClone(r)), complete: !w.incomplete }),
     readCollectionRevision: async (id) => structuredClone(w.revisions.get(id) ?? null),

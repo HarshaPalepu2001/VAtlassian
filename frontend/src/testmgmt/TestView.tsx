@@ -108,7 +108,7 @@ export default function TestView({ model, onModel }: { model: TestViewModel; onM
                 {s.decision === 'REJECT' ? '✕' : '✓'} {s.label}: <strong>{s.printedName}</strong>, <When ms={s.signedAt} />{s.reason ? ` — ${s.reason}` : ''}
               </p>
             ))}
-            {v.state === 'PUBLISHED' && v.nextStep && !v.canSign && <Notice>Waiting for: {v.nextStep.label} ({v.nextStep.role}).</Notice>}
+            {v.state === 'PUBLISHED' && v.nextStep && !v.canSign && <Notice>Waiting for: {v.nextStep.label} ({v.nextStep.role}).{v.signBlocked === 'AUTHOR_CANNOT_SIGN' ? ' You wrote or published this version, so someone else must sign it.' : ''}</Notice>}
             {(v as typeof v & { canFinishVersion?: boolean }).canFinishVersion && (
               <button className="va-button" disabled={busy} onClick={() => call('tm:test:finishVersion', { versionId: v.versionId })}>Finish version</button>
             )}

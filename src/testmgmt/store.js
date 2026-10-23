@@ -82,19 +82,20 @@ export async function saveProject(p, { expectedRevision, now, actor }) {
 export async function readDraft(testIssueId) {
   const row = (await rows('SELECT * FROM tm_test_draft WHERE test_issue_id = ?', [Number(testIssueId)]))[0];
   return row ? { content: json(row.content, null), revision: Number(row.revision), updatedAt: Number(row.updated_at),
-    updatedBy: row.updated_by } : null;
+    updatedBy: row.updated_by, editors: row.editors == null ? null : json(row.editors, []) } : null;
 }
 
-export async function saveDraft({ testIssueId, projectId, content, expectedRevision, now, actor }) {
+/** `editors` is the whole list after this save (testmgmt/authorship.js#withEditor). */
+export async function saveDraft({ testIssueId, projectId, content, expectedRevision, now, actor, editors }) {
   if (!expectedRevision) {
     try {
-      await q(`INSERT INTO tm_test_draft (test_issue_id, project_id, content, revision, updated_at, updated_by)
-        VALUES (?, ?, ?, 1, ?, ?)`, [Number(testIssueId), Number(projectId), JSON.stringify(content), now, actor]);
+      await q(`INSERT INTO tm_test_draft (test_issue_id, project_id, content, revision, updated_at, updated_by, editors)
+        VALUES (?, ?, ?, 1, ?, ?, ?)`, [Number(testIssueId), Number(projectId), JSON.stringify(content), now, actor, JSON.stringify(editors ?? [])]);
       return 1;
     } catch (error) { if (error.duplicate) return null; throw error; }
   }
-  const result = await q(`UPDATE tm_test_draft SET content = ?, revision = revision + 1, updated_at = ?, updated_by = ?
-    WHERE test_issue_id = ? AND revision = ?`, [JSON.stringify(content), now, actor, Number(testIssueId), Number(expectedRevision)]);
+  const result = await q(`UPDATE tm_test_draft SET content = ?, revision = revision + 1, updated_at = ?, updated_by = ?, editors = ?
+    WHERE test_issue_id = ? AND revision = ?`, [JSON.stringify(content), now, actor, JSON.stringify(editors ?? []), Number(testIssueId), Number(expectedRevision)]);
   return affected(result) === 1 ? Number(expectedRevision) + 1 : null;
 }
 
@@ -106,7 +107,8 @@ function versionFrom(row) {
     versionNo: Number(row.version_no), content: json(row.content, null), digest: row.digest,
     chain: json(row.chain, null), chainDigest: row.chain_digest, state: row.state,
     publishedBy: row.published_by, publishedAt: Number(row.published_at),
-    signedAt: row.signed_at == null ? null : Number(row.signed_at), publishEventId: row.publish_event_id ?? null
+    signedAt: row.signed_at == null ? null : Number(row.signed_at), publishEventId: row.publish_event_id ?? null,
+    authors: row.authors == null ? null : json(row.authors, null)
   };
 }
 
@@ -123,9 +125,9 @@ export async function readVersion(versionId) {
 export async function insertVersion(v) {
   try {
     await q(`INSERT INTO tm_test_version (version_id, test_issue_id, project_id, version_no, content, digest, chain,
-      chain_digest, state, published_by, published_at, publish_event_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PUBLISHING', ?, ?, ?)`,
+      chain_digest, state, published_by, published_at, publish_event_id, authors) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PUBLISHING', ?, ?, ?, ?)`,
     [bin(v.versionId), Number(v.testIssueId), Number(v.projectId), Number(v.versionNo), JSON.stringify(v.content),
-      v.digest, JSON.stringify(v.chain), v.chainDigest, v.publishedBy, v.publishedAt, v.publishEventId]);
+      v.digest, JSON.stringify(v.chain), v.chainDigest, v.publishedBy, v.publishedAt, v.publishEventId, JSON.stringify(v.authors)]);
     return true;
   } catch (error) { if (error.duplicate) return false; throw error; }
 }
@@ -160,7 +162,8 @@ function runFrom(row) {
     retestOf: hex(row.retest_of), createdBy: row.created_by, createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
     resolvedSteps: json(row.resolved_steps, null), iterations: json(row.iterations, null), planningSnapshot: json(row.planning_snapshot, null),
-    creationKey: row.creation_key ?? null, creationFingerprint: row.creation_fingerprint ?? null, creationEventId: row.creation_event_id ?? null
+    creationKey: row.creation_key ?? null, creationFingerprint: row.creation_fingerprint ?? null, creationEventId: row.creation_event_id ?? null,
+    stepEventId: row.step_event_id ?? null, stepPrior: row.step_prior == null ? null : json(row.step_prior, null)
   };
 }
 
@@ -237,17 +240,57 @@ export async function listRunsForTest(testIssueId) {
     [Number(testIssueId)])).map(runFrom);
 }
 
-/** Step results change only while the run is IN_PROGRESS, and only from the revision the tester saw. */
-export async function updateRunSteps({ runId, expectedRevision, steps, result, now }) {
-  const out = await q(`UPDATE tm_run SET steps = ?, result = ?, revision = revision + 1, updated_at = ?
-    WHERE run_id = ? AND revision = ? AND state = 'IN_PROGRESS'`,
-  [JSON.stringify(steps), result, now, bin(runId), Number(expectedRevision)]);
+/**
+ * Step results change only while the run is IN_PROGRESS, and only from the
+ * revision the tester saw.
+ *
+ * A change is pending until its audit event `eventId` is written: the run
+ * keeps the event id and the results it replaced (`prior`), takes no other
+ * change, and cannot be frozen for sign-off. confirmRunSteps makes it
+ * effective; settleRunSteps decides it from the audit chain after an
+ * interruption.
+ */
+export async function updateRunSteps({ runId, expectedRevision, steps, result, now, eventId, prior }) {
+  const out = await q(`UPDATE tm_run SET steps = ?, result = ?, revision = revision + 1, updated_at = ?, step_event_id = ?, step_prior = ?
+    WHERE run_id = ? AND revision = ? AND state = 'IN_PROGRESS' AND step_event_id IS NULL`,
+  [JSON.stringify(steps), result, now, bin(eventId), JSON.stringify(prior), bin(runId), Number(expectedRevision)]);
   return affected(out) === 1;
 }
 
+export async function confirmRunSteps({ runId, eventId }) {
+  return affected(await q('UPDATE tm_run SET step_event_id = NULL, step_prior = NULL WHERE run_id = ? AND step_event_id = ?',
+    [bin(runId), bin(eventId)])) === 1;
+}
+
+/**
+ * Finish a pending step change from the audit chain: its exact event makes it
+ * effective; no event, once the writer is certainly gone (`abandoned`, or
+ * longer than a resolver's invocation budget), restores the results it
+ * replaced. Returns whether the run is free of a pending change.
+ */
+export async function settleRunSteps(runId, { now = Date.now(), abandoned = false } = {}) {
+  const run = await readRun(runId);
+  if (!run?.stepEventId) return true;
+  const event = (await rows(`SELECT payload, issue_id FROM va_audit WHERE event_id = FROM_BASE64(?) AND event_type = 'TM_STEP_RECORDED'`,
+    [Buffer.from(run.stepEventId, 'hex').toString('base64')]))[0];
+  if (event) {
+    const payload = json(event.payload, null);
+    if (payload?.runId !== runId || Number(payload.revision) !== run.revision || String(event.issue_id) !== run.executionIssueId) throw new FailClosed('CONTENT_CHANGED');
+    await confirmRunSteps({ runId, eventId: run.stepEventId });
+    return true;
+  }
+  if (!abandoned && now - run.updatedAt <= 5 * 60_000) return false;
+  if (!run.stepPrior || !Array.isArray(run.stepPrior.steps)) throw new FailClosed('RECORDS_INCOMPLETE');
+  await q(`UPDATE tm_run SET steps = ?, result = ?, revision = revision + 1, updated_at = ?, step_event_id = NULL, step_prior = NULL
+    WHERE run_id = ? AND step_event_id = ?`,
+  [JSON.stringify(run.stepPrior.steps), run.stepPrior.result ?? null, now, bin(runId), bin(run.stepEventId)]);
+  return true;
+}
+
+/** No run is frozen, closed or moved on while a step change waits for its audit event. */
 export async function setRunState({ runId, from, to, expectedRevision, frozenDigest, now }) {
   const out = await q(`UPDATE tm_run SET state = ?, revision = revision + 1, updated_at = ?,
-    frozen_digest = COALESCE(frozen_digest, ?) WHERE run_id = ? AND state = ? AND revision = ?`,
+    frozen_digest = COALESCE(frozen_digest, ?) WHERE run_id = ? AND state = ? AND revision = ? AND step_event_id IS NULL`,
   [to, now, frozenDigest ?? null, bin(runId), from, Number(expectedRevision)]);
   return affected(out) === 1;
 }

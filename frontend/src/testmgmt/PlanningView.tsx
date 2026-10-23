@@ -11,7 +11,7 @@ export type PlanningDraft = { objective: string; text: string; members: Planning
   environment: string; configurations: { id: string; name: string }[]; releaseId: string | null; revision: number };
 export type PlanningRevision = { revisionId: string; revisionNo: number; state: string; digest: string; publishedAt?: number;
   content: Omit<PlanningDraft, 'revision' | 'releaseId'> & { release: { id: string; name: string } | null };
-  chain?: Chain; signatures: Signature[]; nextStep: NextStep; canSign: boolean; canRecover?: boolean;
+  chain?: Chain; signatures: Signature[]; nextStep: NextStep; canSign: boolean; canRecover?: boolean; signBlocked?: string | null;
   memberLabels?: Record<string, { key: string; summary: string }>; preconditionLabels?: Record<string, { key: string; summary: string }> };
 export type PlanningViewModel = { role: 'PLAN' | 'SET' | 'PRECONDITION'; issue: { id: string; key: string; summary: string };
   canEdit: boolean; parent: { id: string; key: string } | null; releases: { id: string; name: string }[];
@@ -149,7 +149,7 @@ export default function PlanningView({ model, onModel, onSelectRuns }: {
         {r.state === 'PUBLISHING' && <Notice>Publication is awaiting audit confirmation. Retry publishing this saved draft to recover it.</Notice>}
         {r.state === 'PUBLISHED' && r.canSign && r.nextStep && <SignBox step={r.nextStep} digest={r.digest} allowReject busy={busy}
           onSign={args => call('tm:planning:sign', { revisionId: r.revisionId, contentHash: r.digest, ...args })} />}
-        {r.state === 'PUBLISHED' && r.nextStep && !r.canSign && <Notice>Waiting for {r.nextStep.label} ({r.nextStep.role}).</Notice>}
+        {r.state === 'PUBLISHED' && r.nextStep && !r.canSign && <Notice>Waiting for {r.nextStep.label} ({r.nextStep.role}).{r.signBlocked === 'AUTHOR_CANNOT_SIGN' ? ' You wrote or published this revision, so someone else must sign it.' : ''}</Notice>}
         {r.canRecover && <button className="va-button" disabled={busy} onClick={() => call('tm:planning:sign', { revisionId: r.revisionId, contentHash: r.digest })}>Finish confirmed sign-off</button>}
         {model.role === 'PLAN' && r.state === 'SIGNED' && <>
           <button className="va-button" disabled={busy} onClick={() => select(r)}>Review run inputs</button>

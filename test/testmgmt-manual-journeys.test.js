@@ -20,8 +20,8 @@ function setup() {
   return { w, authoring: createTestAuthoring(w.deps), exec: createTestExecution(w.deps) };
 }
 async function publish(c, draft) {
-  let v = await c.authoring.saveDraft({ issueKey: 'VAT-11', expectedRevision: 0, draft }, actor(c.w, 'approver'));
-  v = await c.authoring.publish({ issueKey: 'VAT-11', expectedRevision: v.draft.revision }, actor(c.w, 'approver'));
+  let v = await c.authoring.saveDraft({ issueKey: 'VAT-11', expectedRevision: 0, draft }, actor(c.w, 'author'));
+  v = await c.authoring.publish({ issueKey: 'VAT-11', expectedRevision: v.draft.revision }, actor(c.w, 'author'));
   return v.versions[0];
 }
 
@@ -91,8 +91,8 @@ test('a signed plan and dataset flow through real execution proof into a frozen 
     dataset: { parameters: [{ name: 'v', type: 'TEXT' }], rows: [{ id: 'low', values: { v: '12' } }, { id: 'high', values: { v: '24' } }] } });
   await c.authoring.signVersion({ versionId: v.versionId, contentHash: v.digest, code: '123456' }, actor(c.w, 'approver'));
   let plan = await planning.saveDraft({ issueKey: 'VAT-21', expectedRevision: 0, draft: { members: [{ testIssueId: '11' }],
-    environment: 'Bench', configurations: [{ id: 'a', name: 'A' }], releaseId: '900' } }, actor(c.w, 'approver'));
-  plan = await planning.publish({ issueKey: 'VAT-21', expectedRevision: plan.draft.revision }, actor(c.w, 'approver'));
+    environment: 'Bench', configurations: [{ id: 'a', name: 'A' }], releaseId: '900' } }, actor(c.w, 'author'));
+  plan = await planning.publish({ issueKey: 'VAT-21', expectedRevision: plan.draft.revision }, actor(c.w, 'author'));
   let revision = plan.revisions[0];
   plan = await planning.sign({ revisionId: revision.revisionId, contentHash: revision.digest, code: '123456' }, actor(c.w, 'approver'));
   revision = plan.revisions[0];

@@ -22,8 +22,13 @@ import { parentOf } from './testAuthoring.js';
 
 export function createRunSigning(deps, { execution, view, isDone }) {
   async function context(runId) {
-    const run = await deps.readRun(runId);
+    let run = await deps.readRun(runId);
     if (!run) tmFail('NOT_FOUND');
+    // Nothing is signed over a step change that is not yet in the audit chain.
+    if (run.stepEventId) {
+      if (!await deps.settleRunSteps(runId, { now: deps.now() })) tmFail('RESULT_PENDING');
+      run = await deps.readRun(runId);
+    }
     const { issue, project } = await execution(run.executionIssueId);
     // Nobody signs or closes a run of a test they cannot open in Jira.
     await deps.readIssueAsUser(run.testIssueId);

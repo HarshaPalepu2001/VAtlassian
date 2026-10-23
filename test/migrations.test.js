@@ -128,7 +128,17 @@ test('v075-v087 stay in the list: they may already have run on a site', () => {
 test('migration ids are unique and include the manual-test schema through rerun provenance', () => {
   const ids = MIGRATIONS.map(m => m.id);
   assert.equal(new Set(ids).size, ids.length);
-  assert.equal(MIGRATIONS.at(-1).id, 'v136_baseline_node_link_policy');
+  assert.equal(MIGRATIONS.at(-1).id, 'v142_tm_run_step_prior');
+});
+
+test('v137-v142 record authors and pending step changes, one statement each', () => {
+  for (const [id, table, column] of [['v137_tm_draft_editors', 'tm_test_draft', 'editors'], ['v138_tm_version_authors', 'tm_test_version', 'authors'],
+    ['v139_tm_collection_draft_editors', 'tm_collection_draft', 'editors'], ['v140_tm_collection_revision_authors', 'tm_collection_revision', 'authors'],
+    ['v141_tm_run_step_event', 'tm_run', 'step_event_id'], ['v142_tm_run_step_prior', 'tm_run', 'step_prior']]) {
+    const sql = sqlFor(id);
+    assert.match(sql, new RegExp(`^ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${column} `), id);
+    assert.ok(!sql.includes(';'), id);
+  }
 });
 
 test('v108 drops Confluence governance and vault tables, columns, and tier config', () => {

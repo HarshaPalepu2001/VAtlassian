@@ -1092,5 +1092,13 @@ export const MIGRATIONS = [
   { id: 'v128_tm_audit_event_lookup', sql: 'CREATE INDEX IF NOT EXISTS idx_tm_audit_event ON va_audit (event_id)' },
   ...RETEST_MIGRATIONS.map((migration, index) => ({ ...migration, id: `v${129 + index}_${migration.id.replaceAll('-', '_')}` })),
   ...SOURCE_LINK_MIGRATIONS,
-  ...BASELINE_LINK_POLICY_MIGRATIONS
+  ...BASELINE_LINK_POLICY_MIGRATIONS,
+  // Authors never sign their own test version or plan revision (testmgmt/authorship.js).
+  { id: 'v137_tm_draft_editors', sql: 'ALTER TABLE tm_test_draft ADD COLUMN IF NOT EXISTS editors TEXT NULL' },
+  { id: 'v138_tm_version_authors', sql: 'ALTER TABLE tm_test_version ADD COLUMN IF NOT EXISTS authors TEXT NULL' },
+  { id: 'v139_tm_collection_draft_editors', sql: 'ALTER TABLE tm_collection_draft ADD COLUMN IF NOT EXISTS editors TEXT NULL' },
+  { id: 'v140_tm_collection_revision_authors', sql: 'ALTER TABLE tm_collection_revision ADD COLUMN IF NOT EXISTS authors TEXT NULL' },
+  // A step-result change is effective only with its audit entry (usecases/testExecution.js#saveSteps).
+  { id: 'v141_tm_run_step_event', sql: 'ALTER TABLE tm_run ADD COLUMN IF NOT EXISTS step_event_id CHAR(32) NULL' },
+  { id: 'v142_tm_run_step_prior', sql: 'ALTER TABLE tm_run ADD COLUMN IF NOT EXISTS step_prior MEDIUMTEXT NULL' }
 ];

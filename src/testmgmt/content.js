@@ -87,6 +87,7 @@ export function runSteps(versionSteps, recorded) {
       actual: text(r.actual), comment: text(r.comment),
       evidence: Array.isArray(r.evidence) ? r.evidence : [],
       recordedBy: r.recordedBy ?? null, recordedAt: r.recordedAt ?? null,
+      ...(Array.isArray(r.history) && r.history.length ? { history: r.history } : {}),
       ...(step.iterationId ? { iterationId: step.iterationId, sourceStepId: step.sourceStepId } : {})
     };
   });
@@ -97,6 +98,11 @@ export function runSteps(versionSteps, recorded) {
  * context, every step result with its evidence hashes, and the computed result.
  * Step timestamps are left out on purpose: who recorded a step is part of the
  * record, the millisecond is not something a signer can attest to.
+ *
+ * A step whose recorded result was later changed also carries what it said
+ * before, who changed it and why (`history`), so the signer signs the
+ * corrections too. A step never changed has no `history` key, which keeps the
+ * digest of every run recorded before corrections were kept.
  */
 export function runContent(run, steps, result) {
   return {
@@ -110,7 +116,9 @@ export function runContent(run, steps, result) {
     steps: steps.map(s => ({ id: s.id, status: s.status, actual: s.actual, comment: s.comment,
       evidence: (s.evidence ?? []).map(e => ({ attachmentId: String(e.attachmentId), sha256: e.sha256, size: Number(e.size),
         ...(e.retained ? { retained: e.retained, mimeType: e.mimeType ?? 'application/octet-stream' } : {}) })),
-      recordedBy: s.recordedBy })),
+      recordedBy: s.recordedBy,
+      ...(s.history?.length ? { history: s.history.map(h => ({ kind: h.kind, status: h.status ?? null, actual: h.actual ?? null,
+        comment: h.comment ?? null, recordedBy: h.recordedBy ?? null, evidence: h.evidence ?? null, changedBy: h.changedBy, reason: h.reason })) } : {}) })),
     result
   };
 }

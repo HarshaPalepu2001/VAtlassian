@@ -51,11 +51,11 @@ export function tmWorld({ chain = DEFAULT_RUN_CHAIN, versionChain = DEFAULT_VERS
     },
     // drafts
     readDraft: async (id) => structuredClone(w.drafts.get(String(id)) ?? null),
-    saveDraft: async ({ testIssueId, content, expectedRevision, actor }) => {
+    saveDraft: async ({ testIssueId, content, expectedRevision, actor, editors }) => {
       const cur = w.drafts.get(String(testIssueId));
       if ((cur?.revision ?? 0) !== expectedRevision) return null;
       const revision = (cur?.revision ?? 0) + 1;
-      w.drafts.set(String(testIssueId), { content: structuredClone(content), revision, updatedAt: clock, updatedBy: actor });
+      w.drafts.set(String(testIssueId), { content: structuredClone(content), revision, updatedAt: clock, updatedBy: actor, editors: structuredClone(editors ?? []) });
       return revision;
     },
     // versions
@@ -108,12 +108,28 @@ export function tmWorld({ chain = DEFAULT_RUN_CHAIN, versionChain = DEFAULT_VERS
         || r.proofProblem
         || (r.state === 'SIGNED' && r.result === 'FAILED' && r.bugState !== 'CREATED')),
     listRunsForTest: async (id) => [...w.runs.values()].filter(r => r.testIssueId === String(id)).map(r => structuredClone(r)),
-    updateRunSteps: async ({ runId, expectedRevision, steps, result }) => {
-      const r = w.runs.get(runId); if (!r || r.revision !== expectedRevision || r.state !== 'IN_PROGRESS') return false;
-      Object.assign(r, { steps: structuredClone(steps), result, revision: r.revision + 1 }); return true;
+    updateRunSteps: async ({ runId, expectedRevision, steps, result, now, eventId, prior }) => {
+      const r = w.runs.get(runId); if (!r || r.revision !== expectedRevision || r.state !== 'IN_PROGRESS' || r.stepEventId) return false;
+      Object.assign(r, { steps: structuredClone(steps), result, revision: r.revision + 1, updatedAt: now, stepEventId: eventId, stepPrior: structuredClone(prior) }); return true;
+    },
+    confirmRunSteps: async ({ runId, eventId }) => {
+      const r = w.runs.get(runId); if (!r || r.stepEventId !== eventId) return false;
+      Object.assign(r, { stepEventId: null, stepPrior: null }); return true;
+    },
+    settleRunSteps: async (runId, { now = clock, abandoned = false } = {}) => {
+      const r = w.runs.get(runId);
+      if (!r?.stepEventId) return true;
+      const event = w.audit.find(e => e.eventType === 'TM_STEP_RECORDED' && e.eventId?.toString('hex') === r.stepEventId);
+      if (event) {
+        if (event.payload.runId !== runId || event.payload.revision !== r.revision) throw Object.assign(new Error('changed'), { reason: 'CONTENT_CHANGED' });
+        Object.assign(r, { stepEventId: null, stepPrior: null }); return true;
+      }
+      if (!abandoned && now - (r.updatedAt ?? 0) <= 5 * 60_000) return false;
+      Object.assign(r, { steps: structuredClone(r.stepPrior.steps), result: r.stepPrior.result, revision: r.revision + 1, stepEventId: null, stepPrior: null });
+      return true;
     },
     setRunState: async ({ runId, from, to, expectedRevision, frozenDigest }) => {
-      const r = w.runs.get(runId); if (!r || r.state !== from || r.revision !== expectedRevision) return false;
+      const r = w.runs.get(runId); if (!r || r.state !== from || r.revision !== expectedRevision || r.stepEventId) return false;
       Object.assign(r, { state: to, revision: r.revision + 1, frozenDigest: r.frozenDigest ?? frozenDigest ?? null }); return true;
     },
     unfreezeRun: async ({ runId, from }) => {

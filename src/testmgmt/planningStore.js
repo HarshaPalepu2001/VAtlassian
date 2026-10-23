@@ -23,26 +23,28 @@ export function createPlanningStore(query = executeQuery) {
     return result.data;
   };
   const draftFrom = row => row ? { issueId: String(row.issue_id), projectId: String(row.project_id), role: row.role,
-    content: parse(row.content), revision: Number(row.revision), updatedAt: Number(row.updated_at), updatedBy: row.updated_by } : null;
+    content: parse(row.content), revision: Number(row.revision), updatedAt: Number(row.updated_at), updatedBy: row.updated_by,
+    editors: row.editors == null ? null : parse(row.editors) } : null;
   const revisionFrom = row => row ? { revisionId: String(row.revision_id), issueId: String(row.issue_id), projectId: String(row.project_id), role: row.role,
     revisionNo: Number(row.revision_no), draftRevision: Number(row.draft_revision), content: parse(row.content), digest: row.digest,
     chain: parse(row.chain), chainDigest: row.chain_digest, state: row.state, publishedBy: row.published_by,
-    publishedAt: Number(row.published_at), signedAt: row.signed_at == null ? null : Number(row.signed_at) } : null;
+    publishedAt: Number(row.published_at), signedAt: row.signed_at == null ? null : Number(row.signed_at),
+    authors: row.authors == null ? null : parse(row.authors) } : null;
   async function readCollectionDraft(key) {
     return draftFrom((await rows('SELECT * FROM tm_collection_draft WHERE issue_id = ?', [issueId(key)]))[0]);
   }
-  async function saveCollectionDraft({ issueId: key, projectId, role, content, expectedRevision, now, actor }) {
+  async function saveCollectionDraft({ issueId: key, projectId, role, content, expectedRevision, now, actor, editors }) {
     if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) tmFail('INVALID_INPUT');
     if (expectedRevision === 0) {
       try {
-        await q(`INSERT INTO tm_collection_draft (issue_id, project_id, role, content, revision, updated_at, updated_by)
-          VALUES (?, ?, ?, ?, 1, ?, ?)`, [issueId(key), issueId(projectId), role, JSON.stringify(content), now, actor]);
+        await q(`INSERT INTO tm_collection_draft (issue_id, project_id, role, content, revision, updated_at, updated_by, editors)
+          VALUES (?, ?, ?, ?, 1, ?, ?, ?)`, [issueId(key), issueId(projectId), role, JSON.stringify(content), now, actor, JSON.stringify(editors ?? [])]);
         return 1;
       } catch (error) { if (error.duplicate) return null; throw error; }
     }
-    const result = await q(`UPDATE tm_collection_draft SET content = ?, revision = revision + 1, updated_at = ?, updated_by = ?
+    const result = await q(`UPDATE tm_collection_draft SET content = ?, revision = revision + 1, updated_at = ?, updated_by = ?, editors = ?
       WHERE issue_id = ? AND project_id = ? AND role = ? AND revision = ?`,
-    [JSON.stringify(content), now, actor, issueId(key), issueId(projectId), role, expectedRevision]);
+    [JSON.stringify(content), now, actor, JSON.stringify(editors ?? []), issueId(key), issueId(projectId), role, expectedRevision]);
     return changes(result) === 1 ? expectedRevision + 1 : null;
   }
   async function listCollectionRevisions(key) {
@@ -55,11 +57,11 @@ export function createPlanningStore(query = executeQuery) {
   async function insertCollectionRevision(r) {
     try {
       const result = await q(`INSERT INTO tm_collection_revision (revision_id, issue_id, project_id, role, revision_no,
-        draft_revision, content, digest, chain, chain_digest, state, published_by, published_at)
-        SELECT ?, issue_id, project_id, role, ?, revision, ?, ?, ?, ?, 'PUBLISHING', ?, ?
+        draft_revision, content, digest, chain, chain_digest, state, published_by, published_at, authors)
+        SELECT ?, issue_id, project_id, role, ?, revision, ?, ?, ?, ?, 'PUBLISHING', ?, ?, ?
         FROM tm_collection_draft WHERE issue_id = ? AND project_id = ? AND role = ? AND revision = ?`,
       [id(r.revisionId), r.revisionNo, JSON.stringify(r.content), r.digest, JSON.stringify(r.chain), r.chainDigest, r.publishedBy,
-        r.publishedAt, issueId(r.issueId), issueId(r.projectId), r.role, r.draftRevision]);
+        r.publishedAt, JSON.stringify(r.authors), issueId(r.issueId), issueId(r.projectId), r.role, r.draftRevision]);
       return changes(result) === 1;
     } catch (error) { if (error.duplicate) return false; throw error; }
   }

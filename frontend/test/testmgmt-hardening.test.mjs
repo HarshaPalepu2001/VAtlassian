@@ -254,3 +254,42 @@ test('a backend audit or persistence failure keeps the Add run retry identity', 
   assert.equal(container.querySelector('input[placeholder="e.g. VAT-11"]').disabled, true);
   assert.ok(window.sessionStorage.getItem('va-tm-add-run:12'));
 });
+function openRunModel() {
+  const m = executionModel(), run = m.runs[0];
+  Object.assign(m, { canEdit: true }); m.issue.done = false;
+  Object.assign(run, { state: 'IN_PROGRESS', result: 'FAILED', canFinish: false, bug: null, nextStep: { ...chain.steps[0], index: 0 } });
+  run.steps[0].actual = 'Overheats';
+  return m;
+}
+const typeReason = (text) => act(() => { const el = [...container.querySelectorAll('label')].find(l => l.textContent.startsWith('Reason for change')).querySelector('textarea');
+  Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set.call(el, text);
+  el.dispatchEvent(new window.Event('input', { bubbles: true })); el.dispatchEvent(new window.Event('change', { bubbles: true })); });
+test('changing a recorded step result asks for a reason and sends it', async () => {
+  const calls = [];
+  await mount(ExecutionView, { model: openRunModel(), onModel: () => {} }, async (key, payload) => { calls.push({ key, payload }); return openRunModel(); });
+  await act(() => [...container.querySelectorAll('button')].find(b => b.textContent === 'Open runner').click());
+  const passed = () => [...container.querySelectorAll('button')].find(b => b.textContent === 'Passed');
+  const remove = () => [...container.querySelectorAll('button')].find(b => b.textContent === 'Remove');
+  assert.equal(passed().disabled, true, 'a recorded result cannot be changed without a reason');
+  assert.equal(remove().disabled, true, 'evidence cannot be removed without a reason');
+  await typeReason('Wrong bench wiring');
+  assert.equal(passed().disabled, false);
+  await act(() => passed().click()); await flush();
+  const sent = calls.find(c => c.key === 'tm:run:recordStep');
+  assert.equal(sent.payload.status, 'PASSED');
+  assert.equal(sent.payload.reason, 'Wrong bench wiring');
+});
+test('earlier step entries stay readable after a change', async () => {
+  const m = executionModel();
+  m.runs[0].steps[0].history = [{ kind: 'RESULT', status: 'PASSED', actual: 'Looked fine', comment: '', recordedBy: 'tester', changedBy: 'tester', changedAt: Date.now(), reason: 'Re-measured' },
+    { kind: 'EVIDENCE_REMOVED', evidence: { attachmentId: '49', sha256: 'c'.repeat(64) }, changedBy: 'tester', changedAt: Date.now(), reason: 'Wrong file' }];
+  await mount(ExecutionView, { model: m, onModel: () => {} });
+  await act(() => [...container.querySelectorAll('button')].find(b => b.textContent === 'Show steps').click());
+  const history = container.querySelector('[aria-label="Changes to step 1"]');
+  for (const text of ['Looked fine', 'Re-measured', 'Evidence removed', 'cccccccccccc', 'Wrong file']) assert.ok(history.textContent.includes(text), text);
+});
+test('the author of a published version is told someone else must sign it', async () => {
+  const m = model(); Object.assign(m.versions[0], { canSign: false, signBlocked: 'AUTHOR_CANNOT_SIGN' });
+  await mount(TestView, { model: m, onModel: () => {} });
+  assert.match(container.textContent, /You wrote or published this version, so someone else must sign it/);
+});

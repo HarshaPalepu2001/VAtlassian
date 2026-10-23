@@ -20,6 +20,7 @@ import { verifyVersionProof, verifyRunProof } from '../testmgmt/proof.js';
 import { requestReads } from '../testmgmt/requestReads.js';
 
 const MAX_LABEL = 255;
+const MAX_REASON = 1000;
 const isDone = (issue) => String(issue?.fields?.status?.statusCategory?.key ?? '').toLowerCase() === 'done';
 
 export function computedResult(steps) {
@@ -80,7 +81,7 @@ export function createTestExecution(deps) {
       let canSign = false;
       const nextRole = run.state === 'IN_PROGRESS' ? run.chain.steps[0].role
         : run.state === 'SIGNING' && position.next != null ? position.step.role : null;
-      if (nextRole && !hidden && planningVisible && sourcesVisible && !pending) {
+      if (nextRole && !hidden && planningVisible && sourcesVisible && !pending && !run.stepEventId) {
         canSign = !separationProblem(run.chain, own, actor.accountId)
           && await deps.isEligibleFor({ accountId: actor.accountId, projectId: project.projectId,
             issueTypeId: issue.fields?.issuetype?.id, role: nextRole });
@@ -88,7 +89,7 @@ export function createTestExecution(deps) {
       const result = computedResult(steps);
       const bug = bugs.find(b => b.runId === run.runId) ?? null;
       out.push({
-        runId: run.runId, state: run.state, result, revision: run.revision,
+        runId: run.runId, state: run.state, result, revision: run.revision, resultPending: !!run.stepEventId,
         test: { id: run.testIssueId, key: test?.key ?? null, summary: test?.fields?.summary ?? null, hidden },
         version: { versionId: run.testVersionId, versionNo: version?.versionNo ?? null, digest: run.testDigest },
         environment: run.environment, configuration: run.configuration, release: run.release,
@@ -208,22 +209,46 @@ export function createTestExecution(deps) {
     if (!await deps.hasIssuePermission(issue.id, 'EDIT_ISSUES')) tmFail('NO_EDIT_PERMISSION');
     if (run.state !== 'IN_PROGRESS') tmFail('RUN_NOT_OPEN');
     if (isDone(issue)) tmFail('EXECUTION_DONE');
+    if (run.stepEventId && !await deps.settleRunSteps(run.runId, { now: deps.now() })) tmFail('RESULT_PENDING');
     // Results are recorded only by someone who can open the test in Jira.
     await deps.readIssueAsUser(run.testIssueId);
     const version = await deps.readVersion(run.testVersionId);
     return { run, issue, version };
   }
 
+  /**
+   * Recorded results are never overwritten without trace (Part 11 §11.10(e),
+   * ALCOA+ "original"). A change is written together with what it replaced
+   * (the step's `history`, and the run's prior results until confirmed) and
+   * takes effect only once its audit event, carrying the old and new values
+   * and the reason, is in the audit chain. No audit event, no change.
+   */
   async function saveSteps(run, issue, steps, actor, event) {
+    const eventId = deps.newHexId();
     const ok = await deps.updateRunSteps({ runId: run.runId, expectedRevision: run.revision, steps,
-      result: computedResult(steps), now: deps.now() });
+      result: computedResult(steps), now: deps.now(), eventId, prior: { steps: run.steps, result: run.result } });
     if (!ok) tmFail('STALE');
-    await deps.tryAudit({ eventType: 'TM_STEP_RECORDED', actorAccountId: actor.accountId, issueId: Number(issue.id),
-      payload: { runId: run.runId, ...event } });
+    try {
+      await deps.audit({ eventId: Buffer.from(eventId, 'hex'), eventType: 'TM_STEP_RECORDED', actorAccountId: actor.accountId,
+        issueId: Number(issue.id), payload: { runId: run.runId, revision: run.revision + 1, ...event } });
+    } catch {
+      await deps.settleRunSteps(run.runId, { now: deps.now(), abandoned: true }).catch(() => {});
+      tmFail('LEDGER_UNAVAILABLE');
+    }
+    // The audit event decides the change from here on: an unconfirmed one is
+    // confirmed from it when the run is next opened (settleRunSteps).
+    await deps.confirmRunSteps({ runId: run.runId, eventId }).catch(() => {});
     return view(issue.key, actor);
   }
 
-  async function recordStep({ runId, expectedRevision, stepId, status, actual = '', comment = '' }, actor) {
+  function changeReason(reason) {
+    const text = String(reason ?? '').trim();
+    if (!text) tmFail('CHANGE_REASON_REQUIRED');
+    if (text.length > MAX_REASON) tmFail('INVALID_INPUT');
+    return text;
+  }
+
+  async function recordStep({ runId, expectedRevision, stepId, status, actual = '', comment = '', reason = null }, actor) {
     const { run, issue, version } = await openRun(runId);
     if (run.revision !== Number(expectedRevision)) tmFail('STALE');
     if (!isStepStatus(status)) tmFail('INVALID_INPUT');
@@ -231,9 +256,15 @@ export function createTestExecution(deps) {
     const step = steps.find(s => s.id === stepId);
     if (!step) tmFail('INVALID_INPUT');
     if (String(actual).length > 4000 || String(comment).length > 4000) tmFail('INVALID_INPUT');
-    const before = step.status;
-    Object.assign(step, { status, actual: String(actual), comment: String(comment), recordedBy: actor.accountId, recordedAt: deps.now() });
-    return saveSteps(run, issue, steps, actor, { stepId, from: before, to: status });
+    const before = { status: step.status, actual: step.actual, comment: step.comment, recordedBy: step.recordedBy, recordedAt: step.recordedAt };
+    const after = { status, actual: String(actual), comment: String(comment) };
+    const recorded = before.recordedBy != null;
+    if (recorded && before.status === after.status && before.actual === after.actual && before.comment === after.comment) return view(issue.key, actor);
+    // The first result needs no reason; changing a recorded one always does.
+    const why = recorded ? changeReason(reason) : null;
+    if (recorded) step.history = [...(step.history ?? []), { kind: 'RESULT', ...before, changedBy: actor.accountId, changedAt: deps.now(), reason: why }];
+    Object.assign(step, { ...after, recordedBy: actor.accountId, recordedAt: deps.now() });
+    return saveSteps(run, issue, steps, actor, { stepId, from: recorded ? before : { status: before.status }, to: after, ...(why ? { reason: why } : {}) });
   }
 
   async function attachEvidence({ runId, expectedRevision, stepId, attachmentId }, actor) {
@@ -251,14 +282,19 @@ export function createTestExecution(deps) {
     return saveSteps(run, issue, steps, actor, { stepId, evidenceAdded: { attachmentId: String(attachment.id), sha256: retained.sha256, size: retained.size } });
   }
 
-  async function removeEvidence({ runId, expectedRevision, stepId, attachmentId }, actor) {
+  async function removeEvidence({ runId, expectedRevision, stepId, attachmentId, reason = null }, actor) {
     const { run, issue, version } = await openRun(runId);
     if (run.revision !== Number(expectedRevision)) tmFail('STALE');
     const steps = runSteps(run.resolvedSteps ?? version.content.steps, run.steps);
     const step = steps.find(s => s.id === stepId);
     if (!step) tmFail('INVALID_INPUT');
-    step.evidence = step.evidence.filter(e => String(e.attachmentId) !== String(attachmentId));
-    return saveSteps(run, issue, steps, actor, { stepId, evidenceRemoved: String(attachmentId) });
+    const removed = step.evidence.find(e => String(e.attachmentId) === String(attachmentId));
+    if (!removed) return view(issue.key, actor);
+    const why = changeReason(reason);
+    const evidence = { attachmentId: String(removed.attachmentId), sha256: removed.sha256, size: Number(removed.size), addedBy: removed.addedBy ?? null };
+    step.evidence = step.evidence.filter(e => e !== removed);
+    step.history = [...(step.history ?? []), { kind: 'EVIDENCE_REMOVED', evidence, changedBy: actor.accountId, changedAt: deps.now(), reason: why }];
+    return saveSteps(run, issue, steps, actor, { stepId, evidenceRemoved: evidence, reason: why });
   }
 
   const signing = createRunSigning(deps, { execution, view, isDone });

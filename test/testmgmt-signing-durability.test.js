@@ -15,8 +15,8 @@ async function fixture({ signed = true } = {}) {
   w.grants.push({ accountId: 'approver', role: 'APPROVER' }, { accountId: 'tester', role: 'TESTER' }, { accountId: 'qa', role: 'QA' });
   const authoring = createTestAuthoring(w.deps), exec = createTestExecution(w.deps);
   let v = await authoring.saveDraft({ issueKey: 'VAT-11', expectedRevision: 0,
-    draft: { steps: [{ id: 's1', action: 'Act', data: '', expected: 'Expected' }] } }, who(w, 'approver'));
-  v = await authoring.publish({ issueKey: 'VAT-11', expectedRevision: v.draft.revision }, who(w, 'approver'));
+    draft: { steps: [{ id: 's1', action: 'Act', data: '', expected: 'Expected' }] } }, who(w, 'author'));
+  v = await authoring.publish({ issueKey: 'VAT-11', expectedRevision: v.draft.revision }, who(w, 'author'));
   const version = v.versions[0];
   if (signed) await authoring.signVersion({ versionId: version.versionId, code: '123456', contentHash: version.digest }, who(w, 'approver'));
   return { w, authoring, exec, version };
@@ -147,13 +147,13 @@ test('a version cannot be signed while its publication audit is pending', async 
   const c = await fixture({ signed: false });
   let draft = await c.authoring.view('VAT-11', who(c.w, 'approver'));
   await c.authoring.saveDraft({ issueKey: 'VAT-11', expectedRevision: draft.draft.revision,
-    draft: { steps: [{ id: 's1', action: 'Changed action', expected: 'Expected' }] } }, who(c.w, 'approver'));
+    draft: { steps: [{ id: 's1', action: 'Changed action', expected: 'Expected' }] } }, who(c.w, 'author'));
   const audit = c.w.deps.audit;
   let entered, fail;
   const reached = new Promise(resolve => { entered = resolve; });
   const pending = new Promise((_resolve, reject) => { fail = reject; });
   c.w.deps.audit = async e => { if (e.eventType === 'TM_VERSION_PUBLISHED') { entered(); await pending; } return audit(e); };
-  const publishing = c.authoring.publish({ issueKey: 'VAT-11', expectedRevision: 2 }, who(c.w, 'approver')).catch(e => e);
+  const publishing = c.authoring.publish({ issueKey: 'VAT-11', expectedRevision: 2 }, who(c.w, 'author')).catch(e => e);
   await reached;
   const version = [...c.w.versions.values()].find(v => v.versionNo === 2);
   let refused = false;

@@ -9,6 +9,7 @@ const usecase = await import('../src/usecases/testPlanning.js').catch(() => ({})
 const normalise = (...args) => { assert.equal(typeof module.normaliseDataset, 'function', 'dataset normalization exists'); return module.normaliseDataset(...args); };
 const expand = (...args) => { assert.equal(typeof module.expandDatasetSteps, 'function', 'bounded expansion exists'); return module.expandDatasetSteps(...args); };
 const actor = { accountId: 'author' };
+const signer = { accountId: 'approver' };
 const rowDataset = { parameters: [{ name: 'voltage', type: 'TEXT' }], rows: [{ id: 'low', values: { voltage: '12 V' } }, { id: 'high', values: { voltage: '24 V' } }] };
 const steps = [{ id: 's1', action: 'Apply {{voltage}}', data: '{{voltage}}', expected: 'Works at {{voltage}}' }];
 const create = (w) => { assert.equal(typeof usecase.createTestPlanning, 'function', 'planning usecase exists'); return usecase.createTestPlanning(w.deps); };
@@ -83,12 +84,12 @@ test('hidden or cross-project members are rejected before saving and never discl
 test('signed plan selection freezes ordered versions, release/configuration and precondition snapshot', async () => {
   const w = planningWorld();
   const pre = await published(w, 'VAT-23', { text: 'Calibrated supply', members: [], configurations: [], releaseId: null });
-  let preSigned = await pre.uc.sign({ revisionId: pre.revision.revisionId, contentHash: pre.revision.digest, code: '123456' }, actor);
+  let preSigned = await pre.uc.sign({ revisionId: pre.revision.revisionId, contentHash: pre.revision.digest, code: '123456' }, signer);
   assert.equal(preSigned.revisions[0].state, 'SIGNED');
   const { uc, revision } = await published(w, 'VAT-21', { preconditions: [{ issueId: '23', revisionId: pre.revision.revisionId }] });
   assert.equal(revision.content.members[0].versionId, w.version.versionId);
   await assert.rejects(uc.selectRuns({ revisionId: revision.revisionId, contentHash: revision.digest }, actor), { reason: 'PLAN_NOT_SIGNED' });
-  await uc.sign({ revisionId: revision.revisionId, contentHash: revision.digest, code: '123456' }, actor);
+  await uc.sign({ revisionId: revision.revisionId, contentHash: revision.digest, code: '123456' }, signer);
   w.version = { ...w.version, versionId: 'b'.repeat(32), versionNo: 2 };
   const selected = await uc.selectRuns({ revisionId: revision.revisionId, contentHash: revision.digest }, actor);
   assert.equal(selected.runs[0].testVersionId, 'a'.repeat(32));
@@ -102,7 +103,7 @@ test('signed plan selection freezes ordered versions, release/configuration and 
 
 test('a terminal collection cannot select runs from unaudited or wrong-role signatures', async () => {
   const w = planningWorld(); const { uc, revision } = await published(w);
-  await uc.sign({ revisionId: revision.revisionId, contentHash: revision.digest, code: '123456' }, actor);
+  await uc.sign({ revisionId: revision.revisionId, contentHash: revision.digest, code: '123456' }, signer);
   w.signatures[0].auditSeq = null;
   await assert.rejects(uc.selectRuns({ revisionId: revision.revisionId, contentHash: revision.digest }, actor), { reason: 'CONTENT_CHANGED' });
 });
@@ -110,10 +111,10 @@ test('a terminal collection cannot select runs from unaudited or wrong-role sign
 test('uncertain publication and signature writes cannot make a runnable plan and can recover', async () => {
   const w = planningWorld(); const { uc, revision } = await published(w);
   w.failState = true;
-  await assert.rejects(uc.sign({ revisionId: revision.revisionId, contentHash: revision.digest, code: '123456' }, actor), { reason: 'SIGNATURE_STATE_PENDING' });
+  await assert.rejects(uc.sign({ revisionId: revision.revisionId, contentHash: revision.digest, code: '123456' }, signer), { reason: 'SIGNATURE_STATE_PENDING' });
   await assert.rejects(uc.selectRuns({ revisionId: revision.revisionId, contentHash: revision.digest }, actor), { reason: 'PLAN_NOT_SIGNED' });
   w.failState = false;
-  const recovered = await uc.sign({ revisionId: revision.revisionId, contentHash: revision.digest, code: '123456' }, actor);
+  const recovered = await uc.sign({ revisionId: revision.revisionId, contentHash: revision.digest, code: '123456' }, signer);
   assert.equal(recovered.revisions[0].state, 'SIGNED');
   assert.equal(w.signatures.length, 1);
   w.hidden.add('11');
@@ -144,7 +145,7 @@ test('people resolve Jira keys and latest signed preconditions without typing in
   const found = await uc.lookup({ issueKey: 'VAT-11', collectionKey: 'VAT-21', kind: 'TEST' }, actor);
   assert.equal(found.key, 'VAT-11'); assert.equal(found.latestSigned.versionNo, 1);
   const pre = await published(w, 'VAT-23', { text: 'Supply ready', members: [], releaseId: null, configurations: [] });
-  await pre.uc.sign({ revisionId: pre.revision.revisionId, contentHash: pre.revision.digest, code: '123456' }, actor);
+  await pre.uc.sign({ revisionId: pre.revision.revisionId, contentHash: pre.revision.digest, code: '123456' }, signer);
   const saved = await uc.saveDraft({ issueKey: 'VAT-21', expectedRevision: 0, draft: { members: [{ testIssueKey: 'VAT-11' }],
     preconditions: [{ issueKey: 'VAT-23' }], environment: 'Bench', configurations: [{ id: 'a', name: 'ECU A' }], releaseId: '900' } }, actor);
   assert.equal(saved.draft.members[0].testIssueId, '11'); assert.equal(saved.draft.members[0].testIssueKey, 'VAT-11');
@@ -157,7 +158,7 @@ test('people resolve Jira keys and latest signed preconditions without typing in
 
 test('run planning validation marks changed drafts stale without rewriting the signed snapshot', async () => {
   const w = planningWorld(); const { uc, revision } = await published(w);
-  await uc.sign({ revisionId: revision.revisionId, contentHash: revision.digest, code: '123456' }, actor);
+  await uc.sign({ revisionId: revision.revisionId, contentHash: revision.digest, code: '123456' }, signer);
   const selection = await uc.selectRuns({ revisionId: revision.revisionId, contentHash: revision.digest }, actor);
   const run = { planningSnapshot: { plan: selection.plan, preconditions: [] } };
   assert.equal(typeof uc.validateRunPlanningSnapshot, 'function');
@@ -174,7 +175,7 @@ test('plan environment limits match persisted execution fields and rejected sign
   await assert.rejects(uc.saveDraft({ issueKey: 'VAT-21', expectedRevision: 0, draft: { environment: 'x'.repeat(256) } }, actor), { reason: 'INVALID_INPUT' });
   const { revision } = await published(w);
   w.deps.isEligibleFor = async () => false;
-  await assert.rejects(uc.sign({ revisionId: revision.revisionId, contentHash: revision.digest, code: '123456' }, actor), { reason: 'NOT_ELIGIBLE' });
+  await assert.rejects(uc.sign({ revisionId: revision.revisionId, contentHash: revision.digest, code: '123456' }, signer), { reason: 'NOT_ELIGIBLE' });
   assert.equal(w.signatures.length, 0);
 });
 
@@ -186,7 +187,7 @@ test('an in-flight publication audit blocks concurrent sign and an audit failure
   const publishing = uc.publish({ issueKey: 'VAT-21', expectedRevision: saved.draft.revision }, actor);
   await new Promise(resolve => setImmediate(resolve));
   const pending = [...w.revisions.values()][0]; assert.equal(pending.state, 'PUBLISHING');
-  await assert.rejects(uc.sign({ revisionId: pending.revisionId, contentHash: pending.digest, code: '123456' }, actor), { reason: 'COLLECTION_NOT_PUBLISHED' });
+  await assert.rejects(uc.sign({ revisionId: pending.revisionId, contentHash: pending.digest, code: '123456' }, signer), { reason: 'COLLECTION_NOT_PUBLISHED' });
   assert.equal(w.signatures.length, 0); release(); await publishing;
   assert.equal(w.revisions.get(pending.revisionId).state, 'PUBLISHED');
   w.deps.audit = original;
@@ -205,6 +206,6 @@ test('pending audit signature promotion blocks the chain and offers recovery', a
   w.deps.hasPendingSignatures = async () => true;
   const view = await uc.view('VAT-21', actor);
   assert.equal(view.revisions[0].canSign, false); assert.equal(view.revisions[0].canRecover, true);
-  await assert.rejects(uc.sign({ revisionId: revision.revisionId, contentHash: revision.digest, code: '123456' }, actor), { reason: 'SIGNATURE_PENDING' });
+  await assert.rejects(uc.sign({ revisionId: revision.revisionId, contentHash: revision.digest, code: '123456' }, signer), { reason: 'SIGNATURE_PENDING' });
   assert.equal(w.signatures.length, 0);
 });

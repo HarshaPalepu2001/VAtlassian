@@ -189,6 +189,7 @@ function Runner({ run, model, busy, editable, call }: {
       {run.steps.map(step => <StepRow key={step.id} run={run} step={step} model={model} busy={busy} editable={editable} call={call} />)}
 
       {run.state === 'IN_PROGRESS' && run.signabilityProblem && <Notice>{PROBLEMS[run.signabilityProblem] ?? run.signabilityProblem}</Notice>}
+      {run.resultPending && <Notice>A result change is waiting for its audit record. Refresh in a moment.</Notice>}
       {run.nextStep && !run.canSign && (run.state === 'SIGNING' || !run.signabilityProblem) && (
         <Notice>Waiting for: {run.nextStep.label} ({run.nextStep.role}).</Notice>
       )}
@@ -226,8 +227,14 @@ function StepRow({ run, step, model, busy, editable, call }: {
   const [actual, setActual] = useState(step.actual);
   const [comment, setComment] = useState(step.comment);
   const [attachmentId, setAttachmentId] = useState('');
-  const record = (status: string) => call('tm:run:recordStep', { runId: run.runId, expectedRevision: run.revision,
-    stepId: step.id, status, actual, comment });
+  const [reason, setReason] = useState('');
+  // A recorded result is changed only with a reason; the earlier one stays in the history.
+  const recorded = step.recordedBy != null;
+  const changes = (status: string) => status !== step.status || actual !== step.actual || comment !== step.comment;
+  const needsReason = (status: string) => recorded && changes(status) && !reason.trim();
+  const done = (ok: boolean) => { if (ok) setReason(''); return ok; };
+  const record = async (status: string) => done(await call('tm:run:recordStep', { runId: run.runId, expectedRevision: run.revision,
+    stepId: step.id, status, actual, comment, ...(recorded ? { reason } : {}) }));
   return (
     <div className="va-card" style={{ padding: 10, marginBottom: 8 }}>
       <p><strong>Step {step.position}.</strong> {step.action}</p>
@@ -242,9 +249,13 @@ function StepRow({ run, step, model, busy, editable, call }: {
             <label className="va-field"><span className="va-label">Comment (required for Not applicable)</span>
               <textarea className="va-input" rows={2} value={comment} onChange={e => setComment(e.target.value)} disabled={busy} /></label>
           </div>
+          {(recorded || step.evidence.length > 0) && (
+            <label className="va-field"><span className="va-label">Reason for change (needed to change a recorded result or remove evidence)</span>
+              <textarea className="va-input" rows={1} value={reason} onChange={e => setReason(e.target.value)} disabled={busy} /></label>
+          )}
           <div className="va-row" style={{ gap: 6 }}>
             {STATUSES.map(s => (
-              <button key={s} className={`va-button${step.status === s ? ' va-button--primary' : ''}`} disabled={busy} onClick={() => record(s)}>{words(s)}</button>
+              <button key={s} className={`va-button${step.status === s ? ' va-button--primary' : ''}`} disabled={busy || needsReason(s)} onClick={() => record(s)}>{words(s)}</button>
             ))}
           </div>
         </>
@@ -258,10 +269,23 @@ function StepRow({ run, step, model, busy, editable, call }: {
         <p key={e.attachmentId} style={{ fontSize: 12 }}>
           📎 {e.filename} · SHA-256 <code>{e.sha256.slice(0, 12)}…</code>
           <EvidenceDownload issueKey={model.issue.key} runId={run.runId} stepId={step.id} evidence={e} disabled={busy} />
-          {editable && <button className="va-button" disabled={busy}
-            onClick={() => call('tm:run:removeEvidence', { runId: run.runId, expectedRevision: run.revision, stepId: step.id, attachmentId: e.attachmentId })}>Remove</button>}
+          {editable && <button className="va-button" disabled={busy || !reason.trim()} title={reason.trim() ? undefined : 'Give a reason for change first'}
+            onClick={async () => done(await call('tm:run:removeEvidence', { runId: run.runId, expectedRevision: run.revision, stepId: step.id, attachmentId: e.attachmentId, reason }))}>Remove</button>}
         </p>
       ))}
+      {!!step.history?.length && (
+        <div aria-label={`Changes to step ${step.position}`} className="va-card va-card--sunken" style={{ padding: 8, marginTop: 6 }}>
+          <p className="va-subtlest" style={{ fontSize: 11 }}>Earlier entries (kept for the record)</p>
+          {step.history.map((h, i) => (
+            <p key={i} style={{ fontSize: 12 }}>
+              {h.kind === 'EVIDENCE_REMOVED'
+                ? <>Evidence removed (SHA-256 <code>{h.evidence?.sha256?.slice(0, 12)}…</code>)</>
+                : <>Was {words(h.status ?? '')}{h.actual ? ` · Actual: ${h.actual}` : ''}{h.comment ? ` · Comment: ${h.comment}` : ''}</>}
+              {' · changed '}<When ms={h.changedAt} />{` — ${h.reason}`}
+            </p>
+          ))}
+        </div>
+      )}
       {editable && model.attachments.length > 0 && (
         <div className="va-row" style={{ gap: 6 }}>
           <Select value={attachmentId} onChange={setAttachmentId} disabled={busy} placeholder="Add evidence from this execution's attachments"
