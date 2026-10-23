@@ -21,6 +21,10 @@ import { requestReads } from '../testmgmt/requestReads.js';
 
 const MAX_LABEL = 255;
 const MAX_REASON = 1000;
+// A step keeps at most this many earlier entries, and a run's results at most
+// this many bytes: the history lives in the run row, which must stay bounded.
+const MAX_STEP_CHANGES = 20;
+const MAX_RESULTS_BYTES = 1024 * 1024;
 const isDone = (issue) => String(issue?.fields?.status?.statusCategory?.key ?? '').toLowerCase() === 'done';
 
 export function computedResult(steps) {
@@ -224,6 +228,7 @@ export function createTestExecution(deps) {
    * and the reason, is in the audit chain. No audit event, no change.
    */
   async function saveSteps(run, issue, steps, actor, event) {
+    if (Buffer.byteLength(JSON.stringify(steps)) > MAX_RESULTS_BYTES) tmFail('RESULTS_TOO_LARGE');
     const eventId = deps.newHexId();
     const ok = await deps.updateRunSteps({ runId: run.runId, expectedRevision: run.revision, steps,
       result: computedResult(steps), now: deps.now(), eventId, prior: { steps: run.steps, result: run.result } });
@@ -239,6 +244,11 @@ export function createTestExecution(deps) {
     // confirmed from it when the run is next opened (settleRunSteps).
     await deps.confirmRunSteps({ runId: run.runId, eventId }).catch(() => {});
     return view(issue.key, actor);
+  }
+
+  function addChange(step, change) {
+    if ((step.history ?? []).length >= MAX_STEP_CHANGES) tmFail('STEP_HISTORY_FULL');
+    step.history = [...(step.history ?? []), change];
   }
 
   function changeReason(reason) {
@@ -262,7 +272,7 @@ export function createTestExecution(deps) {
     if (recorded && before.status === after.status && before.actual === after.actual && before.comment === after.comment) return view(issue.key, actor);
     // The first result needs no reason; changing a recorded one always does.
     const why = recorded ? changeReason(reason) : null;
-    if (recorded) step.history = [...(step.history ?? []), { kind: 'RESULT', ...before, changedBy: actor.accountId, changedAt: deps.now(), reason: why }];
+    if (recorded) addChange(step, { kind: 'RESULT', ...before, changedBy: actor.accountId, changedAt: deps.now(), reason: why });
     Object.assign(step, { ...after, recordedBy: actor.accountId, recordedAt: deps.now() });
     return saveSteps(run, issue, steps, actor, { stepId, from: recorded ? before : { status: before.status }, to: after, ...(why ? { reason: why } : {}) });
   }
@@ -293,7 +303,7 @@ export function createTestExecution(deps) {
     const why = changeReason(reason);
     const evidence = { attachmentId: String(removed.attachmentId), sha256: removed.sha256, size: Number(removed.size), addedBy: removed.addedBy ?? null };
     step.evidence = step.evidence.filter(e => e !== removed);
-    step.history = [...(step.history ?? []), { kind: 'EVIDENCE_REMOVED', evidence, changedBy: actor.accountId, changedAt: deps.now(), reason: why }];
+    addChange(step, { kind: 'EVIDENCE_REMOVED', evidence, changedBy: actor.accountId, changedAt: deps.now(), reason: why });
     return saveSteps(run, issue, steps, actor, { stepId, evidenceRemoved: evidence, reason: why });
   }
 

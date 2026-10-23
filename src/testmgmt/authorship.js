@@ -24,9 +24,15 @@
  * signed content ended.
  */
 
-/** The draft's editors after `accountId` saved it as `revision`. */
-export function withEditor(editors, accountId, revision) {
-  const others = (Array.isArray(editors) ? editors : []).filter(e => e?.accountId && e.accountId !== accountId);
+/**
+ * The draft's editors after `accountId` saved it as `revision`. A draft saved
+ * before editors were recorded starts from its last editor, so the first save
+ * after the upgrade never drops who wrote it.
+ */
+export function withEditor(draft, accountId, revision) {
+  const known = Array.isArray(draft?.editors) ? draft.editors
+    : draft?.updatedBy ? [{ accountId: draft.updatedBy, revision: Number(draft.revision) }] : [];
+  const others = known.filter(e => e?.accountId && e.accountId !== accountId);
   return [...others, { accountId, revision: Number(revision) }];
 }
 
@@ -44,8 +50,9 @@ export function authorsFor({ draft, history, publisher }) {
   const since = Number(lastSigned?.authors?.draftRevision ?? 0);
   const accounts = new Set();
   for (const e of draft?.editors ?? []) if (Number(e.revision) > since) accounts.add(e.accountId);
-  // A draft saved before editors were recorded names only its last editor.
-  if (draft?.editors == null && draft?.updatedBy) accounts.add(draft.updatedBy);
+  // A draft saved before editors were recorded, or whose list cannot be read,
+  // names only its last editor.
+  if (!Array.isArray(draft?.editors) && draft?.updatedBy) accounts.add(draft.updatedBy);
   for (const v of history ?? []) {
     if (v === lastSigned) break;
     if (v.publishedBy) accounts.add(v.publishedBy);

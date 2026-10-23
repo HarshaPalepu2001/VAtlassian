@@ -83,7 +83,7 @@ export async function saveProject(p, { expectedRevision, now, actor }) {
 export async function readDraft(testIssueId) {
   const row = (await rows('SELECT * FROM tm_test_draft WHERE test_issue_id = ?', [Number(testIssueId)]))[0];
   return row ? { content: json(row.content, null), revision: Number(row.revision), updatedAt: Number(row.updated_at),
-    updatedBy: row.updated_by, editors: row.editors == null ? null : json(row.editors, []) } : null;
+    updatedBy: row.updated_by, editors: row.editors == null ? null : json(row.editors, null) } : null;
 }
 
 /** `editors` is the whole list after this save (testmgmt/authorship.js#withEditor). */

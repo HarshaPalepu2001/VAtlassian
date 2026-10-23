@@ -86,7 +86,19 @@ test('a version published before authors were recorded still refuses its publish
 test('authorsFor reads a legacy draft by its last editor and keeps the list sorted and unique', () => {
   assert.deepEqual(authorsFor({ draft: { editors: null, updatedBy: 'zed', revision: 4 }, history: [], publisher: 'amy' }),
     { accounts: ['amy', 'zed'], draftRevision: 4 });
-  assert.deepEqual(withEditor(withEditor([], 'amy', 1), 'amy', 2), [{ accountId: 'amy', revision: 2 }]);
+  assert.deepEqual(withEditor({ editors: withEditor({ editors: [] }, 'amy', 1) }, 'amy', 2), [{ accountId: 'amy', revision: 2 }]);
+  assert.deepEqual(withEditor({ editors: null, updatedBy: 'zed', revision: 4 }, 'amy', 5),
+    [{ accountId: 'zed', revision: 4 }, { accountId: 'amy', revision: 5 }], 'a legacy draft keeps its last editor on the first save');
+  assert.deepEqual(authorsFor({ draft: { editors: null, updatedBy: 'zed', revision: 4 }, history: [], publisher: 'amy' }).accounts, ['amy', 'zed']);
+});
+
+test('the first save after the upgrade does not drop the earlier editor of a legacy draft', async () => {
+  const c = setup();
+  c.w.drafts.set('11', { content: { objective: '', preconditions: '', steps: STEPS, verifies: [], dataset: null }, revision: 3, updatedBy: 'ann', editors: null });
+  await save(c, 'bob', { objective: 'Touched by bob' });
+  const v = await publish(c, 'bob');
+  assert.deepEqual(v.authors, ['ann', 'bob']);
+  await assert.rejects(sign(c, v, 'ann'), { reason: 'AUTHOR_CANNOT_SIGN' });
 });
 
 test('a plan revision editor or publisher cannot sign it', async () => {
@@ -255,4 +267,20 @@ test('an abandoned change with no audit event is rolled back after the invocatio
   const after = c.w.runs.get(r.runId);
   assert.equal(after.stepEventId, null);
   assert.equal(runSteps(STEPS, after.steps)[0].actual, 'Overheats');
+});
+
+test('a step keeps at most 20 earlier entries; the 21st change is refused, not silently grown', async () => {
+  const { c, run } = await signedRun();
+  let r = (await record(c, run, { status: 'PASSED', actual: 'v0' })).runs[0];
+  for (let i = 1; i <= 20; i++) r = (await record(c, r, { status: 'PASSED', actual: `v${i}`, reason: `fix ${i}` })).runs[0];
+  assert.equal(r.steps[0].history.length, 20);
+  await assert.rejects(record(c, r, { status: 'PASSED', actual: 'v21', reason: 'one more' }), { reason: 'STEP_HISTORY_FULL' });
+});
+
+test('recorded results stay within the run size budget', async () => {
+  const { c, run } = await signedRun();
+  // Results that already fill the run row (as a large dataset run can).
+  c.w.runs.get(run.runId).steps = [{ id: 's2', status: 'PASSED', actual: 'x'.repeat(1024 * 1024), comment: '', evidence: [], recordedBy: 'tester' }];
+  await assert.rejects(record(c, run, { status: 'PASSED', actual: 'OK' }), { reason: 'RESULTS_TOO_LARGE' });
+  assert.equal(c.w.audit.filter(e => e.eventType === 'TM_STEP_RECORDED').length, 0, 'nothing is written');
 });

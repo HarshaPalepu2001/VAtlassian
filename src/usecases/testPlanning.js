@@ -159,7 +159,7 @@ export function createTestPlanning(deps) {
     const current = await deps.readCollectionDraft(s.issue.id);
     const revision = await deps.saveCollectionDraft({ issueId: s.issue.id, projectId: s.projectId, role: s.role, content: clean.draft,
       expectedRevision: Number(expectedRevision), now: deps.now(), actor: actor.accountId,
-      editors: withEditor(current?.editors, actor.accountId, Number(expectedRevision) + 1) });
+      editors: withEditor(current, actor.accountId, Number(expectedRevision) + 1) });
     if (revision == null) tmFail('STALE');
     return view(issueKey, actor);
   }

@@ -107,7 +107,7 @@ export function createTestAuthoring(deps) {
     const current = await deps.readDraft(issue.id);
     const revision = await deps.saveDraft({ testIssueId: issue.id, projectId, content: clean.draft,
       expectedRevision: Number(expectedRevision) || 0, now: deps.now(), actor: actor.accountId,
-      editors: withEditor(current?.editors, actor.accountId, (Number(expectedRevision) || 0) + 1) });
+      editors: withEditor(current, actor.accountId, (Number(expectedRevision) || 0) + 1) });
     if (revision == null) tmFail('STALE');
     return view(issueKey, actor);
   }

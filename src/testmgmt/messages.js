@@ -20,6 +20,8 @@ export const TM_MESSAGES = {
   SAME_SIGNER: 'You already signed an earlier step of this chain. A different person must sign this one.',
   AUTHOR_CANNOT_SIGN: 'You wrote or published this content since it was last signed, so someone else must sign it off.',
   CHANGE_REASON_REQUIRED: 'This result was already recorded. Give a reason for changing it; the earlier result is kept in the history.',
+  STEP_HISTORY_FULL: 'This step has already been changed 20 times. Close the run as not executed with a reason and start a new run.',
+  RESULTS_TOO_LARGE: 'This run\'s recorded results have reached the size limit. Shorten the actual results or comments, or close the run as not executed and start a new one.',
   RESULT_PENDING: 'A result change is still waiting for its audit record. Refresh in a moment and try again.',
   NOT_A_RECORDER: 'Only someone who recorded results in this run can sign it as executed.',
   CONTENT_CHANGED: 'This changed after you opened it. Review the current content and sign again.',

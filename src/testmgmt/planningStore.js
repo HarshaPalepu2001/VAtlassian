@@ -6,6 +6,8 @@ const issueId = value => { const out = Number(value); if (!Number.isSafeInteger(
 const parse = value => { try { const out = JSON.parse(value); if (!out || typeof out !== 'object') tmFail('RECORDS_INCOMPLETE'); return out; } catch { tmFail('RECORDS_INCOMPLETE'); } };
 const duplicate = error => error?.code === 'ER_DUP_ENTRY' || error?.context?.debug?.code === 'ER_DUP_ENTRY' || /duplicate entry/i.test(error?.message ?? '');
 const changes = result => Number(result?.data?.affectedRows ?? 0);
+// Unreadable is null, never an empty list: authorship then falls back to the last editor.
+const editorsFrom = value => { if (value == null) return null; try { const out = JSON.parse(value); return Array.isArray(out) ? out : null; } catch { return null; } };
 
 /** SQL boundary is injected so failures and compare-and-swap outcomes are testable without Forge. */
 export function createPlanningStore(query = executeQuery) {
@@ -24,7 +26,7 @@ export function createPlanningStore(query = executeQuery) {
   };
   const draftFrom = row => row ? { issueId: String(row.issue_id), projectId: String(row.project_id), role: row.role,
     content: parse(row.content), revision: Number(row.revision), updatedAt: Number(row.updated_at), updatedBy: row.updated_by,
-    editors: row.editors == null ? null : parse(row.editors) } : null;
+    editors: editorsFrom(row.editors) } : null;
   const revisionFrom = row => row ? { revisionId: String(row.revision_id), issueId: String(row.issue_id), projectId: String(row.project_id), role: row.role,
     revisionNo: Number(row.revision_no), draftRevision: Number(row.draft_revision), content: parse(row.content), digest: row.digest,
     chain: parse(row.chain), chainDigest: row.chain_digest, state: row.state, publishedBy: row.published_by,
