@@ -27,29 +27,30 @@ export default function PlanningView({ model, onModel, onSelectRuns }: {
   const [draft, setDraft] = useState(model.draft);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // `at` names the control whose request failed; null shows the error at the top.
+  const [error, setError] = useState<{ message: string; at: string | null } | null>(null);
   const [selection, setSelection] = useState<PlanRunSelection | null>(null);
   const [executionKey, setExecutionKey] = useState('');
   const [started, setStarted] = useState<string | null>(null);
   const startAttempt = useRef<{ scope: string; requestId: string; offset: number } | null>(null);
   const [startComplete, setStartComplete] = useState(false);
   const edit = (patch: Partial<PlanningDraft>) => { setDraft({ ...draft, ...patch }); setDirty(true); setSelection(null); };
-  const call = async (key: string, payload: Record<string, unknown>) => {
+  const call = async (key: string, payload: Record<string, unknown>, at: string | null = null) => {
     setBusy(true); setError(null);
     try {
       const result = await invoke<PlanningViewModel & Failure>(key, payload);
-      if (result.error) { setError(result.error); return; }
+      if (result.error) { setError({ message: result.error, at }); return; }
       onModel(result); setDraft(result.draft); setDirty(false); setSelection(null);
-    } catch (e) { setError(e instanceof Error ? e.message : 'The request could not be completed.'); }
+    } catch (e) { setError({ message: e instanceof Error ? e.message : 'The request could not be completed.', at }); }
     finally { setBusy(false); }
   };
   const select = async (r: PlanningRevision) => {
     setBusy(true); setError(null); setSelection(null);
     try {
       const result = await invoke<PlanRunSelection & Failure>('tm:plan:selectRuns', { revisionId: r.revisionId, contentHash: r.digest });
-      if (result.error) { setError(result.error); return; }
+      if (result.error) { setError({ message: result.error, at: null }); return; }
       setSelection(result); onSelectRuns?.(result);
-    } catch (e) { setError(e instanceof Error ? e.message : 'The run inputs could not be prepared.'); }
+    } catch (e) { setError({ message: e instanceof Error ? e.message : 'The run inputs could not be prepared.', at: null }); }
     finally { setBusy(false); }
   };
   const member = (index: number, patch: Partial<PlanningMember>) => edit({ members: draft.members.map((m, i) => i === index ? { ...m, ...patch } : m) });
@@ -58,10 +59,10 @@ export default function PlanningView({ model, onModel, onSelectRuns }: {
     setBusy(true); setError(null);
     try {
       const result = await invoke<{ issueId: string; key: string; summary: string; latestSigned: { versionId: string; versionNo: number; revisionId: string; revisionNo: number } | null } & Failure>('tm:planning:lookup', { collectionKey: model.issue.key, issueKey: key, kind });
-      if (result.error) { setError(result.error); return; }
+      if (result.error) { setError({ message: result.error, at: null }); return; }
       if (kind === 'TEST') member(index, { testIssueId: result.issueId, testIssueKey: result.key, summary: result.summary, latestSigned: result.latestSigned });
       else edit({ preconditions: draft.preconditions.map((p, i) => i === index ? { ...p, issueId: result.issueId, issueKey: result.key, summary: result.summary, latestSigned: result.latestSigned } : p) });
-    } catch (e) { setError(e instanceof Error ? e.message : 'The Jira work item could not be found.'); }
+    } catch (e) { setError({ message: e instanceof Error ? e.message : 'The Jira work item could not be found.', at: null }); }
     finally { setBusy(false); }
   };
   const start = async (r: PlanningRevision) => {
@@ -71,17 +72,17 @@ export default function PlanningView({ model, onModel, onSelectRuns }: {
     try {
       const result = await invoke<{ issue?: { key: string }; execution?: { key: string }; complete?: boolean; nextOffset?: number } & Failure>('tm:plan:startExecution', {
         revisionId: r.revisionId, contentHash: r.digest, executionKey: key, requestId: startAttempt.current.requestId, offset: startAttempt.current.offset });
-      if (result.error) { setError(result.error); return; }
+      if (result.error) { setError({ message: result.error, at: null }); return; }
       setStarted(result.issue?.key ?? result.execution?.key ?? key);
       setStartComplete(result.complete !== false);
       startAttempt.current.offset = result.nextOffset ?? startAttempt.current.offset;
-    } catch (e) { setError(e instanceof Error ? e.message : 'The execution could not be started. Retry to check the same request.'); }
+    } catch (e) { setError({ message: e instanceof Error ? e.message : 'The execution could not be started. Retry to check the same request.', at: null }); }
     finally { setBusy(false); }
   };
   const move = (index: number, by: number) => { const members = [...draft.members]; const [m] = members.splice(index, 1); members.splice(index + by, 0, m); edit({ members }); };
   const disabled = busy || !model.canEdit;
   return <>
-    {error && <Notice danger>{error}</Notice>}
+    {error?.at === null && <Notice danger>{error.message}</Notice>}
     <Section title={`${model.role === 'PLAN' ? 'Plan' : model.role === 'SET' ? 'Set' : 'Precondition'} draft`}>
       {!model.canEdit && <Notice>You can read this collection but cannot edit it.</Notice>}
       <label className="va-field"><span className="va-label">Objective</span><textarea className="va-input" aria-label="Planning objective" value={draft.objective} disabled={disabled} maxLength={4000} onChange={e => edit({ objective: e.target.value })} /></label>
@@ -148,9 +149,11 @@ export default function PlanningView({ model, onModel, onSelectRuns }: {
         {r.signatures.map(sig => <p key={sig.stepIndex}>{sig.label}: {sig.printedName} · {sig.decision}{sig.reason ? ` · ${sig.reason}` : ''}</p>)}
         {r.state === 'PUBLISHING' && <Notice>Publication is awaiting audit confirmation. Retry publishing this saved draft to recover it.</Notice>}
         {r.state === 'PUBLISHED' && r.canSign && r.nextStep && <SignBox step={r.nextStep} digest={r.digest} allowReject busy={busy}
-          onSign={args => call('tm:planning:sign', { revisionId: r.revisionId, contentHash: r.digest, ...args })} />}
+          error={error?.at === `sign:${r.revisionId}` ? error.message : null}
+          onSign={args => call('tm:planning:sign', { revisionId: r.revisionId, contentHash: r.digest, ...args }, `sign:${r.revisionId}`)} />}
         {r.state === 'PUBLISHED' && r.nextStep && !r.canSign && <Notice>Waiting for {r.nextStep.label} ({r.nextStep.role}).{r.signBlocked === 'AUTHOR_CANNOT_SIGN' ? ' You wrote or published this revision, so someone else must sign it.' : ''}</Notice>}
-        {r.canRecover && <button className="va-button" disabled={busy} onClick={() => call('tm:planning:sign', { revisionId: r.revisionId, contentHash: r.digest })}>Finish confirmed sign-off</button>}
+        {r.canRecover && <button className="va-button" disabled={busy} onClick={() => call('tm:planning:sign', { revisionId: r.revisionId, contentHash: r.digest }, `finish:${r.revisionId}`)}>Finish confirmed sign-off</button>}
+        {error?.at === `finish:${r.revisionId}` && <Notice danger>{error.message}</Notice>}
         {model.role === 'PLAN' && r.state === 'SIGNED' && <>
           <button className="va-button" disabled={busy} onClick={() => select(r)}>Review run inputs</button>
           <label className="va-field"><span className="va-label">Execution Jira key</span><input className="va-input" aria-label={`Execution Jira key for revision ${r.revisionNo}`} placeholder="VAT-31" value={executionKey} disabled={busy} onChange={e => { setExecutionKey(e.target.value); setStarted(null); }} /></label>

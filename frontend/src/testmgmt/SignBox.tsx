@@ -8,8 +8,10 @@ import type { NextStep } from './types';
  * and the digest they sign; the affirmation box comes before the code
  * (21 CFR 11.50: the meaning of the signature is part of it).
  */
-export default function SignBox({ step, digest, allowReject, busy, onSign }: {
+export default function SignBox({ step, digest, allowReject, busy, error, onSign }: {
   step: NonNullable<NextStep>; digest: string; allowReject: boolean; busy: boolean;
+  /** A refusal of this signature, shown here because the signer is looking here. */
+  error?: string | null;
   onSign: (args: { code: string; decision: 'SIGN' | 'REJECT'; reason?: string }) => void;
 }) {
   const [affirmed, setAffirmed] = useState(false);
@@ -18,7 +20,7 @@ export default function SignBox({ step, digest, allowReject, busy, onSign }: {
   const [reason, setReason] = useState('');
   const ready = code.length === 6 && !busy && (rejecting ? reason.trim().length > 0 : affirmed);
   return (
-    <div className="va-card va-card--sunken" style={{ padding: 12 }}>
+    <div className="va-card va-card--sunken" style={{ padding: 12 }} role="group" aria-label={`${step.label} sign-off`}>
       <p><strong>{step.label}</strong> · role {step.role}</p>
       {!rejecting && <Affirmation checked={affirmed} onChange={setAffirmed} disabled={busy}>{step.meaning}</Affirmation>}
       {rejecting && (
@@ -41,6 +43,7 @@ export default function SignBox({ step, digest, allowReject, busy, onSign }: {
         )}
       </div>
       {!affirmed && !rejecting && code.length === 6 && <Notice>Tick the statement above to sign.</Notice>}
+      {error && <Notice danger>{error}</Notice>}
     </div>
   );
 }

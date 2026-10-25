@@ -68,3 +68,15 @@ No journey acceptance is claimed. Deployment identity and setup were not checked
 - Created TestExecution [VAT-84](https://mgtechdemo.atlassian.net/browse/VAT-84), `TM live J06-J10 execution — VAT-83`, under Epic VAT-36 for the run journeys.
 - Journey 6 — Add a run of the test: **Blocked before execution**. Opened the Test management DEV panel on VAT-84 via View app actions, but the panel remained in a loading/skeleton state after a Jira reload. No run creation was submitted. Reopening the panel or successful initialization is needed to continue.
 - Journeys 7–10 remain **Not run**. They depend on an initialized execution panel and, for the signer separation cases, a non-Tester identity plus a distinct QA identity. The available live Jira session is the single account `harsha.palepu@mgtechsoft.com`; no alternate user session was available in this browser.
+
+## 2026-10-24 continuation — journeys 6–10 on VAT-84 (in-app browser)
+
+- Deployed build: latest development deployment 2026-10-23T16:20Z, after HEAD `83834e8`; working tree clean.
+- The VAT-84 Test management DEV panel rendered (it stayed loading on 2026-10-23). Sign-off chain shown: Tester (Tester) → QA (QA).
+- Journey 6 — Add a run of the test: **Pass**. The existing run on VAT-84 (started Oct 23, 2026, 09:54 PM, HIL bench 3 · ECU rev B) uses **VAT-83 v1**, the latest signed version (v2 is unsigned), and shows **In progress** with computed result Passed. No duplicate run was added.
+- Append-only step history observed live: step 1 was recorded Failed, then changed to Passed with a reason; the runner lists the Failed entry under "Earlier entries (kept for the record)" (changed Oct 23, 2026, 09:55 PM).
+- Journey 18 — Wrong authenticator code: **Pass (observed)**. `tm:run:sign` refused `CODE_INVALID_OR_REPLAYED` at 15:16:24Z and 15:16:27Z; the third failure at 15:17:37Z locked the credential (`MAX_FAILED_ATTEMPTS = 3`). Nothing was signed; the run stayed open.
+- Journey 8 — Sign as Tester: **Blocked**. The user's attempt at 16:39:06Z was refused `CREDENTIAL_LOCKED`. Recovery needs a reset grant issued by a *different* VAtlassian administrator (Admin → Credentials); the user cannot authorize their own. No second VAtlassian administrator exists yet.
+- **Defect (UI):** the refusal was shown, but `ExecutionView` renders its error notice at the top of the panel (`frontend/src/testmgmt/ExecutionView.tsx:75`), about a screen and a half above the Sign button, so the user saw "nothing happening". Errors from signing should appear at the sign box. **Fixed in development 8.31.0 (2026-10-25):** run, version and plan-revision sign refusals now show inside their sign box; step, closure and finish refusals show at their control. Covered by UI tests; the live refusal display is not yet seen.
+- Unexplained: `tm:run:recordStep` refused `STALE` at 16:39:12Z (no change made). Not yet investigated.
+- Journeys 7, 9, 10: **Not run**. 9 depends on 8; 7 and 10 need a second Jira account (non-Tester; distinct QA).

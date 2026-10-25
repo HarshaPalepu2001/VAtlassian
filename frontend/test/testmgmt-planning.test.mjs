@@ -151,3 +151,18 @@ test('a signed plan starts real execution through signed scope and a retry-stabl
   assert.equal(calls[1].payload.requestId, calls[0].payload.requestId); assert.ok(calls[0].payload.requestId);
   assert.match(container.textContent, /VAT-31/);
 });
+test('a refused plan revision signature is shown in its sign box', async () => {
+  const rev = { revisionId: 'a'.repeat(32), revisionNo: 1, state: 'PUBLISHED', digest: 'b'.repeat(64),
+    content: { ...draft, release: { id: '900', name: 'R1' } }, signatures: [], canSign: true,
+    nextStep: { label: 'Approval', role: 'Approver', meaning: 'I approve this plan revision', index: 0 } };
+  globalThis.transport = async (key) => key === 'harness:logAction' ? {} : { error: 'Your authenticator is locked. Ask an administrator to reset it.', reason: 'CREDENTIAL_LOCKED' };
+  await mount(PlanningView, { model: { ...model, revisions: [rev] }, onModel: () => {} });
+  const box = container.querySelector('[role="group"][aria-label="Approval sign-off"]');
+  assert.ok(box, 'the sign box is shown');
+  await act(() => box.querySelector('.va-affirm input').click());
+  await type(box.querySelector('input[aria-label="Six-digit authenticator code"]'), '123456');
+  await act(() => [...box.querySelectorAll('button')].find(b => b.textContent === 'Sign').click());
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+  assert.match(box.textContent, /Your authenticator is locked/);
+  assert.equal(container.querySelectorAll('[role="alert"]').length, 1);
+});

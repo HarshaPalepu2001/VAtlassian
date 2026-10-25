@@ -311,3 +311,39 @@ test('the author rule switch warns while off and is sent with the configuration'
   await act(() => [...container.querySelectorAll('button')].find(b => b.textContent === 'Save and enable').click()); await flush();
   assert.equal(calls.find(c => c.key === 'admin:tm:save').payload.authorSeparation, true);
 });
+const LOCKED = { error: 'Your authenticator is locked. Ask an administrator to reset it.', reason: 'CREDENTIAL_LOCKED' };
+const alerts = () => [...container.querySelectorAll('[role="alert"]')];
+async function signWithCode(label) {
+  const box = () => container.querySelector(`[role="group"][aria-label="${label} sign-off"]`);
+  assert.ok(box(), `the ${label} sign box is shown`);
+  await act(() => box().querySelector('.va-affirm input').click());
+  await act(() => { const el = box().querySelector('input[aria-label="Six-digit authenticator code"]');
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(el, '123456');
+    el.dispatchEvent(new window.Event('input', { bubbles: true })); });
+  await act(() => [...box().querySelectorAll('button')].find(b => b.textContent === 'Sign').click()); await flush();
+  return box();
+}
+test('a refused run signature is shown in its sign box, not at the top of the panel', async () => {
+  const m = openRunModel(); m.runs[0].canSign = true;
+  await mount(ExecutionView, { model: m, onModel: () => {} }, async () => LOCKED);
+  await act(() => [...container.querySelectorAll('button')].find(b => b.textContent === 'Open runner').click());
+  const box = await signWithCode('Review');
+  assert.match(box.textContent, /Your authenticator is locked/);
+  assert.equal(alerts().length, 1, 'the refusal is shown once, at the sign box');
+});
+test('a refused step result is shown on that step', async () => {
+  const m = openRunModel(); Object.assign(m.runs[0].steps[0], { status: 'NOT_RUN', recordedBy: null });
+  await mount(ExecutionView, { model: m, onModel: () => {} }, async () => ({ error: 'Someone else changed this since you opened it. Reload and try again.', reason: 'STALE' }));
+  await act(() => [...container.querySelectorAll('button')].find(b => b.textContent === 'Open runner').click());
+  await act(() => [...container.querySelectorAll('button')].find(b => b.textContent === 'Passed').click()); await flush();
+  const step = container.querySelector('[role="group"][aria-label="Step 1"]');
+  assert.match(step.textContent, /Someone else changed this/);
+  assert.equal(alerts().length, 1);
+});
+test('a refused version signature is shown in its sign box', async () => {
+  await mount(TestView, { model: model(), onModel: () => {} });
+  globalThis.tmTransport = async (key) => key === 'harness:logAction' ? { ok: true } : LOCKED;
+  const box = await signWithCode('Review');
+  assert.match(box.textContent, /Your authenticator is locked/);
+  assert.equal(alerts().length, 1);
+});

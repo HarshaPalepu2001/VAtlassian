@@ -18,16 +18,17 @@ export default function TestView({ model, onModel }: { model: TestViewModel; onM
   const [draft, setDraft] = useState<AuthoringDraft>(model.draft);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // `at` names the control whose request failed; null shows the error at the top.
+  const [error, setError] = useState<{ message: string; at: string | null } | null>(null);
 
-  const apply = (result: TestViewModel & Failure) => {
-    if (result?.error) { setError(result.error); return false; }
+  const apply = (result: TestViewModel & Failure, at: string | null) => {
+    if (result?.error) { setError({ message: result.error, at }); return false; }
     setError(null); onModel(result); setDraft(result.draft); setDirty(false); return true;
   };
-  const call = async (key: string, payload: Record<string, unknown>) => {
+  const call = async (key: string, payload: Record<string, unknown>, at: string | null = null) => {
     setBusy(true);
-    try { return apply(await invoke<TestViewModel & Failure>(key, payload)); }
-    catch (e) { setError(e instanceof Error ? e.message : 'The request did not complete.'); return false; }
+    try { return apply(await invoke<TestViewModel & Failure>(key, payload), at); }
+    catch (e) { setError({ message: e instanceof Error ? e.message : 'The request did not complete.', at }); return false; }
     finally { setBusy(false); }
   };
   const edit = (patch: Partial<AuthoringDraft>) => { setDraft({ ...draft, ...patch }); setDirty(true); };
@@ -42,7 +43,7 @@ export default function TestView({ model, onModel }: { model: TestViewModel; onM
   const signed = model.versions.find(v => v.state === 'SIGNED');
   return (
     <>
-      {error && <Notice danger>{error}</Notice>}
+      {error?.at === null && <Notice danger>{error.message}</Notice>}
       <Facts items={[
         { label: 'Parent', value: model.parent ? `${model.parent.key}${model.parent.summary ? ` · ${model.parent.summary}` : ''}`
           : <Badge tone="danger">No parent — set the Epic before publishing</Badge> },
@@ -110,11 +111,13 @@ export default function TestView({ model, onModel }: { model: TestViewModel; onM
             ))}
             {v.state === 'PUBLISHED' && v.nextStep && !v.canSign && <Notice>Waiting for: {v.nextStep.label} ({v.nextStep.role}).{v.signBlocked === 'AUTHOR_CANNOT_SIGN' ? ' You wrote or published this version, so someone else must sign it.' : ''}</Notice>}
             {(v as typeof v & { canFinishVersion?: boolean }).canFinishVersion && (
-              <button className="va-button" disabled={busy} onClick={() => call('tm:test:finishVersion', { versionId: v.versionId })}>Finish version</button>
+              <button className="va-button" disabled={busy} onClick={() => call('tm:test:finishVersion', { versionId: v.versionId }, `finish:${v.versionId}`)}>Finish version</button>
             )}
+            {error?.at === `finish:${v.versionId}` && <Notice danger>{error.message}</Notice>}
             {v.state === 'PUBLISHED' && v.nextStep && v.canSign && (
               <SignBox step={v.nextStep} digest={v.digest} allowReject busy={busy}
-                onSign={({ code, decision, reason }) => call('tm:test:signVersion', { versionId: v.versionId, code, contentHash: v.digest, decision, reason })} />
+                error={error?.at === `sign:${v.versionId}` ? error.message : null}
+                onSign={({ code, decision, reason }) => call('tm:test:signVersion', { versionId: v.versionId, code, contentHash: v.digest, decision, reason }, `sign:${v.versionId}`)} />
             )}
           </Card>
         ))}

@@ -31,9 +31,14 @@ function rememberAddRun(executionId: string, request: AddRunRequest | null) {
   } catch { /* The mounted view still retains the request when browser storage is unavailable. */ }
 }
 
+/** `at` names the control a request came from, so its refusal shows beside it. */
+type Call = (key: string, payload: Record<string, unknown>, at?: string) => Promise<boolean>;
+type ErrorAt = (at: string) => string | null;
+
 export default function ExecutionView({ model, onModel }: { model: ExecutionViewModel; onModel: (m: ExecutionViewModel) => void }) {
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // A located error shows at its control; one without a place shows at the top.
+  const [error, setError] = useState<{ message: string; at: string | null } | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [addRequest, setAddRequest] = useState<AddRunRequest | null>(() => savedAddRun(model.issue.id));
   const [form, setForm] = useState<RunForm>(() => savedAddRun(model.issue.id)?.form ?? emptyRunForm);
@@ -45,18 +50,20 @@ export default function ExecutionView({ model, onModel }: { model: ExecutionView
     setOpen(null); setError(null); setBusy(false);
   }, [model.issue.id]);
 
-  const call = async (key: string, payload: Record<string, unknown>) => {
+  const call: Call = async (key, payload, at) => {
+    const place = at ?? null;
     const executionId = model.issue.id;
     lastCallOutcome.current = 'uncertain';
     setBusy(true);
     try {
       const result = await invoke<ExecutionViewModel & Failure>(key, payload);
       if (currentExecution.current !== executionId) return false;
-      if (result?.error) { lastCallOutcome.current = addRunRefusals.has(result.reason ?? '') ? 'refused' : 'uncertain'; setError(result.error); return false; }
+      if (result?.error) { lastCallOutcome.current = addRunRefusals.has(result.reason ?? '') ? 'refused' : 'uncertain'; setError({ message: result.error, at: place }); return false; }
       lastCallOutcome.current = 'ok'; setError(null); onModel(result); return true;
-    } catch (e) { if (currentExecution.current === executionId) setError(e instanceof Error ? e.message : 'The request did not complete.'); return false; }
+    } catch (e) { if (currentExecution.current === executionId) setError({ message: e instanceof Error ? e.message : 'The request did not complete.', at: place }); return false; }
     finally { if (currentExecution.current === executionId) setBusy(false); }
   };
+  const errorAt: ErrorAt = at => (error?.at === at ? error.message : null);
   const addRun = async () => {
     const executionId = model.issue.id;
     const request = addRequest ?? { requestId: crypto.randomUUID().replaceAll('-', ''), form: { ...form } };
@@ -72,7 +79,7 @@ export default function ExecutionView({ model, onModel }: { model: ExecutionView
 
   return (
     <>
-      {error && <Notice danger>{error}</Notice>}
+      {error?.at === null && <Notice danger>{error.message}</Notice>}
       <Facts items={[
         { label: 'Parent', value: model.parent ? model.parent.key : <Badge tone="danger">No parent — set the Epic before running</Badge> },
         { label: 'Status', value: model.issue.status },
@@ -106,7 +113,7 @@ export default function ExecutionView({ model, onModel }: { model: ExecutionView
         {model.runs.length === 0 && <EmptyState title="No runs yet">Add a run of a signed test.</EmptyState>}
         {model.runs.map(run => (
           <RunCard key={run.runId} run={run} model={model} busy={busy} expanded={open === run.runId}
-            onToggle={() => setOpen(open === run.runId ? null : run.runId)} call={call} />
+            onToggle={() => setOpen(open === run.runId ? null : run.runId)} call={call} errorAt={errorAt} />
         ))}
       </Section>
       <RetestControls model={model} />
@@ -115,9 +122,9 @@ export default function ExecutionView({ model, onModel }: { model: ExecutionView
   );
 }
 
-function RunCard({ run, model, busy, expanded, onToggle, call }: {
+function RunCard({ run, model, busy, expanded, onToggle, call, errorAt }: {
   run: Run; model: ExecutionViewModel; busy: boolean; expanded: boolean; onToggle: () => void;
-  call: (key: string, payload: Record<string, unknown>) => Promise<boolean>;
+  call: Call; errorAt: ErrorAt;
 }) {
   const editable = run.state === 'IN_PROGRESS' && model.canEdit && !model.issue.done && !run.test.hidden;
   // Signed off, but the outcome or the bug was not written: retryBug finishes it.
@@ -142,18 +149,19 @@ function RunCard({ run, model, busy, expanded, onToggle, call }: {
       {run.bug?.state === 'INTENT' && run.bug.lastError === 'CREATE_ANSWER_LOST' && (
         <Notice>Jira did not confirm the create request. VAtlassian looks for its result after about five minutes and never automatically creates another bug when that outcome is uncertain. Check again, then ask an administrator to investigate if repair is needed.</Notice>
       )}
-      {run.canFinish && <button className="va-button" disabled={busy} onClick={() => call('tm:run:retryBug', { runId: run.runId })}>{finishLabel}</button>}
+      {run.canFinish && <button className="va-button" disabled={busy} onClick={() => call('tm:run:retryBug', { runId: run.runId }, `finish:${run.runId}`)}>{finishLabel}</button>}
+      {errorAt(`finish:${run.runId}`) && <Notice danger>{errorAt(`finish:${run.runId}`)}</Notice>}
       {run.test.hidden ? <Notice>You cannot open this test in Jira, so its steps and results are not shown here.</Notice> : (
         <button className="va-button" onClick={onToggle}>{expanded ? 'Hide steps' : editable ? 'Open runner' : 'Show steps'}</button>
       )}
-      {expanded && !run.test.hidden && <Runner run={run} model={model} busy={busy} editable={editable} call={call} />}
+      {expanded && !run.test.hidden && <Runner run={run} model={model} busy={busy} editable={editable} call={call} errorAt={errorAt} />}
     </Card>
   );
 }
 
-function Runner({ run, model, busy, editable, call }: {
+function Runner({ run, model, busy, editable, call, errorAt }: {
   run: Run; model: ExecutionViewModel; busy: boolean; editable: boolean;
-  call: (key: string, payload: Record<string, unknown>) => Promise<boolean>;
+  call: Call; errorAt: ErrorAt;
 }) {
   const [closing, setClosing] = useState(false);
   const [reason, setReason] = useState('');
@@ -186,7 +194,7 @@ function Runner({ run, model, busy, editable, call }: {
           {!!iteration.stepIds?.length && <p className="va-subtlest" style={{ fontSize: 11 }}>Steps: {iteration.stepIds.join(', ')}</p>}
         </div>)}
       </div>}
-      {run.steps.map(step => <StepRow key={step.id} run={run} step={step} model={model} busy={busy} editable={editable} call={call} />)}
+      {run.steps.map(step => <StepRow key={step.id} run={run} step={step} model={model} busy={busy} editable={editable} call={call} errorAt={errorAt} />)}
 
       {run.state === 'IN_PROGRESS' && run.signabilityProblem && <Notice>{PROBLEMS[run.signabilityProblem] ?? run.signabilityProblem}</Notice>}
       {run.resultPending && <Notice>A result change is waiting for its audit record. Refresh in a moment.</Notice>}
@@ -194,8 +202,8 @@ function Runner({ run, model, busy, editable, call }: {
         <Notice>Waiting for: {run.nextStep.label} ({run.nextStep.role}).</Notice>
       )}
       {canSignNow && run.nextStep && (
-        <SignBox step={run.nextStep} digest={run.contentHash} allowReject={run.state === 'SIGNING'} busy={busy}
-          onSign={({ code: c, decision, reason: r }) => call('tm:run:sign', { runId: run.runId, code: c, contentHash: run.contentHash, decision, reason: r })} />
+        <SignBox step={run.nextStep} digest={run.contentHash} allowReject={run.state === 'SIGNING'} busy={busy} error={errorAt(`sign:${run.runId}`)}
+          onSign={({ code: c, decision, reason: r }) => call('tm:run:sign', { runId: run.runId, code: c, contentHash: run.contentHash, decision, reason: r }, `sign:${run.runId}`)} />
       )}
       {editable && run.canSign && run.result === 'FAILED' && (
         <p className="va-subtlest" style={{ fontSize: 12 }}>A step failed, so this run is signed off as Failed and gets its bug. It cannot be closed as not executed.</p>
@@ -209,9 +217,10 @@ function Runner({ run, model, busy, editable, call }: {
               <div className="va-row" style={{ gap: 8 }}>
                 <CodeInput value={code} onChange={setCode} disabled={busy} />
                 <button className="va-button va-button--primary" disabled={busy || !reason.trim() || code.length !== 6}
-                  onClick={() => call('tm:run:notExecuted', { runId: run.runId, code, reason })}>Close run</button>
+                  onClick={() => call('tm:run:notExecuted', { runId: run.runId, code, reason }, `close:${run.runId}`)}>Close run</button>
                 <button className="va-button" disabled={busy} onClick={() => setClosing(false)}>Cancel</button>
               </div>
+              {errorAt(`close:${run.runId}`) && <Notice danger>{errorAt(`close:${run.runId}`)}</Notice>}
             </div>
           )}
         </div>
@@ -220,9 +229,9 @@ function Runner({ run, model, busy, editable, call }: {
   );
 }
 
-function StepRow({ run, step, model, busy, editable, call }: {
+function StepRow({ run, step, model, busy, editable, call, errorAt }: {
   run: Run; step: RunStep; model: ExecutionViewModel; busy: boolean; editable: boolean;
-  call: (key: string, payload: Record<string, unknown>) => Promise<boolean>;
+  call: Call; errorAt: ErrorAt;
 }) {
   const [actual, setActual] = useState(step.actual);
   const [comment, setComment] = useState(step.comment);
@@ -233,10 +242,11 @@ function StepRow({ run, step, model, busy, editable, call }: {
   const changes = (status: string) => status !== step.status || actual !== step.actual || comment !== step.comment;
   const needsReason = (status: string) => recorded && changes(status) && !reason.trim();
   const done = (ok: boolean) => { if (ok) setReason(''); return ok; };
+  const here = `step:${run.runId}:${step.id}`;
   const record = async (status: string) => done(await call('tm:run:recordStep', { runId: run.runId, expectedRevision: run.revision,
-    stepId: step.id, status, actual, comment, ...(recorded ? { reason } : {}) }));
+    stepId: step.id, status, actual, comment, ...(recorded ? { reason } : {}) }, here));
   return (
-    <div className="va-card" style={{ padding: 10, marginBottom: 8 }}>
+    <div className="va-card" style={{ padding: 10, marginBottom: 8 }} role="group" aria-label={`Step ${step.position}`}>
       <p><strong>Step {step.position}.</strong> {step.action}</p>
       {step.data && <p style={{ fontSize: 12 }}>Data: {step.data}</p>}
       <p style={{ fontSize: 12 }}>Expected: {step.expected}</p>
@@ -258,6 +268,7 @@ function StepRow({ run, step, model, busy, editable, call }: {
               <button key={s} className={`va-button${step.status === s ? ' va-button--primary' : ''}`} disabled={busy || needsReason(s)} onClick={() => record(s)}>{words(s)}</button>
             ))}
           </div>
+          {errorAt(here) && <Notice danger>{errorAt(here)}</Notice>}
         </>
       ) : (
         <>
@@ -270,7 +281,7 @@ function StepRow({ run, step, model, busy, editable, call }: {
           📎 {e.filename} · SHA-256 <code>{e.sha256.slice(0, 12)}…</code>
           <EvidenceDownload issueKey={model.issue.key} runId={run.runId} stepId={step.id} evidence={e} disabled={busy} />
           {editable && <button className="va-button" disabled={busy || !reason.trim()} title={reason.trim() ? undefined : 'Give a reason for change first'}
-            onClick={async () => done(await call('tm:run:removeEvidence', { runId: run.runId, expectedRevision: run.revision, stepId: step.id, attachmentId: e.attachmentId, reason }))}>Remove</button>}
+            onClick={async () => done(await call('tm:run:removeEvidence', { runId: run.runId, expectedRevision: run.revision, stepId: step.id, attachmentId: e.attachmentId, reason }, here))}>Remove</button>}
         </p>
       ))}
       {!!step.history?.length && (
@@ -291,7 +302,7 @@ function StepRow({ run, step, model, busy, editable, call }: {
           <Select value={attachmentId} onChange={setAttachmentId} disabled={busy} placeholder="Add evidence from this execution's attachments"
             options={model.attachments.map(a => ({ value: a.id, label: a.filename }))} />
           <button className="va-button" disabled={busy || !attachmentId}
-            onClick={async () => { if (await call('tm:run:attachEvidence', { runId: run.runId, expectedRevision: run.revision, stepId: step.id, attachmentId })) setAttachmentId(''); }}>Add evidence</button>
+            onClick={async () => { if (await call('tm:run:attachEvidence', { runId: run.runId, expectedRevision: run.revision, stepId: step.id, attachmentId }, here)) setAttachmentId(''); }}>Add evidence</button>
         </div>
       )}
       {editable && model.attachments.length === 0 && <p className="va-subtlest" style={{ fontSize: 11 }}>To add evidence, attach the file to this execution first.</p>}
