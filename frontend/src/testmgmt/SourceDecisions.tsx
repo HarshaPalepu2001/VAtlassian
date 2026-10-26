@@ -68,7 +68,7 @@ export default function SourceDecisions({ model }: { model: TestViewModel }) {
     {records.map(record => <Card key={record.decisionId} title={`${record.content.source.issueKey} · ${record.content.kind === 'APPLICABILITY' ? 'Run applicability' : 'Definition review'}`}>
       <p><Badge tone={stateTone(record.state)}>{words(record.state)}</Badge> · {record.content.decision.toLowerCase().replaceAll('_', ' ')}</p>
       <p style={{ whiteSpace: 'pre-wrap' }}>{record.content.rationale}</p>
-      <Disclosure title="Decision audit identifiers">
+      <Disclosure title="Decision audit identifiers" open={record.canSign}>
       <p>Original baseline v{record.content.oldBaseline.version}: <code>{record.content.oldBaseline.id}</code></p>
       <p>Reviewed baseline v{record.content.newBaseline.version}: <code>{record.content.newBaseline.id}</code></p>
       <p>Signed test content: <code>{record.content.testDigest}</code></p>

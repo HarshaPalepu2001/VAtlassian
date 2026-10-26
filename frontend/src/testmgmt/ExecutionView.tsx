@@ -181,7 +181,7 @@ function Runner({ run, model, busy, editable, call, errorAt }: {
   return (
     <div className="tm-runner">
       {run.preconditions && <Notice>Preconditions: {run.preconditions}</Notice>}
-      {(frozen.planningSnapshot?.plan || frozen.planningSnapshot?.preconditions?.length || frozen.iterations?.length) ? <Disclosure title="Run inputs">
+      {(frozen.planningSnapshot?.plan || frozen.planningSnapshot?.preconditions?.length || frozen.iterations?.length) ? <Disclosure title="Run inputs" open={!!canSignNow}>
       {frozen.planningSnapshot?.plan && <p>Frozen plan {frozen.planningSnapshot.plan.issueId}
         {frozen.planningSnapshot.plan.revisionNo != null ? ` · revision ${frozen.planningSnapshot.plan.revisionNo}` : ''}
         {' · '}{frozen.planningSnapshot.required === false ? 'Optional test' : 'Required test'}
@@ -204,7 +204,7 @@ function Runner({ run, model, busy, editable, call, errorAt }: {
         </div>)}
       </div>}
       </Disclosure> : null}
-      {run.steps.map(step => <StepRow key={step.id} run={run} step={step} model={model} busy={busy} editable={editable} call={call} errorAt={errorAt} />)}
+      {run.steps.map(step => <StepRow key={step.id} run={run} step={step} model={model} busy={busy} editable={editable} signing={!!canSignNow} call={call} errorAt={errorAt} />)}
 
       {run.state === 'IN_PROGRESS' && run.signabilityProblem && <Notice>{PROBLEMS[run.signabilityProblem] ?? run.signabilityProblem}</Notice>}
       {run.resultPending && <Notice>A result change is waiting for its audit record. Refresh in a moment.</Notice>}
@@ -239,8 +239,8 @@ function Runner({ run, model, busy, editable, call, errorAt }: {
   );
 }
 
-function StepRow({ run, step, model, busy, editable, call, errorAt }: {
-  run: Run; step: RunStep; model: ExecutionViewModel; busy: boolean; editable: boolean;
+function StepRow({ run, step, model, busy, editable, signing, call, errorAt }: {
+  run: Run; step: RunStep; model: ExecutionViewModel; busy: boolean; editable: boolean; signing: boolean;
   call: Call; errorAt: ErrorAt;
 }) {
   const [actual, setActual] = useState(step.actual);
@@ -257,7 +257,8 @@ function StepRow({ run, step, model, busy, editable, call, errorAt }: {
     stepId: step.id, status, actual, comment, ...(recorded ? { reason } : {}) }, here));
   return (
     <div className="tm-run-step" role="group" aria-label={`Step ${step.position}`}>
-      <details open={step.position === 1}>
+      {/* Everything the signer signs stays open while their sign box is shown. */}
+      <details open={signing || step.position === 1}>
       <summary className="tm-step-summary"><span><strong>Step {step.position}.</strong> {step.action}</span><Badge tone={resultTone(step.status)}>{words(step.status)}</Badge></summary>
       <div className="tm-step-body">
       {step.data && <p style={{ fontSize: 12 }}>Data: {step.data}</p>}
@@ -296,7 +297,7 @@ function StepRow({ run, step, model, busy, editable, call, errorAt }: {
         </p>
       ))}
       {!!step.history?.length && (
-        <Disclosure title={`Change history (${step.history.length})`}>
+        <Disclosure title={`Change history (${step.history.length})`} open={signing}>
         <div aria-label={`Changes to step ${step.position}`}>
           <p className="va-subtlest">Earlier entries are retained in the audit record.</p>
           {step.history.map((h, i) => (

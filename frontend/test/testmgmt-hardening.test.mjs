@@ -215,10 +215,12 @@ test('frozen reusable preconditions and iteration values are readable before run
   run.planningSnapshot = { plan: { issueId: '40', revisionNo: 3, digest: 'd'.repeat(64) }, required: true,
     preconditions: [{ issueId: '41', revisionNo: 2, digest: 'e'.repeat(64), text: 'Power safe before connecting' }] };
   run.iterations = [{ id: 'high', values: { voltage: '14 V' }, stepIds: ['s1'] }];
+  run.steps.push({ ...run.steps[0], id: 's2', position: 2, action: 'Second action', expected: 'Second expected', evidence: [] });
   await mount(ExecutionView, { model: m, onModel: () => {} });
   await act(() => [...container.querySelectorAll('button')].find(b => b.textContent === 'Show steps').click());
   for (const text of ['Power safe before connecting', 'high', 'voltage', '14 V']) assert.ok(container.textContent.includes(text), text);
   assert.ok(container.textContent.indexOf('14 V') < container.textContent.indexOf('I approve the frozen definition'));
+  for (const details of container.querySelectorAll('details')) assert.equal(details.open, true, 'signed content is expanded at sign-off');
 });
 test('retained download sends only record identities and blocks mismatched bytes', async () => {
   const m = executionModel(); const calls = [];

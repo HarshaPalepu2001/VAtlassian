@@ -100,6 +100,8 @@ test('source review preparation carries the human rationale and displays exact b
   await act(() => button('Prepare decision for signing').click());
   assert.equal(calls.find(c => c.key === 'tm:sources:prepareDecision').payload.decision, 'FITS');
   assert.ok(container.textContent.indexOf('Reviewed baseline v2') < container.textContent.indexOf('I approve this source decision.'));
+  const baselines = [...container.querySelectorAll('details')].find(d => d.textContent.includes('Reviewed baseline v2'));
+  assert.equal(baselines.open, true, 'the reviewed baselines are expanded beside the sign box');
 });
 
 test('dataset editor changes parameter definitions and explicit row values through the consumer callback', async () => {
