@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { invoke } from '../../lib/bridge';
-import { Field, Page, Section, Select } from '../../ui/primitives';
+import { Badge, EmptyState, Field, Page, Section, Select } from '../../ui/primitives';
 import { Notice } from '../../ui/feedback';
+import { Tabs } from '../../testmgmt/ui';
 import type { Project } from '../types';
 
 type ChainStep = { label: string; role: string; meaning: string };
@@ -22,6 +23,7 @@ type Loaded = { success: boolean; error?: string; config: Config | null;
  * enforces them with no override (owner decision 4).
  */
 export default function TestManagementPage({ projects }: { projects: Project[] }) {
+  const [tab, setTab] = useState('setup');
   const [projectId, setProjectId] = useState('');
   const [data, setData] = useState<Loaded | null>(null);
   const [form, setForm] = useState<Config | null>(null);
@@ -31,7 +33,7 @@ export default function TestManagementPage({ projects }: { projects: Project[] }
 
   useEffect(() => {
     let cancelled = false;
-    setData(null); setForm(null); setMessage(null); setRepair({ runId: '', bugKey: '', reason: '' });
+    setTab('setup'); setData(null); setForm(null); setMessage(null); setRepair({ runId: '', bugKey: '', reason: '' });
     if (!projectId) return;
     invoke<Loaded>('admin:tm:get', { projectId }).then(res => {
       if (cancelled) return;
@@ -76,13 +78,17 @@ export default function TestManagementPage({ projects }: { projects: Project[] }
   const rolesError = versionRoles.error ?? runRoles.error;
 
   return (
-    <Page eyebrow="Setup" title="Test management"
-      lead="Choose the work types for tests, test executions and bugs, and the sign-off chains. A run counts only when the test version it used is signed and every step of the run chain is signed.">
-      <Field label="Project">
+    <div className="tm tm--admin"><Page title="Test management"
+      lead="Configure test work types, approvals, and execution settings by project."
+      actions={form && <Badge tone={form.enabled ? 'success' : 'neutral'}>{form.enabled ? 'Enabled' : 'Off'}</Badge>}>
+      <div className="tm-project-picker"><Field label="Project">
         <Select value={projectId} onChange={setProjectId} disabled={busy} placeholder="Choose a project"
           options={projects.map(p => ({ value: p.id, label: `${p.name} (${p.key})` }))} />
-      </Field>
+      </Field></div>
+      {!projectId && <EmptyState title="Choose a project">Select a project to configure test management.</EmptyState>}
+      {projectId && !data && !message && <p role="status">Loading project settings…</p>}
       {message && <Notice danger={message.danger}>{message.text}</Notice>}
+      {rolesError && <Notice danger>{rolesError}</Notice>}
       {data && data.project.style !== 'classic' && <Notice danger>This is a team-managed project. Test management works on company-managed projects only.</Notice>}
       {data?.workflowHealth && (!data.workflowHealth.readable || data.workflowHealth.missingDoneRoutes.length > 0) && (
         <Notice danger>{data.workflowHealth.readable
@@ -91,7 +97,8 @@ export default function TestManagementPage({ projects }: { projects: Project[] }
       )}
       {form && data && (
         <>
-          <Section title="Work types">
+          <Tabs label="Test management settings" value={tab} onChange={setTab} tabs={[
+            { id: 'setup', label: 'Work types', content: <Section title="Work types">
             <div className="va-form-grid">
               {([['testTypeId', 'Test'], ['executionTypeId', 'Test Execution'], ['planTypeId', 'Test Plan (optional)'],
                 ['setTypeId', 'Test Set (optional)'], ['preconditionTypeId', 'Precondition (optional)'], ['defectTypeId', 'Bug (created on a failed run)']] as const).map(([key, label]) => (
@@ -100,38 +107,35 @@ export default function TestManagementPage({ projects }: { projects: Project[] }
                     placeholder="Choose a work type" options={types} />
                 </Field>
               ))}
-              <Field label="Link type for bugs" hint="The automatic bug is linked to its test and execution with this link type.">
+              <Field label="Link type for bugs" hint="Links each automatic bug to its test and execution.">
                 <Select value={form.linkTypeName} onChange={v => setForm({ ...form, linkTypeName: v })} disabled={busy}
                   placeholder="Choose a link type" options={data.linkTypes.map(l => ({ value: l.name, label: l.name }))} />
               </Field>
-              <Field label="Verifies link type" hint="Signed Test source references use this dedicated outward Jira relationship. Existing source baselines keep their signed link policy until a new native approval.">
+              <Field label="Verifies link type" hint="Dedicated outward relationship for signed source references.">
                 <Select value={form.sourceLinkTypeId ?? ''} onChange={v => setForm({ ...form, sourceLinkTypeId: v || null })} disabled={busy}
                   placeholder="Not configured" options={data.linkTypes.filter(link => link.name !== form.linkTypeName).map(link => ({ value: link.id, label: link.name }))} />
               </Field>
             </div>
             <p className="va-subtlest" style={{ fontSize: 12 }}>
-              Use work types that only test management uses. Tests, executions and their bugs sit outside their Epic's approved baseline, so creating them never holds the Epic.
+              Use dedicated test work types. Test work items stay outside their Epic’s approved baseline.
             </p>
-          </Section>
-          {rolesError && <Notice danger>{rolesError}</Notice>}
+          </Section> },
+            { id: 'signoff', label: 'Sign-off', content: <>
           <ChainEditor title="Test version sign-off" scope="Test" chain={form.versionChain} roles={versionRoles.roles} busy={busy}
             onChange={c => setForm(f => f && { ...f, versionChain: c })} />
           <Section title="Independent review">
             <label><input type="checkbox" checked={form.authorSeparation === true} disabled={busy} aria-label="Authors cannot sign their own content"
               onChange={e => setForm(f => f && { ...f, authorSeparation: e.target.checked })} /> Authors cannot sign their own test versions and plan revisions</label>
-            {form.authorSeparation === true
-              ? <p className="va-subtlest" style={{ fontSize: 12 }}>Anyone who edited or published the content since it was last signed must leave sign-off to someone else. This applies to everything still waiting for sign-off.</p>
-              : <Notice danger>Off: an author can approve their own test. This is not compliant (independent review, ISO 26262-8, ASPICE, GxP). Use it only for single-person trials, and switch it on before real use. Every signature records whether it was on.</Notice>}
+            {form.authorSeparation === true && <p className="va-subtlest" style={{ fontSize: 12 }}>An independent signer must approve content edited or published since the last sign-off, including pending revisions.</p>}
           </Section>
           <ChainEditor title="Test run sign-off" scope="Test Execution" chain={form.runChain} roles={runRoles.roles} busy={busy}
             onChange={c => setForm(f => f && { ...f, runChain: c })} />
-          <div className="va-row" style={{ gap: 8 }}>
-            <button className="va-button va-button--primary" disabled={busy} onClick={() => save(true)}>{form.enabled ? 'Save' : 'Save and enable'}</button>
-            {form.enabled && <button className="va-button" disabled={busy} onClick={() => save(false)}>Turn off</button>}
-          </div>
-          <Notice>People need the roles in these chains for this project: assign them under Approver roles. A chain step nobody holds cannot be signed, and a run that needs it cannot start.</Notice>
+          <p className="va-hint">Assign chain roles under Approver roles. Every step needs an eligible signer before a run can start.</p>
+          </> },
+            { id: 'repairs', label: 'Repairs', count: data.repairs?.items.length ?? 0, content:
           <Section title="Repair automatic bug">
-            <p>Investigate the run and Jira history first. Choose the existing mapped Bug under the test's parent. The repair checks its project, work type, parent and exclusive run assignment, creates both navigation links, and records your reason.</p>
+            <p>Review the run and Jira history, then link the existing bug. The bug must match the run’s project, work type, and parent. Your reason is recorded.</p>
+            {!data.repairs?.items.length && <p className="va-hint">No repairs are listed. Enter a run ID to investigate a specific run.</p>}
             {data.repairs?.items.map(item => <p key={item.runId}>
               <button className="va-button" disabled={busy} onClick={() => setRepair({ runId: item.runId, bugKey: item.issueKey ?? '', reason: '' })}>
                 Select run {item.runId.slice(0, 8)}{item.issueKey ? ` · ${item.issueKey}` : ''}
@@ -146,10 +150,16 @@ export default function TestManagementPage({ projects }: { projects: Project[] }
               onChange={e => setRepair({ ...repair, reason: e.target.value })} /></Field>
             <button className="va-button" disabled={busy || !/^[0-9a-f]{32}$/.test(repair.runId) || !repair.bugKey || !repair.reason.trim()}
               onClick={repairBug}>Record repair</button>
-          </Section>
+          </Section> }
+          ]} />
+          {tab !== 'repairs' && form.authorSeparation !== true && <Notice danger>Off: an author can approve their own test. This is not compliant (independent review, ISO 26262-8, ASPICE, GxP). Use it only for single-person trials, and switch it on before real use. Every signature records whether it was on.</Notice>}
+          <div className="tm-actions tm-admin-actions" hidden={tab === 'repairs'}>
+            <button className="va-button va-button--primary" disabled={busy} onClick={() => save(true)}>{form.enabled ? 'Save' : 'Save and enable'}</button>
+            {form.enabled && <button className="va-button" disabled={busy} onClick={() => save(false)}>Turn off</button>}
+          </div>
         </>
       )}
-    </Page>
+    </Page></div>
   );
 }
 
@@ -185,22 +195,22 @@ function ChainEditor({ title, scope, chain, roles, busy, onChange }: {
   }, [roles]);
   return (
     <Section title={title}>
-      <table className="va-table">
-        <thead><tr><th>#</th><th>Label</th><th>Role</th><th>What the signer attests</th><th /></tr></thead>
+      <div className="tm-table-scroll" tabIndex={0}><table className="va-table tm-chain-table">
+        <thead><tr><th>#</th><th>Label</th><th>Role</th><th>What the signer attests</th><th><span className="va-visually-hidden">Step actions</span></th></tr></thead>
         <tbody>{chain.steps.map((s, i) => (
           <tr key={i}>
             <td>{i + 1}</td>
-            <td><input className="va-input" value={s.label} disabled={busy} onChange={e => set(i, { label: e.target.value })} /></td>
-            <td><Select value={s.role} onChange={v => set(i, { role: v })} disabled={busy || !roles} placeholder="Choose a role…"
+            <td><input className="va-input" aria-label={`${title} step ${i + 1} label`} value={s.label} disabled={busy} onChange={e => set(i, { label: e.target.value })} /></td>
+            <td><Select ariaLabel={`${title} step ${i + 1} role`} value={s.role} onChange={v => set(i, { role: v })} disabled={busy || !roles} placeholder="Choose a role…"
               options={(roles ?? []).map(r => ({ value: r, label: r }))} /></td>
-            <td><textarea className="va-input" rows={2} value={s.meaning} disabled={busy} onChange={e => set(i, { meaning: e.target.value })} /></td>
+            <td><textarea className="va-input" aria-label={`${title} step ${i + 1} meaning`} rows={2} value={s.meaning} disabled={busy} onChange={e => set(i, { meaning: e.target.value })} /></td>
             <td><button className="va-button" disabled={busy || chain.steps.length === 1}
               onClick={() => onChange({ ...chain, steps: chain.steps.filter((_, j) => j !== i) })}>Remove</button></td>
           </tr>
         ))}</tbody>
-      </table>
+      </table></div>
       <p className="va-subtlest" style={{ fontSize: 12 }}>
-        Roles defined in Approver roles. Create a grant there first to add new roles. Roles must be granted on the {scope} work type.
+        Grant roles for the {scope} work type under Approver roles.
       </p>
       <div className="va-row" style={{ gap: 12, marginTop: 8, alignItems: 'center' }}>
         <button className="va-button" disabled={busy || chain.steps.length >= 6}

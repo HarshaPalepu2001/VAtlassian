@@ -45,20 +45,19 @@ export default function TestPanel() {
   if (!ctx) return <Loading />;
   if (!ctx.enabled) return <Page variant="panel"><EmptyState title="Test management is off">A VAtlassian administrator can enable it for this project.</EmptyState></Page>;
   if (ctx.role === 'BUG') return <Page variant="panel"><Notice>This bug was created automatically from a failed, signed test run. Its run is on the linked test execution.</Notice></Page>;
-  if (ctx.role === 'SOURCE' && issueKey) return <Page variant="panel"><CoverageView issueKey={issueKey} scope="SOURCE" /></Page>;
+  if (ctx.role === 'SOURCE' && issueKey) return <Page variant="panel"><div className="tm"><CoverageView issueKey={issueKey} scope="SOURCE" /></div></Page>;
   if (!ctx.role) {
     return <Page variant="panel"><EmptyState title="Not a test-management work item">Tests and test executions show their details here.</EmptyState></Page>;
   }
   if (!model) return <Loading />;
   return (
-    <Page variant="panel" eyebrow={model.role === 'TEST' ? 'Test' : model.role === 'EXECUTION' ? 'Test execution' : model.role === 'PLAN' ? 'Test plan' : model.role === 'SET' ? 'Test set' : 'Precondition'} title={model.issue.key}
-      actions={<button className="va-button" onClick={load}>Refresh</button>}>
+    <Page variant="panel">
+      <div className="tm tm-panel-header"><span>Test management</span><button className="va-button" onClick={load}>Refresh</button></div>
       {model.role === 'TEST' ? <>
-        <TestView key={`${model.issue.key}:${model.draft.revision}`} model={model} onModel={setModel} />
-        <CoverageView key={`coverage:${model.versions.map(v => v.state).join()}`} issueKey={model.issue.key} />
-        <SourceDecisions model={model} />
+        <TestView key={model.issue.key} model={model} onModel={setModel}
+          coverage={<><CoverageView key={`coverage:${model.versions.map(v => v.state).join()}`} issueKey={model.issue.key} /><SourceDecisions model={model} /></>} />
       </> : model.role === 'EXECUTION' ? <ExecutionView model={model} onModel={setModel} />
-        : <PlanningView key={`${model.issue.key}:${model.draft.revision}`} model={model} onModel={setModel} />}
+        : <PlanningView key={model.issue.key} model={model} onModel={setModel} />}
     </Page>
   );
 }

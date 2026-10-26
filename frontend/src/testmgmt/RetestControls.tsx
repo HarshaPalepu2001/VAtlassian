@@ -60,7 +60,7 @@ export default function RetestControls({ model }: { model: Model; onModel?: (mod
 
   if (!model.issue.done) return null;
   return <Section title="Selective rerun">
-    <p>Create a new execution under this execution's parent. The selected runs retain their environment, configuration and release; the original signed records remain available.</p>
+    <p>Create a new execution for selected runs, keeping their environment, configuration and release. Original signed records remain available.</p>
     {!model.canEdit && <Notice>You need permission to edit this execution and create work items to start a rerun.</Notice>}
     {error && <Notice danger>{error}</Notice>}
     <fieldset disabled={busy || !!attempt || !model.canEdit} style={{ border: 0, padding: 0 }}>

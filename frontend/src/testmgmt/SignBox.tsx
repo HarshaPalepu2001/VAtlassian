@@ -20,8 +20,8 @@ export default function SignBox({ step, digest, allowReject, busy, error, onSign
   const [reason, setReason] = useState('');
   const ready = code.length === 6 && !busy && (rejecting ? reason.trim().length > 0 : affirmed);
   return (
-    <div className="va-card va-card--sunken" style={{ padding: 12 }} role="group" aria-label={`${step.label} sign-off`}>
-      <p><strong>{step.label}</strong> · role {step.role}</p>
+    <div className="tm-signoff" role="group" aria-label={`${step.label} sign-off`}>
+      <p><strong>{step.label}</strong> <span className="va-muted">({step.role})</span></p>
       {!rejecting && <Affirmation checked={affirmed} onChange={setAffirmed} disabled={busy}>{step.meaning}</Affirmation>}
       {rejecting && (
         <label className="va-field"><span className="va-label">Reason for rejecting</span>

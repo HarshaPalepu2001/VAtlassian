@@ -296,18 +296,21 @@ export function Select({
   value,
   onChange,
   disabled,
+  ariaLabel,
   placeholder,
   options
 }: {
   value: string;
   onChange: (value: string) => void;
   disabled?: boolean;
+  ariaLabel?: string;
   placeholder: string;
   options: Array<{ value: string; label: string }>;
 }) {
   return (
     <select
       className="va-select"
+      aria-label={ariaLabel}
       value={value}
       disabled={disabled}
       onChange={(event) => onChange(event.target.value)}

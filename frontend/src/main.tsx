@@ -5,6 +5,7 @@ import '@atlaskit/css-reset';
 import './ui/tokens.css';
 import './ui/product.css';
 import './ui/surfaces.css';
+import './testmgmt/testManagement.css';
 import { Loading,Page } from './ui/primitives';
 import { Notice } from './ui/feedback';
 import IssueContext from './context/IssueContext';

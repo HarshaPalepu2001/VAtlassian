@@ -34,8 +34,8 @@ export default function DatasetEditor({ value, onChange, disabled = false }: {
     change({ rows: [...rows, { id: `i${n}`, values: Object.fromEntries(dataset.parameters.map(p => [p.name, p.type === 'LIST' ? p.values?.[0] ?? '' : p.value ?? ''])) }] });
   };
   return <section aria-label="Test dataset">
-    <h4>Dataset and iterations</h4>
-    <p className="va-subtlest">Use {'{{parameter}}'} in actions, data and expected results. Publishing freezes the values with the test version.</p>
+    <h3 className="tm-subheading">Parameters and iterations</h3>
+    <p className="va-subtlest">Use {'{{parameter}}'} in steps. Values are frozen when you publish.</p>
     {invalid && <p role="alert">Parameter names must be unique and begin with a letter.</p>}
     {count > 100 && <p role="alert">This dataset exceeds 100 iterations. Split it before saving.</p>}
     <fieldset disabled={disabled} style={{ border: 0, padding: 0 }}>
@@ -43,7 +43,7 @@ export default function DatasetEditor({ value, onChange, disabled = false }: {
         <select className="va-input" aria-label="Iteration mode" value={dataset.mode ?? 'ROWS'} onChange={e => change({ mode: e.target.value as Dataset['mode'], rows: e.target.value === 'COMBINATORIAL' ? [] : [{ id: 'i1', values: Object.fromEntries(dataset.parameters.map(p => [p.name, p.value ?? p.values?.[0] ?? ''])) }] })}>
           <option value="ROWS">Explicit dataset rows</option><option value="COMBINATORIAL">All value combinations</option>
         </select></label>}
-      {dataset.parameters.map((p, index) => <div className="va-card" key={index} style={{ padding: 8, marginBottom: 8 }}>
+      {dataset.parameters.map((p, index) => <div className="tm-dataset-parameter" key={index}>
         <label className="va-field"><span className="va-label">Parameter {index + 1}</span><input className="va-input" aria-label={`Parameter ${index + 1} name`} maxLength={32} value={p.name} onChange={e => parameter(index, { name: e.target.value })} /></label>
         <label className="va-field"><span className="va-label">Parameter type</span><select className="va-input" aria-label={`Parameter ${index + 1} type`} value={p.type} onChange={e => parameter(index, e.target.value === 'LIST' ? { type: 'LIST', values: p.values ?? [''] } : { type: 'TEXT', value: p.value ?? '' })}>
           <option value="TEXT">Text</option><option value="LIST">Value list</option></select></label>
@@ -53,7 +53,7 @@ export default function DatasetEditor({ value, onChange, disabled = false }: {
       </div>)}
       {dataset.parameters.length < 20 && <button type="button" className="va-button" onClick={addParameter}>Add parameter</button>}
       {!!dataset.parameters.length && dataset.mode !== 'COMBINATORIAL' && <>
-        <table className="va-table"><thead><tr><th>Iteration id</th>{dataset.parameters.map((p, i) => <th key={i}>{p.name}</th>)}<th /></tr></thead><tbody>
+        <div className="tm-table-scroll" tabIndex={0}><table className="va-table"><thead><tr><th>Iteration id</th>{dataset.parameters.map((p, i) => <th key={i}>{p.name}</th>)}<th /></tr></thead><tbody>
           {rows.map((row, index) => <tr key={index}>
             <td><input className="va-input" aria-label={`Iteration ${index + 1} id`} value={row.id} maxLength={32} onChange={e => change({ rows: rows.map((r, i) => i === index ? { ...r, id: e.target.value } : r) })} /></td>
             {dataset.parameters.map((p, i) => <td key={i}>{p.type === 'LIST'
@@ -61,7 +61,7 @@ export default function DatasetEditor({ value, onChange, disabled = false }: {
               : <input className="va-input" aria-label={`Iteration ${row.id} ${p.name}`} maxLength={4000} value={row.values[p.name] ?? ''} onChange={e => change({ rows: rows.map((r, j) => j === index ? { ...r, values: { ...r.values, [p.name]: e.target.value } } : r) })} />}</td>)}
             <td><button type="button" className="va-button" aria-label={`Remove iteration ${row.id}`} onClick={() => change({ rows: rows.filter((_, i) => i !== index) })}>Remove</button></td>
           </tr>)}
-        </tbody></table>
+        </tbody></table></div>
         <button type="button" className="va-button" disabled={rows.length >= 100} onClick={addRow}>Add iteration</button>
       </>}
       {!!dataset.parameters.length && <button type="button" className="va-button" onClick={() => onChange(null)}>Remove dataset</button>}

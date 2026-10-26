@@ -56,6 +56,39 @@ test('the signer can read every exact frozen field before the version sign contr
   }
   assert.ok(container.textContent.indexOf('Frozen expected A') < container.textContent.indexOf('I approve the frozen definition'));
 });
+test('test views separate authoring from history and retain unsaved edits across tabs', async () => {
+  await mount(TestView, { model: model(), onModel: () => {} });
+  const tabs = [...container.querySelectorAll('[role="tab"]')];
+  const draftTab = tabs.find(tab => tab.textContent.includes('Definition'));
+  const versionsTab = tabs.find(tab => tab.textContent.includes('Versions'));
+  assert.ok(draftTab && versionsTab, 'Definition and Versions have separate views');
+  const draftPanel = container.querySelector(`#${draftTab.getAttribute('aria-controls')}`);
+  const input = draftPanel.querySelector('textarea');
+  await act(() => {
+    Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set.call(input, 'Unsaved test objective');
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    input.dispatchEvent(new window.Event('change', { bubbles: true }));
+  });
+  await act(() => versionsTab.click());
+  assert.equal(draftPanel.hidden, true);
+  assert.equal(versionsTab.getAttribute('aria-selected'), 'true');
+  await act(() => draftTab.click());
+  assert.equal(input.value, 'Unsaved test objective');
+  assert.equal(draftPanel.hidden, false);
+});
+test('test-management tabs support arrow and boundary keys with one tab stop', async () => {
+  await mount(TestView, { model: model(), onModel: () => {} });
+  const tabs = [...container.querySelectorAll('[role="tab"]')];
+  assert.ok(tabs.length >= 3);
+  await act(() => tabs[0].dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })));
+  assert.equal(tabs[1].getAttribute('aria-selected'), 'true');
+  assert.equal(document.activeElement, tabs[1]);
+  await act(() => tabs[1].dispatchEvent(new window.KeyboardEvent('keydown', { key: 'End', bubbles: true })));
+  assert.equal(tabs.at(-1).getAttribute('aria-selected'), 'true');
+  await act(() => tabs.at(-1).dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Home', bubbles: true })));
+  assert.equal(tabs[0].getAttribute('aria-selected'), 'true');
+  assert.equal(tabs.filter(tab => tab.tabIndex === 0).length, 1);
+});
 test('signed and superseded versions retain readable complete definitions', async () => {
   const m = model(); m.versions[0].state = 'SUPERSEDED'; m.versions[0].canSign = false; m.versions[0].nextStep = null;
   await mount(TestView, { model: m, onModel: () => {} });
@@ -156,7 +189,8 @@ test('chain role pickers offer the roles granted in Approver roles for the Test 
   assert.equal(version.value, 'QA', 'a granted role stays chosen');
   assert.equal(reviewed.value, 'QA Lead');
   assert.equal(executed.value, '', 'a role nobody was granted is cleared, as on controlled transitions');
-  assert.match(container.textContent, /Roles defined in Approver roles\. Create a grant there first to add new roles\./);
+  assert.match(container.textContent, /Grant roles for the Test work type under Approver roles\./);
+  assert.match(container.textContent, /Grant roles for the Test Execution work type under Approver roles\./);
 });
 function executionModel() { return { role: 'EXECUTION', issue: { id: '12', key: 'VAT-12', summary: 'Execution', done: true, status: 'Done' },
   parent: { id: '10', key: 'VAT-10' }, canEdit: false, releases: [], attachments: [], runChain: chain,
@@ -306,6 +340,8 @@ test('the author rule switch warns while off and is sent with the configuration'
   await act(() => { const select = container.querySelector('select'); select.value = '100'; select.dispatchEvent(new window.Event('change', { bubbles: true })); });
   await until(() => !!container.querySelector('input[aria-label="Authors cannot sign their own content"]'));
   assert.match(container.textContent, /Off: an author can approve their own test\. This is not compliant/);
+  const warning = [...container.querySelectorAll('[role="alert"]')].find(alert => alert.textContent.includes('Off: an author'));
+  assert.equal(warning.closest('[hidden]') === null, true, 'The rule warning must be visible beside Save and enable, including on Work types');
   await act(() => container.querySelector('input[aria-label="Authors cannot sign their own content"]').click());
   assert.doesNotMatch(container.textContent, /This is not compliant/);
   await act(() => [...container.querySelectorAll('button')].find(b => b.textContent === 'Save and enable').click()); await flush();

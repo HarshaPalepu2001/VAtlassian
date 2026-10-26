@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { invoke } from '../lib/bridge';
-import { Badge, EmptyState, Section } from '../ui/primitives';
+import { Badge, EmptyState, IssueLink, Section } from '../ui/primitives';
 import { Notice } from '../ui/feedback';
+import { Disclosure } from './ui';
 
 export type SourceReference = { issueId: string; issueKey: string; projectId: string; siteId: string; sourceDigest: string;
   linkTypeId?: string | null;
@@ -12,7 +13,7 @@ export type CoverageRow = { test: { id: string; key: string; summary: string }; 
 export type CoverageModel = { scope: 'TEST' | 'SOURCE'; issue: { id: string; key: string; summary: string };
   complete: boolean; problems: string[]; rows: CoverageRow[] };
 type Failure = { error?: string; reason?: string };
-const words = (value: string) => value.toLowerCase().replaceAll('_', ' ');
+const words = (value: string) => { const text = value.toLowerCase().replaceAll('_', ' '); return text.charAt(0).toUpperCase() + text.slice(1); };
 const tone = (value: string) => value === 'VERIFIED' ? 'success' as const : value === 'UNKNOWN' ? 'warning' as const : 'neutral' as const;
 const reasonText: Record<string, string> = {
   SOURCE_CHANGED: 'The source changed after this test version was signed.', SOURCE_DRIFT: 'The source has changes awaiting approval.',
@@ -44,15 +45,24 @@ export default function CoverageView({ issueKey, scope = 'TEST', initialModel }:
     {error && <Notice danger>{error}</Notice>}
     {model && <>
       {!model.complete && <Notice danger>This view is incomplete. Unavailable records cannot count as verified.</Notice>}
-      <p className="va-subtlest">Operational coverage uses signed test results. Governed coverage also requires a current approved source baseline. Each row uses the latest terminal run for its configuration, release and environment.</p>
+      <p className="va-hint">Governed coverage requires a signed result and a current approved source baseline.</p>
       {model.rows.length === 0 && <EmptyState title="No coverage records">Add source references to a signed test version, then execute it.</EmptyState>}
-      {model.rows.map((row, index) => <div className="va-card" style={{ padding: 12, marginBottom: 8 }} key={`${row.runId ?? 'none'}-${row.source?.issueId ?? 'hidden'}-${index}`}>
-        <p><strong>{row.test.key}</strong>{' → '}{row.source?.issueKey ?? 'Source unavailable or not associated'}{' '}{row.suspect && <Badge tone="warning">Suspect</Badge>}</p>
-        <p style={{ fontSize: 12 }}>{[row.configuration, row.release?.name, row.environment].filter(Boolean).join(' · ') || 'No execution context'}{row.source?.baseline ? ` · source baseline v${row.source.baseline.version}` : ' · no source baseline'}</p>
-        <p>Operational: <Badge tone={tone(row.operational)}>{words(row.operational)}</Badge>{' '}Governed: <Badge tone={tone(row.governed)}>{words(row.governed)}</Badge></p>
-        <p style={{ fontSize: 12 }}>{words(row.state)} · {words(row.result)}{row.runId ? ` · run ${row.runId.slice(0, 8)}` : ''}</p>
-        {row.reasons.length > 0 && <ul>{row.reasons.map(reason => <li key={reason}>{reasonText[reason] ?? words(reason)}</li>)}</ul>}
-      </div>)}
+      {model.rows.length > 0 && <div className="tm-table-scroll" tabIndex={0} role="region" aria-label="Source coverage results">
+        <table className="va-table tm-coverage-table"><thead><tr><th>Test / source</th><th>Context</th><th>Operational</th><th>Governed</th></tr></thead>
+          <tbody>{model.rows.map((row, index) => <tr key={`${row.runId ?? 'none'}-${row.source?.issueId ?? 'hidden'}-${index}`}>
+            <td><IssueLink issueKey={row.test.key} /><div className="va-secondary">{row.source?.issueKey ?? 'Source unavailable or not associated'}</div>
+              {row.suspect && <Badge tone="warning">Suspect</Badge>}
+              {row.reasons.length > 0 && <Disclosure title="Coverage details"><ul>{row.reasons.map(reason => <li key={reason}>{reasonText[reason] ?? words(reason)}</li>)}</ul></Disclosure>}
+            </td>
+            <td>{[row.configuration, row.release?.name, row.environment].filter(Boolean).join(' · ') || 'No execution context'}
+              <div className="va-secondary">{row.source?.baseline ? `Source baseline v${row.source.baseline.version}` : 'No source baseline'}</div>
+              <div className="va-secondary">{words(row.state)} · {words(row.result)}{row.runId ? ` · run ${row.runId.slice(0, 8)}` : ''}</div>
+            </td>
+            <td><Badge tone={tone(row.operational)}>{words(row.operational)}</Badge></td>
+            <td><Badge tone={tone(row.governed)}>{words(row.governed)}</Badge></td>
+          </tr>)}</tbody>
+        </table>
+      </div>}
       {model.problems.length > 0 && model.rows.length === 0 && <Notice>{model.problems.map(reason => reasonText[reason] ?? words(reason)).join(' ')}</Notice>}
     </>}
   </Section>;
@@ -75,7 +85,7 @@ export function SourceSelection({ issueKey, references, onChange, disabled = fal
   };
   return <div>
     {error && <Notice danger>{error}</Notice>}
-    <p className="va-subtlest">Source references are approved with this test version. Updating a test's references leaves the source's baseline unchanged.</p>
+    <p className="va-hint">References are approved with the test version. Source baselines stay unchanged.</p>
     {references.map(source => <p key={source.issueId}>{source.issueKey}{source.baseline ? ` · baseline v${source.baseline.version}` : ' · operational source'}{' '}
       <button className="va-button" disabled={disabled || busy} onClick={() => onChange(references.filter(ref => ref.issueId !== source.issueId))}>Remove</button></p>)}
     <div className="va-row" style={{ gap: 8 }}>

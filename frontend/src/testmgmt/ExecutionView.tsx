@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { invoke } from '../lib/bridge';
-import { Badge, Card, CodeInput, EmptyState, Facts, Section, Select } from '../ui/primitives';
+import { Badge, CodeInput, EmptyState, Facts, Section, Select } from '../ui/primitives';
 import { Notice, When } from '../ui/feedback';
 import SignBox from './SignBox';
 import EvidenceDownload from './EvidenceDownload';
 import RetestControls from './RetestControls';
+import { Disclosure, Tabs } from './ui';
 import ExecutionSummary from './ExecutionSummary';
 import { PROBLEMS, resultTone, stateTone, words } from './labels';
 import type { ExecutionViewModel, Failure, Run, RunStep } from './types';
@@ -36,6 +37,7 @@ type Call = (key: string, payload: Record<string, unknown>, at?: string) => Prom
 type ErrorAt = (at: string) => string | null;
 
 export default function ExecutionView({ model, onModel }: { model: ExecutionViewModel; onModel: (m: ExecutionViewModel) => void }) {
+  const [tab, setTab] = useState('runs');
   const [busy, setBusy] = useState(false);
   // A located error shows at its control; one without a place shows at the top.
   const [error, setError] = useState<{ message: string; at: string | null } | null>(null);
@@ -78,7 +80,7 @@ export default function ExecutionView({ model, onModel }: { model: ExecutionView
   };
 
   return (
-    <>
+    <div className="tm">
       {error?.at === null && <Notice danger>{error.message}</Notice>}
       <Facts items={[
         { label: 'Parent', value: model.parent ? model.parent.key : <Badge tone="danger">No parent — set the Epic before running</Badge> },
@@ -87,8 +89,10 @@ export default function ExecutionView({ model, onModel }: { model: ExecutionView
       ]} />
       {model.issue.done && <Notice>This execution is done. Its runs are read-only.</Notice>}
 
+      <Tabs label="Execution details" value={tab} onChange={setTab} tabs={[
+        { id: 'runs', label: 'Runs', count: model.runs.length, content: <>
       {model.canEdit && !model.issue.done && (
-        <Section title="Add a run">
+        <Disclosure title={addRequest ? 'Retry pending run' : 'Add a run'} open={!!addRequest || model.runs.length === 0}>
           <div className="va-form-grid">
             <label className="va-field"><span className="va-label">Test key</span>
               <input className="va-input" placeholder="e.g. VAT-11" value={form.testKey} disabled={busy || !!addRequest}
@@ -105,8 +109,8 @@ export default function ExecutionView({ model, onModel }: { model: ExecutionView
           </div>
           {addRequest && <Notice>This add request is waiting for a confirmed outcome. Retrying uses the same submitted test and execution context.</Notice>}
           <button className="va-button va-button--primary" disabled={busy || !form.testKey.trim()} onClick={addRun}>{addRequest ? 'Retry Add run' : 'Add run'}</button>
-          <p className="va-subtlest" style={{ fontSize: 12 }}>The run uses the test's latest signed version and this project's sign-off chain as they are now.</p>
-        </Section>
+          <p className="va-subtlest" style={{ fontSize: 12 }}>Uses the latest signed test version and current sign-off chain.</p>
+        </Disclosure>
       )}
 
       <Section title="Runs">
@@ -116,9 +120,11 @@ export default function ExecutionView({ model, onModel }: { model: ExecutionView
             onToggle={() => setOpen(open === run.runId ? null : run.runId)} call={call} errorAt={errorAt} />
         ))}
       </Section>
-      <RetestControls model={model} />
-      <ExecutionSummary issueKey={model.issue.key} />
-    </>
+      </> },
+        ...(model.issue.done ? [{ id: 'rerun', label: 'Rerun', content: <RetestControls model={model} /> }] : []),
+        { id: 'summary', label: 'Summary', content: <ExecutionSummary issueKey={model.issue.key} /> }
+      ]} />
+    </div>
   );
 }
 
@@ -132,8 +138,10 @@ function RunCard({ run, model, busy, expanded, onToggle, call, errorAt }: {
     : run.state === 'SIGNING' ? 'Finish sign-off' : run.bug?.state === 'INTENT' ? 'Check bug again' : 'Finish bug setup';
   const title = `${run.test.key ?? 'Test'} v${run.version.versionNo ?? '?'}${run.test.summary ? ` · ${run.test.summary}` : ''}`;
   return (
-    <Card title={title} subtitle={<>{[run.environment, run.configuration, run.release?.name].filter(Boolean).join(' · ') || 'No environment stated'} · started <When ms={run.createdAt} /></>}>
-      <p>
+    <article className="tm-run">
+      <h3 className="tm-run__title">{title}</h3>
+      <p className="tm-run__meta">{[run.environment, run.configuration, run.release?.name].filter(Boolean).join(' · ') || 'No environment stated'} · started <When ms={run.createdAt} /></p>
+      <p className="tm-run__status">
         <Badge tone={stateTone(run.state)}>{words(run.state)}</Badge>{' '}
         <Badge tone={resultTone(run.result)}>{words(run.result)}</Badge>{' '}
         {run.bug && <Badge tone={run.bug.state === 'CREATED' ? 'neutral' : 'danger'}>{words(run.bug.state)}{run.bug.issueKey ? ` ${run.bug.issueKey}` : ''}</Badge>}
@@ -152,10 +160,10 @@ function RunCard({ run, model, busy, expanded, onToggle, call, errorAt }: {
       {run.canFinish && <button className="va-button" disabled={busy} onClick={() => call('tm:run:retryBug', { runId: run.runId }, `finish:${run.runId}`)}>{finishLabel}</button>}
       {errorAt(`finish:${run.runId}`) && <Notice danger>{errorAt(`finish:${run.runId}`)}</Notice>}
       {run.test.hidden ? <Notice>You cannot open this test in Jira, so its steps and results are not shown here.</Notice> : (
-        <button className="va-button" onClick={onToggle}>{expanded ? 'Hide steps' : editable ? 'Open runner' : 'Show steps'}</button>
+        <button className="va-button" aria-expanded={expanded} onClick={onToggle}>{expanded ? 'Hide steps' : editable ? 'Open runner' : 'Show steps'}</button>
       )}
       {expanded && !run.test.hidden && <Runner run={run} model={model} busy={busy} editable={editable} call={call} errorAt={errorAt} />}
-    </Card>
+    </article>
   );
 }
 
@@ -171,8 +179,9 @@ function Runner({ run, model, busy, editable, call, errorAt }: {
     preconditions?: { issueId: string; revisionNo?: number; digest?: string; text: string }[] } | null;
     iterations?: { id: string; values: Record<string, string>; stepIds?: string[] }[] };
   return (
-    <div style={{ marginTop: 8 }}>
+    <div className="tm-runner">
       {run.preconditions && <Notice>Preconditions: {run.preconditions}</Notice>}
+      {(frozen.planningSnapshot?.plan || frozen.planningSnapshot?.preconditions?.length || frozen.iterations?.length) ? <Disclosure title="Run inputs">
       {frozen.planningSnapshot?.plan && <p>Frozen plan {frozen.planningSnapshot.plan.issueId}
         {frozen.planningSnapshot.plan.revisionNo != null ? ` · revision ${frozen.planningSnapshot.plan.revisionNo}` : ''}
         {' · '}{frozen.planningSnapshot.required === false ? 'Optional test' : 'Required test'}
@@ -188,12 +197,13 @@ function Runner({ run, model, busy, editable, call, errorAt }: {
       {!!frozen.iterations?.length && <div aria-label="Frozen run iterations">
         <h4>Frozen iterations</h4>
         {frozen.iterations.map(iteration => <div key={iteration.id}><p><strong>{iteration.id}</strong></p>
-          {Object.keys(iteration.values).length ? <table className="va-table"><thead><tr><th>Parameter</th><th>Value</th></tr></thead>
-            <tbody>{Object.entries(iteration.values).map(([name, value]) => <tr key={name}><td>{name}</td><td style={{ whiteSpace: 'pre-wrap' }}>{value}</td></tr>)}</tbody></table>
+          {Object.keys(iteration.values).length ? <div className="tm-table-scroll" tabIndex={0}><table className="va-table"><thead><tr><th>Parameter</th><th>Value</th></tr></thead>
+            <tbody>{Object.entries(iteration.values).map(([name, value]) => <tr key={name}><td>{name}</td><td style={{ whiteSpace: 'pre-wrap' }}>{value}</td></tr>)}</tbody></table></div>
             : <p>No parameters.</p>}
           {!!iteration.stepIds?.length && <p className="va-subtlest" style={{ fontSize: 11 }}>Steps: {iteration.stepIds.join(', ')}</p>}
         </div>)}
       </div>}
+      </Disclosure> : null}
       {run.steps.map(step => <StepRow key={step.id} run={run} step={step} model={model} busy={busy} editable={editable} call={call} errorAt={errorAt} />)}
 
       {run.state === 'IN_PROGRESS' && run.signabilityProblem && <Notice>{PROBLEMS[run.signabilityProblem] ?? run.signabilityProblem}</Notice>}
@@ -246,11 +256,12 @@ function StepRow({ run, step, model, busy, editable, call, errorAt }: {
   const record = async (status: string) => done(await call('tm:run:recordStep', { runId: run.runId, expectedRevision: run.revision,
     stepId: step.id, status, actual, comment, ...(recorded ? { reason } : {}) }, here));
   return (
-    <div className="va-card" style={{ padding: 10, marginBottom: 8 }} role="group" aria-label={`Step ${step.position}`}>
-      <p><strong>Step {step.position}.</strong> {step.action}</p>
+    <div className="tm-run-step" role="group" aria-label={`Step ${step.position}`}>
+      <details open={step.position === 1}>
+      <summary className="tm-step-summary"><span><strong>Step {step.position}.</strong> {step.action}</span><Badge tone={resultTone(step.status)}>{words(step.status)}</Badge></summary>
+      <div className="tm-step-body">
       {step.data && <p style={{ fontSize: 12 }}>Data: {step.data}</p>}
       <p style={{ fontSize: 12 }}>Expected: {step.expected}</p>
-      <p><Badge tone={resultTone(step.status)}>{words(step.status)}</Badge></p>
       {editable ? (
         <>
           <div className="va-form-grid">
@@ -263,7 +274,7 @@ function StepRow({ run, step, model, busy, editable, call, errorAt }: {
             <label className="va-field"><span className="va-label">Reason for change (needed to change a recorded result or remove evidence)</span>
               <textarea className="va-input" rows={1} value={reason} onChange={e => setReason(e.target.value)} disabled={busy} /></label>
           )}
-          <div className="va-row" style={{ gap: 6 }}>
+          <div className="tm-actions tm-status-actions">
             {STATUSES.map(s => (
               <button key={s} className={`va-button${step.status === s ? ' va-button--primary' : ''}`} disabled={busy || needsReason(s)} onClick={() => record(s)}>{words(s)}</button>
             ))}
@@ -278,15 +289,16 @@ function StepRow({ run, step, model, busy, editable, call, errorAt }: {
       )}
       {step.evidence.map(e => (
         <p key={e.attachmentId} style={{ fontSize: 12 }}>
-          📎 {e.filename} · SHA-256 <code>{e.sha256.slice(0, 12)}…</code>
+          {e.filename} · SHA-256 <code>{e.sha256.slice(0, 12)}…</code>
           <EvidenceDownload issueKey={model.issue.key} runId={run.runId} stepId={step.id} evidence={e} disabled={busy} />
           {editable && <button className="va-button" disabled={busy || !reason.trim()} title={reason.trim() ? undefined : 'Give a reason for change first'}
             onClick={async () => done(await call('tm:run:removeEvidence', { runId: run.runId, expectedRevision: run.revision, stepId: step.id, attachmentId: e.attachmentId, reason }, here))}>Remove</button>}
         </p>
       ))}
       {!!step.history?.length && (
-        <div aria-label={`Changes to step ${step.position}`} className="va-card va-card--sunken" style={{ padding: 8, marginTop: 6 }}>
-          <p className="va-subtlest" style={{ fontSize: 11 }}>Earlier entries (kept for the record)</p>
+        <Disclosure title={`Change history (${step.history.length})`}>
+        <div aria-label={`Changes to step ${step.position}`}>
+          <p className="va-subtlest">Earlier entries are retained in the audit record.</p>
           {step.history.map((h, i) => (
             <p key={i} style={{ fontSize: 12 }}>
               {h.kind === 'EVIDENCE_REMOVED'
@@ -295,17 +307,18 @@ function StepRow({ run, step, model, busy, editable, call, errorAt }: {
               {' · changed '}<When ms={h.changedAt} />{` — ${h.reason}`}
             </p>
           ))}
-        </div>
+        </div></Disclosure>
       )}
       {editable && model.attachments.length > 0 && (
         <div className="va-row" style={{ gap: 6 }}>
-          <Select value={attachmentId} onChange={setAttachmentId} disabled={busy} placeholder="Add evidence from this execution's attachments"
+          <Select ariaLabel={`Step ${step.position} evidence attachment`} value={attachmentId} onChange={setAttachmentId} disabled={busy} placeholder="Add evidence from this execution's attachments"
             options={model.attachments.map(a => ({ value: a.id, label: a.filename }))} />
           <button className="va-button" disabled={busy || !attachmentId}
             onClick={async () => { if (await call('tm:run:attachEvidence', { runId: run.runId, expectedRevision: run.revision, stepId: step.id, attachmentId }, here)) setAttachmentId(''); }}>Add evidence</button>
         </div>
       )}
-      {editable && model.attachments.length === 0 && <p className="va-subtlest" style={{ fontSize: 11 }}>To add evidence, attach the file to this execution first.</p>}
+      {editable && model.attachments.length === 0 && <p className="va-hint">To add evidence, attach the file to this execution first.</p>}
+      </div></details>
     </div>
   );
 }

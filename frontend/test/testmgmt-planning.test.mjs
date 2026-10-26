@@ -61,6 +61,29 @@ test('ordinary Jira source issues expose signed-test coverage through the actual
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
   assert.ok(container.textContent.includes('No coverage records'));
 });
+test('publishing from the actual panel opens Versions after a draft revision update', async () => {
+  let current = { role: 'TEST', issue: { id: '21', key: 'VAT-21', summary: 'Test' }, canEdit: true,
+    parent: { id: '10', key: 'VAT-10' }, draft: { objective: 'Objective', preconditions: '',
+      steps: [{ id: 's1', action: 'Stimulus', data: '', expected: 'Response' }], verifies: [], revision: 1 }, versions: [], runs: [] };
+  globalThis.transport = async (key, payload) => {
+    if (key === 'tm:context') return { role: 'TEST', enabled: true };
+    if (key === 'tm:coverage:test') return { complete: true, rows: [], problems: [] };
+    if (key === 'tm:sources:decisions') return { complete: true, records: [] };
+    if (key === 'harness:logAction') return {};
+    if (key === 'tm:test:saveDraft') current = { ...current, draft: { ...payload.draft, revision: 2 } };
+    if (key === 'tm:test:publish') current = { ...current, versions: [{ versionId: 'a'.repeat(32), versionNo: 1,
+      state: 'PUBLISHED', digest: 'b'.repeat(64), publishedAt: Date.now(), content: current.draft, signatures: [], canSign: false, nextStep: null }] };
+    return current;
+  };
+  await mount(TestPanel, {});
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+  await type(container.querySelector('textarea'), 'Saved objective');
+  await act(() => button('Save draft').click());
+  assert.equal(container.querySelector('[role="tab"][aria-selected="true"]').textContent, 'Definition');
+  await act(() => button('Publish new version').click());
+  assert.match(container.querySelector('[role="tab"][aria-selected="true"]').textContent, /Versions/);
+  assert.equal(container.querySelector('[role="tabpanel"]:not([hidden])').textContent.includes('Saved objective'), true);
+});
 test('source review preparation carries the human rationale and displays exact baselines before signing', async () => {
   const calls = []; let prepared = false;
   const record = { decisionId: 'a'.repeat(32), state: 'SIGNING', digest: 'b'.repeat(64), canSign: true, canFinish: false,

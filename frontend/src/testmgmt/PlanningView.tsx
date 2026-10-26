@@ -3,6 +3,8 @@ import { invoke } from '../lib/bridge';
 import { Badge, Card, Section } from '../ui/primitives';
 import { Notice } from '../ui/feedback';
 import SignBox from './SignBox';
+import { Disclosure, Tabs } from './ui';
+import { stateTone, words } from './labels';
 import type { Chain, NextStep, Signature } from './types';
 
 export type PlanningMember = { testIssueId: string; testIssueKey?: string; summary?: string; versionId: string | null; required: boolean; versionNo?: number; digest?: string; latestSigned?: { versionId: string; versionNo: number } | null };
@@ -24,6 +26,7 @@ type Failure = { error?: string; reason?: string };
 export default function PlanningView({ model, onModel, onSelectRuns }: {
   model: PlanningViewModel; onModel: (model: PlanningViewModel) => void; onSelectRuns?: (selection: PlanRunSelection) => void;
 }) {
+  const [tab, setTab] = useState('draft');
   const [draft, setDraft] = useState(model.draft);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -41,6 +44,7 @@ export default function PlanningView({ model, onModel, onSelectRuns }: {
       const result = await invoke<PlanningViewModel & Failure>(key, payload);
       if (result.error) { setError({ message: result.error, at }); return; }
       onModel(result); setDraft(result.draft); setDirty(false); setSelection(null);
+      if (key === 'tm:planning:publish') setTab('revisions');
     } catch (e) { setError({ message: e instanceof Error ? e.message : 'The request could not be completed.', at }); }
     finally { setBusy(false); }
   };
@@ -81,15 +85,16 @@ export default function PlanningView({ model, onModel, onSelectRuns }: {
   };
   const move = (index: number, by: number) => { const members = [...draft.members]; const [m] = members.splice(index, 1); members.splice(index + by, 0, m); edit({ members }); };
   const disabled = busy || !model.canEdit;
-  return <>
+  return <div className="tm">
     {error?.at === null && <Notice danger>{error.message}</Notice>}
-    <Section title={`${model.role === 'PLAN' ? 'Plan' : model.role === 'SET' ? 'Set' : 'Precondition'} draft`}>
+    <Tabs label="Planning details" value={tab} onChange={setTab} tabs={[
+      { id: 'draft', label: 'Draft', content: <Section title={`${model.role === 'PLAN' ? 'Plan' : model.role === 'SET' ? 'Set' : 'Precondition'} draft`}>
       {!model.canEdit && <Notice>You can read this collection but cannot edit it.</Notice>}
       <label className="va-field"><span className="va-label">Objective</span><textarea className="va-input" aria-label="Planning objective" value={draft.objective} disabled={disabled} maxLength={4000} onChange={e => edit({ objective: e.target.value })} /></label>
       <label className="va-field"><span className="va-label">{model.role === 'PRECONDITION' ? 'Precondition text' : 'Notes'}</span><textarea className="va-input" aria-label="Planning text" value={draft.text} disabled={disabled} maxLength={4000} onChange={e => edit({ text: e.target.value })} /></label>
       {model.role !== 'PRECONDITION' && <>
-        <h4>Ordered test membership</h4><p className="va-subtlest">Enter Jira test keys, such as VAT-11. Publishing pins each selected signed version.</p>
-        <table className="va-table"><thead><tr><th>#</th><th>Test</th><th>Signed version</th><th>Required</th><th /></tr></thead><tbody>
+        <h3 className="tm-subheading">Tests</h3><p className="va-subtlest">Add Jira test keys. Publishing pins the selected signed versions.</p>
+        <div className="tm-table-scroll" tabIndex={0}><table className="va-table tm-members-table"><thead><tr><th>#</th><th>Test</th><th>Signed version</th><th>Required</th><th><span className="va-visually-hidden">Member actions</span></th></tr></thead><tbody>
           {draft.members.map((m, index) => <tr key={index}>
             <td>{index + 1}</td><td><input className="va-input" aria-label={`Member ${index + 1} Jira key`} placeholder="VAT-11" value={m.testIssueKey ?? ''} disabled={disabled} onChange={e => member(index, { testIssueKey: e.target.value, testIssueId: '', summary: '', latestSigned: null, versionId: null })} />
               <button className="va-button" disabled={disabled || !m.testIssueKey?.trim()} onClick={() => lookup(index, 'TEST')}>Find test</button>
@@ -101,13 +106,13 @@ export default function PlanningView({ model, onModel, onSelectRuns }: {
               {m.latestSigned && <option value={m.latestSigned.versionId}>Signed v{m.latestSigned.versionNo}</option>}
             </select></td>
             <td><input type="checkbox" aria-label={`Member ${index + 1} required`} checked={m.required} disabled={disabled} onChange={e => member(index, { required: e.target.checked })} /></td>
-            <td><button className="va-button" disabled={disabled || index === 0} aria-label={`Move member ${index + 1} up`} onClick={() => move(index, -1)}>↑</button>
+            <td className="tm-member-actions"><button className="va-button" disabled={disabled || index === 0} aria-label={`Move member ${index + 1} up`} onClick={() => move(index, -1)}>↑</button>
               <button className="va-button" disabled={disabled || index === draft.members.length - 1} aria-label={`Move member ${index + 1} down`} onClick={() => move(index, 1)}>↓</button>
               <button className="va-button" disabled={disabled} aria-label={`Remove member ${index + 1}`} onClick={() => edit({ members: draft.members.filter((_, i) => i !== index) })}>Remove</button></td>
           </tr>)}
-        </tbody></table>
+        </tbody></table></div>
         {model.canEdit && <button className="va-button" disabled={busy || draft.members.length >= 200} onClick={() => edit({ members: [...draft.members, { testIssueId: '', testIssueKey: '', versionId: null, required: true }] })}>Add test</button>}
-        <h4>Reusable preconditions</h4>
+        <Disclosure title={`Reusable preconditions (${draft.preconditions.length})`}>
         {draft.preconditions.map((p, index) => <div key={index} className="va-row">
           <label className="va-field"><span className="va-label">Precondition Jira key</span><input className="va-input" placeholder="VAT-23" aria-label={`Precondition ${index + 1} Jira key`} disabled={disabled} value={p.issueKey ?? ''} onChange={e => edit({ preconditions: draft.preconditions.map((v, i) => i === index ? { ...v, issueKey: e.target.value, issueId: '', summary: '', revisionId: null, latestSigned: null } : v) })} /></label>
           <button className="va-button" disabled={disabled || !p.issueKey?.trim()} onClick={() => lookup(index, 'PRECONDITION')}>Find precondition</button>
@@ -120,9 +125,10 @@ export default function PlanningView({ model, onModel, onSelectRuns }: {
           <button className="va-button" disabled={disabled} onClick={() => edit({ preconditions: draft.preconditions.filter((_, i) => i !== index) })}>Remove precondition</button>
         </div>)}
         {model.canEdit && <button className="va-button" disabled={busy || draft.preconditions.length >= 50} onClick={() => edit({ preconditions: [...draft.preconditions, { issueId: '', issueKey: '', revisionId: null }] })}>Add precondition</button>}
+        </Disclosure>
       </>}
       {model.role === 'PLAN' && <>
-        <h4>Release and execution context</h4>
+        <Disclosure title="Release and execution context" open>
         <label className="va-field"><span className="va-label">Jira release</span><select className="va-input" aria-label="Plan release" value={draft.releaseId ?? ''} disabled={disabled} onChange={e => edit({ releaseId: e.target.value || null })}>
           <option value="">Select release</option>{model.releases.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select></label>
         <label className="va-field"><span className="va-label">Environment</span><input className="va-input" aria-label="Plan environment" disabled={disabled} value={draft.environment} maxLength={255} onChange={e => edit({ environment: e.target.value })} /></label>
@@ -131,17 +137,19 @@ export default function PlanningView({ model, onModel, onSelectRuns }: {
           <button className="va-button" disabled={disabled} onClick={() => edit({ configurations: draft.configurations.filter((_, i) => i !== index) })}>Remove configuration</button>
         </div>)}
         {model.canEdit && <button className="va-button" disabled={busy || draft.configurations.length >= 20} onClick={() => { let n = draft.configurations.length + 1; while (draft.configurations.some(c => c.id === `cfg${n}`)) n++; edit({ configurations: [...draft.configurations, { id: `cfg${n}`, name: '' }] }); }}>Add configuration</button>}
+        </Disclosure>
       </>}
-      {model.canEdit && <div className="va-row" style={{ gap: 8, marginTop: 12 }}>
+      {model.canEdit && <div className="tm-actions">
         <button className="va-button" disabled={busy || !dirty} onClick={() => call('tm:planning:saveDraft', { issueKey: model.issue.key, expectedRevision: draft.revision, draft })}>Save draft</button>
         <button className="va-button va-button--primary" disabled={busy || dirty || !draft.revision || !model.parent} onClick={() => call('tm:planning:publish', { issueKey: model.issue.key, expectedRevision: draft.revision })}>Publish revision</button>
       </div>}
-      <p className="va-subtlest">Publishing freezes ordered members, signed test versions and preconditions. Plans freeze the release, environment and configurations. Sign the revision before preparing official runs.</p>
-    </Section>
-    <Section title="Immutable revisions">
+      <p className="va-subtlest">Publish a saved draft, then sign the revision before preparing runs.</p>
+    </Section> },
+      { id: 'revisions', label: 'Revisions', count: model.revisions.length, content: <>
+    <Section title="Revisions">
       {!model.revisions.length && <p>No revisions yet.</p>}
       {model.revisions.map(r => <Card key={r.revisionId} title={`Revision ${r.revisionNo}`}>
-        <p><Badge>{r.state}</Badge></p>
+        <p><Badge tone={stateTone(r.state)}>{words(r.state)}</Badge></p>
         {r.content.text && <p style={{ whiteSpace: 'pre-wrap' }}>{r.content.text}</p>}
         <ol>{r.content.members.map(m => <li key={m.testIssueId}>{r.memberLabels?.[m.testIssueId]?.key ?? `Test ${m.testIssueId}`} · {r.memberLabels?.[m.testIssueId]?.summary} · Signed v{m.versionNo} · {m.required ? 'Required' : 'Optional'}</li>)}</ol>
         {r.content.preconditions.map(p => <p key={p.issueId}>{r.preconditionLabels?.[p.issueId]?.key ?? 'Precondition'}, revision {p.revisionNo}: {p.text}</p>)}
@@ -165,9 +173,11 @@ export default function PlanningView({ model, onModel, onSelectRuns }: {
     {started && <Notice>{startComplete ? `Execution ${started} is ready. Open its Test management panel to record results.` : `Execution ${started} has more runs to add. Continue this request to finish the signed plan selection.`}</Notice>}
     {selection && <Section title="Frozen run inputs">
       <p>{selection.runs.length} run inputs prepared from the signed revision. Choose these inputs when starting an execution.</p>
-      <table className="va-table"><thead><tr><th>Test</th><th>Signed version</th><th>Configuration</th><th>Environment</th><th>Release</th></tr></thead><tbody>
+      <div className="tm-table-scroll" tabIndex={0}><table className="va-table"><thead><tr><th>Test</th><th>Signed version</th><th>Configuration</th><th>Environment</th><th>Release</th></tr></thead><tbody>
         {selection.runs.map((run, i) => <tr key={i}><td>{run.testKey ?? run.testIssueId}</td><td>v{run.testVersionNo ?? '?'}</td><td>{run.configuration}</td><td>{run.environment}</td><td>{run.release?.name}</td></tr>)}
-      </tbody></table><p>Selection digest <code>{selection.digest}</code></p>
+      </tbody></table></div><p>Selection digest <code>{selection.digest}</code></p>
     </Section>}
-  </>;
+    </> }
+    ]} />
+  </div>;
 }

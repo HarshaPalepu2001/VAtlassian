@@ -3,6 +3,8 @@ import { invoke } from '../lib/bridge';
 import { Badge, Card, Section } from '../ui/primitives';
 import { Notice } from '../ui/feedback';
 import SignBox from './SignBox';
+import { Disclosure } from './ui';
+import { words, stateTone } from './labels';
 import type { NextStep, TestViewModel } from './types';
 
 type Decision = { decisionId: string; state: string; digest: string; canSign: boolean; canFinish: boolean; proofConfirmed: boolean;
@@ -42,11 +44,11 @@ export default function SourceDecisions({ model }: { model: TestViewModel }) {
   };
   if (!sources.length && !records.length && !error) return null;
   return <Section title="Source change decisions">
-    <p>After an approved source baseline changes, review whether this signed test still fits. Reusing an older run requires a separate applicability decision for that exact frozen run.</p>
+    <p className="va-hint">Review a changed source against this test, or approve reuse of an existing signed run.</p>
     {error && <Notice danger>{error}</Notice>}
     {!complete && <Notice danger>Decision history is incomplete. Coverage remains unconfirmed.</Notice>}
     <button className="va-button" disabled={busy} onClick={load}>Refresh decisions</button>
-    {model.canEdit && !!sources.length && <fieldset disabled={busy} style={{ border: 0, padding: 0 }}>
+    {model.canEdit && !!sources.length && <Disclosure title="Review a source change"><fieldset disabled={busy} style={{ border: 0, padding: 0 }}>
       <label className="va-field"><span className="va-label">Source</span><select className="va-input" aria-label="Source to review" value={sourceId} onChange={e => setSourceId(e.target.value)}>
         <option value="">Choose a signed source reference</option>{sources.map(source => <option key={source.issueId} value={source.issueId}>{source.issueKey}</option>)}
       </select></label>
@@ -62,14 +64,16 @@ export default function SourceDecisions({ model }: { model: TestViewModel }) {
       <button className="va-button" disabled={!sourceId || !rationale.trim() || kind === 'APPLICABILITY' && !runId} onClick={() => call('tm:sources:prepareDecision', {
         issueKey: model.issue.key, sourceIssueId: sourceId, kind, decision: kind === 'APPLICABILITY' ? 'APPLIES' : decision, rationale, runId: kind === 'APPLICABILITY' ? runId : null
       })}>Prepare decision for signing</button>
-    </fieldset>}
+    </fieldset></Disclosure>}
     {records.map(record => <Card key={record.decisionId} title={`${record.content.source.issueKey} · ${record.content.kind === 'APPLICABILITY' ? 'Run applicability' : 'Definition review'}`}>
-      <p><Badge>{record.state}</Badge> · {record.content.decision.toLowerCase().replaceAll('_', ' ')}</p>
+      <p><Badge tone={stateTone(record.state)}>{words(record.state)}</Badge> · {record.content.decision.toLowerCase().replaceAll('_', ' ')}</p>
       <p style={{ whiteSpace: 'pre-wrap' }}>{record.content.rationale}</p>
+      <Disclosure title="Decision audit identifiers">
       <p>Original baseline v{record.content.oldBaseline.version}: <code>{record.content.oldBaseline.id}</code></p>
       <p>Reviewed baseline v{record.content.newBaseline.version}: <code>{record.content.newBaseline.id}</code></p>
       <p>Signed test content: <code>{record.content.testDigest}</code></p>
       {record.content.run && <p>Frozen run: <code>{record.content.run.runId}</code> · <code>{record.content.run.frozenDigest}</code></p>}
+      </Disclosure>
       {record.signatures.map(sig => <p key={sig.step_index}>{sig.label}: {sig.printedName}</p>)}
       {record.canFinish && <button className="va-button" disabled={busy} onClick={() => call('tm:sources:finishDecision', { decisionId: record.decisionId })}>Finish source decision</button>}
       {record.canSign && record.nextStep && <SignBox key={`${record.decisionId}:${record.nextStep.index}`} step={record.nextStep} digest={record.digest} allowReject={false} busy={busy}
