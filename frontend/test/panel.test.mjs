@@ -2724,3 +2724,16 @@ test('the baseline record names a per-field decision for what it is, not as a pl
  assert.match(text,/Field decisions/);
  assert.doesNotMatch(text,/MIXED/,'the raw decision code is never shown');
 });
+
+test('diagnostics stay reachable when the summary fails or the admin incident count cannot be read, and stay hidden from non-admins',async()=>{
+ const hasLink=()=>[...container.querySelectorAll('button')].some(b=>b.textContent==='Diagnostics');
+ setup(async key=>key==='panel:getSummary'?summary({adminIncidentUnavailable:true}):{restores:[]});
+ await act(()=>root.render(h(IssuePanel,{issueKey:'T-1'})));await flush();
+ assert.ok(hasLink(),'an admin whose incident read failed keeps diagnostics');
+ setup(async key=>{if(key==='panel:getSummary')throw new Error('Tunnel could not be reached');return {restores:[]};});
+ await act(()=>root.render(h(IssuePanel,{issueKey:'T-2'})));await flush();
+ assert.ok(hasLink(),'a summary that failed to load keeps diagnostics');
+ setup(async key=>key==='panel:getSummary'?summary():{restores:[]});
+ await act(()=>root.render(h(IssuePanel,{issueKey:'T-3'})));await flush();
+ assert.ok(!hasLink(),'an ordinary user never sees diagnostics');
+});

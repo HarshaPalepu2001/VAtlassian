@@ -225,8 +225,11 @@ function IssuePanelBody({ issueKey: issueKeyProp, onDone }: Props) {
         </>
       )}
 
-      {/* Diagnostics are for administrators, and folded away until asked for. */}
-      {summary?.adminIncidentCount != null &&       <DiagnosticsHud summary={authoritativeSummary} evidence={evidence} />}
+      {/* Diagnostics are for administrators, and folded away until asked for.
+          A summary that failed to load, or an admin whose incident count could
+          not be read, is exactly when they are needed, so both keep the link. */}
+      {(summary ? summary.adminIncidentCount != null || summary.adminIncidentUnavailable === true : Boolean(error))
+        && <DiagnosticsHud summary={authoritativeSummary} evidence={evidence} />}
     </div>
   );
 }
