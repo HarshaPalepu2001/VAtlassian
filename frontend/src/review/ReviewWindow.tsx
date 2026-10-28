@@ -130,7 +130,10 @@ export default function ReviewWindow({ issueKey, tab: requestedTab = 'changes', 
     onSave: () => setMixedRequest(previous => ({ token: (previous?.token ?? 0) + 1,
       decisions: decisionPayload(fields, decisionState), fields }))
   } : undefined;
-  const reportText = report?.body && !report.degraded ? report.body.headline || report.body.narrative : '';
+  // A summary written without AI (AI off, or the model unavailable) is still
+  // shown, labelled, so the reviewer is never offered a button that can only
+  // produce another hidden summary.
+  const reportText = report?.body ? report.body.headline || report.body.narrative : '';
 
   return (
     <div className="va-window">
@@ -173,7 +176,9 @@ export default function ReviewWindow({ issueKey, tab: requestedTab = 'changes', 
             {shownEvidence && fields.length > 0 && (reportText ? (
               <div className="va-brief" aria-label="Summary of the changes">
                 <p>{reportText}</p>
-                <span className="va-subtlest">Written from the changes below. Check each one before deciding.</span>
+                <span className="va-subtlest" title={report?.degraded ? report.degradedReason ?? '' : report?.model}>
+                  {report?.degraded ? 'Written without AI from the changes below.' : 'Written from the changes below.'} Check each one before deciding.
+                </span>
               </div>
             ) : (
               <div className="va-brief va-brief--empty">

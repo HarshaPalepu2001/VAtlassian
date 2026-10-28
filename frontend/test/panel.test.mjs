@@ -2737,3 +2737,13 @@ test('diagnostics stay reachable when the summary fails or the admin incident co
  await act(()=>root.render(h(IssuePanel,{issueKey:'T-3'})));await flush();
  assert.ok(!hasLink(),'an ordinary user never sees diagnostics');
 });
+
+test('a summary written without AI is shown and labelled, not hidden behind another Summarise button',async()=>{
+ const calls=windowSetup({},key=>key==='report:get'?{success:true,report:{degraded:true,degradedReason:'AI assistance is off',body:{headline:'Story points changed from 5 to 13.'}}}:undefined);
+ await act(()=>root.render(h(ReviewWindow,{issueKey:'T-1'})));await flush();await flush();
+ const brief=container.querySelector('.va-brief').textContent;
+ assert.match(brief,/Story points changed from 5 to 13\./);
+ assert.match(brief,/Written without AI/);
+ assert.equal(clickButton('Summarise these changes'),undefined);
+ assert.ok(!calls.some(([key])=>key==='report:generate'));
+});
