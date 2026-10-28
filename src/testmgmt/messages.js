@@ -1,4 +1,5 @@
 import { DENY, needsUserConsent } from '../lib/errors.js';
+import { retryGuidance } from '../usecases/access.js';
 
 /** What a person is told when test management refuses something. One sentence each, saying what to do. */
 export const TM_MESSAGES = {
@@ -94,6 +95,6 @@ export async function tmRespond(operation) {
     if (needsUserConsent(error)) throw error;
     const reason = error?.reason ?? 'SERVICE_UNAVAILABLE';
     if (!error?.reason) console.error('tm: unexpected error', error);
-    return { error: TM_MESSAGES[reason] ?? error.userMessage ?? DENY[reason] ?? TM_MESSAGES.SERVICE_UNAVAILABLE, reason };
+    return { error: TM_MESSAGES[reason] ?? error.userMessage ?? DENY[reason] ?? TM_MESSAGES.SERVICE_UNAVAILABLE, reason, ...retryGuidance(error) };
   }
 }

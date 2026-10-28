@@ -277,6 +277,12 @@ export async function driftedInProjects(projectIds, {
  * project. Oldest first, so a cut at `limit` drops the newest, not the most
  * overdue. The caller checks the role each item's baseline froze.
  */
+/**
+ * `issue_id ASC` breaks ties on `last_drift_at` (plausible at millisecond
+ * resolution for a bulk capture): without it, two rows sharing a timestamp
+ * have no guaranteed relative order across separate query executions, which
+ * a value-based (last_drift_at, issue_id) pagination cursor depends on.
+ */
 export async function awaitingDecision({ projectIds = [], siteWide = false, limit = 200 } = {}) {
   const ids = [...new Set((projectIds ?? []).map(Number).filter(Number.isFinite))];
   if (!siteWide && ids.length === 0) return [];
@@ -284,7 +290,7 @@ export async function awaitingDecision({ projectIds = [], siteWide = false, limi
   const rows = await throwing(
     `SELECT ${REVIEW_COLUMNS} FROM va_item_state
      WHERE state IN ('${REVIEW_STATE.DRIFTED}', '${REVIEW_STATE.ERROR}')${scope}
-     ORDER BY last_drift_at ASC LIMIT ${limitClause(limit)}`,
+     ORDER BY last_drift_at ASC, issue_id ASC LIMIT ${limitClause(limit)}`,
     siteWide ? [] : ids
   );
   return rows.map(decode);

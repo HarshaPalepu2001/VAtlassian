@@ -304,6 +304,30 @@ test('every pending decision is reachable across pages, in order, and none of th
   assert.ok(seen.every(i => i.kind === 'CHANGES'), 'every item under decision keeps that kind on every page: none leaked through as a transition');
 });
 
+test('a decision resolved between pages does not hide the next one — a value cursor, not a row position', async () => {
+  // A row-position cursor (page 2 starts "at index 200") breaks the moment
+  // the set it indexes into changes shape: removing the earliest item here
+  // shifts every later one up by one slot, so slice(200, 400) on the new,
+  // 200-long array would return nothing and silently drop the 201st decision.
+  const COUNT = 201;
+  const issues = Array.from({ length: COUNT }, (_, n) => issue({ id: n + 1 }));
+  const decisions = Array.from({ length: COUNT }, (_, n) => changed(n + 1, { last_drift_at: 1000 + n }));
+  const baselines = Array.from({ length: COUNT }, (_, n) => baseline(n + 1));
+  world({ issues, decisions, baselines });
+
+  const first = await run();
+  assert.equal(first.items.length, 200);
+  assert.ok(first.nextPageToken, 'one decision remains');
+
+  // The earliest item — already shown on the first page — gets decided
+  // before the next page is fetched, exactly as a reviewer acting on it
+  // between the two round trips would make it disappear from the store.
+  decisions.splice(0, 1);
+
+  const second = await run({ nextPageToken: first.nextPageToken });
+  assert.deepEqual(second.items.map(i => i.issueKey), ['VAT-201'], 'the still-outstanding 201st decision is not skipped');
+});
+
 test('someone with no approval role gets an empty list without any Jira search', async () => {
   const calls = world({ grants: [] });
   assert.deepEqual(await run(), { items: [], nextPageToken: null });

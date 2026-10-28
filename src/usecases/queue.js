@@ -63,7 +63,7 @@ export async function list({ payload = {}, context }) { return respond(async () 
   const actor = actorFrom(context);
   const grants = await grantsFor(actor.accountId);
   if (!grants.length) return { items: [], nextPageToken: null };
-  const { decisionsOffset, transitionsToken } = decodeToken(payload.nextPageToken);
+  const { decisionsCursor, transitionsToken } = decodeToken(payload.nextPageToken);
 
   // Recomputed on every page, not only while decisions are still being shown:
   // it is what keeps an item under decision from ever also showing as a
@@ -73,8 +73,18 @@ export async function list({ payload = {}, context }) { return respond(async () 
   // Storage only, no Jira read, so paying for it again each call is cheap.
   const { items: all, overflow } = await decisionsFor(grants);
   const skip = new Set(all.map(({ row }) => Number(row.issue_id)));
-  const pageRows = decisionsOffset != null ? all.slice(decisionsOffset, decisionsOffset + DECISIONS_PAGE) : [];
-  const decisionsDone = decisionsOffset == null || decisionsOffset + pageRows.length >= all.length;
+
+  // A VALUE cursor, not a row position: re-filtered against this call's own
+  // fresh fetch, so an item resolved or added between calls shifts nothing —
+  // it only ever compares each row against the last one this viewer actually
+  // saw. An offset/index cursor would skip or repeat rows whenever the set
+  // changed shape between calls; this cannot, because "after" means after a
+  // specific (last_drift_at, issue_id), never "past position N".
+  const remaining = decisionsCursor === 'done' ? []
+    : decisionsCursor === 'start' ? all
+      : all.filter(({ row }) => isAfterCursor(row, decisionsCursor));
+  const pageRows = remaining.slice(0, DECISIONS_PAGE);
+  const decisionsDone = decisionsCursor === 'done' || remaining.length <= DECISIONS_PAGE;
 
   const [decisions, transitions] = await Promise.all([
     pageRows.length ? decisionItems(pageRows, actor) : [],
@@ -83,37 +93,48 @@ export async function list({ payload = {}, context }) { return respond(async () 
       : Promise.resolve({ items: [], nextPageToken: transitionsToken ?? null })
   ]);
 
+  const last = pageRows[pageRows.length - 1];
   const nextPageToken = encodeToken({
-    decisionsOffset: decisionsDone ? null : decisionsOffset + pageRows.length,
+    decisionsCursor: decisionsDone ? 'done' : { afterDriftAt: Number(last.row.last_drift_at), afterIssueId: Number(last.row.issue_id) },
     transitionsToken: transitions.nextPageToken
   });
   return { items: [...decisions, ...transitions.items], nextPageToken, ...(overflow ? { decisionsOverflow: true } : {}) };
 }); }
 
+function isAfterCursor(row, cursor) {
+  const driftAt = Number(row.last_drift_at);
+  const issueId = Number(row.issue_id);
+  return driftAt > cursor.afterDriftAt || (driftAt === cursor.afterDriftAt && issueId > cursor.afterIssueId);
+}
+
 /**
  * The app's own opaque continuation string — never Jira's raw token alone.
  * It carries both where the decisions scan is and Jira's transition-search
  * continuation, so cursoring through one can never lose the place in the
- * other. `decisionsOffset: null` means the decisions scan is finished;
- * no token yet (the first call) starts it at offset 0.
+ * other. The decisions side is a value cursor — the last `(last_drift_at,
+ * issue_id)` actually shown — never a row position/offset: a cursor built
+ * from a position would silently skip or repeat rows once the underlying set
+ * changed shape between calls (an item resolved, or a new one arrived).
+ * `'done'` means the decisions scan is finished; no token yet (the first
+ * call) means `'start'`, from the very beginning.
  */
 function decodeToken(raw) {
-  if (!raw) return { decisionsOffset: 0, transitionsToken: null };
+  if (!raw) return { decisionsCursor: 'start', transitionsToken: null };
   try {
     const parsed = JSON.parse(raw);
-    return {
-      decisionsOffset: Number.isInteger(parsed.o) ? parsed.o : null,
-      transitionsToken: typeof parsed.t === 'string' ? parsed.t : null
-    };
+    const o = parsed.o;
+    const decisionsCursor = o === null ? 'done'
+      : (o && Number.isFinite(o.d) && Number.isInteger(o.i)) ? { afterDriftAt: o.d, afterIssueId: o.i }
+        : 'done'; // malformed: degrades to "already finished", never re-shows a decision
+    return { decisionsCursor, transitionsToken: typeof parsed.t === 'string' ? parsed.t : null };
   } catch {
-    // Only ever reached with a token this function did not itself produce.
-    // Degrading to "decisions already finished" is safe: it never re-shows a
-    // decision, it only moves on to transitions sooner than it should.
-    return { decisionsOffset: null, transitionsToken: null };
+    return { decisionsCursor: 'done', transitionsToken: null };
   }
 }
-function encodeToken({ decisionsOffset, transitionsToken }) {
-  return decisionsOffset == null && !transitionsToken ? null : JSON.stringify({ o: decisionsOffset, t: transitionsToken });
+function encodeToken({ decisionsCursor, transitionsToken }) {
+  if (decisionsCursor === 'done' && !transitionsToken) return null;
+  const o = decisionsCursor === 'done' ? null : { d: decisionsCursor.afterDriftAt, i: decisionsCursor.afterIssueId };
+  return JSON.stringify({ o, t: transitionsToken });
 }
 
 // ── Decisions: changes and unfinished restores ─────────────────────────────

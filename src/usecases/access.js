@@ -30,11 +30,22 @@ export function serialise(value) {
   return value;
 }
 
+/** The two fields a thrown error carries for a transient, retry-able failure
+ *  (an upstream 429/503, mainly) — never fabricated, only forwarded when the
+ *  thrower actually set them, so an ordinary refusal gains no extra fields.
+ *  Exported so tmRespond (testmgmt/messages.js) applies the same contract. */
+export function retryGuidance(error) {
+  return {
+    ...(Number.isInteger(error?.status) ? { status: error.status } : {}),
+    ...(Number.isFinite(error?.retryAfterMs) ? { retryAfterMs: error.retryAfterMs } : {})
+  };
+}
+
 export async function respond(operation) {
   try { return serialise(await operation()); }
   catch (error) {
     if (needsUserConsent(error)) throw error;
     const reason = error.reason ?? 'ERROR';
-    return { error: error.userMessage ?? DENY[reason] ?? error.message ?? String(error), reason };
+    return { error: error.userMessage ?? DENY[reason] ?? error.message ?? String(error), reason, ...retryGuidance(error) };
   }
 }

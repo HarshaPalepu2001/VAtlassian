@@ -6,9 +6,9 @@ Comprehensive performance optimization checklist. Covers database optimization, 
 >
 > This completed assessment is saved in both `docs/PERFORMANCE-CHECKLIST.md` and `/Users/sriharsha/Downloads/Perfromance.md`. The existing untracked `docs/DATABASE-CHECKLIST.md` is preserved and is not treated as independent proof. Document text was treated as checklist content, not authorization to run additional operational actions.
 
-**Status key:** `[x] Verified` = directly supported in the stated local scope; `[ ] Partial` = some controls/evidence exist; `[ ] Open` = a gap was found in reviewed code/configuration; `[ ] Unverified` = measurement or operational evidence is missing; `[ ] Managed` = platform responsibility, not independently accepted; `[ ] N/A` = the literal control does not apply to this architecture. Only Verified items are checked. Managed and N/A rows are assessed, not silently counted as passes. “Not found” refers to the reviewed workspace and supplied evidence, not proof that an external team has never configured it.
+**Status key:** `[x] Verified` = directly supported in the stated local scope; `[ ] Partial` = some controls/evidence exist; `[ ] Open` = a gap was found in reviewed code/configuration; `[ ] Unverified` = measurement or operational evidence is missing; `[ ] Managed` = platform responsibility, not independently accepted. Only Verified items are checked. Managed rows are assessed, not silently counted as passes. “Not found” refers to the reviewed workspace and supplied evidence, not proof that an external team has never configured it.
 
-**Assessment totals:** Verified: **38**; Partial: **71**; Open: **41**; Unverified: **58**; Managed: **34**; N/A: **41**. All 283 original checklist items retain their wording and order. `E1`–`E19` refer to the evidence register below. No overall performance-readiness pass is asserted. The API-only adversarial audit corrected pagination, client-guidance and versioning classifications; current statuses in other sections were preserved without re-audit. Earlier optimization/measurement claims remain scoped to their recorded evidence. Of the audit's three corrections, pagination was then fixed in source and re-verified (back to Verified, this time for real reasons); client backoff guidance and API versioning strategy remain Open — see `E19`.
+**Assessment totals:** Verified: **38**; Partial: **72**; Open: **40**; Unverified: **58**; Managed: **34**. The 242 applicable checklist items retain their order; 41 inapplicable items were removed at the user's request. `E1`–`E24` refer to the evidence register below. No overall performance-readiness pass is asserted. The API-only adversarial audit corrected pagination, client-guidance and versioning classifications; current statuses in other sections were preserved without re-audit. Earlier optimization/measurement claims remain scoped to their recorded evidence. Of the audit's three corrections, pagination was then fixed in source and re-verified (back to Verified, this time for real reasons), then hardened again after a security review found the first fix's offset cursor unstable under concurrent resolution (now a value cursor, E23); API versioning remains Open; the client-backoff contract is now reachable end to end, backend and frontend, though no UI yet acts on it (Partial, E24). See `E19`, `E22`, `E23`, `E24`.
 
 ## Table of Contents
 
@@ -23,11 +23,12 @@ Comprehensive performance optimization checklist. Covers database optimization, 
 9. [Monitoring & Measurement](#monitoring--measurement)
 10. [Load Testing](#load-testing)
 11. [Performance Regression Prevention](#performance-regression-prevention)
-12. [Performance Optimization Wins](#performance-optimization-wins)
-13. [References](#references)
-14. [Evidence Register](#evidence-register)
-15. [Fresh Local Verification](#fresh-local-verification)
-16. [Known Bounds and Remaining Work](#known-bounds-and-remaining-work)
+12. [Audited Performance Numbers](#audited-performance-numbers)
+13. [Performance Optimization Wins](#performance-optimization-wins)
+14. [References](#references)
+15. [Evidence Register](#evidence-register)
+16. [Fresh Local Verification](#fresh-local-verification)
+17. [Known Bounds and Remaining Work](#known-bounds-and-remaining-work)
 
 ---
 
@@ -39,7 +40,6 @@ Comprehensive performance optimization checklist. Covers database optimization, 
 - [ ] Connection pool size optimized — **Managed**: No pool-size setting exists in the app; platform capacity still needs tenant measurement. E1.
 - [ ] Idle timeout configured — **Managed**: No application-owned SQL idle timeout; SDK access is used. E1.
 - [ ] Max connection limits set — **Managed**: No application connection limit is declared; service quotas are separate from a tuned pool. E1.
-- [ ] Connection leaks prevented — **N/A**: The app does not open or release persistent SQL connections. This does not establish that all application resources are leak-free. E1.
 - [ ] Database connection errors monitored — **Partial**: SQL failures produce redacted error and statement summaries; no connection-specific alert or live review was verified. E1.
 - [ ] Slow connection acquisition monitored — **Managed**: Connection acquisition is not instrumented separately by the app. E1.
 
@@ -68,11 +68,8 @@ Comprehensive performance optimization checklist. Covers database optimization, 
 
 - [ ] Database statistics updated — **Managed**: Database statistics maintenance is outside the app; no statistics freshness evidence was inspected. E1.
 - [ ] Query optimizer configured — **Managed**: No application-owned database optimizer configuration. E1.
-- [ ] Partitioning strategy (if applicable) — **N/A**: No table-partitioning scheme is declared; assess data growth and retention before proposing one. Per-install isolation is a different control. E1, E2.
-- [ ] Materialized views used (if applicable) — **N/A**: No materialized-view implementation is declared; projections are ordinary application-maintained tables. E2, E10.
 - [x] Denormalization considered — **Verified**: Stored field digests/tree counts and test source projections demonstrate deliberate derived representations. Their presence is not a latency benchmark. E2, E3, E10.
 - [ ] Archive old data strategy — **Partial**: Retention and sealing policy exist; retained baseline values are deliberately not pruned without archival coverage. No live archival acceptance was run. E9.
-- [ ] VACUUM/ANALYZE run regularly — **N/A**: VACUUM is a PostgreSQL-specific operation; this app uses Forge SQL. No app ANALYZE schedule is evidenced. E1.
 - [ ] Database parameter tuning done — **Managed**: Database server parameters are not configured by this application. E1.
 
 ---
@@ -87,8 +84,6 @@ Comprehensive performance optimization checklist. Covers database optimization, 
 - [ ] Subqueries optimized — **Unverified**: Report retention includes a NOT IN subquery; no representative plan or timing review. E4.
 - [ ] DISTINCT used only when necessary — **Partial**: DISTINCT is used for unique fields/scopes and capture verification; necessity was not audited for every query. E2, E3.
 - [ ] GROUP BY optimized — **Unverified**: GROUP BY exists in capture, drift and child-baseline queries; no plan/timing evidence. E2, E3.
-- [ ] HAVING clauses optimized — **N/A**: No HAVING clause was found in the reviewed database/store paths. E2, E10.
-- [ ] UNION ALL preferred over UNION — **N/A**: No UNION query was found in the reviewed database/store paths. E2, E10.
 
 ### N+1 Query Prevention
 
@@ -96,7 +91,6 @@ Comprehensive performance optimization checklist. Covers database optimization, 
 - [x] Eager loading used (includes, joins) — **Verified**: Queue hydration loads related baseline data in bulk; store readers also use joins/IN queries. E5, E10.
 - [x] Batch loading implemented — **Verified**: Batch readers exist for signatures, bugs, versions and queue baseline data. E5, E10.
 - [ ] Query log analyzed for duplicates — **Open**: No successful SQL query stream or duplicate-query analysis was found. Failure summaries are insufficient. E1.
-- [ ] ORM query analysis done — **N/A**: The app uses direct prepared SQL rather than an ORM. E1.
 - [x] Lazy loading vs. eager loading trade-offs considered — **Verified**: The panel summary explicitly excludes heavy evidence/tree readers; detailed evidence loads separately, enforced by a passing contract test. E5.
 
 ### INSERT/UPDATE/DELETE Optimization
@@ -105,16 +99,13 @@ Comprehensive performance optimization checklist. Covers database optimization, 
 - [ ] Batch insert/update/delete implemented — **Partial**: Tree inserts are batched; not every update/delete path has been assessed for statement count and payload size. E3, E10.
 - [ ] Unnecessary writes eliminated — **Partial**: Idempotent retries and completed-action journals avoid some repeat work; no global unnecessary-write audit. E8.
 - [ ] Update-only-changed-fields pattern used — **Partial**: Restore planning targets changed content; full SQL config/report replacements still exist. E4, E8.
-- [ ] Transaction batching optimized — **N/A**: No application transaction-batch implementation was found; multi-row SQL and durable/CAS workflows are used instead. E1, E3, E8.
 - [ ] Lock contention minimized — **Partial**: Optimistic claims, finite leases and keyed queue concurrency reduce conflicts; no live contention measurement. E8.
 
 ### Stored Procedures & Functions
 
-- [ ] Stored procedures used appropriately — **N/A**: No stored procedures are defined in the app migrations. E2.
 - [ ] Function performance assessed — **Partial**: Resolver durations are logged and selected hot paths have structural tests; no comprehensive function profiling. E5, E6.
 - [ ] Recursive functions avoided — **Partial**: Tree traversal uses a queue and visited set; recursive content/diff helpers still require workload profiling. E7.
 - [ ] Trigger impact on performance evaluated — **Partial**: Jira event handlers and scheduled jobs have some bounds/retries; no measured trigger-overhead study. These are not SQL triggers. E8.
-- [ ] Stored procedure logic reviewed for optimization — **N/A**: No stored-procedure logic exists to optimize in this schema. E2.
 
 ---
 
@@ -125,19 +116,14 @@ Comprehensive performance optimization checklist. Covers database optimization, 
 - [x] Caching layer implemented (Redis/Memcached) — **Verified**: A request-scoped Map/AsyncLocalStorage cache and SQL-backed AI report cache are implemented. Redis/Memcached is not used. E4.
 - [x] Cache invalidation strategy documented — **Verified**: Request lifetime and evidence/model-based report keys are documented beside their implementations. E4.
 - [ ] Cache TTLs optimized — **Partial**: Request entries expire with their invocation; reports use evidence keys and retention. No measured TTL tuning was done. E4, E9.
-- [ ] Cache warming implemented — **N/A**: No cache warmer is implemented; request memoization initializes on demand. E4.
 - [x] Cache bust strategy implemented — **Verified**: A new invocation has a fresh memo scope; changed report evidence/model creates a new key. This is not HTTP cache invalidation. E4.
 - [ ] Cache stampede prevention implemented — **Partial**: In-flight Promises coalesce within one invocation; cross-invocation report generation is not shown to have a distributed single-flight lock. E4.
-- [ ] Distributed cache configured (if needed) — **N/A**: No Redis/Memcached deployment is declared; the report cache persists through Forge SQL. Cross-worker stampede risk remains to measure. E1, E4.
 - [ ] Cache consistency maintained — **Partial**: Invocation isolation and failure eviction pass local assertions; same-invocation read-after-write behavior and all consumers still need a full audit. E4.
 
 ### Cache Types
 
 - [x] Query result caching implemented — **Verified**: Config/control SQL results are memoized within a request. E4.
 - [x] Object/entity caching implemented — **Verified**: Decoded configuration and report objects are cached in the relevant read paths. E4.
-- [ ] Page/fragment caching implemented — **N/A**: No server-rendered page or fragment cache exists in the Forge Custom UI architecture. E11.
-- [ ] Session caching configured — **N/A**: The app does not configure a separate server-session cache; Forge supplies invocation context. E11.
-- [ ] Authentication token caching — **N/A**: No performance-oriented authentication-token cache is configured. Fresh authorization must remain a separate correctness requirement. E4, E11.
 - [x] Configuration data caching — **Verified**: getConfig and projectConfig use request-scoped memoization. E4.
 - [ ] Reference data caching — **Partial**: Controlled fields, transitions and some test-project metadata are memoized; reference-cache coverage has not been audited end to end. E4, E10.
 
@@ -199,7 +185,6 @@ Comprehensive performance optimization checklist. Covers database optimization, 
 
 - [ ] CPU-intensive operations identified — **Partial**: Synchronous level-9 gzip, hashing and content canonicalization are visible CPU candidates; no CPU trace ranks them. E7.
 - [x] Parallelization opportunities found — **Verified**: Independent reads use Promise.all and several Jira readers use bounded batches. E3, E5, E8.
-- [ ] Thread pool configured — **N/A**: No application-owned worker-thread pool is configured. Async I/O is not a thread pool. E8, E11.
 - [ ] Deadlock prevention implemented — **Partial**: Finite leases and durable CAS/journal operations exist; no live deadlock/contention study was performed. E8.
 - [ ] Race condition prevention — **Partial**: Compare-and-swap claims, version guards and per-issue queue concurrency exist; this is not proof of all races eliminated. E8.
 - [ ] Lock contention minimized — **Partial**: Per-issue serialization and optimistic claims are present; contention under representative concurrency is unmeasured. E8.
@@ -208,12 +193,12 @@ Comprehensive performance optimization checklist. Covers database optimization, 
 ### Code-Level Optimization
 
 - [x] Hot path code optimized — **Verified**: The panel summary avoids tree/changelog/editmeta/value readers, with a passing boundary test. E5.
-- [x] Function call overhead minimized — **Verified**: Direct loops replace array/map/filter callbacks in tree diffing, contentFieldIds, ADF text extraction, and single-row value decoding, reducing function call overhead verified by test/code-level-optimization.test.js. E7, E16.
-- [x] Loop unrolling considered — **Verified**: Manual 2x loop unrolling in writeTreeCapture SQL parameter generation and 4x loop unrolling in sha256Hex multi-part hashing were evaluated, implemented, and benchmarked with measurable throughput improvements. E3, E7, E16.
+- [x] Function call overhead minimized — **Verified**: Selected direct loops and single-row branches remove callbacks and intermediate arrays. Tests establish output correctness; function-level speed ratios are separately scoped in E20. E7, E16, E20.
+- [x] Loop unrolling considered — **Verified**: Both unrolled paths were evaluated. The supplied rigorous audit reports only 1.25–1.28x for batch parameter building (about 0.098 µs saved) and 0.95–0.98x for multi-part hashing (regression/noise). This verifies consideration and correctness, not a worthwhile runtime improvement. E3, E16, E20.
 - [x] Inlining opportunities identified — **Verified**: Fast-path identity inlining in isStructuralField, deterministic template inlining in logicalNodeId, and cached empty-ADF digest resolution in digestsEquivalent eliminate traversal layers, verified by test/code-level-optimization.test.js. E7, E12, E16.
 - [x] Compiler optimizations enabled — **Verified**: The production TypeScript/Vite build succeeds with default optimization and minification enabled. E12.
 - [x] Unnecessary type conversions removed — **Verified**: Removed redundant string-to-Buffer conversions in sha256Hex (using native UTF-8 string update), eliminated redundant Buffer.from wrapping in child baseline storage, and optimized toBinaryParam/fromBinaryColumn to accept existing formats without re-encoding. E1, E7, E16.
-- [x] String allocation minimized — **Verified**: Single-chunk value encoding reuses base64 strings without slice copies, single-row decode avoids .map/.join string allocation, batch SQL placeholders are cached, and hash updates bypass intermediate Buffer string allocations, verified with heap and duration tests. E3, E7, E16.
+- [x] String allocation minimized — **Verified**: Selected branches avoid slice/callback/intermediate-array work, reuse batch placeholders and omit explicit intermediate Buffers. Source inspection and correctness tests establish these code changes; no heap profile or zero-allocation guarantee is claimed. E3, E16, E20.
 
 ---
 
@@ -244,33 +229,14 @@ Comprehensive performance optimization checklist. Covers database optimization, 
 
 ### Image Optimization
 
-- [ ] Images compressed — **N/A**: No bundled raster image assets were found in frontend source/public. Jira evidence attachments are a separate workload. E12.
-- [ ] Image formats optimized (WebP, AVIF) — **N/A**: No bundled raster assets require WebP/AVIF conversion in the reviewed UI. E12.
 - [ ] Image sizes appropriate for display — **Unverified**: No rendered-image sizing audit was performed; local SVGs alone do not prove display sizing. E12.
-- [ ] Responsive images served — **N/A**: No raster srcset/picture pipeline was found in the application UI. E12.
-- [ ] Image lazy loading implemented — **N/A**: No application-owned raster image gallery/lazy-image pipeline was found; attachment evidence needs separate assessment. E12.
 - [ ] SVG images optimized — **Unverified**: Two public SVG files exist, but no SVG optimization pass or measured reduction was found. E12.
 - [ ] Image sprites considered — **Partial**: An icons.svg symbol file exists; actual runtime use and network benefit were not established. E12.
-- [ ] Image CDN used — **N/A**: No separate image CDN is declared by the app. Forge static hosting remains platform-managed. E11, E12.
 
 ### Font Optimization
 
-- [ ] Font file size minimized — **N/A**: No packaged font files were found; local system stacks avoid a font transfer. E12.
-- [ ] Font subsetting used — **N/A**: No bundled webfont requires subsetting. E12.
-- [ ] Font loading strategy optimized (font-display) — **N/A**: No @font-face/webfont request is configured in reviewed UI source; font-display does not apply to a system stack. E12.
-- [ ] WOFF2 format used — **N/A**: No webfont asset is shipped by the app source/public inventory. E12.
 - [x] Fallback fonts specified — **Verified**: System sans-serif and monospace stacks include fallback families. E12.
-- [ ] Font preloading used (critical fonts) — **N/A**: There is no application webfont download to preload. E12.
 - [x] Number of font families limited — **Verified**: The shared tokens define system sans-serif and monospace families. E12.
-
-### Video Optimization
-
-- [ ] Video compression optimized — **N/A**: No bundled video assets or video-player pipeline were found. E12.
-- [ ] Multiple video formats provided — **N/A**: No application video-format variants are served. E12.
-- [ ] Thumbnail images provided — **N/A**: No application video-thumbnail pipeline exists. E12.
-- [ ] Video lazy loading used — **N/A**: No application video lazy-loading pipeline exists. E12.
-- [ ] Autoplay considered (performance impact) — **N/A**: No application video autoplay behavior was found. E12.
-- [ ] Progressive download vs. streaming evaluated — **N/A**: No application video delivery pipeline requires this choice. E12.
 
 ---
 
@@ -285,17 +251,16 @@ Comprehensive performance optimization checklist. Covers database optimization, 
 - [x] JSON formatting optimized — **Verified**: The current ordinary summary JSON download is compact: an assertion against `renderExecutionSummary` confirms equality with JSON.stringify({ summaryId, digest, snapshot }) without indentation. Readable HTML intentionally retains formatted text. The registered diagnostic probe still pretty-prints its HTTP JSON (`src/jobs/probe.js`); its temporary comment does not prove it absent from deployments. This check covers the ordinary application summary JSON, not every HTTP response. The 41% figure in E17 is a historical fixture result, not independently reproduced by this audit. E15, E17, E18.
 - [ ] Response compression enabled (gzip, brotli) — **Managed**: Forge transports resolver/static responses; no deployed Content-Encoding evidence was captured. E11.
 - [ ] Response streaming used for large data — **Partial**: Object Store ranges validate status, Content-Range and byte count; the evidence resolver/frontend also implement bounded range chunks (`src/usecases/testEvidence.js`, `frontend/src/testmgmt/EvidenceDownload.tsx`). These are repeated buffered chunk responses, not one continuously streamed HTTP response. Whole-object paths and browser-side file assembly still materialize buffers. Local range tests passed; no live streaming acceptance. E7, E18.
-- [x] Pagination implemented — **Verified, fixed in this session**: The adversarial audit's reproduction was real — `awaitingDecision` defaulted to `LIMIT 200` with no cursor, so a 201st eligible decision was unreachable with `nextPageToken: null`. Fixed in `src/usecases/queue.js`: `decisionsFor` now fetches up to a `DECISIONS_HARD_CAP` of 2000 (flagging `decisionsOverflow: true` if even that is hit, rather than silently acting complete) and `list` pages that full, oldest-first list in memory using a new opaque composite token (`{ o: decisionsOffset, t: jiraTransitionsToken }`, `decodeToken`/`encodeToken`) — so the client's existing opaque-`nextPageToken` contract (`frontend/src/queue/QueueList.tsx:76`) needs no change. The exclusion set that keeps an item under decision from ever also showing as a transition is now recomputed from the *complete* decision list on every call, not just the page where decisions finish — otherwise a multi-page decisions scan could let an earlier page's item leak through once transitions resume. New regression test `test/queue.test.js` ("every pending decision is reachable across pages...", 201 decisions, 3 pages) asserts all 201 are returned exactly once, oldest-first, and that none of them is ever misclassified as a transition; full suite `test/queue.test.js` (17/17) and `npm test` (2180/2180) pass. Report/decision readers elsewhere remain truncation-flagged without continuation, which is a separate, smaller-stakes gap (report downloads, not an approver's worklist) left as documented. E5, E10, E18, E19.
+- [x] Pagination implemented — **Verified, fixed in this session**: The adversarial audit's reproduction was real — `awaitingDecision` defaulted to `LIMIT 200` with no cursor, so a 201st eligible decision was unreachable with `nextPageToken: null`. Fixed in `src/usecases/queue.js`: `decisionsFor` now fetches up to a `DECISIONS_HARD_CAP` of 2000 (flagging `decisionsOverflow: true` if even that is hit, rather than silently acting complete) and `list` pages that full, oldest-first list in memory using a new opaque composite token (`decodeToken`/`encodeToken`) — so the client's existing opaque-`nextPageToken` contract (`frontend/src/queue/QueueList.tsx:76`) needs no change. The exclusion set that keeps an item under decision from ever also showing as a transition is recomputed from the *complete* decision list on every call, not just the page where decisions finish. A follow-up automated security review of this fix correctly flagged the first version as an index/offset cursor, unstable if the set changes shape between calls (an item resolved mid-scan shifts every later row's position); the cursor is now a **value** cursor on `(last_drift_at, issue_id)` instead — `awaitingDecision` gained an `issue_id ASC` tiebreaker for deterministic ordering, and continuation compares each fresh fetch against the last `(last_drift_at, issue_id)` actually shown, immune to rows entering or leaving the set between calls. Two regression tests cover this: 201 decisions across 3 pages with no gaps/duplicates/leaks, and a second that resolves the earliest decision between two page calls and confirms the still-outstanding one is not skipped (it would have been, under the first, offset-based version). Full suite `test/queue.test.js` (18/18) and `npm test` (2181/2181) pass. Report/decision readers elsewhere remain truncation-flagged without continuation, which is a separate, smaller-stakes gap (report downloads, not an approver's worklist) left as documented. E5, E10, E18, E19, E23.
 - [ ] Field filtering available — **Partial**: Selected Jira adapters request explicit fields, including the approval queue. This is internal field selection; the reviewed resolver contracts do not offer a general client-selected field list. Fixed server projections and broader reads for drift correctness must be evaluated per endpoint. E5, E8, E18.
 - [ ] Sparse fieldsets available — **Open**: No general client-selected sparse-fieldset contract was found in the reviewed resolver definitions or usecases. Internal field-selection and drift-scope fields are different controls. This is a scoped code-review finding, not proof about every external integration. E5, E10, E18.
 
 ### API Rate & Throttling
 
 - [ ] API rate limiting configured — **Partial**: Restore, vault and link queues declare per-issue concurrency 1; queue issue hydration uses READ_CONCURRENCY=5. These cap simultaneous work within their stated scope, not arrivals per caller or across all issues. No application-wide admission limiter was found in reviewed resolver wrappers. Platform ceilings still apply; the earlier phrase unlimited distinct issues was too strong. E8, E18.
-- [ ] Rate limit headers returned — **N/A**: N/A for the Forge resolver JSON contract specifically: these application functions return data, not an app-controlled HTTP header response. The registered probe is a separate HTTP surface with a Content-Type header and no rate-limit metadata in its reviewed helper; it requires a separate decision if retained. No deployed headers were inspected, so N/A is not a pass for every API entry point. E8, E11, E18.
 - [ ] Throttling strategy fair — **Unverified**: The per-issue concurrency keys above serialize work per issue but give no cross-user or cross-tenant fairness guarantee, and no fairness test or admission policy was found. E8.
-- [ ] Rate limit error responses clear — **Partial**: Bug creation preserves upstream Retry-After and bounded retries, but clarity is not uniform. An isolated actual queue fixture with one eligible candidate whose live issue read returns 429 produced { items: [], nextPageToken: null }, with no error/retry/incompleteness signal (`src/usecases/queue.js`, `liveActions`). Both shared error wrappers also drop numeric status and retry timing. Permission filtering remains necessary; transient throttling must be distinguished from an item the caller cannot browse. E8, E18.
-- [ ] Client backoff guidance provided — **Open**: Backend retries do not supply guidance to a resolver caller. Giving the actual respond/tmRespond functions { status: 429, retryAfterMs: 3000 } yielded generic ERROR / SERVICE_UNAVAILABLE envelopes without either status or delay. No matching frontend retry-timing contract was found. The previous Partial classification credited a different, server-side control. E8, E18.
+- [ ] Rate limit error responses clear — **Partial**: Queue liveActions still omits non-OK candidate reads, including throttling, without an incomplete-result signal. The current shared wrappers now preserve supplied numeric status and retry timing, verified in nine fresh repetitions, but cannot restore metadata swallowed before an error is thrown. Permission filtering remains necessary. E8, E18, E22.
+- [ ] Client backoff guidance provided — **Partial**: The contract is now reachable end to end, not just at the backend. `respond`/`tmRespond` (`src/usecases/access.js`, `src/testmgmt/messages.js`) preserve a caught error's `status`/`retryAfterMs` onto the returned envelope only when the thrower actually set them (nothing fabricated, confirmed by `test/user-consent.test.js`'s existing exact-shape assertion still passing unchanged for an ordinary error). The frontend's shared `assertResult` (`frontend/src/lib/result.ts`) used to immediately discard the whole envelope into a bare `new Error(message)` string the moment it saw `result.error` — every one of its ~15 call sites lost `status`/`retryAfterMs` right there, so even a perfect backend signal reached no caller. It now throws a `ResultError extends Error` carrying `reason`/`status`/`retryAfterMs` as properties; `instanceof Error` and `.message` still work everywhere unchanged (`npm run build:ui` passes; existing `instanceof Error` catch sites across the frontend are unaffected). No UI currently reads these fields to show a wait time or schedule a retry — that is still open, and the audit's caution against unsafe automatic replay of mutations means any such follow-up must distinguish retryable reads from mutations rather than auto-replaying either. E8, E18, E22, E24.
 - [x] Exponential backoff recommended — **Verified**: Verified for bounded backend retries: actual restore and vault worker calls at retry counts 0–4 each returned 5, 10, 20, 40, 60-second delays, and existing exhaustion tests pass. Product-event retry/schema-pending tests also pass. This check does not imply client guidance, admission fairness, jitter or a measured live-delivery guarantee. E8, E18.
 
 ### API Versioning & Deprecation
@@ -315,8 +280,6 @@ Comprehensive performance optimization checklist. Covers database optimization, 
 
 - [ ] Critical resources identified — **Partial**: Entry/shared/route resources are visible in the build; no browser critical-path waterfall was captured. E12.
 - [ ] Resource priority configured — **Partial**: Vite generates modulepreload links; no measured priority tuning for deployed Jira iframe loads. E12.
-- [ ] DNS prefetch used — **N/A**: No additional external content origin requiring DNS-prefetch is declared by the UI code reviewed. E11, E12.
-- [ ] Preconnect used for critical origins — **N/A**: No measured external critical-origin handshake justifies adding a preconnect hint. E11, E12.
 - [ ] Prefetch used for non-critical resources — **Open**: No explicit non-critical route prefetch policy was found. E12.
 - [ ] Resource hints optimized — **Partial**: Default preload hints exist; no waterfall comparison establishes optimal hints. E12.
 - [ ] Render-blocking resources minimized — **Partial**: Module scripts and lazy routes reduce initial work; shared CSS/UI cost still needs browser measurement. E12.
@@ -325,7 +288,6 @@ Comprehensive performance optimization checklist. Covers database optimization, 
 ### Core Web Vitals
 
 - [ ] Largest Contentful Paint (LCP) < 2.5s — **Unverified**: No measured LCP distribution for Jira host/iframe; do not infer this from build duration. E12, E13.
-- [ ] First Input Delay (FID) < 100ms — **N/A**: Legacy template metric: FID has been replaced by INP. Preserve this row for traceability; measure INP <= 200 ms at p75 instead. E13.
 - [ ] Cumulative Layout Shift (CLS) < 0.1 — **Unverified**: No measured CLS distribution was supplied. E13.
 - [ ] Core Web Vitals monitored — **Open**: No web-vitals/PerformanceObserver collection was found in the reviewed frontend. E12, E13.
 - [ ] Performance metrics tracked over time — **Open**: No retained browser metric series or trend report was supplied. E6, E13.
@@ -345,7 +307,6 @@ Comprehensive performance optimization checklist. Covers database optimization, 
 
 ### Server Configuration
 
-- [ ] Web server optimized (nginx/Apache tuning) — **N/A**: No application-owned nginx/Apache server exists; Forge hosts the app. E11.
 - [ ] Worker processes configured — **Managed**: Forge manages execution processes; the manifest declares consumer functions, not OS workers. E11.
 - [ ] Buffer sizes optimized — **Managed**: No server/socket buffer tuning is exposed by app configuration. E11.
 - [ ] Keepalive connections configured — **Managed**: No app-owned connection keepalive setting is declared. E11.
@@ -360,7 +321,6 @@ Comprehensive performance optimization checklist. Covers database optimization, 
 - [ ] Memory utilization monitored — **Managed**: Database host memory monitoring is outside this code; no console evidence was inspected. E1.
 - [ ] Disk I/O monitored — **Managed**: Database disk I/O telemetry is outside this code; no console evidence was inspected. E1.
 - [ ] Database configuration tuned — **Managed**: No application-owned database server tuning settings. E1.
-- [ ] Query cache configured (if applicable) — **N/A**: No configurable SQL server query-cache setting is used by this application; request memoization is separate. E1, E4.
 - [ ] Buffer pool size optimized — **Managed**: No app-owned database buffer-pool setting. E1.
 
 ### Application Server
@@ -368,7 +328,6 @@ Comprehensive performance optimization checklist. Covers database optimization, 
 - [ ] Application server memory configured — **Partial**: Restore/vault workers declare 1024 MiB; other functions use platform defaults. No heap/headroom benchmark validates sizing. E7, E11.
 - [ ] Heap size optimized — **Managed**: No explicit Node heap-size override or heap-sizing study. E11.
 - [ ] Garbage collection tuned — **Managed**: No app GC configuration or profiling evidence. E11.
-- [ ] Thread pool configured — **N/A**: No application server thread pool is declared. E11.
 - [ ] Worker process count optimized — **Managed**: No OS worker count is configured; queue concurrency is a separate application control. E8, E11.
 - [x] Timeout configurations reviewed — **Verified**: Restore/vault/link worker timeouts are declared at 600 s; scheduled sweeps and LLM calls have explicit budgets. This verifies reviewable bounds, not deadline success. E8, E11.
 
@@ -421,7 +380,6 @@ Comprehensive performance optimization checklist. Covers database optimization, 
 - [ ] High error rate alert configured — **Open**: No error-rate alert threshold/destination/test evidence was supplied. E6.
 - [ ] High CPU usage alert configured — **Managed**: Host CPU alerting is platform-owned; no customer-facing alert setup was verified. E11.
 - [ ] High memory usage alert configured — **Managed**: Host memory alerting is platform-owned; no customer-facing alert setup was verified. E11.
-- [ ] Database connection pool exhaustion alert — **N/A**: There is no app-owned connection pool to exhaust; SQL throttling/service-error alerts still need verification. E1.
 - [ ] Cache eviction rate alert — **Open**: No cache-eviction alert exists in the reviewed cache code. E4.
 - [ ] Slow query alert configured — **Open**: No per-query timing threshold or slow-query alert is implemented in the SQL wrapper. E1.
 
@@ -464,7 +422,6 @@ Comprehensive performance optimization checklist. Covers database optimization, 
 - [ ] Current capacity documented — **Partial**: Configured limits are documented below; tested sustainable workload and headroom are not established. E1, E7, E11, E14.
 - [ ] Growth projections estimated — **Open**: No issue/attachment/user growth forecast was supplied. E14.
 - [ ] Scaling strategy planned — **Partial**: Batching and asynchronous consumers provide bounded execution; a quantified scaling plan against platform quotas is missing. E8, E14.
-- [ ] Vertical vs. horizontal scaling evaluated — **N/A**: Forge infrastructure scaling is managed; application memory/concurrency choices still require measured capacity planning. E11, E14.
 - [ ] Infrastructure costs estimated — **Open**: No workload-based compute/SQL/storage/LLM cost estimate was verified. E14.
 - [ ] Scaling timeline established — **Open**: No growth-triggered scaling milestones or timeline was supplied. E14.
 
@@ -481,6 +438,34 @@ Comprehensive performance optimization checklist. Covers database optimization, 
 - [ ] Root cause analysis for regressions — **Partial**: Tests document specific repeated-work regressions and the restore investigation records causes; no recurring performance incident/RCA process was verified. E3, E5, E8.
 
 ---
+
+## Audited performance numbers
+
+The code-level ratios below come from the rigorous re-benchmarking supplied by the user (7–9 runs, 100k–200k iterations per run); they were not independently rerun in this document-editing pass. The API formatting and payload figures come from the retained nine-run local audit in E21. All are local measurements or fixture counts, not deployed latency results.
+
+| Code-level change | Audited result | Interpretation |
+| --- | --- | --- |
+| sha256Hex direct string update | 1.00–1.01x; about 0–3 ns/call | Noise; no meaningful measured gain. |
+| logicalNodeId inlining | 1.08x | Modest local improvement. |
+| contentFieldIds single pass | 1.34x | Modest local improvement. |
+| encodeValue single-chunk branch | 2.51–2.83x | Local encoding-path improvement. |
+| decodeValue single-row branch | 5.53x | Local decoding-path improvement. |
+| Batch parameter loop unrolling | 1.25–1.28x; about 0.098 µs saved/call | Small absolute saving; endpoint benefit unmeasured. |
+| Multi-part hash unrolling | 0.95–0.98x | Regression/noise. |
+| isStructuralField fast path | 1.38–2.21x | Noisy and field-mix dependent. |
+| Equivalent-digest cache | No accepted speedup ratio | Cache exists; the earlier benchmark comparator was misleading. |
+
+| API measurement | Correct value | Scope |
+| --- | --- | --- |
+| Compact JSON serialization | Median 6.787 → 4.773 µs; paired median 1.43x; about 2.014 µs saved | Three-run synthetic summary; 9 pairs of 100,000 iterations. |
+| JSON download size | 5,212 → 2,884 bytes; 44.7% smaller | Same synthetic summary; UTF-8 bytes. |
+| Whole response size | 14,066 → 11,529 bytes; 18.0% smaller | Includes snapshot plus JSON/HTML exports; before transport compression. |
+| Panel Jira calls | 3 | No-parent fixture: issue, profile and real transition reader. Ancestor checks may add calls. |
+| Queue Jira calls | 51 for 50 candidates; peak issue-read concurrency 5 | One search plus 50 live reads; concurrency does not reduce call volume. |
+| Same-key request cache | 30 reads → 1 factory call | One invocation only; 30 separate invocations still execute 30 factories. |
+| Saved-summary issue-reader calls | 103 calls for 100 runs of one test and one coverage row | Two distinct issue IDs; this is the saved-summary read path. |
+| Backend retry delays | 5, 10, 20, 40, 60 seconds | Local restore/vault worker behavior. |
+| Deployed API latency, throughput, p95 or cold-start gain | Not measured | No production speedup claim. |
 
 ## Performance Optimization Wins
 
@@ -516,31 +501,31 @@ The following are structural implementation wins verified locally on 28 October 
 
 ### Optimization: Inlined logicalNodeId and fast-path isStructuralField
 
-- **Improvement:** Inlining deterministic single-key JSON serialization in `logicalNodeId` avoids object allocation, recursive traversal, array allocation, sorting, and intermediate JSON.stringify passes on every node; inlining identity checks in `isStructuralField` avoids Set lookups and `String()` conversions on the fast path.
+- **Improvement:** Inlining deterministic single-key JSON serialization in `logicalNodeId` bypasses construction and canonical traversal of a one-key wrapper; the existing one-key canonical fast path already skips sorting; inlining identity checks in `isStructuralField` avoids Set lookups and `String()` conversions on the fast path.
 - **Date:** Implemented and verified 28 October 2026.
 - **Scope/technique:** `src/lib/tree/model.js` and `src/lib/tree/structure.js`. E7, E16.
-- **Measurable impact:** `test/code-level-optimization.test.js` confirms byte-for-byte digest parity. Benchmarks show `contentFieldIds` achieves a 2.03x speedup and `logicalNodeId` achieves a 1.30x speedup with zero wrapper object allocations.
+- **Measurable impact:** `test/code-level-optimization.test.js` confirms byte-for-byte digest parity. The supplied rigorous audit reports `contentFieldIds` at 1.34x and `logicalNodeId` at 1.08x. These are isolated local ratios, not application speedups; no heap profile was collected. E20.
 
 ### Optimization: Value store chunk & decode allocation minimization
 
 - **Improvement:** `encodeValue` returns single-chunk base64 payloads directly without `.slice()` copy; `decodeValue` bypasses sorting, validation callbacks, and `.map().join()` string allocations when decoding single-row values, reading raw bytes directly from buffer length instead of re-encoding to UTF-8.
 - **Date:** Implemented and verified 28 October 2026.
 - **Scope/technique:** `src/lib/valuestore.js`. E7, E16.
-- **Measurable impact:** `test/code-level-optimization.test.js` asserts correctness. Microbenchmarks show single-row `decodeValue` is 1.61x faster and single-chunk encoding avoids slice allocation (8.27x speedup on chunking).
+- **Measurable impact:** `test/code-level-optimization.test.js` asserts correctness. The supplied rigorous audit reports single-row `decodeValue` at 5.53x and single-chunk `encodeValue` at 2.51–2.83x. These are isolated local results; they do not establish an endpoint latency improvement. E20.
 
 ### Optimization: 2x unrolled batch SQL parameter generation & placeholder caching
 
 - **Improvement:** `writeTreeCapture` caches fixed 50-row SQL placeholder strings and uses 2x loop unrolling when building multi-row parameter arrays.
 - **Date:** Implemented and verified 28 October 2026.
 - **Scope/technique:** `src/db/baselineTreeStore.js`. E3, E16.
-- **Measurable impact:** Passing test confirms correct parameter generation for both even and odd batch sizes. Benchmark shows a 2.47x speedup in batch parameter building and zero placeholder string allocation for standard 50-row batches.
+- **Measurable impact:** Passing test confirms correct parameter generation for both even and odd batch sizes. The supplied rigorous audit reports 1.25–1.28x for parameter building, about 0.098 µs saved per measured call. Fixed placeholder reuse is a structural improvement; endpoint latency and zero-allocation claims are not established. E20.
 
 ### Optimization: Direct string hashing in sha256Hex & 4x loop unrolling
 
 - **Improvement:** `sha256Hex` updates string parts directly using native UTF-8 OpenSSL hashing without allocating intermediate `Buffer` instances, and unrolls multi-part loops by 4x.
 - **Date:** Implemented and verified 28 October 2026.
 - **Scope/technique:** `src/lib/hash.js`. E16.
-- **Measurable impact:** Asserts exact hash parity across variable argument counts; removes Buffer allocations from all single-string and multi-part hash paths.
+- **Measurable impact:** Correctness assertions establish exact hash parity across variable argument counts. The supplied audit reports direct string hashing at 1.00–1.01x (noise) and multi-part unrolling at 0.95–0.98x (regression/noise). Removing an explicit Buffer conversion is not proof of a runtime win. E20.
 
 ---
 
@@ -579,6 +564,11 @@ Paths below are relative to the repository root. Source inspection establishes i
 | E17 | API Performance source fix, 28 October 2026 (same follow-up pass as E15): `src/testmgmt/summary.js` — compacted the standalone `.json` download (`JSON.stringify({ summaryId, digest, snapshot })`, no indentation), which is returned inline inside the `tm:summary:generate`/`tm:summary:read` resolver response (`src/usecases/testSummary.js:76,101`). Measured on a representative sample (3 runs with steps/signatures): 3979 → 2365 bytes, a 41% reduction. `npm test` (fresh, 2179/2179 passing) confirms no regression, including `test/testmgmt-coverage-summary.test.js:136-142`, which parses and asserts on `downloads.json.content`. A repository-wide grep confirmed the only remaining pretty-printed `JSON.stringify(..., null, 2)` calls are the `.html` download's human-read `<pre>` blocks (same file) and the temporary diagnostic webtrigger `src/jobs/probe.js:21` — neither is a regression. |
 | E18 | Adversarial API checklist audit, 28 October 2026: `docs/acceptance/2026-10-28-api-performance-adversarial-audit.md`. Current source snapshot `b718ada843dce74015e8a3ca4f31a25407624743` plus existing working-tree changes; relevant source hashes checked for stability. 144 existing local tests passed; 4 isolated counterexample/format fixtures passed; a separate 62-test run included exact worker-delay assertions and overlaps earlier worker coverage. Confirmed a 200-decision cap without continuation, a swallowed queue hydration 429, missing caller retry metadata, current compact summary JSON and actual bounded exponential delays. No product-source changes, deployment, load test or live acceptance; earlier E15/E17 evidence remains historical. |
 | E19 | Pagination source fix for the 200-decision cap E18 found, 28 October 2026: `src/usecases/queue.js` — `decisionsFor` now requests `DECISIONS_HARD_CAP = 2000` instead of the implicit 200 and reports `overflow`; `list` pages the result in memory with a new `decodeToken`/`encodeToken` composite cursor and rebuilds its transition-exclusion `skip` set from the complete decision list on every call. `test/queue.test.js` updated (the `limit` now passed to `awaitingDecision`) and extended with a 201-decision, 3-page regression test asserting completeness, no duplicates, stable ordering and no decision ever misclassified as a transition. `node --test test/queue.test.js` (17/17) and `npm test` (2180/2180) both fresh passes. |
+| E20 | User-supplied Speed Claims Audit in this conversation, 28 October 2026: 7–9 runs, median, 100k–200k iterations per run. Corrected code-level figures are recorded in Audited performance numbers. These results are supplied evidence, not a fresh independent run by this editing pass. No accepted 69.9x equivalent-digest caching claim or deployed API speedup is retained. |
+| E21 | Local API speed audit: `docs/acceptance/2026-10-28-api-speed-claims-audit.md`, raw `docs/acceptance/api-speed-audit-2026-10-28/results.json`, and `scripts/audit-api-performance.mjs`. Nine paired 100k-iteration serialization runs, deterministic payload bytes, request-count fixtures and a 172-test local regression pass. Results are historical snapshot evidence; later error-wrapper changes are verified separately in E22. No live RTT, latency percentile, compression header or throughput measurement. |
+| E22 | Current source read-back of `src/usecases/access.js` and `src/testmgmt/messages.js`: both now include retryGuidance in error envelopes. Nine fresh assertion repetitions in this document-update pass confirmed that each preserves supplied status 429 and retryAfterMs 3000. This credits the backend metadata contract only; it does not establish frontend retry acceptance or repair queue hydration swallowing non-OK responses. |
+| E23 | Pagination hardening in response to an automated security review of the E19 fix, 28 October 2026: `src/usecases/queue.js`, `src/db/itemStateStore.js` (`issue_id ASC` tiebreaker on `awaitingDecision`). The decisions cursor changed from a row position/offset to a value cursor on `(last_drift_at, issue_id)`, immune to the set changing shape between calls. Two new `test/queue.test.js` cases: 201 decisions over 3 pages with no gaps/duplicates/leaks, and one that removes the earliest decision between two page calls and confirms the still-outstanding one is still returned (reproducing, then closing, exactly the failure mode the review described). `node --test test/queue.test.js` (18/18) and `npm test` (2181/2181) fresh passes. |
+| E24 | Client-backoff contract completed end to end, 28 October 2026: `src/usecases/access.js`/`src/testmgmt/messages.js` (shared `retryGuidance` helper, additive `status`/`retryAfterMs` fields, built on E22) and `frontend/src/lib/result.ts` (new `ResultError extends Error`, replacing a bare `new Error(message)` that discarded the whole envelope). `npm run build:ui` passes (fresh production TypeScript/Vite build); `test/user-consent.test.js`'s existing exact-shape assertion on `respond()`'s ordinary-error output still passes unchanged, confirming no fields are fabricated. Repository-wide check of frontend `instanceof Error`/`.name` call sites found none that `ResultError` would break. No UI reads `status`/`retryAfterMs` yet to show a wait time or gate a retry — that remains open, deliberately, since the adversarial audit cautioned against unsafe automatic replay of mutations. |
 
 ## Fresh local verification
 
