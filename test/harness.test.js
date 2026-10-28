@@ -336,3 +336,56 @@ test('a truncated harness line does not crash log inspection', async () => {
   assert.equal(events[0].action, 'unknown');
   assert.equal(events[1].action, 'gate:deny');
 });
+
+// A missing viewer boundary would return protected child keys, digests and worker errors.
+test('inspectIssue filters live child diagnostics and opaque restore/audit payloads for the viewer', async () => {
+  const { inspectIssue: inspect } = await import('../src/usecases/harness.js');
+  const { logicalNodeId } = await import('../src/lib/tree/model.js');
+  const { deps } = inspectDeps({ issueResponse: typedIssue({ typeId: '10004', typeName: 'Task' }), rows: {
+    va_baseline_node: [
+      { logicalNodeId: logicalNodeId(11), currentIssueId: 11, issueKey: 'VAT-11' },
+      { logicalNodeId: logicalNodeId(99), currentIssueId: 99, issueKey: 'SECRET-99' }
+    ],
+    va_baseline: [{ issue_id: 11, content_hash: 'visible-baseline' }, { issue_id: 99, content_hash: 'hidden-baseline' }],
+    va_audit: [{ seq: 1, event_type: 'RESTORE_FAILED', payload: '{"error":"SECRET-99 hidden-value"}', occurred_at: 1 }]
+  } });
+  deps.filterViewableTree = async tree => ({ ...tree, nodes: tree.nodes.filter(n => String(n.id) === '11') });
+  deps.findViewableIssues = async () => [];
+  deps.readTreeDrift = async () => [
+    { logicalNodeId: logicalNodeId(11), currentDigest: 'visible-current' },
+    { logicalNodeId: logicalNodeId(99), currentDigest: 'hidden-current' },
+    { logicalNodeId: logicalNodeId(777), issueId: 777, issueKey: 'NEW-777', currentDigest: 'hidden-new-current' }
+  ];
+  deps.restoresForIssue = async () => [{ restore_id: 'restore', state: 'PARTIAL', total_steps: 3, completed_steps: 1,
+    last_error: 'SECRET-99 hidden-error', detail: [{
+      unmatched: [{ issueKey: 'VAT-11', actual: 'visible-actual', fieldName: 'Summary' },
+        { issueKey: 'SECRET-99', actual: 'hidden-value' }, { issueKey: 'NEW-777', actual: 'hidden-new-value' }],
+      refused: [{ issueKey: 'SECRET-99', error: { detail: 'hidden-refusal' } }],
+      verification: { changes: [{ logicalNodeId: logicalNodeId(99), to: 'hidden-change' }] },
+      plan: { steps: [{ issueKey: 'SECRET-99', values: { summary: 'hidden-plan' } }] }
+    }] }];
+  const before = JSON.stringify(await deps.restoresForIssue());
+  const result = await inspect({ payload: { issueKey: 'VAT-41' }, context: { accountId: 'u1' } }, deps);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.childBaselines.map(row => row.issueId), [11]);
+  assert.deepEqual(result.drift.items.map(row => row.currentDigest), ['visible-current']);
+  assert.equal(result.restores[0].unmatched[0].actual, 'visible-actual');
+  assert.equal(result.restores[0].totalSteps, 3);
+  assert.doesNotMatch(JSON.stringify(result), /SECRET-99|NEW-777|hidden-/);
+  assert.equal(JSON.stringify(await deps.restoresForIssue()), before, 'projection does not alter authoritative records');
+});
+
+test('diagnostics do not expose nested opaque refusal errors or their copied verification reasons', async () => {
+  const { opaqueRestoreEvidence, safeVerificationGuidance, assertOpaqueEvidenceHidden } = await import('./helpers/opaque-restore-evidence.js');
+  const { inspectIssue: inspect } = await import('../src/usecases/harness.js');
+  const { deps } = inspectDeps({ issueResponse: typedIssue({ typeId: '10004', typeName: 'Task' }) });
+  const detail = opaqueRestoreEvidence('VAT-41', 44008);
+  deps.restoresForIssue = async () => [{ restore_id: 'restore', state: 'PARTIAL', detail }];
+  deps.filterViewableTree = async () => ({ nodes: [] });
+  deps.findViewableIssues = async () => [];
+  const result = await inspect({ payload: { issueKey: 'VAT-41' }, context: { accountId: 'u1' } }, deps);
+  assert.equal(result.ok, true);
+  assertOpaqueEvidenceHidden(assert, result);
+  assert.equal(result.restores[0].unmatched[2].reason, safeVerificationGuidance);
+  assert.ok(result.restores[0].refused[0].reason);
+});

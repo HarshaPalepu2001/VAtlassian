@@ -506,10 +506,16 @@ test('S58 a tracked field removed from the issue (value gone) is drift', async (
   await heldEverywhere(w, 'T-1');
 });
 
-test('S59 a transition screen that edits tracked content moves once, then the item is held', async () => {
+test('S59 a transition-screen tracked edit is refused before Jira applies the fields or move', async () => {
   const w = await approvedItem();
-  assert.equal(await w.moves('T-1', '41', { modifiedFields: { summary: 'changed on the screen' } }), true);
-  await heldEverywhere(w, 'T-1');
+  const persisted = structuredClone(w.issue('T-1'));
+  const r = await w.transition('T-1', '41', { modifiedFields: { summary: 'changed on the screen' } });
+  assert.ok(heldFor(r), 'the proposed tracked edit must be held before the move');
+  assert.deepEqual(w.issue('T-1'), persisted, 'Jira must not apply the screen values or status after refusal');
+  // The pending screen edit is not saved Jira content. The panel therefore
+  // remains clean until the person explicitly saves an edit to the work item.
+  assert.equal((await w.panel('T-1')).drift.count, 0);
+  await freeEverywhere(w, 'T-1');
 });
 
 test('S60 a six-digit value typed on an ordinary transition screen does not block the move', async () => {
@@ -615,13 +621,20 @@ test('S73 rule role changed after signing: refused', async () => {
   assert.equal(await w.moves('T-1', '31'), false);
 });
 
-test('S74 no transition id but the signature token on the screen: resolves and passes', async () => {
+test('S74 a screen token with ambiguous siblings requires the validator\'s trusted transition configuration', async () => {
   const w = world(); w.createIssue({ key: 'T-1', status: '3' });
   w.workflows.get('1:1').push({ id: '33', name: 'Fast approve', from: ['3'], to: '4' });
   w.control({ transitionId: '31' });
   const row = await w.sign('T-1', '31');
-  const r = await w.transition('T-1', '31', { omitId: true, modifiedFields: { customfield_761: row.approval_id.toString('hex') } });
-  assert.equal(r.result, true, r.errorMessage);
+  const modifiedFields = { customfield_761: row.approval_id.toString('hex') };
+  const unresolved = await w.transition('T-1', '31', { omitId: true, modifiedFields });
+  assert.equal(unresolved.result, false, 'the token cannot choose which sibling is executing');
+  assert.equal(row.state, 'PENDING', 'unresolved execution must not consume the receipt');
+  assert.equal(w.issue('T-1').fields.status.id, '3');
+  const resolved = await w.transition('T-1', '31', { omitId: true, configured: true, modifiedFields });
+  assert.equal(resolved.result, true, resolved.errorMessage);
+  assert.equal(row.state, 'CONSUMED');
+  assert.equal(w.issue('T-1').fields.status.id, '4');
 });
 
 test('S75 consuming a signature voids the item\'s other pending signatures', async () => {

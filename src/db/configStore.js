@@ -3,6 +3,8 @@ import { newId, throwing } from './store.js';
 import { withAlwaysControlled } from '../lib/content.js';
 import { effectiveAssurance } from '../lib/approval/levels.js';
 import { memo } from '../lib/cache.js';
+import { FailClosed } from '../lib/errors.js';
+import { validateConfig, stripRetiredConfig } from '../lib/configValidation.js';
 
 /**
  * va_config, va_controlled_transition, va_controlled_field, va_eligibility.
@@ -16,20 +18,25 @@ const ACTIVE = 'ACTIVE';
 
 // ── va_config ────────────────────────────────────────────────────────────────
 
+/** Defaults apply only to absent rows. Never replace saved, unreadable controls
+ * with defaults, or include the raw row/parser error in an exposed refusal. */
+function decodeConfig(value) {
+  try { return JSON.parse(value); }
+  catch { throw new FailClosed('CONFIGURATION_INVALID'); }
+}
+
+function governedConfig(config) {
+  try { return validateConfig(stripRetiredConfig(config)); }
+  catch { throw new FailClosed('CONFIGURATION_INVALID'); }
+}
+
 export async function getConfig(key, fallback = null) {
   return memo(`config:${key}`, async () => {
     const rows = await throwing('SELECT cfg_value FROM va_config WHERE cfg_key = ?', [key]);
     if (rows.length === 0) return fallback;
-    try {
-      return JSON.parse(rows[0].cfg_value);
-    } catch {
-      // A config row that will not parse is a corrupt row, not a reason to take
-      // the app down. Falling back to the default means the app runs on its
-      // documented defaults rather than refusing to start, and the admin console
-      // shows the row as unreadable so somebody can fix it.
-      console.error('config: unparseable value for', key);
-      return fallback;
-    }
+    const config = decodeConfig(rows[0].cfg_value);
+    // Other keys intentionally store generic JSON values, including scalars.
+    return key === 'site' || key.startsWith('project:') ? governedConfig(config) : config;
   });
 }
 
@@ -46,9 +53,8 @@ export async function readConfigRecord(key) {
   const rows = await throwing('SELECT cfg_value FROM va_config WHERE cfg_key = ?', [key]);
   if (!rows.length) return { config: {}, revision: null };
   const revision = rows[0].cfg_value;
-  let config;
-  try { config = JSON.parse(revision); } catch { throw new Error('Saved configuration is unreadable. No changes were saved.'); }
-  if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('Saved configuration is invalid. No changes were saved.');
+  const config = decodeConfig(revision);
+  governedConfig(config);
   return { config, revision };
 }
 
@@ -85,13 +91,9 @@ export async function projectConfig(projectId) {
     );
     let site = {}, project = {};
     for (const row of rows) {
-      try {
-        const parsed = JSON.parse(row.cfg_value);
-        if (row.cfg_key === 'site') site = parsed ?? {};
-        else project = parsed ?? {};
-      } catch {
-        console.error('config: unparseable value for', row.cfg_key);
-      }
+      const parsed = governedConfig(decodeConfig(row.cfg_value));
+      if (row.cfg_key === 'site') site = parsed;
+      else project = parsed;
     }
     return deepMerge(deepMerge(DEFAULT_PROJECT_CONFIG, site), project);
   });
@@ -431,21 +433,19 @@ export async function controlledFields({ projectId, issueTypeId }) {
   return memo(`controlledFields:${projectId}:${issueTypeId}`, async () => {
     const rows = await throwing(
       `SELECT TO_BASE64(cf_id) AS cf_id, field_id, field_name, field_kind, schema_type,
-              store_values, writable, materiality
+              store_values, writable, materiality, state
        FROM va_controlled_field
        WHERE project_id = ?
          AND (issue_type_id = ? OR issue_type_id = '*')
-         AND state = ?
        ORDER BY issue_type_id DESC`,
-      [projectId, issueTypeId, ACTIVE]
+      [projectId, issueTypeId]
     );
     // ORDER BY issue_type_id DESC puts an exact-issue-type row ahead of the '*'
-    // row for the same field, and the Map keeps the first of each field_id — so a
-    // per-type override wins over the project-wide default rather than appearing
-    // beside it as a duplicate.
+    // row for the same field. Resolve that precedence before filtering state:
+    // an exact EXCLUDED row must suppress an ACTIVE project-wide default.
     const byField = new Map();
     for (const r of rows) if (!byField.has(r.field_id)) byField.set(r.field_id, r);
-    const declared = [...byField.values()].map((r) => ({
+    const declared = [...byField.values()].filter(r => r.state === ACTIVE).map((r) => ({
       cf_id: fromBinaryColumn(r.cf_id).toString('hex'),
       field_id: r.field_id,
       field_name: r.field_name,

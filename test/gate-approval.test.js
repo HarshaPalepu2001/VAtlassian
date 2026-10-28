@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createGate, rawCodeSubmitted } from '../src/gate.js';
 import { makeApproval } from '../src/lib/approval/record.js';
 import { providerFor } from '../src/lib/approval/registry.js';
-import { approvalContentHash } from '../src/lib/approval/runtime.js';
+import { approvalContentHash, resolveEdge } from '../src/lib/approval/runtime.js';
 import { planTreeCapture } from '../src/lib/tree/capturePlan.js';
 
 async function fixture(level = 'ESIGNATURE', baselineControl = null) {
@@ -24,6 +24,63 @@ async function fixture(level = 'ESIGNATURE', baselineControl = null) {
   const payload = { issue: { key: 'T-10' }, transition: { id: '50', from: { id: '1' }, to: { id: '2' } } };
   return { deps, row, snapshot, payload, logs, events };
 }
+
+// Keep the actual edge resolver and validator together: only the Jira read and
+// stored policy boundaries are supplied here, so a receipt-selected policy
+// would allow the wrong sibling all the way through capability consumption.
+function resolveFixtureEdge(f, { available, configured = null }) {
+  f.payload.transition.id = null;
+  f.payload.configuration = configured == null ? {} : { transitionId: configured };
+  f.deps.load = async args => ({ ...f.snapshot, ...await resolveEdge({
+    gated: async id => ({ ...f.snapshot.ct, required_assurance: id === '51' ? 'BIOMETRIC' : 'ESIGNATURE' }),
+    signedTransitionId: async () => f.row.transition_id,
+    transitions: async () => available
+  }, args) });
+}
+
+const siblingApprovalEdges = [{ id: '50', toStatusId: '2', isAvailable: true },
+  { id: '51', toStatusId: '2', isAvailable: true }];
+
+test('configured biometric sibling refuses an esignature receipt for the other transition', async () => {
+  const f = await fixture('ESIGNATURE');
+  f.payload.transition.modifiedFields = { receipt: f.row.approval_id.toString('hex') };
+  resolveFixtureEdge(f, { available: siblingApprovalEdges, configured: '51' });
+  const denied = await createGate(f.deps)(f.payload);
+  assert.equal(denied.result, false);
+  assert.equal(f.events.some(event => event.eventType === 'SIGNATURE_CONSUMED'), false);
+  assert.equal(f.logs.find(event => event.event === 'gate:deny')?.detail, 'EDGE_BINDING_MISMATCH');
+});
+
+test('a receipt cannot disambiguate controlled siblings without validator configuration', async () => {
+  const f = await fixture();
+  f.payload.transition.modifiedFields = { receipt: f.row.approval_id.toString('hex') };
+  resolveFixtureEdge(f, { available: siblingApprovalEdges });
+  assert.equal((await createGate(f.deps)(f.payload)).result, false);
+  assert.equal(f.events.some(event => event.eventType === 'SIGNATURE_CONSUMED'), false);
+});
+
+test('an unavailable receipt edge cannot override the sole live biometric edge', async () => {
+  const f = await fixture();
+  f.payload.transition.modifiedFields = { receipt: f.row.approval_id.toString('hex') };
+  resolveFixtureEdge(f, { available: [siblingApprovalEdges[1], { ...siblingApprovalEdges[0], isAvailable: false }] });
+  assert.equal((await createGate(f.deps)(f.payload)).result, false);
+  assert.equal(f.events.some(event => event.eventType === 'SIGNATURE_CONSUMED'), false);
+});
+
+test('a matching receipt is accepted for its independently configured available transition', async () => {
+  const f = await fixture();
+  f.payload.transition.modifiedFields = { receipt: f.row.approval_id.toString('hex') };
+  resolveFixtureEdge(f, { available: siblingApprovalEdges, configured: '50' });
+  assert.equal((await createGate(f.deps)(f.payload)).result, true);
+  assert.equal(f.events.filter(event => event.eventType === 'SIGNATURE_CONSUMED').length, 1);
+});
+
+test('dashboard approval without a screen token resolves the sole live controlled transition', async () => {
+  const f = await fixture();
+  resolveFixtureEdge(f, { available: [siblingApprovalEdges[0]] });
+  assert.equal((await createGate(f.deps)(f.payload)).result, true);
+  assert.equal(f.events.filter(event => event.eventType === 'SIGNATURE_CONSUMED').length, 1);
+});
 test('gate consumes a verified capability exactly once under concurrent requests', async () => {
   const f = await fixture(), gate = createGate(f.deps);
   const results = await Promise.all([gate(f.payload), gate(f.payload)]);

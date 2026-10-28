@@ -1,3 +1,4 @@
+import { restoreErrorForViewer } from './viewerProjection.js';
 import api, { route } from '@forge/api';
 import { actorFrom, fail, respond } from './access.js';
 import { availableTransitions } from '../lib/transitions.js';
@@ -291,7 +292,7 @@ export async function getSummary(args) { return respond(async () => {
     totalSteps: Number(restores[0].total_steps ?? 0),
     completedSteps: Number(restores[0].completed_steps ?? 0),
     lastCheckpoint: restores[0].last_checkpoint != null ? Number(restores[0].last_checkpoint) : null,
-    lastError: restores[0].last_error ?? null
+    lastError: restoreErrorForViewer(restores[0].last_error)
   } : null;
 
   const restoredVia = reachedBy ? {

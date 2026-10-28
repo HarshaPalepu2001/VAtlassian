@@ -29,6 +29,7 @@ export const DENY = {
   MULTI_LINK_FIELD_UNSUPPORTED: 'This work item has more than one tracked link field, so its links cannot be restored automatically. No changes were made. Ask an administrator to track a single link field.',
   RESTORE_STATUS_UNAVAILABLE: 'The work item could not be returned to its approved review status, so no changes were restored. Ask an administrator to check the workflow route.',
   NOT_CONFIGURED: 'This transition is gated but has not been configured. Contact your VAtlassian administrator.',
+  CONFIGURATION_INVALID: 'Saved VAtlassian settings are unreadable or invalid, so this action was blocked. Ask a VAtlassian administrator to repair the saved configuration before trying again.',
   LEDGER_UNAVAILABLE: 'The audit ledger could not record this action, so the transition was blocked. No changes were made.',
   NO_PENDING_SIGNATURE: 'This transition requires an electronic signature. Please open the "My Signatures" app from the top navigation bar to sign and complete this transition, or use the VAtlassian panel on the issue.',
   SIGNATURE_EXPIRED: 'Your signature expired before the transition was performed. Please sign again.',

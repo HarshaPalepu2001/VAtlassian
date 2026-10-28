@@ -10,6 +10,7 @@ import { logicalNodeId } from '../lib/tree/model.js';
 import { withStoredAttribution } from '../lib/tree/reviewAttribution.js';
 import { attachmentRejection, removedNodeFiles } from '../lib/restore/attachmentPreflight.js';
 import { mixedEligibility } from '../lib/approval/mixedDecision.js';
+import { projectRestoreRows } from './viewerProjection.js';
 
 /**
  * THE HEAVY READ — recursive tree, retained values, changelog attribution,
@@ -156,7 +157,7 @@ export async function getEvidence(args) { return respond(async () => {
       ...groupedDrift
     },
     rejection: { deleteIssueKeys, recreateCount, attachments },
-    restoreHistory: restores
+    restoreHistory: await projectRestoreRows(restores, prepared)
   };
 }); }
 

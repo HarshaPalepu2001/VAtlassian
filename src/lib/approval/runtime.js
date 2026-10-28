@@ -143,13 +143,12 @@ export async function approvalRuntime() {
  * Returns `edgeFailure` rather than throwing: the validator must still be able
  * to refuse a drifted item for its drift, whatever is wrong with the edge.
  */
-export async function resolveEdge({ gated, signedTransitionId, transitions },
-  { toStatusId, transitionId, approvalId, configuredTransitionId = null }) {
+export async function resolveEdge({ gated, transitions },
+  { toStatusId, transitionId, configuredTransitionId = null }) {
   let id = transitionId == null ? null : String(transitionId);
-  if (!id && approvalId) {
-    const signed = await signedTransitionId();
-    if (signed != null) id = String(signed);
-  }
+  // A receipt proves approval for an edge; it cannot identify the edge Jira
+  // is executing or choose the policy against which it will be checked.
+  // Resolve independently from Jira's payload, configuration and live edges.
   if (id) return { transitionId: id, ct: await gated(id), edgeFailure: null };
 
   let available;
@@ -242,10 +241,6 @@ export async function gateRuntime() {
   const resolve = args => resolveEdge({
     gated: id => config.gatedTransition({ projectId: args.issue.projectId, issueTypeId: args.issue.issueTypeId,
       fromStatusId: args.fromStatusId, toStatusId: args.toStatusId, transitionId: id }),
-    signedTransitionId: async () => (await approvals.pendingApprovalByToken({
-      issueId: args.issue.issueId, fromStatusId: args.fromStatusId, toStatusId: args.toStatusId,
-      approvalId: Buffer.from(args.approvalId, 'hex'), now: Date.now()
-    }))?.transition_id,
     transitions: () => readAsUserOrApp(
       () => availableTransitions(api, args.issue.issueKey),
       async () => {
@@ -281,6 +276,12 @@ export async function gateRuntime() {
     load: async ({ issueKey, fromStatusId, toStatusId, transitionId, approvalId, modifiedFields, configuredTransitionId }) => {
       const issue = describeIssue(await readIssue(issueKey));
       if (issue.statusId !== fromStatusId) throw new FailClosed('STATUS_CHANGED');
+      // Jira has not persisted transition-screen edits yet. Compare the
+      // proposed content, including explicit null clears, just as the signing
+      // hash below does. Keep the executing issue's identity and policy scope:
+      // a submitted type must not select a different transition/field policy
+      // or exempt an existing Test Execution from its completion guard.
+      const proposedFields = { ...issue.fields, ...modifiedFields };
 
       // THE ITEM FIRST, THE EDGE SECOND. This validator is attached to every
       // transition, and drift holds the item on all of them — so nothing about
@@ -307,7 +308,7 @@ export async function gateRuntime() {
       // counter: this is what the panel offers a decision on, so an item held
       // here always has a decision waiting for it, and an edit made a moment
       // ago holds the item before any collector has seen it.
-      const drift = await baselineDrift({ baseline: active, issueId: issue.issueId, issueFields: issue.fields,
+      const drift = await baselineDrift({ baseline: active, issueId: issue.issueId, issueFields: proposedFields,
         declared, readRootDigests: rootNodeDigests });
       logLiveDrift('gate', { issueKey: issue.issueKey, issueTypeId: issue.issueTypeId, comparison: drift, scope });
       // Only a held link explains itself this way, and only then is it read.
@@ -321,7 +322,10 @@ export async function gateRuntime() {
       let ancestorDrift = null;
       let ancestorDriftError = null;
       if (drift.changed.length === 0 && health?.enabled !== false) {
-        ancestorDrift = await driftedAncestor(issue, ancestorDeps, { surface: 'gate-ancestor' })
+        // Walk the proposed parent while retaining the current item's role
+        // for ancestor-hold exemptions; a proposed type cannot bypass a hold.
+        const ancestorIssue = { ...issue, fields: { ...issue.fields, parent: proposedFields.parent } };
+        ancestorDrift = await driftedAncestor(ancestorIssue, ancestorDeps, { surface: 'gate-ancestor' })
           .catch(error => { ancestorDriftError = error?.reason ?? error?.message ?? 'UNREADABLE'; return null; });
       }
 

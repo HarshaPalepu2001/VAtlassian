@@ -13,6 +13,7 @@ import { scopeForItem } from '../lib/tree/nodeFields.js';
 import { canonicaliseIssue } from '../lib/attachmentIdentity.js';
 import { activeRootsForNode, rootNodeDigests } from '../db/baselineTreeStore.js';
 import { controlledFields } from '../db/configStore.js';
+import { viewerProjection, projectRestore } from './viewerProjection.js';
 
 /**
  * The issue is read AS THE CALLER. This is served from the panel resolver,
@@ -154,6 +155,16 @@ export async function inspectIssue({ payload, context }, deps = defaultInspectDe
       }))
     : [];
 
+  // Node identity metadata is enough to authorize diagnostic rows; do not load retained values.
+  const baselineNodes = baseline?.baseline_id ? await rows(`SELECT logical_node_id AS logicalNodeId,
+    current_issue_id AS currentIssueId, original_issue_id AS originalIssueId, issue_key AS issueKey
+    FROM va_baseline_node WHERE baseline_id = FROM_BASE64(?)`,
+    [Buffer.from(baseline.baseline_id).toString('base64')]) : [];
+  const viewer = await viewerProjection({ issueId: numericIssueId, issueKey: issueData?.key,
+    nodes: baselineNodes, values: [childBaselines, treeDrift, restores, liveDrift] }, deps);
+  const visibleTreeDrift = treeDrift.map(row => viewer.entry(row)).filter(Boolean);
+  const visibleRestores = restores.map(row => projectRestore(row, viewer));
+
   // 3. Workflow gate policy simulation
   let projectDisabled = false;
   let controlledTransitions = [];
@@ -258,7 +269,7 @@ export async function inspectIssue({ payload, context }, deps = defaultInspectDe
         captureBaseline: Boolean(ct.capture_baseline)
       }))
     },
-    liveDrift,
+    liveDrift: viewer.project(liveDrift),
     typeCheck,
     review: review ? {
       state: review.state,
@@ -278,7 +289,7 @@ export async function inspectIssue({ payload, context }, deps = defaultInspectDe
       nodeCount: baseline.node_count,
       capturedAt: baseline.captured_at
     } : null,
-    childBaselines,
+    childBaselines: childBaselines.filter(row => viewer.visibleIssue(row.issueId)),
     vault: {
       storage: 'OBJECT_STORE',
       attachmentCount: vaultAttachments.length,
@@ -294,7 +305,7 @@ export async function inspectIssue({ payload, context }, deps = defaultInspectDe
     },
     drift: {
       treeDriftCount: treeDrift.length,
-      items: treeDrift.slice(0, 10)
+      items: visibleTreeDrift.slice(0, 10)
     },
     approvals: (approvals || []).slice(0, 5).map(a => ({
       approvalId: Buffer.isBuffer(a.approval_id) ? a.approval_id.toString('hex') : a.approval_id,
@@ -311,7 +322,7 @@ export async function inspectIssue({ payload, context }, deps = defaultInspectDe
     // no answer short of reading va_restore.detail out of the database by hand.
     // The verifier already knows which field on which work item refused to
     // match; this is the surface that says so.
-    restores: (restores || []).slice(0, 5).map(r => {
+    restores: visibleRestores.slice(0, 5).map(r => {
       const summary = Array.isArray(r.detail) ? r.detail.find(entry => entry && typeof entry === 'object') : null;
       return {
         restoreId: Buffer.isBuffer(r.restore_id) ? r.restore_id.toString('hex') : r.restore_id,
@@ -324,12 +335,12 @@ export async function inspectIssue({ payload, context }, deps = defaultInspectDe
           kind: entry?.kind ?? null, issueKey: entry?.issueKey ?? null,
           reason: entry?.error?.detail ?? null
         })),
-        // Kept raw as a last resort for restores written before the verifier
-        // reported per-field detail — including the one this was built for.
+        // Legacy verification detail crosses the same viewer boundary as unmatched fields.
         verificationChanges: summary?.verification?.changes ?? []
       };
     }),
-    recentAudit: auditEntries
+    // Audit payloads are arbitrary worker/app text, not a viewer-scoped schema.
+    recentAudit: auditEntries.map(({ payload: ignored, ...entry }) => entry)
   };
 
   harnessLog('DIAGNOSTICS', 'inspectIssue:success', {

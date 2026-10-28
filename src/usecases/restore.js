@@ -8,6 +8,7 @@ import { enqueueRestore } from '../lib/restore/queue.js';
 import { markRestoreQueued, markRestoreQueueFailure } from '../db/restoreStore.js';
 import { isEligible } from '../lib/reviewer.js';
 import { baselinePolicy } from '../lib/baselinePolicy.js';
+import { projectRestoreRows } from './viewerProjection.js';
 
 const idBase64 = value => Buffer.isBuffer(value) ? value.toString('base64') : String(value);
 /** Restore states with a worker (or the synchronous path) still acting on the item. */
@@ -21,7 +22,8 @@ export async function getState(args) { return respond(async () => {
   const approvals = new Map(await Promise.all([...new Set(rows.map(row => row.approval_id).filter(Boolean))]
     .map(async id => [id, await approvalById(id).catch(() => null)])));
   const at = value => value != null ? Number(value) : null;
-  return { restores: rows.map(row => {
+  const visibleRows = await projectRestoreRows(rows, prepared);
+  return { restores: visibleRows.map(row => {
     const approval = approvals.get(row.approval_id);
     return { ...row,
       error: row.last_error ?? null,
@@ -48,7 +50,10 @@ export async function retry(args) { return respond(async () => {
   if ((await restoresForIssue(prepared.issueId)).some(row => !sameRestore(row) && IN_FLIGHT.has(row.state))) {
     fail('ALREADY_RESTORING');
   }
-  if (restore.state === 'COMPLETE' || restore.state === 'COMPLETE_WITH_REPLACEMENTS') return { success: true, restore };
+  if (restore.state === 'COMPLETE' || restore.state === 'COMPLETE_WITH_REPLACEMENTS') {
+    const [visibleRestore] = await projectRestoreRows([restore], prepared);
+    return { success: true, restore: visibleRestore };
+  }
   if (Number(restore.baseline_version) !== prepared.baselineVersion) fail('STALE_BASELINE');
   if (!prepared.baseline?.baseline_id || !restore.baseline_id
       || !Buffer.from(prepared.baseline.baseline_id).equals(Buffer.from(restore.baseline_id))) fail('STALE_BASELINE');

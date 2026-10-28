@@ -922,3 +922,38 @@ test('a child opened from See changes gets its subtree and field decisions from 
   assert.deepEqual(evidence.drift.groups.map(group => group.issueKey), ['VAT-57', 'VAT-59']);
   assert.deepEqual(evidence.drift.fields.map(field => field.issueKey), ['VAT-57', 'VAT-59']);
 });
+
+test('restore history and summary never return hidden worker data through evidence or compatibility state', async () => {
+  const f = fixture();
+  const originalRequest = f.request;
+  const row = { restore_id: Buffer.alloc(16, 4), state: 'PARTIAL', total_steps: 4, completed_steps: 1,
+    last_error: 'SECRET-99 hidden-worker-error', candidate_digests: { internal: 'hidden-candidate' },
+    detail: [{ unmatched: [{ issueKey: 'T-10', actual: 'visible-root' },
+      { issueKey: 'SECRET-99', actual: 'hidden-child-current' }, { issueKey: 'NEW-777', actual: 'hidden-new-current' }],
+      plan: { steps: [{ issueKey: 'SECRET-99', values: { summary: 'hidden-plan' } }] } }]
+  };
+  const original = JSON.stringify(row);
+  f.restoresForIssue = async () => [row];
+  f.request = async (identity, url, options = {}) => {
+    if (String(url).includes('/search/jql')) return { ok: true, json: async () => ({ issues: [], isLast: true }) };
+    return originalRequest(identity, url, options);
+  };
+  for (const read of [getEvidence, getState]) {
+    const result = await read(args);
+    assert.equal(result.reason, undefined);
+    assert.doesNotMatch(JSON.stringify(result), /SECRET-99|NEW-777|hidden-|candidate_digests|"plan"/, read.name);
+    if (result.restoreHistory) assert.equal(result.restoreHistory[0].detail[0].unmatched[0].actual, 'visible-root');
+  }
+  assert.equal(JSON.stringify(row), original);
+});
+
+test('panel evidence suppresses nested opaque restore refusals and copied reasons', async () => {
+  const { opaqueRestoreEvidence, safeVerificationGuidance, assertOpaqueEvidenceHidden } = await import('./helpers/opaque-restore-evidence.js');
+  const f = fixture();
+  f.restoresForIssue = async () => [{ restore_id: Buffer.alloc(16, 4), state: 'PARTIAL', detail: opaqueRestoreEvidence() }];
+  const result = await getEvidence(args);
+  assert.equal(result.reason, undefined);
+  assertOpaqueEvidenceHidden(assert, result);
+  assert.equal(result.restoreHistory[0].detail[0].unmatched[2].reason, safeVerificationGuidance);
+  assert.ok(result.restoreHistory[0].detail[0].refused[0].error.detail);
+});

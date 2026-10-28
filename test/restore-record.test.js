@@ -23,12 +23,16 @@ const modules = {
 
 const hooks = registerHooks({
   resolve(specifier, context, next) {
+    if (specifier === '@forge/api') return { url: 'fixture:viewer-api', shortCircuit: true };
     let resolved = specifier;
     try { resolved = specifier.startsWith('.') ? new URL(specifier, context.parentURL || 'file:///').pathname : specifier; } catch {}
     const key = Object.keys(modules).find(k => resolved.endsWith('/' + k));
     return key ? { url: 'fixture:' + key, shortCircuit: true } : next(specifier, context);
   },
   load(url, context, next) {
+    if (url === 'fixture:viewer-api') return { format: 'module', shortCircuit: true, source: `
+      export const route = (s,...v) => s.reduce((a,b,i)=>a+b+(v[i]??''),'');
+      export default { asUser: () => ({ requestJira: (...a) => globalThis.vaRestore.request(...a) }) };` };
     const names = modules[url.slice(8)];
     if (!names) return next(url, context);
     const access = url.endsWith('panelAccess.js')
@@ -62,7 +66,7 @@ test('each restore says who triggered it, when it ran, and which version it rest
     ['Priya Raman', 500, 900, 3],
     [null, 6000, null, 3]
   ]);
-  assert.equal(result.restores[1].error, 'Jira refused');
+  assert.match(result.restores[1].error, /Restore could not be completed/);
   assert.deepEqual(lookups.sort(), ['YQ==', 'Yg=='], 'each approval is read once, however many restores it started');
 });
 
@@ -159,4 +163,67 @@ test('a retry resumes a per-field decision\'s restore under its own signature, a
     assert.equal(result.state, expected, decision);
     if (expected === undefined) assert.equal(result.reason, 'NOT_ELIGIBLE');
   }
+});
+
+
+test('restore:getState retains progress and visible child detail without exposing worker plans or protected children', async () => {
+  const source = { restore_id: 'cg==', state: 'PARTIAL', total_steps: 5, completed_steps: 2,
+    last_error: 'SECRET-99 hidden-error', candidate_digests: { tree: 'hidden-candidate' },
+    detail: [{ unmatched: [{ issueKey: 'T-11', actual: 'visible-current' },
+      { issueKey: 'SECRET-99', actual: 'hidden-current' }, { issueKey: 'NEW-777', actual: 'hidden-new' }],
+      refused: [{ issueKey: 'SECRET-99', error: { detail: 'hidden-refused' } }],
+      verification: { changes: [{ issueId: 99, actual: 'hidden-change' }] },
+      plan: { steps: [{ issueKey: 'SECRET-99', values: { summary: 'hidden-plan' } }] } }]
+  };
+  const original = JSON.stringify(source);
+  globalThis.vaRestore = {
+    load: async () => ({ issueId: 10, issue: { id: '10', key: 'T-10' }, tree: { nodes: [
+      { id: '10', key: 'T-10' }, { id: '11', key: 'T-11' }, { id: '99', key: 'SECRET-99' }
+    ] } }),
+    restoresForIssue: async () => [source], approvalById: async () => null,
+    request: async (url, options) => ({ ok: true, json: async () => String(url).includes('/permissions/check')
+      ? { projectPermissions: [{ permission: 'BROWSE_PROJECTS', issues: [11] }] }
+      : { issues: [], isLast: true } })
+  };
+  const result = await getState(args);
+  assert.equal(result.reason, undefined);
+  assert.deepEqual(result.restores[0].progress, { totalSteps: 5, completedSteps: 2, remainingSteps: 3 });
+  assert.equal(result.restores[0].detail[0].unmatched[0].actual, 'visible-current');
+  assert.doesNotMatch(JSON.stringify(result), /SECRET-99|NEW-777|hidden-|candidate_digests|"plan"/);
+  assert.equal(JSON.stringify(source), original);
+});
+
+
+test('retrying an already complete restore returns viewer evidence rather than its raw signed candidate or worker detail', async () => {
+  const { args } = retryFixture({ restoreState: 'COMPLETE' });
+  const read = globalThis.vaRestore.restoreById;
+  globalThis.vaRestore.restoreById = async (...args) => ({ ...await read(...args),
+    detail: [{ unmatched: [{ issueKey: 'SECRET-99', actual: 'hidden-current' }] }], last_error: 'SECRET-99 hidden-error' });
+  const result = await retry(args);
+  assert.equal(result.success, true);
+  assert.doesNotMatch(JSON.stringify(result), /SECRET-99|hidden-|candidate_digests/);
+});
+
+test('restore state and completed retry suppress opaque nested worker errors while retaining safe verification guidance', async () => {
+  const { opaqueRestoreEvidence, safeVerificationGuidance, assertOpaqueEvidenceHidden } = await import('./helpers/opaque-restore-evidence.js');
+  const { args } = retryFixture({ restoreState: 'COMPLETE' });
+  const read = globalThis.vaRestore.restoreById;
+  const row = { ...await read(), detail: opaqueRestoreEvidence() };
+  globalThis.vaRestore.restoreById = async () => row;
+  globalThis.vaRestore.restoresForIssue = async () => [row];
+  const prepared = globalThis.vaRestore.load;
+  globalThis.vaRestore.load = async () => ({ ...await prepared(), issue: { id: '10', key: 'T-10' },
+    tree: { nodes: [{ id: '99', key: 'SECRET-99' }] } });
+  globalThis.vaRestore.request = async () => ({ ok: true,
+    json: async () => ({ projectPermissions: [{ permission: 'BROWSE_PROJECTS', issues: [] }] }) });
+  const before = JSON.stringify(row);
+  for (const readResponse of [getState, retry]) {
+    const result = await readResponse(args);
+    assert.equal(result.reason, undefined);
+    assertOpaqueEvidenceHidden(assert, result);
+    const visible = result.restores?.[0] ?? result.restore;
+    assert.equal(visible.detail[0].unmatched[2].reason, safeVerificationGuidance);
+    assert.ok(visible.detail[0].refused[0].error.detail);
+  }
+  assert.equal(JSON.stringify(row), before);
 });

@@ -619,3 +619,19 @@ test('a failed restoredVia lookup does not fail the summary', async () => {
   assert.equal(summary.error, undefined);
   assert.equal(summary.restoredVia, null);
 });
+
+
+test('summary reports restore failure without exposing opaque child errors or making extra Jira reads', async () => {
+  const f = fixture({ restoresForIssue: async () => [{ restore_id: Buffer.alloc(16, 7),
+    state: 'FAILED', total_steps: 3, completed_steps: 1, last_error: 'SECRET-99 hidden-value: issue 99 refused' }] });
+  const request = f.request;
+  const urls = [];
+  f.request = async (...args) => { urls.push(String(args[1])); return request(...args); };
+  const result = await getSummary(args);
+  assert.equal(result.reason, undefined);
+  assert.equal(result.restore.state, 'FAILED');
+  assert.equal(result.restore.completedSteps, 1);
+  assert.ok(result.restore.lastError);
+  assert.doesNotMatch(JSON.stringify(result), /SECRET-99|hidden-value|issue 99/);
+  assert.ok(urls.every(url => url.includes('/issue/') || url.includes('/myself')), 'no tree or permission fan-out for a safe error summary');
+});

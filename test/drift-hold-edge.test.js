@@ -26,11 +26,10 @@ test('an uncontrolled exact transition resolves with no rule and no failure', as
   assert.deepEqual(edge, { transitionId: '51', ct: null, edgeFailure: null });
 });
 
-test('the signed approval names the transition when the payload does not', async () => {
+test('a receipt alone cannot name an unavailable executing transition', async () => {
   const edge = await resolveEdge(edgeDeps({ signed: 70, controlled: ['70'] }),
     { toStatusId: '2', transitionId: null, approvalId: 'ab' });
-  assert.equal(edge.transitionId, '70');
-  assert.equal(edge.ct, rule);
+  assert.deepEqual(edge, { transitionId: null, ct: null, edgeFailure: 'NOT_CONFIGURED' });
 });
 
 test('one live transition into the status is taken as the edge', async () => {
