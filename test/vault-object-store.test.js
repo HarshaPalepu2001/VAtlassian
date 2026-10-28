@@ -68,6 +68,13 @@ test('a missing object is a 404; a store that cannot be read is a 503', async ()
   await assert.rejects(() => store({ downloadThrows: new Error('rate limited') }).os.getContent('k'), error => error.status === 503);
 });
 
+test('object existence distinguishes a missing copy from an unavailable metadata service', async () => {
+  assert.equal(await store().os.hasContent('k'), false);
+  assert.equal(await store({ existing: { key: 'k', size: 12 } }).os.hasContent('k'), true);
+  const unavailable = createVaultObjectStore({ fos: { get: async () => { throw new Error('unavailable'); } } });
+  await assert.rejects(() => unavailable.hasContent('k'), error => error.status === 503);
+});
+
 test('the size cap is checked from the reported size', () => {
   assert.equal(tooLarge(MAX_VAULT_BYTES), false);
   assert.equal(tooLarge(MAX_VAULT_BYTES + 1), true);

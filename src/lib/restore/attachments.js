@@ -19,8 +19,7 @@ import { isReadableCopy, describeLocation } from '../vaultLocation.js';
  *     dialog names it before anyone signs. Its name, size and content hash go
  *     into the audit ledger first, and the delete happens only if that write
  *     succeeded: losing the audit trail is a reason to keep a file, never a
- *     reason to destroy it quietly. A copy of its bytes is kept in the vault
- *     where one can be.
+ *     reason to destroy it quietly. Only baselined files belong in the vault.
  *
  * Additions first, then removals, so a refused upload never costs a file.
  *
@@ -107,6 +106,7 @@ export async function restoreAttachments({ issueKey, issueId, sourceIssueId = is
   const refused = [];
   const restored = [];
   const removed = [];
+  const recoveredIds = new Set();
   // Restored files whose copy's media id stayed unknown: rich text showing the
   // original cannot be pointed at them (see the executor, which names the
   // fields instead of sending Jira a pointer it would refuse).
@@ -128,9 +128,30 @@ export async function restoreAttachments({ issueKey, issueId, sourceIssueId = is
       continue;
     }
     try {
+      // An earlier attempt can upload successfully and lose its response or
+      // fail before the alias is durable. Recover only an unaliased file with
+      // the approved name and exact vaulted hash, never a filename alone.
+      let recovered = null;
+      for (const candidate of extra) {
+        const candidateId = jiraIdOf(candidate);
+        if (recoveredIds.has(candidateId) || aliases?.has(candidateId)
+          || candidate.filename !== (file.filename || copy.filename)) continue;
+        try {
+          if (sha256(await deps.download(candidateId)) === copy.content_hash) {
+            recovered = candidateId;
+            break;
+          }
+        } catch (error) {
+          if (Number(error?.status) === 404) {
+            throw new AttachmentRestoreError({ status: 503,
+              detail: 'A possible restored attachment is not readable yet; retry before uploading another copy.' });
+          }
+          throw error;
+        }
+      }
       let bytes;
       try {
-        bytes = await deps.downloadVaulted(copy);
+        if (!recovered) bytes = await deps.downloadVaulted(copy);
       } catch (error) {
         // Recorded, but gone from where it was kept: a fact about this file,
         // not the system, so it is named rather than retried.
@@ -143,16 +164,25 @@ export async function restoreAttachments({ issueKey, issueId, sourceIssueId = is
         }
         throw error;
       }
-      if (sha256(bytes) !== copy.content_hash) {
+      if (!recovered && sha256(bytes) !== copy.content_hash) {
         refuse(file, `The vaulted copy no longer matches the hash recorded when it was vaulted, so it was not restored. It may have been changed in ${describeLocation(copy)}.`);
         continue;
       }
-      const uploaded = await deps.upload({ issueKey, filename: file.filename || copy.filename, mimeType: file.mimeType, buffer: bytes });
+      const uploaded = recovered ? { id: recovered }
+        : await deps.upload({ issueKey, filename: file.filename || copy.filename, mimeType: file.mimeType, buffer: bytes });
       const newId = String(uploaded?.id ?? '');
       if (!newId) throw new AttachmentRestoreError({ status: 502, detail: 'Jira accepted the upload but returned no attachment id.' });
       // Read back before it may stand for the original: an alias over the
       // wrong bytes would make a wrong file look approved.
-      const landed = sha256(await deps.download(newId));
+      let landed;
+      try { landed = sha256(await deps.download(newId)); }
+      catch (error) {
+        if (Number(error?.status) === 404) {
+          throw new AttachmentRestoreError({ status: 503,
+            detail: 'The uploaded attachment is not readable yet; its bytes must be verified on retry.' });
+        }
+        throw error;
+      }
       if (landed !== copy.content_hash) {
         await deps.remove(newId).catch(() => {});
         refuse(file, 'Jira stored different bytes from the vaulted copy, so the upload was removed again.');
@@ -162,14 +192,17 @@ export async function restoreAttachments({ issueKey, issueId, sourceIssueId = is
       // at it. Unknown only if Jira stops answering the way it did when probed;
       // the file is still restored, and a description that needs the pointer
       // is named as not restored, never written with a guess.
-      const mediaId = await mediaIdWithRetry(deps, newId);
+      const mediaId = copy.media_id ? await mediaIdWithRetry(deps, newId) : null;
       if (!mediaId && copy.media_id) unpointable.push({ id: String(file.id), attachmentId: newId, originalMediaId: String(copy.media_id) });
-      await deps.recordAlias({ attachmentId: newId, issueId: Number(issueId), standsForId: String(file.id),
-        contentHash: copy.content_hash, restoreRef, mediaId, standsForMediaId: copy.media_id ?? null });
+      // Publish the alias only after evidence is durable. Otherwise an audit
+      // outage would leave a recognised copy that retries silently skip.
       await deps.audit('ATTACHMENT_RESTORED', { issueKey, originalAttachmentId: String(file.id), attachmentId: newId,
         filename: file.filename || copy.filename, contentHash: copy.content_hash, vaultBaselineId: copy.baseline_id ?? null,
         mediaId, originalMediaId: copy.media_id ?? null },
       Number(issueId));
+      await deps.recordAlias({ attachmentId: newId, issueId: Number(issueId), standsForId: String(file.id),
+        contentHash: copy.content_hash, restoreRef, mediaId, standsForMediaId: copy.media_id ?? null });
+      if (recovered) recoveredIds.add(recovered);
       restored.push({ id: String(file.id), attachmentId: newId, filename: describeFile(file) });
     } catch (error) {
       if (isSystemic(error)) throw error;
@@ -179,21 +212,30 @@ export async function restoreAttachments({ issueKey, issueId, sourceIssueId = is
 
   for (const file of extra) {
     const jiraId = jiraIdOf(file);
+    if (recoveredIds.has(jiraId)) continue;
     try {
       // Evidence before destruction: what is deleted is written to the ledger
-      // first, with the hash of its bytes, and a copy kept where the vault can.
+      // first, with the hash of its bytes. Added files are not baselined and
+      // must never be uploaded to Object Store.
       const bytes = await deps.download(jiraId);
       const contentHash = sha256(bytes);
-      const kept = await deps.preserve({ issueId: Number(issueId), file, buffer: bytes }).catch(() => null);
       await deps.audit('ATTACHMENT_REMOVED_BY_RESTORE', { issueKey, attachmentId: jiraId, filename: file.filename,
         size: file.size ?? null, contentHash, author: file.author?.accountId ?? null, created: file.created ?? null,
-        vaultCopy: kept ? { storage: kept.storage ?? null,
-          objectKey: kept.objectKey ?? null } : null }, Number(issueId));
+        vaultCopy: null }, Number(issueId));
       await deps.remove(jiraId);
       removed.push({ id: jiraId, filename: describeFile(file) });
     } catch (error) {
-      // Gone before we reached it: the state a removal wants.
-      if (Number(error?.status) === 404) { removed.push({ id: jiraId, filename: describeFile(file) }); continue; }
+      // A content 404 can be a temporarily unreadable attachment. Confirm
+      // absence from the fresh Jira list before calling it removed.
+      if (Number(error?.status) === 404) {
+        const live = await deps.readCurrent(issueKey);
+        if (live.some(attachment => jiraIdOf(attachment) === jiraId)) {
+          throw new AttachmentRestoreError({ status: 503,
+            detail: 'An added attachment is still listed but its bytes cannot be read yet; removal will retry.' });
+        }
+        removed.push({ id: jiraId, filename: describeFile(file) });
+        continue;
+      }
       if (isSystemic(error)) throw error;
       refuse(file, Number(error?.status) === 403
         ? 'The app is not allowed to delete attachments in this project, so this file was left in place.'

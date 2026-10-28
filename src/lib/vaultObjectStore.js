@@ -39,6 +39,12 @@ export function tooLarge(size) {
 
 export function createVaultObjectStore({ fos, fetch }) {
   return {
+    /** Metadata only: do not carry a missing object into another baseline. */
+    async hasContent(objectKey) {
+      try { return Boolean(await fos.get(objectKey)); }
+      catch (error) { throw failure(503, `The Forge Object Store metadata could not be read: ${error?.message ?? error}`); }
+    },
+
     /** Stores `buffer` under its content hash. Returns where it went. */
     async putContent({ buffer, hash }) {
       const hex = hash ?? createHash('sha256').update(buffer).digest('hex');

@@ -16,7 +16,8 @@ function bodyFor(body) {
     projectId: Number(body.projectId)
   };
   // The files the baseline recorded, when it tracks attachments: the vault
-  // copies exactly these. Absent, the worker copies what is on the issue.
+  // copies exactly these. Absent, the worker skips copying: current files do
+  // not establish baseline membership.
   if (Array.isArray(body.attachments)) {
     out.attachments = body.attachments.map(a => ({
       id: String(a?.id ?? ''), jiraId: String(a?.jiraId ?? a?.id ?? ''), filename: String(a?.filename ?? '')

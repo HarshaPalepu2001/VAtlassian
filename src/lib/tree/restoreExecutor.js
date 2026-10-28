@@ -69,8 +69,11 @@ export async function executeTreeRestore({
   let preflightOk = false;
   try {
     preflightOk = await adapters.checkPermissions({ ...plan, rootIssueKey, baselineTree, currentTree });
-  } catch {
-    preflightOk = false;
+  } catch (error) {
+    if (isSystemicFailure(error)) {
+      return { state: 'PARTIAL', attempted: 0, completed: 0, remaining: plan.steps.length,
+        refused: [], replacements: [], stopped: true, retryableError: errorDetail(error) };
+    }
   }
   if (preflightOk !== true) {
     // Nothing was attempted and nothing can be, so this is terminal rather than
@@ -119,6 +122,7 @@ export async function executeTreeRestore({
 
   let attempted = 0;
   let stopped = false;
+  let retryableError = null;
   // A node whose replacement Jira refused has no identity to act on, so every
   // step that targets it — or that would hang a child under it — is settled as
   // refused too rather than attempted and failed one by one.
@@ -286,6 +290,7 @@ export async function executeTreeRestore({
       if (isSystemicFailure(error)) {
         await adapters.finishRestoreAction(restoreId, step.stepKey, false, errorDetail(error), { now: Date.now() });
         stopped = true;
+        retryableError = errorDetail(error);
         break;
       }
       await settleRefusal(step, error);
@@ -307,6 +312,7 @@ export async function executeTreeRestore({
     remaining,
     refused,
     replacements,
-    stopped
+    stopped,
+    ...(retryableError ? { retryableError } : {})
   };
 }

@@ -50,11 +50,69 @@ function world({ onIssue = [], vault = {}, aliases = {} } = {}) {
 const approved = [file('1', 'spec.pdf'), file('2', 'data.csv')];
 const run = (w, target = approved) => restoreAttachments({ issueKey: 'T-1', issueId: 10, target, deps: w.deps });
 
+test('restore never puts unbaselined additions in Object Store', async () => {
+  const w = world({ onIssue: [[file('3', 'extra.txt'), 'extra']] });
+  let preserved = 0;
+  w.deps.preserve = async () => { preserved++; };
+  await run(w, []);
+  assert.equal(preserved, 0);
+  assert.equal(w.jira.size, 0);
+  assert.equal(w.audit[0].payload.contentHash, hash('extra'));
+});
+
+test('retry recovers an upload interrupted before its alias was durable without uploading another copy', async () => {
+  const w = world({ vault: { 1: { filename: 'spec.pdf', bytes: 'pdf' } } });
+  const saveAlias = w.deps.recordAlias;
+  w.deps.recordAlias = async () => { throw Object.assign(new Error('SQL unavailable'), { status: 503 }); };
+  await assert.rejects(() => run(w, [file('1', 'spec.pdf')]), error => error.status === 503);
+  w.deps.recordAlias = saveAlias;
+  await run(w, [file('1', 'spec.pdf')]);
+  assert.equal(w.calls.filter(call => call[0] === 'upload').length, 1);
+  assert.equal(w.jira.size, 1);
+  assert.equal(w.aliases.get('900'), '1');
+});
+
+test('a restored file cannot bypass its audit record after the ledger recovers', async () => {
+  const w = world({ vault: { 1: { filename: 'spec.pdf', bytes: 'pdf' } } });
+  w.faults.add('audit');
+  await assert.rejects(() => run(w, [file('1', 'spec.pdf')]), error => error.status === 503);
+  w.faults.delete('audit');
+  await run(w, [file('1', 'spec.pdf')]);
+  assert.equal(w.audit.filter(entry => entry.eventType === 'ATTACHMENT_RESTORED').length, 1);
+  assert.equal(w.calls.filter(call => call[0] === 'upload').length, 1);
+});
+
+test('a just-uploaded file temporarily absent from read-back requests retry, then recovers the same upload', async () => {
+  const w = world({ vault: { 1: { filename: 'spec.pdf', bytes: 'pdf' } } });
+  const download = w.deps.download;
+  let hidden = true;
+  w.deps.download = async id => {
+    if (hidden) throw Object.assign(new Error('not visible yet'), { status: 404 });
+    return download(id);
+  };
+  await assert.rejects(() => run(w, [file('1', 'spec.pdf')]), error => error.status === 503);
+  await assert.rejects(() => run(w, [file('1', 'spec.pdf')]), error => error.status === 503);
+  assert.equal(w.calls.filter(call => call[0] === 'upload').length, 1);
+  hidden = false;
+  await run(w, [file('1', 'spec.pdf')]);
+  assert.equal(w.calls.filter(call => call[0] === 'upload').length, 1);
+  assert.equal(w.aliases.get('900'), '1');
+});
+
+test('a same-name file with different bytes cannot stand for a missing baseline attachment', async () => {
+  const w = world({ onIssue: [[file('3', 'spec.pdf'), 'wrong']], vault: { 1: { filename: 'spec.pdf', bytes: 'pdf' } } });
+  await run(w, [file('1', 'spec.pdf')]);
+  assert.equal(w.aliases.get('3'), undefined);
+  assert.equal(w.aliases.get('900'), '1');
+  assert.equal(w.jira.has('3'), false);
+  assert.equal(w.jira.get('900').bytes, 'pdf');
+});
+
 test('a removed file is uploaded again from the vault and recorded as standing for the original', async () => {
   const w = world({ onIssue: [[file('2', 'data.csv'), 'csv']], vault: { 1: { filename: 'spec.pdf', bytes: 'pdf' } } });
   const result = await run(w);
   assert.deepEqual(result.restored, [{ id: '1', attachmentId: '900', filename: 'spec.pdf' }]);
-  assert.deepEqual(w.calls, [['upload', '900', 'spec.pdf'], ['alias', '900', '1'], ['audit', 'ATTACHMENT_RESTORED']]);
+  assert.deepEqual(w.calls, [['upload', '900', 'spec.pdf'], ['audit', 'ATTACHMENT_RESTORED'], ['alias', '900', '1']]);
   assert.equal(w.audit[0].payload.contentHash, hash('pdf'));
 });
 
@@ -64,7 +122,7 @@ test('an added file is written to the ledger with its hash, then deleted', async
   assert.deepEqual(result.removed, [{ id: '3', filename: 'evil.exe' }]);
   assert.deepEqual(w.calls, [['audit', 'ATTACHMENT_REMOVED_BY_RESTORE'], ['remove', '3']], 'evidence before destruction');
   assert.equal(w.audit[0].payload.contentHash, hash('mz'));
-  assert.deepEqual(w.audit[0].payload.vaultCopy, { storage: 'OBJECT_STORE', objectKey: 'vault/sha256/kept' });
+  assert.equal(w.audit[0].payload.vaultCopy, null);
 });
 
 test('nothing is deleted when the ledger entry cannot be written', async () => {
@@ -142,9 +200,23 @@ test('a refused upload is named, not retried for ever', async () => {
 
 test('an added file already gone counts as removed', async () => {
   const w = world({ onIssue: [[file('1', 'spec.pdf'), 'pdf'], [file('2', 'data.csv'), 'csv']] });
-  w.deps.readCurrent = async () => [file('1', 'spec.pdf'), file('2', 'data.csv'), file('3', 'ghost.txt')];
+  const readCurrent = w.deps.readCurrent;
+  let firstRead = true;
+  w.deps.readCurrent = async () => {
+    if (!firstRead) return readCurrent();
+    firstRead = false;
+    return [file('1', 'spec.pdf'), file('2', 'data.csv'), file('3', 'ghost.txt')];
+  };
   const result = await run(w);
   assert.deepEqual(result.removed, [{ id: '3', filename: 'ghost.txt' }]);
+});
+
+test('content 404 is not proof that a listed added attachment has been removed', async () => {
+  const w = world({ onIssue: [[file('3', 'extra.txt'), 'bytes']] });
+  w.deps.download = async () => { throw Object.assign(new Error('not readable yet'), { status: 404 }); };
+  await assert.rejects(() => run(w, []), error => error.status === 503);
+  assert.equal(w.jira.has('3'), true);
+  assert.equal(w.audit.length, 0);
 });
 
 test('a missing approved list refuses rather than deleting every file', async () => {

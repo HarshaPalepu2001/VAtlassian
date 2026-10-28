@@ -48,6 +48,33 @@ function storeFixture() {
   };
 }
 
+test('a temporary stopped action retries the same restore instead of failing for no progress', async () => {
+  const f = storeFixture();
+  let unavailable = true;
+  f.executeBatch = async () => unavailable
+    ? { state: 'PARTIAL', completed: 0, remaining: 1, attempted: 1, stopped: true,
+      retryableError: { status: 503, detail: 'Jira unavailable' } }
+    : { state: 'READY_TO_VERIFY', completed: 1, remaining: 0, attempted: 1 };
+  const first = await runRestoreWorker({ body }, f);
+  assert.equal(first._retry, true);
+  assert.equal(f.restore.state, 'QUEUING');
+  assert.equal(f.calls.some(call => call?.[0] === 'fail'), false);
+  unavailable = false;
+  const second = await runRestoreWorker({ body, retryContext: { retryCount: 1 } }, f);
+  assert.equal(second.state, 'COMPLETE');
+});
+
+test('repeated temporary restore failures eventually remain visible and retryable by the reviewer', async () => {
+  const f = storeFixture();
+  f.executeBatch = async () => ({ state: 'PARTIAL', completed: 0, remaining: 1, attempted: 1,
+    stopped: true, retryableError: { status: 503, detail: 'Jira unavailable' } });
+  const result = await runRestoreWorker({ body, retryContext: { retryCount: 5 } }, f);
+  assert.equal(result.state, 'FAILED');
+  assert.match(result.error, /after automatic retries/);
+  assert.equal(f.calls.includes('decided'), false);
+  assert.equal(f.calls.includes('verify'), false);
+});
+
 test('signed rejection stores its deterministic action plan before enqueueing', async () => {
   const order = [];
   const store = {

@@ -24,7 +24,6 @@ test('a restored file is uploaded as the app, as multipart with the XSRF bypass 
   assert.match(body, /Content-Type: application\/pdf/);
   assert.match(body, /%PDF/);
 });
-
 test('an unusual mime type is not written into the multipart header', async () => {
   const { calls, api } = fakeApi(async () => ({ ok: true, status: 200, json: async () => [{ id: '1' }] }));
   await createAttachmentRestoreDeps({ api, route }).upload({ issueKey: 'T-1', filename: 'x', mimeType: 'text/plain\r\nX-Evil: 1', buffer: Buffer.from('x') });
@@ -69,22 +68,4 @@ test('downloadVaulted downloads from the Object Store and refuses Confluence cop
     () => deps.downloadVaulted({ storage: 'CONFLUENCE', confluence_attachment_id: 'c1' }),
     e => e.status === 404 && /stored in Confluence, which is no longer supported/.test(e.message)
   );
-});
-
-test('preserve stores a file to the Object Store', async () => {
-  const puts = [];
-  const os = {
-    putContent: async ({ buffer }) => {
-      puts.push(buffer);
-      return { storage: 'OBJECT_STORE', objectKey: 'vault/sha256/abc' };
-    }
-  };
-  const deps = createAttachmentRestoreDeps({
-    api: fakeApi(() => ({})).api,
-    route,
-    objectStore: os
-  });
-  const res = await deps.preserve({ buffer: Buffer.from('deleted-file') });
-  assert.deepEqual(res, { storage: 'OBJECT_STORE', objectKey: 'vault/sha256/abc' });
-  assert.equal(puts[0].toString(), 'deleted-file');
 });

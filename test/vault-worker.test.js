@@ -4,8 +4,60 @@ import { createHash } from 'node:crypto';
 import { runVaultWorker } from '../src/jobs/vaultWorker.js';
 
 function baseBody() {
-  return { baselineId: 'b1', issueId: 42, issueKey: 'ENG-1', projectId: 7 };
+  return { baselineId: 'b1', issueId: 42, issueKey: 'ENG-1', projectId: 7,
+    attachments: [{ id: 'a1', filename: 'x.png' }, { id: 'a2', filename: 'two.png' }] };
 }
+
+test('a job without a baseline attachment list never vaults current files', async () => {
+  const { attachments, ...legacy } = baseBody();
+  const rows = [];
+  const result = await runVaultWorker(legacy, baseOverrides({ insertVaultAttachment: async row => rows.push(row) }));
+  assert.equal(result.state, 'SKIPPED');
+  assert.equal(rows.length, 0);
+});
+
+test('an unchanged baseline file reuses its vaulted bytes without downloading or uploading again', async () => {
+  const rows = [];
+  const result = await runVaultWorker({ ...baseBody(), attachments: [{ id: 'a1', filename: 'x.png' }] }, baseOverrides({
+    vaultedCopies: async () => new Map([['a1', { content_hash: 'h', storage: 'OBJECT_STORE', object_key: 'vault/sha256/h', media_id: 'm' }]]),
+    downloadAttachment: async () => { throw new Error('must reuse the retained copy'); },
+    insertVaultAttachment: async row => rows.push(row)
+  }));
+  assert.equal(result.vaulted, 1);
+  assert.equal(rows[0].objectKey, 'vault/sha256/h');
+});
+
+test('a temporary vault failure requests redelivery and the next delivery skips already copied files', async () => {
+  const stored = new Set();
+  let unavailable = true;
+  const deps = baseOverrides({
+    readIssueAttachments: async () => [{ id: 'a1', filename: 'one.png' }, { id: 'a2', filename: 'two.png' }],
+    isAttachmentVaulted: async ({ jiraAttachmentId }) => stored.has(jiraAttachmentId),
+    insertVaultAttachment: async ({ jiraAttachmentId }) => stored.add(jiraAttachmentId),
+    downloadAttachment: async attachment => {
+      if (attachment.id === 'a1' && unavailable) throw Object.assign(new Error('temporarily unavailable'), { status: 503 });
+      return Buffer.from(attachment.id);
+    }
+  });
+  const first = await runVaultWorker({ body: baseBody() }, deps);
+  assert.equal(first._retry, true);
+  assert.deepEqual([...stored], ['a2']);
+  unavailable = false;
+  const second = await runVaultWorker({ body: baseBody(), retryContext: { retryCount: 1 } }, deps);
+  assert.equal(second.state, 'COMPLETE');
+  assert.equal(second.skipped, 1);
+  assert.deepEqual([...stored].sort(), ['a1', 'a2']);
+});
+
+test('failed alias lookup requests a retry before interpreting any attachment identities', async () => {
+  const rows = [];
+  const result = await runVaultWorker(baseBody(), baseOverrides({
+    identityRecords: async () => { throw new Error('SQL unavailable'); },
+    insertVaultAttachment: async row => rows.push(row)
+  }));
+  assert.equal(result._retry, true);
+  assert.equal(rows.length, 0);
+});
 
 function baseOverrides(overrides = {}) {
   return {
@@ -17,11 +69,37 @@ function baseOverrides(overrides = {}) {
     mediaIdOf: async () => null,
     vaultedCopies: async () => new Map(),
     putContent: async ({ hash }) => ({ storage: 'OBJECT_STORE', objectKey: `vault/sha256/${hash}` }),
+    hasContent: async () => true,
     tryAppend: async () => {},
     now: () => 1000,
     ...overrides
   };
 }
+
+test('a missing earlier object is repaired from the still-live baseline file', async () => {
+  const rows = [];
+  const puts = [];
+  const result = await runVaultWorker({ ...baseBody(), attachments: [{ id: 'a1', filename: 'x.png' }] }, baseOverrides({
+    vaultedCopies: async () => new Map([['a1', { content_hash: 'old', storage: 'OBJECT_STORE', object_key: 'vault/sha256/old' }]]),
+    hasContent: async () => false,
+    putContent: async ({ hash }) => { puts.push(hash); return { objectKey: `vault/sha256/${hash}` }; },
+    insertVaultAttachment: async row => rows.push(row)
+  }));
+  assert.equal(result.vaulted, 1);
+  assert.equal(puts.length, 1);
+  assert.equal(rows[0].contentHash, createHash('sha256').update(Buffer.from('bytes')).digest('hex'));
+});
+
+test('an unavailable object existence check retries rather than recording a healthy vaulted copy', async () => {
+  const rows = [];
+  const result = await runVaultWorker({ ...baseBody(), attachments: [{ id: 'a1', filename: 'x.png' }] }, baseOverrides({
+    vaultedCopies: async () => new Map([['a1', { content_hash: 'h', storage: 'OBJECT_STORE', object_key: 'vault/sha256/h' }]]),
+    hasContent: async () => { throw Object.assign(new Error('Object Store unavailable'), { status: 503 }); },
+    insertVaultAttachment: async row => rows.push(row)
+  }));
+  assert.equal(result._retry, true);
+  assert.equal(rows.length, 0);
+});
 
 test('rejects a body missing required fields', async () => {
   const result = await runVaultWorker({ body: { issueId: 42 } }, baseOverrides());
@@ -68,14 +146,15 @@ test('one failed attachment does not stop the rest and is recorded as failed', a
     tryAppend: async (event) => auditedEvents.push(event.eventType)
   });
   const result = await runVaultWorker({ body: baseBody() }, overrides);
-  assert.equal(result.failed, 1);
-  assert.equal(result.vaulted, 1);
+  assert.equal(result._retry, true);
+  assert.equal(result.retryOptions.retryData.failed, 1);
+  assert.equal(result.retryOptions.retryData.vaulted, 1);
   assert.ok(auditedEvents.includes('ATTACHMENT_VAULT_FAILED'));
   assert.ok(auditedEvents.includes('ATTACHMENT_VAULTED'));
 });
 
 test('an issue with no attachments completes', async () => {
-  const result = await runVaultWorker({ body: baseBody() }, baseOverrides({ readIssueAttachments: async () => [] }));
+  const result = await runVaultWorker({ body: { ...baseBody(), attachments: [] } }, baseOverrides({ readIssueAttachments: async () => [] }));
   assert.equal(result.state, 'COMPLETE');
   assert.equal(result.vaulted, 0);
 });
@@ -154,7 +233,7 @@ test('a file larger than the vault takes is refused from its reported size, befo
     downloadAttachment: async () => { downloaded = true; return Buffer.from('x'); },
     tryAppend: async event => events.push(event)
   });
-  const result = await runVaultWorker({ body: baseBody() }, overrides);
+  const result = await runVaultWorker({ body: { ...baseBody(), attachments: [{ id: 'a1', filename: 'huge.iso' }] } }, overrides);
   assert.equal(downloaded, false);
   assert.equal(result.failed, 1);
   assert.equal(events[0].eventType, 'ATTACHMENT_VAULT_FAILED');

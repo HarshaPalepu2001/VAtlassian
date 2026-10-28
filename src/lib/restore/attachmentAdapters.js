@@ -1,7 +1,6 @@
 import { identityRecords, recordAttachmentAlias, vaultedCopies } from '../../db/vaultStore.js';
 import { readMediaId } from '../mediaIdentity.js';
 import { tryAppend } from '../../db/store.js';
-import { STORAGE } from '../vaultLocation.js';
 import { defaultVaultObjectStore } from '../vaultObjectStore.js';
 import { EVENT } from '../ledger.js';
 
@@ -129,14 +128,6 @@ export function createAttachmentRestoreDeps({ api, route, actorAccountId = 'syst
         eventType: EVENT[eventType] ?? eventType, payload });
       if (!written) throw failure('AUDIT', 503, `The ${eventType} audit entry could not be written.`);
       return written;
-    },
-
-    /**
-     * Keep the bytes of a file about to be deleted in the Object Store.
-     */
-    async preserve({ buffer }) {
-      const put = await (await vaultStore()).putContent({ buffer });
-      return { storage: STORAGE.OBJECT_STORE, objectKey: put.objectKey };
     }
   };
 }

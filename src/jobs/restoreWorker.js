@@ -1,4 +1,5 @@
 import api, { route } from '@forge/api';
+import { InvocationError, InvocationErrorCode } from '@forge/events';
 import { restoreById, claimRestore, heartbeatRestore, beginRestoreVerification,
   finishQueuedRestore, markRestoreQueued, markRestoreQueueFailure, failRestore } from '../db/restoreStore.js';
 import { activeBaseline, activeBaselines, baselineById, readAllValues } from '../db/baselineStore.js';
@@ -345,6 +346,17 @@ export async function runRestoreWorker(eventOrBody, overrides = {}) {
       maxActions: WORKER_BATCH });
     const totalSteps = Number(restore.total_steps ?? plan.steps.length);
     harnessLog('RESTORE', 'worker:batchExecuted', { restoreId: idBase64(restoreId), completed: executed.completed, remaining: executed.remaining, state: executed.state });
+    if (executed.retryableError) {
+      // Retain the action journal and original signed rejection. A transient
+      // failure is not a no-progress refusal; Forge redelivers this same job.
+      const retryCount = Number(eventOrBody?.retryContext?.retryCount ?? 0);
+      if (retryCount >= 5) throw new Error(`Restore still unavailable after automatic retries: ${executed.retryableError.detail}`);
+      await deps.heartbeatRestore({ restoreId, completedSteps: Number(executed.completed ?? 0), totalSteps, now: Date.now() });
+      await deps.markRestoreQueued({ restoreId, jobId: restore.job_id ?? null, now: Date.now(), totalSteps });
+      await beat(Date.now());
+      return new InvocationError({ retryAfter: Math.min(60, 5 * 2 ** retryCount),
+        retryReason: InvocationErrorCode.FUNCTION_RETRY_REQUEST });
+    }
     if (executed.state === 'PARTIAL' || Number(executed.remaining) > 0) {
       const previousCompleted = Number(restore.completed_steps ?? 0);
       const completed = Number(executed.completed ?? 0);

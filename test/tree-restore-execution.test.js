@@ -81,6 +81,7 @@ test('a failed field action resumes without replaying a completed move', async (
   const { adapters, state } = createJournalAdapters({ failFieldOnce: true });
   const first = await executeTreeRestore({ restoreId: 'restore-1', rootIssueKey: 'ROOT-1', ...fixture, adapters, maxActions: 2 });
   assert.equal(first.state, 'PARTIAL');
+  assert.equal(first.retryableError.detail, 'field write refused');
   assert.equal(first.attempted, 2);
   assert.equal(state.mutations.move.length, 1);
   const second = await executeTreeRestore({ restoreId: 'restore-1', rootIssueKey: 'ROOT-1', ...fixture, adapters, maxActions: 10 });
@@ -96,6 +97,15 @@ test('no Jira mutation occurs when preflight cannot prove permissions', async ()
   const result = await executeTreeRestore({ restoreId: 'restore-2', rootIssueKey: 'ROOT-1', ...fixture, adapters, maxActions: 10 });
   assert.equal(result.state, 'FAILED');
   assert.deepEqual(state.mutations, { create: [], edit: [], move: [], delete: [], links: [] });
+  assert.equal(state.actions.length, 0);
+});
+
+test('an unavailable permission service is retryable rather than a permanent permission refusal', async () => {
+  const fixture = trees();
+  const { adapters, state } = createJournalAdapters();
+  adapters.checkPermissions = async () => { throw Object.assign(new Error('Jira unavailable'), { status: 503 }); };
+  const result = await executeTreeRestore({ restoreId: 'preflight-outage', rootIssueKey: 'ROOT-1', ...fixture, adapters });
+  assert.equal(result.retryableError?.status, 503);
   assert.equal(state.actions.length, 0);
 });
 

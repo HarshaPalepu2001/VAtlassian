@@ -108,7 +108,7 @@ export function createRestoreAdapters({ api, route, actorAccountId = 'system', a
           ? route`/rest/api/3/mypermissions?projectId=${projectId}&permissions=${names.join(',')}`
           : route`/rest/api/3/mypermissions?issueKey=${rootIssueKey}&permissions=${names.join(',')}`;
         const response = await request(query, { headers: { Accept: 'application/json' } });
-        if (!ok(response)) return false;
+        await checked(response, 'CHECK_RESTORE_PERMISSIONS');
         const body = await responseBody(response);
         if (!names.every(name => body?.permissions?.[name]?.havePermission === true)) return false;
       }
