@@ -550,3 +550,14 @@ test('a background refresh keeps the roles list and the Grant form usable, and o
  later.resolve({success:false,error:'Temporary failure'});await flush();
  assert.match(text(),/First reviewer/,'a failed background read keeps what was shown');
 });
+
+test('an administrator whose access is revoked elsewhere sees the access page on returning, without the console reloading on every focus',async()=>{
+ let admin=true;let projectReads=0;
+ await mount('AdminConsole',key=>key==='admin:check'?{success:true,isAdmin:admin,isJiraAdmin:false,needsBootstrap:false}:key==='admin:listProjects'?(projectReads++,{success:true,projects}):{success:true,admins:[]});
+ assert.match(text(),/Add administrator/);
+ await act(()=>window.dispatchEvent(new window.Event('focus')));await flush();
+ assert.equal(projectReads,1,'an unchanged admin re-check does not reload the projects');
+ admin=false;
+ await act(()=>window.dispatchEvent(new window.Event('focus')));await flush();
+ assert.match(text(),/Administrator access required/);
+});

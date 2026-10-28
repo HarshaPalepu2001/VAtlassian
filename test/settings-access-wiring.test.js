@@ -52,8 +52,10 @@ test('all-project role grants can be restricted to a single work type', async ()
   deps.route = (parts, ...values) => parts.reduce((s, part, i) => s + part + (values[i] ?? ''), '');
   deps.asApp = () => ({ requestJira: async path => {
     assert.equal(path, '/rest/api/3/issuetype');
-    return { ok: true, json: async () => [{ id: '2', name: 'Requirement' }] };
+    return { ok: true, json: async () => [{ id: '2', name: 'Requirement' },
+      { id: '10050', name: 'Requirement', scope: { type: 'PROJECT', project: { id: '10001' } } }] };
   } });
+  // A team-managed project's own copy of a type would match that project only.
   assert.deepEqual((await admin.listIssueTypesForProject(request({ projectId: '*' }), deps)).issueTypes, [{ id: '2', name: 'Requirement', subtask: false }]);
 });
 

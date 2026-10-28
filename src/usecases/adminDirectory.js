@@ -40,7 +40,10 @@ export async function listIssueTypesForProject(req, overrides) {
       : route`/rest/api/3/issuetype/project?projectId=${projectId}`);
     if (!response.ok) return { success: false, error: `Jira returned ${response.status}` };
     const body = await response.json();
-    return { success: true, issueTypes: (body ?? []).map((t) => ({ id: String(t.id), name: t.name, subtask: t.subtask === true })) };
+    // Site-wide, only the shared types: each team-managed project returns its
+    // own same-named copies (scope PROJECT), which would match one project only.
+    const types = projectId === '*' ? (body ?? []).filter((t) => !t.scope) : (body ?? []);
+    return { success: true, issueTypes: types.map((t) => ({ id: String(t.id), name: t.name, subtask: t.subtask === true })) };
   } catch (e) {
     console.error(e);
     return { success: false, error: e.message };

@@ -72,22 +72,28 @@ export default function AdminConsole({ configure = false }: { configure?: boolea
     } catch (e) { setProjects([]); setProjectError(errorMessage(e)); }
     finally { setLoadingProjects(false); }
   }, []);
-  const check = useCallback(async () => {
+  // A background re-check (focus, or a configuration change elsewhere) keeps
+  // the console as it is unless access actually changed: a revoked admin is
+  // shown the access page, a newly granted one gets the console, and a failed
+  // read leaves the page alone. Projects load only when admin access begins.
+  const check = useCallback(async (quiet?: unknown, wasAdmin = false) => {
+    const background = quiet === true;
     const seq = ++accessSequence.current;
-    setError('');
+    if (!background) setError('');
     try {
       const r = assertResult(await invoke<Result & { isAdmin: boolean; isJiraAdmin?: boolean; needsBootstrap: boolean }>('admin:check'));
       if (seq !== accessSequence.current) return;
       setAccess(r);
-      if (r.isAdmin) void loadProjects();
-    } catch (e) { if (seq === accessSequence.current) { setAccess(null); setError(errorMessage(e)); } }
+      if (r.isAdmin && !(background && wasAdmin)) void loadProjects();
+    } catch (e) { if (seq === accessSequence.current && !background) { setAccess(null); setError(errorMessage(e)); } }
   }, [loadProjects]);
 
   useEffect(() => {
     void check();
     return () => { ++accessSequence.current; };
   }, [check]);
-  useConfigurationUpdates(() => { if (!access?.isAdmin) return check(); });
+  // Before the first answer there is nothing to keep, so it simply checks again.
+  useConfigurationUpdates(() => (access ? check(true, access.isAdmin) : check()));
 
   if (error) {
     return (
