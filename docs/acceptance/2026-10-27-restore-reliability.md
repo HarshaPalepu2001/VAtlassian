@@ -11,6 +11,7 @@ preserved; nothing was committed.
 | --- | --- |
 | A temporary Jira failure stops a batch without progress and immediately fails the restore. | The executor identifies the temporary failure; the worker requests redelivery of the same signed restore, preserving its action journal. Five automatic retries are allowed before a visible failure requiring review. |
 | A failed vault copy reports `COMPLETE` and does not request another delivery. | Temporary failures request Forge redelivery; completed copies are skipped. Permanent file failures report `PARTIAL`. |
+| Vault redelivery has no limit of its own: Forge keeps retrying for its whole retention window (normally 24 hours), re-attempting permanent failures and writing a new failure entry each time. | Retries stop after five with `PARTIAL`, or a recorded `FAILED` when the baseline files cannot be read. Each failed file is written to the ledger once across deliveries, and a file that failed permanently is not tried again. |
 | A job without an attachment list copies whatever files happen to be on Jira. | It skips copying. Only the attachment list recorded by the capture can supply targets. |
 | Restore saves copies of unbaselined additions before removing them. | These bytes are not put into Object Store. Their metadata and content hash are still audited before deletion. |
 | Upload succeeds but its response, audit, or alias publication fails. | A retry can recover the existing upload using its filename and SHA-256, without another upload. A same-name file with different bytes is never accepted. |

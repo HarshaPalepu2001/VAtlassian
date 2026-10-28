@@ -239,3 +239,43 @@ test('a file larger than the vault takes is refused from its reported size, befo
   assert.equal(events[0].eventType, 'ATTACHMENT_VAULT_FAILED');
   assert.match(events[0].payload.error, /TOO_LARGE/);
 });
+
+test('a failure is written to the ledger once across redeliveries, and a permanent one is not tried again', async () => {
+  const audits = [];
+  const downloads = [];
+  const deps = baseOverrides({
+    readIssueAttachments: async () => [{ id: 'a1', filename: 'one.png', size: 10 }, { id: 'a2', filename: 'two.png', size: 10 }],
+    downloadAttachment: async attachment => {
+      downloads.push(attachment.id);
+      throw Object.assign(new Error(attachment.id === 'a1' ? 'temporarily unavailable' : 'forbidden'), { status: attachment.id === 'a1' ? 503 : 403 });
+    },
+    tryAppend: async event => { audits.push(event); return { ok: true }; }
+  });
+  const first = await runVaultWorker({ body: baseBody() }, deps);
+  assert.equal(first._retry, true);
+  const second = await runVaultWorker({ body: baseBody(), retryContext: { retryCount: 1, retryData: first.retryOptions.retryData } }, deps);
+  assert.equal(second._retry, true);
+  assert.deepEqual(downloads, ['a1', 'a2', 'a1'], 'the 403 file is not downloaded again');
+  assert.deepEqual(audits.map(a => a.payload.jiraAttachmentId).sort(), ['a1', 'a2'], 'one failure entry per file');
+  assert.equal(second.retryOptions.retryData.failed, 2);
+});
+
+test('vault retries stop at the limit with a partial result instead of redelivering for the whole retention window', async () => {
+  const deps = baseOverrides({
+    downloadAttachment: async () => { throw Object.assign(new Error('temporarily unavailable'), { status: 503 }); }
+  });
+  const result = await runVaultWorker({ body: baseBody(), retryContext: { retryCount: 5 } }, deps);
+  assert.equal(result._retry, undefined);
+  assert.equal(result.state, 'PARTIAL');
+});
+
+test('a job that cannot read its baseline files is recorded as failed once retries run out', async () => {
+  const audits = [];
+  const result = await runVaultWorker({ body: baseBody(), retryContext: { retryCount: 5 } }, baseOverrides({
+    identityRecords: async () => { throw new Error('SQL unavailable'); },
+    tryAppend: async event => { audits.push(event); return { ok: true }; }
+  }));
+  assert.equal(result.state, 'FAILED');
+  assert.equal(audits[0].eventType, 'ATTACHMENT_VAULT_FAILED');
+  assert.equal(audits[0].payload.baselineId, 'b1');
+});

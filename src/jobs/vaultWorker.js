@@ -54,8 +54,14 @@ async function defaultDownloadAttachment(attachment) {
   return Buffer.from(await res.arrayBuffer());
 }
 
+// Forge keeps redelivering for as long as the retention window lasts (a day or
+// more), so the worker sets its own limit, as the restore worker does.
+const MAX_VAULT_RETRIES = 5;
+// retryData is capped at 4 KB by Forge; ids beyond this are re-audited at worst.
+const MAX_CARRIED_IDS = 200;
+const retryCountOf = event => Number(event?.retryContext?.retryCount ?? 0);
 const retry = (event, retryData) => new InvocationError({
-  retryAfter: Math.min(60, 5 * 2 ** Math.min(Number(event?.retryContext?.retryCount ?? 0), 4)),
+  retryAfter: Math.min(60, 5 * 2 ** Math.min(retryCountOf(event), 4)),
   retryReason: InvocationErrorCode.FUNCTION_RETRY_REQUEST,
   ...(retryData ? { retryData } : {})
 });
@@ -64,7 +70,15 @@ export async function runVaultWorker(eventOrBody, overrides = {}) {
   try { return await vaultFiles(eventOrBody, overrides); }
   catch (error) {
     console.error('vaultWorker: could not read the baseline files', error);
-    return retry(eventOrBody);
+    if (retryCountOf(eventOrBody) < MAX_VAULT_RETRIES) return retry(eventOrBody);
+    // Out of retries: say so in the ledger rather than vanish from the queue.
+    const body = eventOrBody?.body ?? eventOrBody;
+    if (body?.issueId && body?.baselineId) {
+      await (overrides.tryAppend ?? tryAppend)({ actorAccountId: 'system', issueId: body.issueId, eventType: EVENT.ATTACHMENT_VAULT_FAILED,
+        payload: { baselineId: body.baselineId, jiraAttachmentId: null, error: String(error?.message ?? error) } })
+        .catch(failure => console.error('vaultWorker: could not record copy failure', failure));
+    }
+    return { state: 'FAILED', reason: 'UNAVAILABLE', error: String(error?.message ?? error) };
   }
 }
 
@@ -94,12 +108,22 @@ async function vaultFiles(eventOrBody, overrides) {
   const earlier = await deps.vaultedCopies({ issueId: body.issueId, attachmentIds: body.attachments.map(a => String(a.id)) });
   const results = { vaulted: 0, skipped: 0, failed: 0 };
   let retryable = false;
+  // Carried between deliveries: failures already in the ledger are not written
+  // again, and a file that failed for good is not tried again.
+  const carried = eventOrBody?.retryContext?.retryData ?? {};
+  const audited = new Set(Array.isArray(carried.audited) ? carried.audited.map(String) : []);
+  const settled = new Set(Array.isArray(carried.settled) ? carried.settled.map(String) : []);
+  const finalAttempt = retryCountOf(eventOrBody) >= MAX_VAULT_RETRIES;
 
   for (const { recorded, current } of targets) {
     const jiraAttachmentId = String(recorded.id);
     const filename = current?.filename ?? recorded.filename;
     if (await deps.isAttachmentVaulted({ baselineId: body.baselineId, jiraAttachmentId })) {
       results.skipped += 1;
+      continue;
+    }
+    if (settled.has(jiraAttachmentId)) {
+      results.failed += 1;
       continue;
     }
     try {
@@ -147,14 +171,21 @@ async function vaultFiles(eventOrBody, overrides) {
       console.error('vaultWorker: failed to vault attachment', jiraAttachmentId, error);
       const status = Number(error?.status ?? 0);
       if (!status || status >= 500 || status === 408 || status === 429) retryable = true;
-      await deps.tryAppend({ actorAccountId: 'system', issueId: body.issueId, eventType: EVENT.ATTACHMENT_VAULT_FAILED,
-        payload: { baselineId: body.baselineId, jiraAttachmentId, filename, error: String(error?.message ?? error) } })
-        .catch(error => console.error('vaultWorker: could not record copy failure', error));
+      else settled.add(jiraAttachmentId);
+      if (!audited.has(jiraAttachmentId)) {
+        const written = await deps.tryAppend({ actorAccountId: 'system', issueId: body.issueId, eventType: EVENT.ATTACHMENT_VAULT_FAILED,
+          payload: { baselineId: body.baselineId, jiraAttachmentId, filename, error: String(error?.message ?? error) } })
+          .catch(error => { console.error('vaultWorker: could not record copy failure', error); return null; });
+        if (written) audited.add(jiraAttachmentId);
+      }
       results.failed += 1;
     }
   }
 
-  if (retryable) return retry(eventOrBody, results);
+  if (retryable && !finalAttempt) {
+    return retry(eventOrBody, { ...results, audited: [...audited].slice(0, MAX_CARRIED_IDS),
+      settled: [...settled].slice(0, MAX_CARRIED_IDS) });
+  }
   return { state: results.failed ? 'PARTIAL' : 'COMPLETE', storage: STORAGE.OBJECT_STORE, ...results };
 }
 
