@@ -43,7 +43,9 @@ function world({ onIssue = [], vault = {}, aliases = {} } = {}) {
       if (w.faults.has('audit')) throw Object.assign(new Error('ledger down'), { status: 503 });
       w.calls.push(['audit', eventType]); w.audit.push({ eventType, payload });
     },
-    preserve: async () => ({ storage: 'OBJECT_STORE', objectKey: 'vault/sha256/kept' })
+    preserve: async () => ({ storage: 'OBJECT_STORE', objectKey: 'vault/sha256/kept' }),
+    restoredEvidence: async ({ attachmentId, originalAttachmentId }) => w.audit.some(entry => entry.eventType === 'ATTACHMENT_RESTORED'
+      && entry.payload.attachmentId === attachmentId && entry.payload.originalAttachmentId === originalAttachmentId)
   };
   return w;
 }
@@ -69,6 +71,17 @@ test('retry recovers an upload interrupted before its alias was durable without 
   await run(w, [file('1', 'spec.pdf')]);
   assert.equal(w.calls.filter(call => call[0] === 'upload').length, 1);
   assert.equal(w.jira.size, 1);
+  assert.equal(w.aliases.get('900'), '1');
+});
+
+test('a recovered upload whose restore evidence was already written is not recorded as restored twice', async () => {
+  const w = world({ vault: { 1: { filename: 'spec.pdf', bytes: 'pdf' } } });
+  const saveAlias = w.deps.recordAlias;
+  w.deps.recordAlias = async () => { throw Object.assign(new Error('SQL unavailable'), { status: 503 }); };
+  await assert.rejects(() => run(w, [file('1', 'spec.pdf')]), error => error.status === 503);
+  w.deps.recordAlias = saveAlias;
+  await run(w, [file('1', 'spec.pdf')]);
+  assert.equal(w.audit.filter(entry => entry.eventType === 'ATTACHMENT_RESTORED').length, 1);
   assert.equal(w.aliases.get('900'), '1');
 });
 

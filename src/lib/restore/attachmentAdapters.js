@@ -1,6 +1,6 @@
 import { identityRecords, recordAttachmentAlias, vaultedCopies } from '../../db/vaultStore.js';
 import { readMediaId } from '../mediaIdentity.js';
-import { tryAppend } from '../../db/store.js';
+import { readForIssue, tryAppend } from '../../db/store.js';
 import { defaultVaultObjectStore } from '../vaultObjectStore.js';
 import { EVENT } from '../ledger.js';
 
@@ -45,7 +45,7 @@ async function detailOf(response) {
  *                      recorded on every ledger entry this writes.
  */
 export function createAttachmentRestoreDeps({ api, route, actorAccountId = 'system', approvalId = null, append = tryAppend,
-  objectStore = null }) {
+  objectStore = null, readLedger = readForIssue }) {
   const jira = (path, options) => api.asApp().requestJira(path, options);
   let store = objectStore;
   const vaultStore = async () => (store ??= await defaultVaultObjectStore());
@@ -118,6 +118,24 @@ export function createAttachmentRestoreDeps({ api, route, actorAccountId = 'syst
         return (await identityRecords([issueId])).get(Number(issueId)) ?? null;
       } catch (error) {
         throw failure('READ_ATTACHMENT_ALIASES', 503, String(error?.message ?? error));
+      }
+    },
+
+    /**
+     * Whether a restore already wrote evidence for this copy: a retry that
+     * recovers its own upload must not record the same restoration twice.
+     * Throws: the evidence decision waits on it.
+     */
+    async restoredEvidence({ issueId, attachmentId, originalAttachmentId }) {
+      try {
+        return (await readLedger(Number(issueId))).some(row => {
+          if (row.event_type !== EVENT.ATTACHMENT_RESTORED) return false;
+          const payload = typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload;
+          return String(payload?.attachmentId) === String(attachmentId)
+            && String(payload?.originalAttachmentId) === String(originalAttachmentId);
+        });
+      } catch (error) {
+        throw failure('AUDIT', 503, `Earlier restore evidence could not be read: ${error?.message ?? error}`);
       }
     },
 

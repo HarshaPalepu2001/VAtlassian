@@ -69,3 +69,15 @@ test('downloadVaulted downloads from the Object Store and refuses Confluence cop
     e => e.status === 404 && /stored in Confluence, which is no longer supported/.test(e.message)
   );
 });
+
+test('earlier restore evidence is found in the ledger by copy and original, and an unreadable ledger is retried', async () => {
+  const rows = [
+    { event_type: 'ATTACHMENT_REMOVED_BY_RESTORE', payload: JSON.stringify({ attachmentId: '900' }) },
+    { event_type: 'ATTACHMENT_RESTORED', payload: JSON.stringify({ attachmentId: '900', originalAttachmentId: '1' }) }
+  ];
+  const deps = createAttachmentRestoreDeps({ api: fakeApi(async () => ({})).api, route, readLedger: async issueId => issueId === 10 ? rows : [] });
+  assert.equal(await deps.restoredEvidence({ issueId: 10, attachmentId: '900', originalAttachmentId: '1' }), true);
+  assert.equal(await deps.restoredEvidence({ issueId: 10, attachmentId: '900', originalAttachmentId: '2' }), false);
+  const down = createAttachmentRestoreDeps({ api: fakeApi(async () => ({})).api, route, readLedger: async () => { throw new Error('SQL down'); } });
+  await assert.rejects(() => down.restoredEvidence({ issueId: 10, attachmentId: '900', originalAttachmentId: '1' }), e => e.status === 503);
+});

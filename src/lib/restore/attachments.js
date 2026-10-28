@@ -195,8 +195,13 @@ export async function restoreAttachments({ issueKey, issueId, sourceIssueId = is
       const mediaId = copy.media_id ? await mediaIdWithRetry(deps, newId) : null;
       if (!mediaId && copy.media_id) unpointable.push({ id: String(file.id), attachmentId: newId, originalMediaId: String(copy.media_id) });
       // Publish the alias only after evidence is durable. Otherwise an audit
-      // outage would leave a recognised copy that retries silently skip.
-      await deps.audit('ATTACHMENT_RESTORED', { issueKey, originalAttachmentId: String(file.id), attachmentId: newId,
+      // outage would leave a recognised copy that retries silently skip. A
+      // recovered upload may already have its evidence from the attempt that
+      // lost the alias; it is written once, never twice.
+      const evidenced = recovered && deps.restoredEvidence
+        ? await deps.restoredEvidence({ issueId: Number(issueId), attachmentId: newId, originalAttachmentId: String(file.id) })
+        : false;
+      if (!evidenced) await deps.audit('ATTACHMENT_RESTORED', { issueKey, originalAttachmentId: String(file.id), attachmentId: newId,
         filename: file.filename || copy.filename, contentHash: copy.content_hash, vaultBaselineId: copy.baseline_id ?? null,
         mediaId, originalMediaId: copy.media_id ?? null },
       Number(issueId));
