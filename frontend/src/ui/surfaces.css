@@ -99,11 +99,6 @@
 /* ── The issue panel ─────────────────────────────────────────────────────── */
 
 .va-panel-toolbar { margin-bottom: -8px; }
-.va-panel-section { display: flex; flex-direction: column; gap: 10px; }
-.va-panel-section + .va-panel-section { margin-top: 8px; }
-.va-panel-section__head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.va-panel-section__title { margin: 0; font-size: var(--va-size-body); font-weight: 600; color: var(--va-text); }
-.va-panel-section__sub { font-size: var(--va-size-meta); color: var(--va-text-subtle); }
 
 .va-facts-grid {
   display: grid; grid-template-columns: 150px minmax(0, 1fr); column-gap: 12px; row-gap: 8px; margin: 0; padding: 0;
@@ -246,18 +241,12 @@
   background: rgba(9, 30, 66, 0.54);
   display: flex; justify-content: center; align-items: flex-start;
 }
-.va-sheet > .va-attest { width: 100%; max-width: 680px; box-shadow: var(--va-shadow-overlay); }
 
-.va-attest__label { font-size: var(--va-size-micro); font-weight: 700; text-transform: uppercase; letter-spacing: 0.02em; margin: 8px 0 2px; opacity: 0.85; }
 .va-checks { list-style: none; margin: 0 0 16px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .va-check { display: flex; gap: 8px; align-items: flex-start; font-size: var(--va-size-body); }
 .va-check--ok .va-icon { color: var(--va-success-text); }
 .va-check--warn .va-icon { color: var(--va-warning-text); }
 .va-check--info .va-icon { color: var(--va-brand); }
-.va-manifest {
-  font-family: var(--va-font-mono); font-size: var(--va-size-meta); color: var(--va-text-subtle);
-  margin: 0 0 12px; padding-top: 12px; border-top: 1px solid var(--va-border);
-}
 
 .va-receipt {
   display: flex; flex-direction: column; gap: 16px; width: 100%; max-width: 680px; box-sizing: border-box;
