@@ -1,4 +1,5 @@
 import { runAdmin, validId, validScope } from './adminRuntime.js';
+import { affectedRows } from '../lib/db.js';
 const ACTIVE = 'ACTIVE';
 const REVOKED = 'REVOKED';
 
@@ -94,9 +95,9 @@ export async function grantEligibility(req, overrides) {
     }
   });
   const insertResult = await executeQuery(
-    `INSERT INTO va_eligibility (el_id, account_id, issue_type_id, role, state, granted_at, granted_by, project_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [toBinaryParam(elId), targetAccountId, issueTypeId, role, ACTIVE, now, accountId, projectId == null ? null : String(projectId)]
+    `INSERT INTO va_eligibility (el_id, account_id, issue_type_id, role, state, granted_at, granted_by, display_name, project_id)
+     VALUES (FROM_BASE64(?), ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [toBinaryParam(elId), targetAccountId, issueTypeId, role, ACTIVE, now, accountId, target.displayName ?? '', projectId]
   );
   if (!insertResult.result) return { success: false, error: 'Failed to grant eligibility' };
   return { success: true, elId: elId.toString('hex') };
@@ -116,10 +117,11 @@ export async function revokeEligibility(req, overrides) {
     payload: { action: 'REVOKE_REQUESTED', elId }
   });
   const updateResult = await executeQuery(
-    `UPDATE va_eligibility SET state = ? WHERE el_id = ?`,
+    `UPDATE va_eligibility SET state = ? WHERE el_id = FROM_BASE64(?) AND state = 'ACTIVE'`,
     [REVOKED, toBinaryParam(Buffer.from(elId, 'hex'))]
   );
   if (!updateResult.result) return { success: false, error: 'Failed to revoke eligibility' };
+  if (affectedRows(updateResult) !== 1) return { success: false, error: 'This role grant no longer exists or was already revoked. Reload the roles.' };
   return { success: true };
   }, overrides, 'eligibility');
 }

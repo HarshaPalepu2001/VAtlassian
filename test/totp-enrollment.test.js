@@ -51,3 +51,15 @@ test('status still answers when the administrator roster cannot be read',async()
  const r=await api.checkStatus({context:{accountId:'alice'}});
  assert.equal(r.success,true);assert.equal(r.isEnrolled,true);assert.equal(r.administrators,null);assert.equal(r.onlyAdministrator,false);
 });
+
+test('recovery status failure is surfaced rather than pretending no reset grant exists',async()=>{
+ const {api}=fake({read:async()=>({state:'LOCKED',version:0}),grant:async()=>{throw new Error('storage unavailable');}});
+ assert.equal((await api.checkStatus({context:{accountId:'alice'}})).success,false);
+});
+test('encryption configuration failure never burns the reset grant',async()=>{
+ let redeemed=0;
+ const {api}=fake({read:async()=>({state:'LOCKED',version:0}),grant:async()=>({grant_id:'x',expires_at:now+60000}),
+  key:()=>{throw new Error('key unavailable');},redeem:async()=>{redeemed++;return true;}});
+ assert.equal((await api.enrol({context:{accountId:'alice'}})).success,false);
+ assert.equal(redeemed,0);
+});

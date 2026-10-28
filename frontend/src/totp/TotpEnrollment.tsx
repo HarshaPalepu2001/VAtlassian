@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { invoke } from '../lib/bridge';
 import Button from '@atlaskit/button';
 import SectionMessage from '@atlaskit/section-message';
 import { QRCodeSVG } from 'qrcode.react';
 
 import { Card, CodeInput, Loading, Page, Stack } from '../ui/primitives';
+import { useConfigurationUpdates } from '../lib/configurationUpdates';
 
 /**
  * Authenticator enrolment (manifest module va-totp-settings).
@@ -23,11 +24,14 @@ export default function TotpEnrollment() {
   const [qrUri, setQrUri] = useState<string | null>(null);
   const [code, setCode] = useState('');
   const [message, setMessage] = useState<{ type: 'success' | 'error' | 'warning'; text: string } | null>(null);
+  const statusSequence = useRef(0);
 
   const checkStatus = async () => {
+    const seq = ++statusSequence.current;
     try {
       const response = await invoke('totp:checkStatus') as
         { success: boolean; isEnrolled: boolean; state?: string; error?: string } & Partial<Recovery>;
+      if (seq !== statusSequence.current) return;
       if (response.success) {
         setIsEnrolled(response.isEnrolled);
         setIsLocked(response.state === 'LOCKED');
@@ -37,18 +41,24 @@ export default function TotpEnrollment() {
           onlyAdministrator: response.onlyAdministrator === true
         });
       } else {
+        setIsEnrolled(null); setQrUri(null);
         setMessage({ type: 'error', text: response.error || 'Could not check your authenticator.' });
       }
     } catch (err: any) {
+      if (seq !== statusSequence.current) return;
+      setIsEnrolled(null); setQrUri(null);
       setMessage({ type: 'error', text: err.message });
     } finally {
-      setLoading(false);
+      if (seq === statusSequence.current) setLoading(false);
     }
   };
 
-  useEffect(() => { checkStatus(); }, []);
+  useEffect(() => { void checkStatus(); return () => { ++statusSequence.current; }; }, []);
+  useConfigurationUpdates(() => { if (!busy && !qrUri) return checkStatus(); });
 
   const startEnrolment = async () => {
+    if (busy) return;
+    ++statusSequence.current;
     setBusy(true);
     setMessage(null);
     try {
@@ -71,7 +81,7 @@ export default function TotpEnrollment() {
     setBusy(true);
     setMessage(null);
     try {
-      const response = await invoke('totp:confirm', { code }) as { success: boolean; error?: string };
+      const response = await invoke('totp:confirm', { code }) as { success: boolean; error?: string; reason?: string };
       if (response.success) {
         setMessage({ type: 'success', text: 'Your authenticator is set up. You can now sign records.' });
         setQrUri(null);
@@ -80,6 +90,10 @@ export default function TotpEnrollment() {
       } else {
         setMessage({ type: 'error', text: response.error || 'That code was not accepted. Try the next one your app shows.' });
         setCode('');
+        if (response.reason === 'CREDENTIAL_LOCKED' || response.reason === 'ENROLMENT_EXPIRED') {
+          setQrUri(null);
+          await checkStatus();
+        }
       }
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message });
@@ -95,7 +109,10 @@ export default function TotpEnrollment() {
     try { await checkStatus(); } finally { setBusy(false); }
   };
 
-  if (loading && isEnrolled === null) return <Loading label="Checking your authenticator…" />;
+  if (isEnrolled === null) {
+    if (loading) return <Loading label="Checking your authenticator…" />;
+    return <Page title="Authenticator status unavailable"><SectionMessage appearance="error"><p>{message?.text ?? 'Could not check your authenticator.'}</p></SectionMessage><Button isDisabled={busy} onClick={refresh}>Retry</Button></Page>;
+  }
 
   return (
     <Page

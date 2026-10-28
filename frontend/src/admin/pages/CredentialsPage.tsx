@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '../../lib/bridge';
 import Button from '@atlaskit/button';
 import { Badge, Card, Loading, Page, Table } from '../../ui/primitives';
@@ -7,6 +7,7 @@ import { assertResult, errorMessage } from '../../lib/result';
 import type { Result } from '../../lib/result';
 import type { JiraUser } from '../types';
 import UserPicker from '../UserPicker';
+import { useConfigurationUpdates } from '../../lib/configurationUpdates';
 type Grant = { accountId: string; forName?: string; issuedByName?: string; issuedAt: number; expiresAt: number; status: string };
 type Credential = { accountId: string; displayName?: string; state: string; lastVerifiedAt?: number };
 /** src/lib/totp.js CREDENTIAL_STATE */
@@ -20,24 +21,28 @@ export default function CredentialsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const sequence = useRef(0);
   const load = useCallback(async () => {
+    const seq = ++sequence.current;
     setLoading(true); setError(''); setGrants(null); setCredentials(null);
     try {
       const [g, c] = await Promise.all([
         invoke<Result & { grants: Grant[] }>('admin:listCredentialResetGrants'),
         invoke<Result & { credentials: Credential[]; hasMore?: boolean }>('admin:listCredentials')
       ]);
+      if (seq !== sequence.current) return;
       assertResult(g); assertResult(c); setGrants(g.grants); setCredentials(c.credentials); setHasMore(c.hasMore === true);
-    } catch (e) { setError(errorMessage(e)); }
-    finally { setLoading(false); }
+    } catch (e) { if (seq === sequence.current) setError(errorMessage(e)); }
+    finally { if (seq === sequence.current) setLoading(false); }
   }, []);
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void load(); return () => { ++sequence.current; }; }, [load]);
+  useConfigurationUpdates(() => { if (!busy) return load(); });
   async function issue() {
     if (!person || busy) return;
     setBusy(true); setError(''); setMessage('');
     try {
       assertResult(await invoke<Result>('admin:issueCredentialResetGrant', { targetAccountId: person.accountId }));
-      setMessage(`Reset authorized for ${person.displayName}. They can enroll a replacement authenticator in personal settings.`);
+      setMessage(`Reset authorized for ${person.displayName}. They must open Jira personal settings → VAtlassian authenticator, choose Check again, then set up and confirm their replacement. The grant lasts 24 hours and works once.`);
       setPerson(null); await load();
     } catch (e) { setError(errorMessage(e)); }
     finally { setBusy(false); }

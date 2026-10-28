@@ -33,9 +33,11 @@ export async function listIssueTypesForProject(req, overrides) {
   return runAdmin(req, async (deps) => {
     const { asApp, route } = deps;
     const { projectId } = req.payload ?? {};
-  if (!projectId) return { success: false, error: 'projectId is required' };
+  if (projectId !== '*' && !/^[1-9]\d*$/.test(String(projectId ?? ''))) return { success: false, error: 'Choose a project or all projects.' };
   try {
-    const response = await asApp().requestJira(route`/rest/api/3/issuetype/project?projectId=${projectId}`);
+    const response = await asApp().requestJira(projectId === '*'
+      ? route`/rest/api/3/issuetype`
+      : route`/rest/api/3/issuetype/project?projectId=${projectId}`);
     if (!response.ok) return { success: false, error: `Jira returned ${response.status}` };
     const body = await response.json();
     return { success: true, issueTypes: (body ?? []).map((t) => ({ id: String(t.id), name: t.name, subtask: t.subtask === true })) };
@@ -182,5 +184,6 @@ export async function searchUsers(req, overrides) {
     console.error(e);
     return { success: false, error: e.message };
   }
-  }, overrides, 'adminDirectory');
+  // Jira administrators need the same picker to repair the administrator roster.
+  }, overrides, 'adminDirectory', { allowJiraAdmin: true });
 }

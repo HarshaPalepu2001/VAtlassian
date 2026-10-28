@@ -68,3 +68,48 @@ test('first-time setup still starts straight away',async()=>{
  await act(()=>button('Set up my authenticator').click());await flush();
  assert.ok(calls.includes('totp:enrol'));assert.equal(Boolean(container.querySelector('[data-qr]')),true);
 });
+
+test('failed status never offers first-time enrollment and can be retried',async()=>{
+ await mount(()=>Promise.resolve({success:false,error:'Recovery storage unavailable'}));
+ assert.equal(Boolean(button('Set up my authenticator')),false);
+ assert.match(text(),/Recovery storage unavailable/);
+ globalThis.transport=()=>Promise.resolve(status({state:'LOCKED',isEnrolled:false}));
+ await act(()=>button('Retry').click());await flush();
+ assert.match(text(),/authenticator is locked/);
+});
+test('confirmation lockout removes the QR and shows recovery immediately',async()=>{
+ let current={success:true,state:'NONE',isEnrolled:false};
+ await mount(key=>{
+  if(key==='totp:enrol')return Promise.resolve({success:true,uri:'otpauth://totp/x'});
+  if(key==='totp:confirm'){current=status({state:'LOCKED',isEnrolled:false});return Promise.resolve({success:false,reason:'CREDENTIAL_LOCKED',error:'Locked'});}
+  return Promise.resolve(current);
+ });
+ await act(()=>button('Set up my authenticator').click());await flush();
+ await act(()=>{
+  const input=container.querySelector('input');
+  Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set.call(input,'123456');
+  input.dispatchEvent(new window.Event('input',{bubbles:true}));
+ });
+ await act(()=>button('Confirm setup').click());await flush();
+ assert.equal(Boolean(container.querySelector('[data-qr]')),false);
+ assert.match(text(),/authenticator is locked/);
+});
+
+test('an earlier status read cannot hide a newly issued reset grant',async()=>{
+ let resolve;let reads=0;
+ const pending=new Promise(r=>{resolve=r;});
+ await mount(()=>++reads===1?pending:Promise.resolve(status({state:'LOCKED',isEnrolled:false,resetGrant:{expiresAt:Date.now()+3600000}})));
+ await act(()=>window.dispatchEvent(new window.Event('focus')));await flush();
+ resolve(status({state:'LOCKED',isEnrolled:false}));await flush();
+ assert.equal(Boolean(button('Set up my authenticator again')),true);
+});
+
+test('a status read started before enrollment cannot remove its new QR',async()=>{
+ let resolve;let reads=0;
+ const pending=new Promise(r=>{resolve=r;});
+ await mount(key=>key==='totp:enrol'?Promise.resolve({success:true,uri:'otpauth://totp/x'}):++reads===1?Promise.resolve(status({resetGrant:{expiresAt:Date.now()+3600000}})):pending);
+ await act(()=>window.dispatchEvent(new window.Event('focus')));await flush();
+ await act(()=>button('Set up a new authenticator').click());await flush();
+ resolve({success:false,error:'Earlier status unavailable'});await flush();
+ assert.equal(Boolean(container.querySelector('[data-qr]')),true);
+});

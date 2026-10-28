@@ -150,9 +150,19 @@ export async function revokeControlledTransition(req, overrides) {
   return runAdmin(req, async deps => {
     const ctId = req.payload?.ctId;
     if (!validId(ctId)) throw new Error('A valid ctId is required.');
+    const id = deps.toBinaryParam(Buffer.from(ctId, 'hex'));
+    let previous;
+    if (req.payload.expectedRevision !== undefined) {
+      previous = (await query(deps, `SELECT ${EDIT_COLUMNS.join(', ')} FROM va_controlled_transition WHERE ct_id = FROM_BASE64(?) AND state = 'ACTIVE'`, [id])).data?.[0];
+      if (!previous || editRevision(previous) !== req.payload.expectedRevision) {
+        throw new Error('This rule changed or was removed since it was loaded. Reload before removing it.');
+      }
+    }
     await audit(deps, req.context.accountId, deps.EVENT.CONTROLLED_TRANSITION_CHANGED, { action: 'REVOKE_REQUESTED', ctId });
-    await query(deps, "UPDATE va_controlled_transition SET state = 'REVOKED' WHERE ct_id = FROM_BASE64(?)",
-      [deps.toBinaryParam(Buffer.from(ctId, 'hex'))]);
+    const compare = previous ? EDIT_COLUMNS.map(k => ` AND ${k} <=> ?`).join('') : '';
+    const result = await query(deps, `UPDATE va_controlled_transition SET state = 'REVOKED' WHERE ct_id = FROM_BASE64(?) AND state = 'ACTIVE'${compare}`,
+      [id, ...(previous ? EDIT_COLUMNS.map(k => previous[k] ?? null) : [])]);
+    if (affectedRows(result) !== 1) throw new Error('This rule changed or was already removed. Reload the rules.');
     return { success: true };
   }, overrides);
 }

@@ -20,7 +20,7 @@ test('all privileged endpoints reject inactive admins and database failure', asy
   // to somebody holding neither. The fixture grants Jira-administrator
   // standing by default, so for every other endpoint this loop also proves a
   // Jira administrator alone cannot reach it.
-  const rosterNames = new Set(['listAdmins', 'grantAdmin', 'revokeAdmin']);
+  const rosterNames = new Set(['listAdmins', 'grantAdmin', 'revokeAdmin', 'searchUsers']);
   for (const [name, handler] of Object.entries(admin)) {
     if (publicNames.has(name)) continue;
     for (const options of [{ unauthorized: true }, { authError: true }]) {

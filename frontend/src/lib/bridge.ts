@@ -5,6 +5,11 @@ import { recordHarnessEvent, getActiveTraceId } from './harness';
  *  signature recorded, a transition retried, a restoration retried. Every
  *  other open surface needs to know when one of these actually happens. */
 const MUTATION_KEYS = ['signature:submit', 'approval:submit', 'approval:retryTransition', 'restore:retry'];
+const CONFIGURATION_MUTATIONS = new Set([
+  'admin:grantAdmin', 'admin:revokeAdmin', 'admin:grantEligibility', 'admin:revokeEligibility',
+  'admin:createControlledTransition', 'admin:updateControlledTransition', 'admin:revokeControlledTransition',
+  'admin:saveConfig', 'admin:issueCredentialResetGrant'
+]);
 
 /** `respond()` on the server never rejects the resolver call — it resolves
  *  with `{ error, reason }` — so a failed mutation still returns here as a
@@ -57,8 +62,11 @@ export async function invoke<T = unknown>(key: string, payload?: Record<string, 
       });
     }
 
-    if (MUTATION_KEYS.includes(key) && isDurable(result)) {
-      void events.emit('VA_ISSUE_CHANGED', { issueKey: payload?.issueKey }).catch(() => {});
+    const changeEvent = MUTATION_KEYS.includes(key) ? 'VA_ISSUE_CHANGED'
+      : CONFIGURATION_MUTATIONS.has(key) ? 'VA_CONFIGURATION_CHANGED' : null;
+    if (changeEvent && isDurable(result)) {
+      const change = changeEvent === 'VA_ISSUE_CHANGED' ? { issueKey: payload?.issueKey } : { operation: key };
+      void events.emit(changeEvent, change).catch(() => {});
     }
     return result;
   } catch (error) {

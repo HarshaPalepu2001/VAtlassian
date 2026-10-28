@@ -12,6 +12,7 @@ import type { AssuranceLevel } from '../../lib/assurance';
 import { CONTROLLED_TRANSITION_ASSURANCE_OPTIONS } from '../../lib/assurance';
 import { assertResult, errorMessage } from '../../lib/result';
 import { formatDate } from '../../ui/format';
+import { useConfigurationUpdates } from '../../lib/configurationUpdates';
 
 type Project = { id: string; key: string; name: string };
 type IssueType = { id: string; name: string };
@@ -78,6 +79,7 @@ const COLUMNS = [
 export default function TransitionsPage({ projects }: { projects: Project[] }) {
   const [editing, setEditing] = useState<ControlledTransition | null>(null);
   const [refresh, setRefresh] = useState(0);
+  const [rolesRefresh, setRolesRefresh] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -105,23 +107,30 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
   const [captureBaseline,setCapture]=useState(true);
   const [rejectStatus, setRejectStatus] = useState('');
   const [availableRoles, setAvailableRoles] = useState<string[]>([]);
+  const listSequence = useRef(0);
 
   const loadTransitions = async () => {
+    const seq = ++listSequence.current;
     setLoading(true); setLoaded(false); setTransitions([]);
     try {
       const response = await invoke('admin:listControlledTransitions') as
         { success: boolean; transitions?: ControlledTransition[]; error?: string };
+      if (seq !== listSequence.current) return;
 
       if (response.success) {setTransitions(response.transitions ?? []);setLoaded(true);}
       else setMessage({ type: 'error', text: response.error || 'Failed to load controlled transitions.' });
     } catch (err: any) {
+      if (seq !== listSequence.current) return;
       setMessage({ type: 'error', text: err.message || 'Failed to load data.' });
     } finally {
-      setLoading(false);
+      if (seq === listSequence.current) setLoading(false);
     }
   };
 
-  useEffect(() => { loadTransitions(); }, []);
+  useEffect(() => { void loadTransitions(); return () => { ++listSequence.current; }; }, []);
+  useConfigurationUpdates(() => {
+    if (!saving) { setRolesRefresh(v => v + 1); return loadTransitions(); }
+  });
 
   useEffect(() => {
     let active = true;
@@ -165,7 +174,7 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
         }
       }).catch(e => { if(active) setMessage({type:'error',text:errorMessage(e)}); });
     return () => { active = false; };
-  }, [projectId, issueTypeId, refresh, editing]);
+  }, [projectId, issueTypeId, refresh, rolesRefresh, editing]);
 
   // The transition picker. A change to either scope input invalidates
   // whatever was selected — Jira's workflow for a different project or work
@@ -238,13 +247,13 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
         fromStatusId: selectedTransition.fromStatusId,
         toStatusId: selectedTransition.toStatusId,
         requiredAssurance,captureBaseline,requiredRole: role.trim(), meaning: meaning.trim(), rejectToStatusId: rejectStatus || null
-      }) as { success: boolean; error?: string };
+      }) as { success: boolean; error?: string; note?: string };
 
       if (result.success) {
         const project = projects.find((p) => p.id === projectId);
         setMessage({
           type: 'success',
-          text: `Rule ${editing ? 'updated' : 'added'}; approval required${project ? ` in ${project.name}` : ''} for "${meaning.trim()}".`
+          text: `Rule ${editing ? 'updated' : 'added'}; approval required${project ? ` in ${project.name}` : ''} for "${meaning.trim()}".${result.note ? ` ${result.note}` : ''}`
         });
         setEditing(null); setRole(''); setMeaning(''); setRejectStatus(''); setSelectedKey('');
         await loadTransitions();
@@ -262,7 +271,7 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
     if (saving) return;
     setSaving(true); setMessage(null);
     try {
-      assertResult(await invoke('admin:revokeControlledTransition', { ctId: rule.ctId }) as any);
+      assertResult(await invoke('admin:revokeControlledTransition', { ctId: rule.ctId, expectedRevision: rule.revision }) as any);
       if (editing?.ctId === rule.ctId) setEditing(null);
       await loadTransitions();
     } catch (e) { setMessage({type:'error',text:errorMessage(e)}); }
@@ -276,7 +285,7 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
   };
 
   return (
-    <Page eyebrow="Setup" title="Controlled transitions">
+    <Page eyebrow="Setup" title="Controlled transitions" actions={<Button isDisabled={saving || loading} onClick={() => { setRefresh(v => v + 1); void loadTransitions(); }}>Refresh rules and roles</Button>}>
       {message && (
         <div style={{ marginBottom: '20px' }}>
           <SectionMessage appearance={message.type}>

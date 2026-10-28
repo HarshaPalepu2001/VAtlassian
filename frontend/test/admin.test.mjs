@@ -106,8 +106,8 @@ test('settings saves only changed live preferences without materializing inherit
  });
  assert.doesNotMatch(text(),/transitions proceed without VAtlassian validator blocks/);
  assert.equal([...container.querySelectorAll('label')].some(l=>l.textContent.includes('Post audit comment')&&l.querySelector('input:not(:disabled)')),false);
- const label=[...container.querySelectorAll('label')].find(l=>l.textContent.includes('Enable AI assistance'));
- await act(()=>label.querySelector('input').click());await act(()=>button('Save settings').click());await flush();
+ const label=[...container.querySelectorAll('label')].find(l=>l.textContent.includes('Summaries and field suggestions'));
+ await act(()=>label.querySelector('input').click());await act(()=>button('Save').click());await flush();
  assert.deepEqual(savedConfig.config,{ai:{enabled:false}});
  assert.match(text(),/Site-wide default settings saved/);
 });
@@ -116,7 +116,7 @@ test('settings handles optimistic concurrency conflicts cleanly',async()=>{
  await mount('Settings',(key)=>key==='admin:getConfig'?{success:true,revision:'rev-1',config:{enabled:true,ai:{enabled:true},policy:{mode:'DETECT'}}}:{success:false,error:'Settings changed since you loaded this page.'});
  const checkboxes = container.querySelectorAll('input[type=checkbox]');
  await act(()=>checkboxes[0].click()); // toggle enabled
- await act(()=>button('Save settings').click());
+ await act(()=>button('Save').click());
  await flush();
  assert.match(text(),/Settings changed since you loaded this page/);
  assert.ok(button('Retry'));
@@ -192,6 +192,63 @@ test('roles page allows site-wide role grant with all projects option',async()=>
   });
 });
 
+test('all projects does not force all work types when granting a role',async()=>{
+ await mount('Roles',key=>key==='admin:listEligibility'?{success:true,grants:[]}:{success:true,issueTypes:[{id:'2',name:'Requirement'}]});
+ await select(0,'*');
+ assert.equal(container.querySelectorAll('select')[1].disabled,false);
+ assert.ok([...container.querySelectorAll('select')[1].options].some(o=>o.value==='2'));
+ await select(1,'2');
+ assert.equal(container.querySelectorAll('select')[1].value,'2');
+});
+
+test('role membership can refresh after another administrator changes it',async()=>{
+ let grants=[];
+ await mount('Roles',()=>({success:true,grants}));
+ grants=[{elId:'a'.repeat(32),signerName:'New reviewer',role:'QA',issueTypeName:'All work item types',scope:'All projects',signerActive:true}];
+ await act(()=>window.dispatchEvent(new window.Event('focus')));await flush();
+ assert.match(text(),/New reviewer/);
+ assert.ok(button('Refresh roles'));
+});
+
+test('administrator membership refreshes when returning from another tab',async()=>{
+ let admins=[];
+ await mount('Admins',()=>({success:true,admins}));
+ admins=[{accountId:'new-admin',displayName:'New administrator',state:'ACTIVE',canRevoke:false}];
+ await act(()=>window.dispatchEvent(new window.Event('focus')));await flush();
+ assert.match(text(),/New administrator/);
+});
+
+test('administrator access can be checked again after another admin grants it',async()=>{
+ let granted=false;
+ await mount('AdminConsole',key=>key==='admin:check'?{success:true,isAdmin:granted,isJiraAdmin:false,needsBootstrap:false}:key==='admin:listProjects'?{success:true,projects}:{success:true,admins:[]});
+ granted=true;
+ assert.equal(Boolean(button('Check access again')),true);
+ await act(()=>button('Check access again').click());await flush();
+ assert.match(text(),/Add administrator/);
+});
+
+test('an older access refusal cannot replace a newly verified administrator grant',async()=>{
+ const pending=defer();let checks=0;
+ await mount('AdminConsole',key=>key==='admin:check'?(++checks===1?pending.promise:{success:true,isAdmin:true,needsBootstrap:false}):key==='admin:listProjects'?{success:true,projects}:{success:true,admins:[]});
+ await act(()=>window.dispatchEvent(new window.Event('focus')));await flush();
+ pending.resolve({success:true,isAdmin:false,isJiraAdmin:false,needsBootstrap:false});await flush();
+ assert.match(text(),/Add administrator/);
+});
+
+test('a late rule listing cannot replace the refreshed rule list',async()=>{
+ const pending=defer();let reads=0;
+ await mount('Transitions',()=>++reads===1?pending.promise:{success:true,transitions:[]});
+ await act(()=>window.dispatchEvent(new window.Event('focus')));await flush();
+ pending.resolve({success:true,transitions:[{ctId:'a'.repeat(32),meaning:'Outdated rule',requiredRole:'QA'}]});await flush();
+ assert.doesNotMatch(text(),/Outdated rule/);
+});
+
+test('disabled project settings describe the actual controlled-transition refusal',async()=>{
+ await mount('Settings',()=>({success:true,revision:null,config:{enabled:false,ai:{enabled:true}}}));
+ assert.doesNotMatch(text(),/validators are unaffected/);
+ assert.match(text(),/controlled transitions are blocked/);
+});
+
 test('a failed project directory read leaves administrator recovery accessible',async()=>{
  await mount('AdminConsole',key=>key==='admin:check'?{success:true,isAdmin:true,needsBootstrap:false}:key==='admin:listProjects'?{success:false,error:'Jira projects unavailable'}:{success:true,admins:[]});
  assert.match(text(),/Add administrator/);
@@ -260,7 +317,7 @@ const labelled=t=>[...container.querySelectorAll('label')].find(l=>l.textContent
 
 test('settings offers every preference that has a runtime consumer',async()=>{
  await mount('Settings',key=>key==='admin:getConfig'?liveConfig():{success:true,statuses:[]});
- for(const control of ['Content processing','Restore as','Notify watchers','Retries per field']){
+ for(const control of ['Change detection','Write restored values as','Notify watchers','Retries per field']){
   assert.ok(text().includes(control),`${control} is missing from the settings page`);
  }
 });
@@ -276,14 +333,13 @@ test('settings offers no control for a retired preference',async()=>{
 test('turning capture off says what stops, including the drift hold',async()=>{
  await mount('Settings',key=>key==='admin:getConfig'?liveConfig():{success:true,statuses:[]});
  await act(()=>labelled('Capture baselines').querySelector('input').click());await flush();
- assert.match(text(),/no longer captures a baseline/);
- assert.match(text(),/no longer held at transitions/);
- assert.match(text(),/still require a signature/);
+ assert.match(text(),/controlled transitions are blocked and no changes are detected/);
+ assert.match(text(),/Approval rules are not bypassed/);
 });
 
 test('restoration discloses that tree baselines ignore its settings',async()=>{
  await mount('Settings',key=>key==='admin:getConfig'?liveConfig():{success:true,statuses:[]});
- assert.match(text(),/includes child work items is always restored as the app/);
+ assert.match(text(),/A baseline with child work items is always restored by the app/);
 });
 
 test('settings sends each changed preference to the resolver unchanged',async()=>{
@@ -297,7 +353,7 @@ test('settings sends each changed preference to the resolver unchanged',async()=
  await act(()=>{actAs.value='user';actAs.dispatchEvent(new window.Event('change',{bubbles:true}));});
  await act(()=>labelled('Notify watchers').querySelector('input').click());
  await flush();
- await act(()=>button('Save settings').click());await flush();
+ await act(()=>button('Save').click());await flush();
  assert.deepEqual(saved.config.restore,{actAs:'user',notifyUsers:true});
  // Untouched preferences stay absent so the project keeps inheriting them.
  assert.equal(saved.config.ai,undefined);
@@ -309,7 +365,7 @@ test('settings refuses to save a retries value the resolver would reject',async(
  const retries=container.querySelector('input[type=number][max="10"]');
  assert.ok(retries,'retries input is missing');
  await act(()=>typeInto(retries,'50'));await flush();
- assert.equal(button('Save settings').disabled,true);
+ assert.equal(button('Save').disabled,true);
 });
 
 test('the ledger reports new activity without redrawing the record being read',async()=>{
@@ -403,7 +459,7 @@ test('attachment protection is chosen per project, never for the site',async()=>
  await mount('Settings',key=>{asked.push(key);return key==='admin:getConfig'?liveConfig():{success:true,statuses:[]};});
  assert.match(text(),/Attachment protection/);
  assert.match(text(),/set per project/);
- assert.equal(labelled('Lock attachment deletion'),undefined,'no lockdown control at site scope');
+ assert.equal(labelled('Only VAtlassian may delete attachments'),undefined,'no lockdown control at site scope');
  assert.equal(asked.includes('admin:getVaultStatus'),false);
 });
 
@@ -418,12 +474,12 @@ test('turning the lockdown on warns about a shared scheme and sends only that ch
  await select(0,'1');
  assert.match(text(),/Approved files are copied to the Forge Object Store/);
  assert.match(text(),/Default Permission Scheme/);
- assert.doesNotMatch(text(),/often shared/,'no warning before the box is ticked');
- await act(()=>labelled('Lock attachment deletion').querySelector('input').click());await flush();
- assert.match(text(),/often shared/);
- await act(()=>button('Check which projects share it').click());await flush();
- assert.match(text(),/Shared with: SEC/);
- await act(()=>button('Save settings').click());await flush();
+ assert.doesNotMatch(text(),/loses the delete permissions/,'no warning before the switch is turned on');
+ await act(()=>labelled('Only VAtlassian may delete attachments').querySelector('input').click());await flush();
+ assert.match(text(),/loses the delete permissions/);
+ await act(()=>button('Which projects share it?').click());await flush();
+ assert.match(text(),/Shared with SEC/);
+ await act(()=>button('Save').click());await flush();
  assert.deepEqual(saved.config,{vault:{lockAttachmentDeletion:true}});
  assert.match(text(),/2 grants removed/);
  assert.deepEqual(sharing.slice(0,2),[false,true]);
@@ -433,7 +489,7 @@ test('a lockdown applied earlier is disclosed even with the setting off',async()
  await mount('Settings',key=>key==='admin:getConfig'?liveConfig():key==='admin:getVaultStatus'
   ?vaultStatus({lockdown:{enabled:false,lockedAt:1727000000000,lockedSchemeId:'10000'}}):{success:true,statuses:[]});
  await select(0,'1');
- assert.match(text(),/Delete grants were removed from this project's scheme/);
+ assert.match(text(),/Delete permissions were removed on/);
  assert.match(text(),/stay removed until someone re-adds them/);
 });
 
@@ -442,8 +498,8 @@ test('turning the lockdown off says removed grants are not put back',async()=>{
   :key==='admin:getVaultStatus'?vaultStatus({lockdown:{enabled:true,lockedAt:1727000000000,lockedSchemeId:'10000'}}):{success:true,statuses:[]});
  await select(0,'1');
  assert.match(text(),/Locked since/);
- await act(()=>labelled('Lock attachment deletion').querySelector('input').click());await flush();
- assert.match(text(),/does not put removed grants back/);
+ await act(()=>labelled('Only VAtlassian may delete attachments').querySelector('input').click());await flush();
+ assert.match(text(),/does not give the delete permissions back/);
 });
 
 test('an unreadable vault status is reported, not shown as unprotected',async()=>{

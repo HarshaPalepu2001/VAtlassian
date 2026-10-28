@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { invoke } from '../../lib/bridge';
 import Button from '@atlaskit/button';
 import SectionMessage from '@atlaskit/section-message';
@@ -10,6 +10,7 @@ import {
   Badge, Card, EmptyState, Field, Name, Page, Person, Section, Select, Table
 } from '../../ui/primitives';
 import { formatDate } from '../../ui/format';
+import { useConfigurationUpdates } from '../../lib/configurationUpdates';
 
 type Project = { id: string; key: string; name: string };
 type IssueType = { id: string; name: string };
@@ -57,34 +58,39 @@ export default function RolesPage({ projects }: { projects: Project[] }) {
   const [selectedUser, setSelectedUser] = useState<JiraUser | null>(null);
 
   const [filter, setFilter] = useState('');
+  const grantsSequence = useRef(0);
 
   const loadGrants = async () => {
+    const seq = ++grantsSequence.current;
     setLoading(true); setLoaded(false); setGrants([]);
     try {
       const response = await invoke('admin:listEligibility', {}) as
         { success: boolean; grants?: EligibilityGrant[]; error?: string };
+      if (seq !== grantsSequence.current) return;
       if (response.success) {setGrants(response.grants ?? []);setLoaded(true);}
       else setMessage({ type: 'error', text: response.error || 'Failed to load approver eligibility.' });
     } catch (err: any) {
+      if (seq !== grantsSequence.current) return;
       setMessage({ type: 'error', text: err.message || 'Failed to load approver eligibility.' });
     } finally {
-      setLoading(false);
+      if (seq === grantsSequence.current) setLoading(false);
     }
   };
 
-  useEffect(() => { loadGrants(); }, []);
+  useEffect(() => { void loadGrants(); return () => { ++grantsSequence.current; }; }, []);
+  useConfigurationUpdates(() => { if (!saving) return loadGrants(); });
 
   useEffect(() => {
     let active = true;
     setIssueTypes([]);
-    if (projectId && projectId !== '*') invoke('admin:listIssueTypesForProject', { projectId })
+    if (projectId) invoke('admin:listIssueTypesForProject', { projectId })
       .then((r: any) => { assertResult(r); if (active) setIssueTypes(r.issueTypes ?? []); })
       .catch(e => { if (active) setMessage({ type: 'error', text: errorMessage(e) }); });
     return () => { active = false; };
   }, [projectId]);
 
   const isSiteWide = projectId === '*';
-  const complete = Boolean(loaded && selectedUser && projectId && (isSiteWide || issueTypeId) && role.trim());
+  const complete = Boolean(loaded && selectedUser && projectId && issueTypeId && role.trim());
 
   const handleGrant = async () => {
     setMessage(null);
@@ -96,7 +102,7 @@ export default function RolesPage({ projects }: { projects: Project[] }) {
     try {
       const result = await invoke('admin:grantEligibility', {
         targetAccountId: selectedUser!.accountId,
-        issueTypeId: isSiteWide ? '*' : issueTypeId,
+        issueTypeId,
         role: role.trim(),
         projectId: isSiteWide ? '*' : projectId
       }) as { success: boolean; error?: string };
@@ -144,7 +150,7 @@ export default function RolesPage({ projects }: { projects: Project[] }) {
   const deactivated = grants.filter((grant) => !grant.signerActive).length;
 
   return (
-    <Page eyebrow="Setup" title="Approver roles">
+    <Page eyebrow="Setup" title="Approver roles" actions={<Button isDisabled={saving || loading} onClick={loadGrants}>Refresh roles</Button>}>
       {message && (
         <div style={{ marginBottom: '20px' }}>
           <SectionMessage appearance={message.type}>
@@ -169,7 +175,7 @@ export default function RolesPage({ projects }: { projects: Project[] }) {
 
       <Card
         title="Grant a role"
-        subtitle="Eligibility is granted per work item type, so a Change Request approver is not automatically a Deviation approver."
+        subtitle="Add people to an existing role or name a new role. Choose the projects and work item types it covers."
       >
         <fieldset disabled={saving} style={{border:0,padding:0,margin:0,minWidth:0}}><div className="va-form-grid va-form-grid--wide">
           <UserPicker value={selectedUser} onChange={setSelectedUser} />
@@ -178,7 +184,7 @@ export default function RolesPage({ projects }: { projects: Project[] }) {
             <Select
               placeholder="Choose a project…"
               value={projectId}
-              onChange={(value) => { setProjectId(value); setIssueTypeId(''); }}
+              onChange={(value) => { setProjectId(value); setIssueTypeId(value === '*' ? '*' : ''); }}
               options={[{ value: '*', label: 'All projects (Site-wide)' }, ...projects.map((p) => ({ value: p.id, label: p.name }))]}
             />
           </Field>
@@ -186,20 +192,22 @@ export default function RolesPage({ projects }: { projects: Project[] }) {
           <Field label="Work item type">
             <Select
               placeholder="Choose a type…"
-              value={isSiteWide ? '*' : issueTypeId}
-              disabled={!projectId || isSiteWide}
+              value={issueTypeId}
+              disabled={!projectId}
               onChange={setIssueTypeId}
-              options={isSiteWide ? [{ value: '*', label: 'All work item types' }] : [{value:'*',label:'All work item types'},...issueTypes.map((t) => ({ value: t.id, label: t.name }))]}
+              options={[{value:'*',label:'All work item types'},...issueTypes.map((t) => ({ value: t.id, label: t.name }))]}
             />
           </Field>
 
-          <Field label="May sign as" hint="Must match the role named on the controlled transition, exactly.">
+          <Field label="May sign as" hint="Choose an existing role or enter a new one. Role names match controlled transitions exactly.">
             <Textfield
+              list="va-existing-roles"
               placeholder="QA Lead"
               value={role}
               maxLength={32}
               onChange={(e: any) => setRole(e.target.value)}
             />
+            <datalist id="va-existing-roles">{[...new Set(grants.map(g => g.role))].sort().map(name => <option key={name} value={name} />)}</datalist>
           </Field>
         </div>
 

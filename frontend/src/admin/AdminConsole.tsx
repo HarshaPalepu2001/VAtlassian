@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { view } from '@forge/bridge';
 import { invoke } from '../lib/bridge';
 import { Loading, Page } from '../ui/primitives';
@@ -19,6 +19,7 @@ import HealthPage from './pages/HealthPage';
 import ContentReviewPage from './pages/ContentReviewPage';
 import SettingsPage from './pages/SettingsPage';
 import TestManagementPage from './pages/TestManagementPage';
+import { useConfigurationUpdates } from '../lib/configurationUpdates';
 
 const NAV_ITEMS: { id: AdminRoute; label: string }[] = [
   { id: 'settings', label: 'Settings' },
@@ -41,6 +42,7 @@ export default function AdminConsole({ configure = false }: { configure?: boolea
   const [error, setError] = useState('');
   const [projectError, setProjectError] = useState('');
   const [loadingProjects, setLoadingProjects] = useState(false);
+  const accessSequence = useRef(0);
 
   useEffect(() => {
     if (configure) return;
@@ -71,17 +73,21 @@ export default function AdminConsole({ configure = false }: { configure?: boolea
     finally { setLoadingProjects(false); }
   }, []);
   const check = useCallback(async () => {
+    const seq = ++accessSequence.current;
     setError('');
     try {
       const r = assertResult(await invoke<Result & { isAdmin: boolean; isJiraAdmin?: boolean; needsBootstrap: boolean }>('admin:check'));
+      if (seq !== accessSequence.current) return;
       setAccess(r);
       if (r.isAdmin) void loadProjects();
-    } catch (e) { setAccess(null); setError(errorMessage(e)); }
+    } catch (e) { if (seq === accessSequence.current) { setAccess(null); setError(errorMessage(e)); } }
   }, [loadProjects]);
 
   useEffect(() => {
     void check();
+    return () => { ++accessSequence.current; };
   }, [check]);
+  useConfigurationUpdates(() => { if (!access?.isAdmin) return check(); });
 
   if (error) {
     return (
@@ -118,6 +124,7 @@ export default function AdminConsole({ configure = false }: { configure?: boolea
     return (
       <Page title="Administrator access required">
         <Notice>An existing VAtlassian administrator must grant access.</Notice>
+        <button className="va-button" onClick={check}>Check access again</button>
       </Page>
     );
   }

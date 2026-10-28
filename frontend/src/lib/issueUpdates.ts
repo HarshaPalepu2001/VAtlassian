@@ -26,7 +26,7 @@ export function subscribeIssueUpdates(refresh: (options: RefreshOptions) => void
   };
   window.addEventListener('focus', update);
   document.addEventListener('visibilitychange', update);
-  for (const event of ['JIRA_ISSUE_CHANGED', 'VA_ISSUE_CHANGED']) {
+  for (const event of ['JIRA_ISSUE_CHANGED', 'VA_ISSUE_CHANGED', 'VA_CONFIGURATION_CHANGED']) {
     events.on(event, update).then(subscription => {
       if (stopped) subscription.unsubscribe();
       else subscriptions.push(subscription);

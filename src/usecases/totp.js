@@ -2,6 +2,7 @@ import { enrol as makeEnrollment, provisioningUri } from '../lib/totp.js';
 import { enrolmentDecision, grantUsable } from '../lib/credentialRecovery.js';
 import { deviceStatus as statusOf, daysBetween } from '../lib/deviceCheck.js';
 import { verifyTotp } from '../lib/approval/totpVerification.js';
+import { needsUserConsent } from '../lib/errors.js';
 
 export function createTotpUsecases(deps) {
   function actor(context) {
@@ -11,6 +12,7 @@ export function createTotpUsecases(deps) {
   const safe = fn => async (args = {}) => {
     try { return await fn(args, actor(args.context)); }
     catch (e) {
+      if (needsUserConsent(e)) throw e;
       console.error('TOTP error:', e);
       return { success: false, error: 'Authenticator operation could not complete. Refresh and try again; contact your administrator if it persists.' };
     }
@@ -24,7 +26,7 @@ export function createTotpUsecases(deps) {
       // otherwise its only button is one the server will refuse.
       const needsGrant = state === 'ACTIVE' || state === 'LOCKED';
       const [grant, roster] = needsGrant
-        ? await Promise.all([deps.grant(accountId).catch(() => null), deps.administrators?.().catch(() => null) ?? null])
+        ? await Promise.all([deps.grant(accountId), deps.administrators?.().catch(() => null) ?? null])
         : [null, null];
       const usable = grantUsable(grant, deps.now());
       const others = Array.isArray(roster) ? roster.filter(a => a.accountId !== accountId) : null;
@@ -44,12 +46,14 @@ export function createTotpUsecases(deps) {
       const now = deps.now();
       const verdict = enrolmentDecision({credential,grant,now});
       if (!verdict.allow) return {success:false,error:verdict.error};
-      if (verdict.consumesGrant) {
-        if (!await deps.redeem(grant,now)) return {success:false,error:'That reset grant expired or was already used. Ask for a new reset.'};
-        await deps.audit({eventType:'CREDENTIAL_RESET_GRANT_REDEEMED',actorAccountId:accountId,payload:{previousState:credential.state}});
-      }
+      // Validate the server key and prepare the encrypted replacement before
+      // consuming the one-use permission. Configuration errors must not burn it.
       const enrollment = makeEnrollment({key:deps.key(1),keyVersion:1});
       try {
+        if (verdict.consumesGrant) {
+          if (!await deps.redeem(grant,now)) return {success:false,error:'That reset grant expired or was already used. Ask for a new reset.'};
+          await deps.audit({eventType:'CREDENTIAL_RESET_GRANT_REDEEMED',actorAccountId:accountId,payload:{previousState:credential.state}});
+        }
         if (!await deps.write(accountId,credential,enrollment.stored,now)) return {success:false,error:'Your credential changed during setup. Refresh and try again.'};
         await deps.audit({eventType:'TOTP_ENROLLED',actorAccountId:accountId,payload:{keyVersion:1}});
         return {success:true,uri:provisioningUri(enrollment.secretForQrCodeOnly,{accountLabel:accountId,issuer:'VAtlassian'})};
