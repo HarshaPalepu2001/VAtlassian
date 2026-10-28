@@ -73,8 +73,6 @@ const { default: RestoreStatus } = await import('../src/panel/sections/RestoreSt
 const { default: TransitionsPage } = await import('../src/admin/pages/TransitionsPage.tsx');
 const { restoreStateLabel } = await import('../src/panel/approvalModel.ts');
 const { default: WebAuthnPopup } = await import('../src/panel/WebAuthnPopup.tsx');
-await import('../../src/ui-kit/edit.jsx');
-const UiKitEdit = globalThis.uiKitEdit;
 const deviceAuth = await import('../src/panel/deviceAuth.ts');
 hooks.deregister();
 
@@ -373,59 +371,6 @@ test('CHALLENGE 3.2: TransitionsPage functional role updater preserves valid rol
 });
 
 // ── 4. UI Kit Missing evidenceHash Error Banner ───────────────────────────────
-
-test('CHALLENGE 4.1: UI Kit Edit surfaces error banner when evidenceHash is null or missing in drift', async () => {
-  const calls = [];
-  const fieldContext = {
-    extension: {
-      issue: { key: 'PROJ-101', id: '101' },
-      issueTransition: { id: '7' },
-      renderContext: 'issue-transition'
-    }
-  };
-
-  setup(async (key, payload) => {
-    calls.push([key, payload]);
-    if (key === 'signing:context') {
-      return {
-        issue: { key: 'PROJ-101', statusName: 'Review', summary: 'Critical Bug' },
-        actorName: 'Dr. Alice',
-        drift: { evidenceHash: null }, // Null evidence hash!
-        actions: [{
-          transitionId: '7',
-          meaning: 'Approved for Release',
-          requiredRole: 'QA',
-          toStatusName: 'Released',
-          toStatusId: '10',
-          eligible: true,
-          requiredAssurance: 'ESIGNATURE'
-        }]
-      };
-    }
-    return {};
-  }, { context: fieldContext });
-
-  await act(() => root.render(UiKitEdit));
-  await settle();
-
-  // Must render error banner
-  assert.match(text(), /Evidence hash could not be loaded for this work item\. Signing cannot proceed without verified content\./);
-
-  // Textfield must be disabled
-  const textfield = container.querySelector('.uk-textfield');
-  assert.ok(textfield, 'Textfield must exist');
-  assert.equal(textfield.disabled, true, 'Code input textfield must be disabled when evidenceHash is missing');
-
-  // Affirmation checkbox
-  const checkbox = container.querySelector('.uk-checkbox input');
-  if (checkbox) {
-    await act(() => checkbox.click());
-    await settle();
-    assert.equal(textfield.disabled, true, 'Textfield must remain disabled even after affirming when evidenceHash is null');
-  }
-
-  assert.ok(!calls.some(([k]) => k === 'approval:challenge'), 'approval:challenge must NEVER be called without evidenceHash');
-});
 
 // ── 5. Restoration Status Machine & Labels ───────────────────────────────────
 

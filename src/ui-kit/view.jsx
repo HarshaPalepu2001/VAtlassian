@@ -1,6 +1,6 @@
 /**
  * The `view` entry point of sig-signature-code. What is actually STORED in this
- * field is the signature id that src/ui-kit/edit.jsx obtained from
+ * field is the signature id that the signing form (frontend/src/field/ApprovalField.tsx) obtained from
  * panel:preauthorize — a 32-character hex receipt, never the code itself
  * (see the panel:preauthorize header in src/resolvers/panel.js for why).
  *

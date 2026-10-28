@@ -10,10 +10,10 @@
  * to sign the wrong transition with a meaning statement that belonged to that
  * other edge. Attesting to the wrong meaning is a critical compliance failure.
  *
- * THE FIELD'S IDENTITY IS THE DISAMBIGUATOR. An administrator places whichever
- * field matches the rule's required assurance on that transition's screen.
- * Resolving with surface: 'esignature-field' or 'device-field' narrows the
- * candidates using lib/journey.js's resolveActions().
+ * THE TRANSITION ID IS THE DISAMBIGUATOR. Both fields now mount the same
+ * Custom UI form, which resolves with surface: 'signature-field' and serves
+ * every assurance level; the exact transition id narrows the candidates to
+ * one before lib/journey.js's resolveActions() reads the rule.
  */
 import api from '@forge/api';
 import { load, respond, actorFrom, fail } from './panelAccess.js';

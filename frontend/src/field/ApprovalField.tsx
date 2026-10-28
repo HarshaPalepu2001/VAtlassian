@@ -1,19 +1,13 @@
 /**
- * THE TRANSITION-SCREEN SIGNING FORM, AS CUSTOM UI.
+ * THE TRANSITION-SCREEN SIGNING FORM — the one form behind the Electronic
+ * signature field.
  *
- * WHY THIS EXISTS ALONGSIDE src/ui-kit/edit.jsx. That field is UI Kit, which
- * renders declaratively on Atlassian's side: it has no DOM, no `window` and no
- * `navigator`, so `navigator.credentials.get()` cannot be called from it at
- * all. A biometric edge on that surface can only ever show a code box, which
- * the server then refuses as INSUFFICIENT_ASSURANCE. Custom UI runs in an
- * iframe, and the ceremony popup escapes it — see the permissions note in
- * manifest.yml.
- *
- * The two fields are separate on purpose. The authenticator-code path through
- * the UI Kit field is in use and is not disturbed by anything here; an
- * administrator puts whichever field on the transition screen matches the
- * assurance that edge requires. This one reads the requirement and serves
- * every level, so it is the safe default for a screen shared by several rules.
+ * It looks and reads like the signing sheet on the issue panel: what the
+ * signature means, who is signing, then the credential — an authenticator
+ * code, or a device check that opens its own small window. Both fields
+ * registered in manifest.yml mount this same form, so a signer meets one
+ * signing step whatever an administrator put on the screen. It is Custom UI
+ * because a device check needs `navigator.credentials`, which UI Kit lacks.
  *
  * ONE EXACT ACTION, NEVER A CHOICE. Jira has already chosen the transition:
  * `context.extension.issueTransition.id`. The server resolves the rule for
@@ -33,13 +27,14 @@ import { useEffect, useRef, useState } from 'react';
 import { invoke } from '../lib/bridge';
 import { view } from '@forge/bridge';
 import Button from '@atlaskit/button';
-import { Affirmation, CodeInput, Field, Loading } from '../ui/primitives';
-import { AssuranceChip, Notice } from '../ui/feedback';
+import { CodeInput, Field, Loading } from '../ui/primitives';
+import { Notice } from '../ui/feedback';
+import { Avatar } from '../ui/brand';
 import { approvalMode } from '../lib/assurance';
 import type { AssuranceLevel } from '../lib/assurance';
 import { assertResult, errorMessage } from '../lib/result';
 import type { Result } from '../lib/result';
-import { PROGRESS, captureFact, driftFact, transitionScopeLabel } from '../panel/approvalModel';
+import { PROGRESS, transitionScopeLabel } from '../panel/approvalModel';
 import { biometricStatus, confirmBiometric, enrolBiometric } from '../panel/deviceAuth';
 
 const CODE_LENGTH = 6;
@@ -86,7 +81,7 @@ function exactAction(state: SigningContext, transitionId: string): { action: Act
   const requiredRole = state.requiredRole ?? (state.transitions ?? []).find(t => t.requiredRole)?.requiredRole;
   const notEligible = state.blocker === 'NOT_ELIGIBLE_FOR_RULE' || (!state.blocker && (state.transitions ?? []).some(t => t.eligible === false));
   if (state.blocker === 'GATE_NOT_ENFORCED') return { action: null, blocker: 'The approval rule exists, but the VAtlassian validator is not attached to this transition in Jira. Ask a Jira administrator to re-attach it.' };
-  if (state.blocker === 'WRONG_FIELD_FOR_RULE') return { action: null, blocker: 'This transition is signed with an authenticator code. Ask an administrator to put the "Electronic Signature" field on this transition screen.' };
+  if (state.blocker === 'WRONG_FIELD_FOR_RULE') return { action: null, blocker: 'This signing form cannot carry out the method this transition requires. Ask an administrator to put the "Electronic signature" field on this transition screen.' };
   if (notEligible) {
     return { action: null, blocker: requiredRole ? `This transition is signed by ${requiredRole}. You do not hold the approver role on this work item.` : 'You do not hold the approver role this transition requires.' };
   }
@@ -108,7 +103,6 @@ export default function ApprovalField({ context }: { context?: { extension?: { i
   const [signerName, setSignerName] = useState<string | null>(null);
   const [evidenceHash, setEvidenceHash] = useState<string | undefined>();
   const [blocker, setBlocker] = useState('');
-  const [affirmed, setAffirmed] = useState(false);
   const [code, setCode] = useState('');
   const [device, setDevice] = useState<{ enrolled: boolean; usableHere: boolean } | null>(null);
   const [deviceNonce, setDeviceNonce] = useState(0);
@@ -127,14 +121,14 @@ export default function ApprovalField({ context }: { context?: { extension?: { i
     // Whatever this screen showed before is withdrawn, receipt included: a
     // token minted for one action must never travel with another.
     view.submit('');
-    setAction(null); setBlocker(''); setAffirmed(false); setCode(''); setSigned(''); setMessage(''); setFailed(false);
+    setAction(null); setBlocker(''); setCode(''); setSigned(''); setMessage(''); setFailed(false);
     if (!transitionId) {
       setBlocker(FAIL_CLOSED_MESSAGES.TRANSITION_ID_REQUIRED);
       setLoaded(true);
       return;
     }
     setLoaded(false);
-    invoke<SigningContext>('signing:context', { issueKey: contextKey, issueId: contextId, transitionId, surface: 'device-field' })
+    invoke<SigningContext>('signing:context', { issueKey: contextKey, issueId: contextId, transitionId, surface: 'signature-field' })
       .then(state => {
         if (!active) return;
         if (!state?.issue) {
@@ -219,68 +213,53 @@ export default function ApprovalField({ context }: { context?: { extension?: { i
     setCode(next);
     // A new code withdraws the previous attempt's refusal.
     if (failed) { setFailed(false); setMessage(''); }
-    if (next.length === CODE_LENGTH && affirmed && !signed) void record(next);
   }
 
   if (!loaded) return <Loading label="Loading this work item…" />;
 
   const deviceReady = mode !== 'biometric' || device === null || device.usableHere;
+  const canSign = Boolean(action) && !busy && deviceReady && (mode !== 'totp' || code.length === CODE_LENGTH);
   return (
-    <div className="va-stack">
-      <p className="va-secondary">
-        {issue?.key ? `${issue.key} — ${issue.summary ?? '(no summary)'}` : 'Approval'}
-      </p>
+    <section className="va-sign va-sign--field" aria-label="Electronic signature">
       <div role="status" aria-live="polite" className="va-secondary">{progress}</div>
       {message && <Notice danger={failed}>{message}</Notice>}
       {blocker && <Notice>{blocker}</Notice>}
 
-      {/* The exact action Jira is performing, read-only. There is no selector
-          on this surface, even when the issue has other eligible transitions. */}
-      {action && (
-        <dl className="va-stack va-stack--tight" style={{ margin: 0 }}>
-          <div className="va-row"><dt className="va-secondary">Transition</dt><dd style={{ margin: 0 }}>{transitionScopeLabel(action, issue?.statusName)}</dd></div>
-          <div className="va-row"><dt className="va-secondary">Role</dt><dd style={{ margin: 0 }}>{action.requiredRole ?? 'Any approver role'}</dd></div>
-          <div className="va-row"><dt className="va-secondary">Meaning</dt><dd style={{ margin: 0 }}>{action.meaning ?? 'Approved'}</dd></div>
-          <div className="va-row"><dt className="va-secondary">Authentication</dt><dd style={{ margin: 0 }}><AssuranceChip level={level} /></dd></div>
-          <div className="va-row"><dt className="va-secondary">Baseline</dt><dd style={{ margin: 0 }}>{captureFact(action)}</dd></div>
-          <div className="va-row"><dt className="va-secondary">Unapproved changes</dt><dd style={{ margin: 0 }}>{driftFact()}</dd></div>
-        </dl>
-      )}
+      {/* The exact action Jira is performing. There is no selector on this
+          surface, even when the issue has other eligible transitions. */}
+      {action && !signed && <>
+        <p className="va-sign__meaning">{action.meaning ?? 'Approved'}</p>
+        <p className="va-secondary">{[issue?.key, transitionScopeLabel(action, issue?.statusName)].filter(Boolean).join(' · ')}</p>
+        <div className="va-sign__signer">
+          <Avatar name={signerName} size={32} />
+          <div className="va-stack va-stack--tight">
+            <strong>{signerName ?? 'You'}</strong>
+            <span className="va-subtlest">{action.requiredRole ?? 'Approver'}</span>
+          </div>
+        </div>
+        {mode === 'biometric' && device && !device.usableHere && (
+          <Notice>
+            {device.enrolled
+              ? 'Your registered device cannot be used at this address. Register this browser to sign here.'
+              : 'This transition is signed with Face ID, Touch ID or Windows Hello. Register this device first.'}
+            {' '}<Button isDisabled={busy} onClick={() => void setupDevice()}>{busy ? progress : 'Register this device'}</Button>
+          </Notice>
+        )}
+        {mode === 'totp' && (
+          <Field label="Authenticator code">
+            <CodeInput value={code} onChange={onCode} disabled={busy} onSubmit={() => { if (canSign) void record(code); }} />
+          </Field>
+        )}
+        <p className="va-sign__fine">
+          {mode === 'biometric' ? 'A small window opens for Face ID, Touch ID or Windows Hello. ' : ''}
+          Signing records your name, the time and this meaning, and is the equivalent of your handwritten signature.
+        </p>
+        <div className="va-sign__actions">
+          <Button appearance="primary" isDisabled={!canSign} onClick={() => void record(code)}>{busy ? progress : 'Sign'}</Button>
+        </div>
+      </>}
 
-      {action && !signed && (
-        <>
-          {mode === 'biometric' && device && !device.usableHere && (
-            <Notice>
-              {device.enrolled
-                ? 'Your registered device cannot be used at this address. Register this browser to approve here.'
-                : 'This transition is confirmed with a device check. Register this device before approving.'}
-              {' '}<Button isDisabled={busy} onClick={() => void setupDevice()}>{busy ? progress : 'Set up biometric approval'}</Button>
-            </Notice>
-          )}
-
-          {action.capturesBaseline && <p className="va-secondary">This approval also records the configured test link rules. Where enabled, a Test owns its Verifies links and linked source approvals exclude those relationships.</p>}
-          <Affirmation checked={affirmed} onChange={setAffirmed} disabled={busy || !deviceReady}>
-            {`I, ${signerName ?? 'the signer'}, have reviewed ${issue?.key ?? 'this work item'} and I declare: ${action.meaning ?? 'Approved'}. I am signing as ${action.requiredRole ?? 'approver'} and I understand this electronic signature is the legally binding equivalent of my handwritten signature.`}
-          </Affirmation>
-
-          {affirmed && mode === 'totp' && (
-            <Field label="Authenticator code" hint="Checked here and never stored on this work item.">
-              <CodeInput value={code} onChange={onCode} disabled={busy} onSubmit={() => { if (code.length === CODE_LENGTH) void record(code); }} />
-            </Field>
-          )}
-
-          {affirmed && mode === 'biometric' && (
-            <div className="va-row">
-              <Button appearance="primary" isDisabled={busy || !deviceReady} onClick={() => void record('')}>
-                {busy ? progress : 'Confirm with your device'}
-              </Button>
-              <span className="va-secondary">Opens a separate window for Face ID, Touch ID, or Windows Hello.</span>
-            </div>
-          )}
-        </>
-      )}
-
-      {signed && <p className="va-secondary">Select the transition button below to complete it.</p>}
-    </div>
+      {signed && <p className="va-secondary">Signed. Select the transition button below to finish.</p>}
+    </section>
   );
 }

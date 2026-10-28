@@ -86,6 +86,15 @@ test('the biometric field is never offered an authenticator-code rule', () => {
   assert.equal(blocker, null);
 });
 
+test('the one electronic signature field serves a code rule and a device rule alike', () => {
+  // Both fields mount the same Custom UI form, which can take a code or open
+  // the device-check window; the exact transition id, not the field, picks the rule.
+  const { actions, blocker } = atInReview({ surface: 'signature-field' });
+
+  assert.equal(blocker, null);
+  assert.deepEqual(actions.map((a) => a.requiredAssurance).sort(), ['BIOMETRIC', 'ESIGNATURE']);
+});
+
 test('a rule reachable from any status says so, rather than posing as a step', () => {
   const { actions } = atInReview({ surface: 'device-field' });
 

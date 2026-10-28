@@ -34,6 +34,7 @@ function App() {
   let screen: React.ReactNode;
   if (isReviewContext(context.extension.modal)) screen = <ReviewWindow issueKey={context.extension.modal.issueKey} tab={context.extension.modal.tab} />;
   else switch (context.moduleKey) {
+    case 'va-approval-field':
     case 'va-device-approval-field': screen = <ApprovalField context={context as any} />; break;
     case 'va-panel': screen = <IssuePanel />; break;
     case 'va-test': screen = <TestPanel />; break;

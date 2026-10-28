@@ -40,10 +40,14 @@ const SURFACE_ASSURANCE = Object.freeze({
   // it at all. A biometric edge on this surface could only ever show a code
   // box, which the server then refuses as INSUFFICIENT_ASSURANCE.
   'esignature-field': ['ESIGNATURE'],
-  // Custom UI, mounted from the "Biometric Authentication" field. An
-  // administrator puts this field on the screen for a biometric rule, so its
-  // presence IS the statement of which rule this screen is for.
-  'device-field': ['BIOMETRIC']
+  // Custom UI, mounted from the retired "Biometric Authentication" field
+  // before both fields showed one form. Kept for any caller still naming it.
+  'device-field': ['BIOMETRIC'],
+  // THE ONE ELECTRONIC SIGNATURE FIELD. Custom UI, so it can open the device
+  // ceremony window as well as take a code: it serves every level, like the
+  // panel. The exact transition id, not the field, says which rule applies
+  // (usecases/signing.js narrows to it before this table is read).
+  'signature-field': null
 });
 
 export const BLOCKER = Object.freeze({
@@ -98,7 +102,7 @@ function describeAction(transition, gate) {
  *                                      Parallel array of boolean|undefined; `undefined` means
  *                                      "could not be checked" and is treated as enforced —
  *                                      see the note on failing open below.
- * @param {string}   input.surface      'panel' | 'queue' | 'esignature-field' | 'device-field'
+ * @param {string}   input.surface      'panel' | 'queue' | 'signature-field' | 'esignature-field' | 'device-field'
  *
  * @returns {{actions: Array, blocker: string|null, gatedCount: number}}
  *   `actions` is empty or every entry is fully signable by this person on this

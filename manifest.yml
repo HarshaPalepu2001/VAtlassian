@@ -84,10 +84,16 @@ modules:
       view:
         resource: main-ui
   jira:customField:
+    # ONE SIGNING FORM, WHICHEVER FIELD IS ON THE SCREEN. Both fields mount the
+    # same Custom UI form (frontend/src/field/ApprovalField.tsx): it takes an
+    # authenticator code or opens the device-check window, whichever the rule
+    # for that exact transition requires. Custom UI is required for the second:
+    # UI Kit has no `navigator`, so it can never run a WebAuthn ceremony.
     - key: va-approval-field
-      name: Electronic Signature
-      description: Confirm this transition in the VAtlassian approval form. Never
-        enter an authenticator code in a plain Jira text field.
+      name: Electronic signature
+      description: The VAtlassian signing form for a controlled transition. Put it
+        on the transition screen; it asks for an authenticator code or a device
+        check, whichever the rule requires.
       type: string
       resolver:
         function: panel-resolver
@@ -100,27 +106,17 @@ modules:
             — see the VAtlassian panel'"
           export: true
       edit:
-        resource: ui-kit-approval-edit
-        render: native
+        resource: main-ui
         experience: [ issue-transition ]
 
-    # THE SECOND FIELD IS NOT A DUPLICATE. The field above is UI Kit, which
-    # renders declaratively on Atlassian's side and has no DOM, no `window`
-    # and no `navigator` — `navigator.credentials.get()` cannot be called
-    # from it, so it can never serve an edge whose required assurance is
-    # BIOMETRIC. This one is Custom UI, runs in an iframe, and can open the
-    # ceremony popup (see the permissions note further down).
-    #
-    # An administrator puts whichever field matches the assurance that
-    # transition requires on its screen. This one reads the requirement and
-    # serves every level, so it is the safe choice for a screen shared by
-    # several rules; the UI Kit field above is left exactly as it is so the
-    # authenticator-code path already in use is not disturbed.
+    # RETIRED: the former "Biometric Authentication" field. It stays registered
+    # so the receipts stored in it, and screens that still carry it, keep
+    # working; it shows exactly the same form as the field above. Swap it for
+    # "Electronic signature" on transition screens, then remove this module.
     - key: va-device-approval-field
-      name: Biometric Authentication
-      description: Signing form for controlled transitions, including biometric
-        device checks. Put this on the transition screen for any rule whose
-        required assurance is Biometric approval.
+      name: Electronic signature (retired)
+      description: Replaced by Electronic signature, which shows the same form.
+        Remove this field from transition screens.
       type: string
       resolver:
         function: panel-resolver
@@ -267,8 +263,6 @@ resources:
     path: frontend/dist
   - key: ui-kit-approval-view
     path: src/ui-kit/view.jsx
-  - key: ui-kit-approval-edit
-    path: src/ui-kit/edit.jsx
 permissions:
   # THIS BLOCK FORFEITS RUNS ON ATLASSIAN. It is here for one reason: biometric
   # approval needs navigator.credentials.get(), which a Forge Custom UI iframe
