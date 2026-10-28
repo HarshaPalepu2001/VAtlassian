@@ -60,25 +60,29 @@ export default function RolesPage({ projects }: { projects: Project[] }) {
   const [filter, setFilter] = useState('');
   const grantsSequence = useRef(0);
 
-  const loadGrants = async () => {
+  // A background refresh keeps the grants and the form usable, replacing the
+  // list only on success; it never disables Grant while the person is typing.
+  const loadGrants = async (quiet?: unknown) => {
+    const background = quiet === true;
     const seq = ++grantsSequence.current;
-    setLoading(true); setLoaded(false); setGrants([]);
+    if (!background) { setLoading(true); setLoaded(false); setGrants([]); }
     try {
       const response = await invoke('admin:listEligibility', {}) as
         { success: boolean; grants?: EligibilityGrant[]; error?: string };
       if (seq !== grantsSequence.current) return;
       if (response.success) {setGrants(response.grants ?? []);setLoaded(true);}
-      else setMessage({ type: 'error', text: response.error || 'Failed to load approver eligibility.' });
+      else if (!background) setMessage({ type: 'error', text: response.error || 'Failed to load approver eligibility.' });
     } catch (err: any) {
-      if (seq !== grantsSequence.current) return;
+      if (seq !== grantsSequence.current || background) return;
       setMessage({ type: 'error', text: err.message || 'Failed to load approver eligibility.' });
     } finally {
-      if (seq === grantsSequence.current) setLoading(false);
+      if (seq === grantsSequence.current && !background) setLoading(false);
     }
   };
 
   useEffect(() => { void loadGrants(); return () => { ++grantsSequence.current; }; }, []);
-  useConfigurationUpdates(() => { if (!saving) return loadGrants(); });
+  // Quiet over a loaded page; during a load it simply supersedes it.
+  useConfigurationUpdates(() => { if (!saving) return loadGrants(!loading); });
 
   useEffect(() => {
     let active = true;

@@ -538,3 +538,15 @@ test('credentials say they cover authenticator apps and not biometric devices',a
  assert.match(text(),/Locked/);
  assert.doesNotMatch(text(),/PENDING_CONFIRM|LOCKED/);
 });
+
+test('a background refresh keeps the roles list and the Grant form usable, and only replaces the list on success',async()=>{
+ let grants=[{elId:'a'.repeat(32),signerName:'First reviewer',role:'QA',issueTypeName:'All work item types',scope:'All projects',signerActive:true}];
+ const later=defer();let reads=0;
+ await mount('Roles',key=>key==='admin:listEligibility'?(++reads===1?{success:true,grants}:later.promise):{success:true,issueTypes:[]});
+ await act(()=>window.dispatchEvent(new window.Event('focus')));await flush();
+ assert.match(text(),/First reviewer/,'the list stays on screen while it refreshes');
+ assert.doesNotMatch(text(),/Eligibility is unavailable/);
+ assert.equal(button('Refresh roles').disabled,false,'nothing is locked by a background refresh');
+ later.resolve({success:false,error:'Temporary failure'});await flush();
+ assert.match(text(),/First reviewer/,'a failed background read keeps what was shown');
+});

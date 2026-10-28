@@ -22,9 +22,11 @@ export default function CredentialsPage() {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const sequence = useRef(0);
-  const load = useCallback(async () => {
+  // A background refresh keeps the lists on screen and replaces them only on success.
+  const load = useCallback(async (quiet?: unknown) => {
+    const background = quiet === true;
     const seq = ++sequence.current;
-    setLoading(true); setError(''); setGrants(null); setCredentials(null);
+    if (!background) { setLoading(true); setError(''); setGrants(null); setCredentials(null); }
     try {
       const [g, c] = await Promise.all([
         invoke<Result & { grants: Grant[] }>('admin:listCredentialResetGrants'),
@@ -32,11 +34,12 @@ export default function CredentialsPage() {
       ]);
       if (seq !== sequence.current) return;
       assertResult(g); assertResult(c); setGrants(g.grants); setCredentials(c.credentials); setHasMore(c.hasMore === true);
-    } catch (e) { if (seq === sequence.current) setError(errorMessage(e)); }
-    finally { if (seq === sequence.current) setLoading(false); }
+    } catch (e) { if (seq === sequence.current && !background) setError(errorMessage(e)); }
+    finally { if (seq === sequence.current && !background) setLoading(false); }
   }, []);
   useEffect(() => { void load(); return () => { ++sequence.current; }; }, [load]);
-  useConfigurationUpdates(() => { if (!busy) return load(); });
+  // Quiet over a loaded page; during a load it simply supersedes it.
+  useConfigurationUpdates(() => { if (!busy) return load(!loading); });
   async function issue() {
     if (!person || busy) return;
     setBusy(true); setError(''); setMessage('');

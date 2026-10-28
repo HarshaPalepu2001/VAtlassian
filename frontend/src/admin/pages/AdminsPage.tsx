@@ -13,9 +13,10 @@ export default function AdminsPage({bootstrap=false,onBootstrap}:{bootstrap?:boo
  const [loading,setLoading]=useState(!bootstrap);const [loaded,setLoaded]=useState(false);
  const [admins,setAdmins]=useState<Admin[]>([]);const [person,setPerson]=useState<JiraUser|null>(null);const [busy,setBusy]=useState(false);const [message,setMessage]=useState('');const [error,setError]=useState('');
  const sequence=useRef(0);
- const load=useCallback(async()=>{const seq=++sequence.current;setLoading(true);setError('');try{const r=assertResult(await invoke<Result&{admins:Admin[]}>('admin:listAdmins'));if(seq!==sequence.current)return;setAdmins(r.admins);setLoaded(true);}catch(e){if(seq!==sequence.current)return;setLoaded(false);setError(errorMessage(e));}finally{if(seq===sequence.current)setLoading(false);}},[]);
+ // A background refresh keeps the roster on screen and replaces it only on success.
+ const load=useCallback(async(quiet?:unknown)=>{const background=quiet===true;const seq=++sequence.current;if(!background){setLoading(true);setError('');}try{const r=assertResult(await invoke<Result&{admins:Admin[]}>('admin:listAdmins'));if(seq!==sequence.current)return;setAdmins(r.admins);setLoaded(true);}catch(e){if(seq!==sequence.current||background)return;setLoaded(false);setError(errorMessage(e));}finally{if(seq===sequence.current&&!background)setLoading(false);}},[]);
  useEffect(()=>{if(!bootstrap)void load();return()=>{++sequence.current;};},[bootstrap,load]);
- useConfigurationUpdates(()=>{if(!busy&&!bootstrap)return load();});
+ useConfigurationUpdates(()=>{if(!busy&&!bootstrap)return load(!loading);});
  async function run(action:()=>Promise<Result>,done?:()=>void){setBusy(true);setError('');setMessage('');try{const r=assertResult(await action());setMessage(r.message??r.note??'Change saved.');done?.();if(!bootstrap)await load();}catch(e){setError(errorMessage(e));}finally{setBusy(false);}}
  return <Page eyebrow="Setup" title="Administrators"><div className="va-stack">{error&&<Notice danger>{error}{!bootstrap&&<Button isDisabled={busy||loading} onClick={load}>Retry</Button>}</Notice>}{message&&<Notice>{message}</Notice>}
   {bootstrap?<Card title="Claim the first administrator role"><p>A Jira administrator can initialize access to VAtlassian.</p><Button appearance="primary" isDisabled={busy} onClick={()=>run(()=>invoke<Result>('admin:bootstrap'),onBootstrap)}>Claim administrator role</Button></Card>:<>

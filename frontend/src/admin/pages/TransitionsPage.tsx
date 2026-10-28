@@ -109,27 +109,30 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
   const [availableRoles, setAvailableRoles] = useState<string[]>([]);
   const listSequence = useRef(0);
 
-  const loadTransitions = async () => {
+  // A background refresh keeps the rules on screen and replaces them only on success.
+  const loadTransitions = async (quiet?: unknown) => {
+    const background = quiet === true;
     const seq = ++listSequence.current;
-    setLoading(true); setLoaded(false); setTransitions([]);
+    if (!background) { setLoading(true); setLoaded(false); setTransitions([]); }
     try {
       const response = await invoke('admin:listControlledTransitions') as
         { success: boolean; transitions?: ControlledTransition[]; error?: string };
       if (seq !== listSequence.current) return;
 
       if (response.success) {setTransitions(response.transitions ?? []);setLoaded(true);}
-      else setMessage({ type: 'error', text: response.error || 'Failed to load controlled transitions.' });
+      else if (!background) setMessage({ type: 'error', text: response.error || 'Failed to load controlled transitions.' });
     } catch (err: any) {
-      if (seq !== listSequence.current) return;
+      if (seq !== listSequence.current || background) return;
       setMessage({ type: 'error', text: err.message || 'Failed to load data.' });
     } finally {
-      if (seq === listSequence.current) setLoading(false);
+      if (seq === listSequence.current && !background) setLoading(false);
     }
   };
 
   useEffect(() => { void loadTransitions(); return () => { ++listSequence.current; }; }, []);
   useConfigurationUpdates(() => {
-    if (!saving) { setRolesRefresh(v => v + 1); return loadTransitions(); }
+    // Quiet over a loaded page; during a load it simply supersedes it.
+    if (!saving) { setRolesRefresh(v => v + 1); return loadTransitions(!loading); }
   });
 
   useEffect(() => {
