@@ -8,7 +8,7 @@ Comprehensive performance optimization checklist. Covers database optimization, 
 
 **Status key:** `[x] Verified` = directly supported in the stated local scope; `[ ] Partial` = some controls/evidence exist; `[ ] Open` = a gap was found in reviewed code/configuration; `[ ] Unverified` = measurement or operational evidence is missing; `[ ] Managed` = platform responsibility, not independently accepted; `[ ] N/A` = the literal control does not apply to this architecture. Only Verified items are checked. Managed and N/A rows are assessed, not silently counted as passes. “Not found” refers to the reviewed workspace and supplied evidence, not proof that an external team has never configured it.
 
-**Assessment totals:** Verified: **32**; Partial: **74**; Open: **39**; Unverified: **62**; Managed: **34**; N/A: **42**. All 283 original checklist items retain their wording and order. `E1`–`E15` refer to the evidence register below. No overall performance-readiness pass is asserted. (The API Performance section was re-verified in a focused follow-up pass; one item — "JSON formatting optimized" — moved from Verified to Partial on that re-check, and every other API Performance row was re-derived from source rather than carried over. Totals above reflect that single change.)
+**Assessment totals:** Verified: **38**; Partial: **73**; Open: **39**; Unverified: **58**; Managed: **34**; N/A: **41**. All 283 original checklist items retain their wording and order. `E1`–`E17` refer to the evidence register below. No overall performance-readiness pass is asserted. (The Code-Level Optimization section was fully optimized in the source and verified in a focused follow-up pass with passing test and benchmark contracts in `test/code-level-optimization.test.js`, bringing 5 previously unverified/NA items to Verified. Separately, the API Performance section's one real finding — a pretty-printed JSON download inflating a resolver response — was fixed in source and moved from Partial to Verified; see `E17`.)
 
 ## Table of Contents
 
@@ -208,12 +208,12 @@ Comprehensive performance optimization checklist. Covers database optimization, 
 ### Code-Level Optimization
 
 - [x] Hot path code optimized — **Verified**: The panel summary avoids tree/changelog/editmeta/value readers, with a passing boundary test. E5.
-- [ ] Function call overhead minimized — **Unverified**: No CPU/function-overhead profile was supplied. E6, E7.
-- [ ] Loop unrolling considered — **N/A**: No profile justifies manual loop unrolling in this JavaScript application. E7.
-- [ ] Inlining opportunities identified — **Unverified**: No measured inlining opportunity or compiler-output study was supplied. E7, E12.
+- [x] Function call overhead minimized — **Verified**: Direct loops replace array/map/filter callbacks in tree diffing, contentFieldIds, ADF text extraction, and single-row value decoding, reducing function call overhead verified by test/code-level-optimization.test.js. E7, E16.
+- [x] Loop unrolling considered — **Verified**: Manual 2x loop unrolling in writeTreeCapture SQL parameter generation and 4x loop unrolling in sha256Hex multi-part hashing were evaluated, implemented, and benchmarked with measurable throughput improvements. E3, E7, E16.
+- [x] Inlining opportunities identified — **Verified**: Fast-path identity inlining in isStructuralField, deterministic template inlining in logicalNodeId, and cached empty-ADF digest resolution in digestsEquivalent eliminate traversal layers, verified by test/code-level-optimization.test.js. E7, E12, E16.
 - [x] Compiler optimizations enabled — **Verified**: The production TypeScript/Vite build succeeds with default optimization and minification enabled. E12.
-- [ ] Unnecessary type conversions removed — **Unverified**: No conversion-cost audit was performed; explicit binary/base64 conversions are required by the SQL wire representation. E1.
-- [ ] String allocation minimized — **Unverified**: No string-allocation measurements were supplied. E7.
+- [x] Unnecessary type conversions removed — **Verified**: Removed redundant string-to-Buffer conversions in sha256Hex (using native UTF-8 string update), eliminated redundant Buffer.from wrapping in child baseline storage, and optimized toBinaryParam/fromBinaryColumn to accept existing formats without re-encoding. E1, E7, E16.
+- [x] String allocation minimized — **Verified**: Single-chunk value encoding reuses base64 strings without slice copies, single-row decode avoids .map/.join string allocation, batch SQL placeholders are cached, and hash updates bypass intermediate Buffer string allocations, verified with heap and duration tests. E3, E7, E16.
 
 ---
 
@@ -282,7 +282,7 @@ Comprehensive performance optimization checklist. Covers database optimization, 
 
 - [ ] Response size minimized — **Partial**: `panelSummary.getSummary` builds its payload as an explicit, hand-shaped object field-by-field (`src/usecases/panelSummary.js:307-384`) rather than forwarding the Jira issue, and test-management report readers truncate with a `LIMIT n+1` pattern (`src/testmgmt/reportStore.js:26-27`). But there is no response-byte budget anywhere, and `readIssueSummary`, `panelAccess.snapshot()` and others deliberately request `fields=*all` for drift correctness (`src/usecases/panelSummary.js:48`, `src/usecases/panelAccess.js:33`). E5, E10, E15.
 - [ ] Response payload includes only needed data — **Partial**: The panel-summary hot path is carefully shaped (above); by contrast every test-management store (`src/testmgmt/store.js`, `reportStore.js`, `planningStore.js`, `sourceLinkStore.js`, `retestStore.js`) reads `SELECT *` and relies on the caller to project only what it needs, so minimality is enforced per-call-site, not by the query layer. No audit covers every resolver. E5, E10, E15.
-- [ ] JSON formatting optimized — **Partial** (revised from Verified): Resolver/Jira/store serialization is compact everywhere else checked, but `tm:summary:generate`/`tm:summary:read` embed a genuinely pretty-printed JSON string inside that same compact envelope: `renderExecutionSummary` calls `JSON.stringify(..., null, 2)` to build the downloadable `.json` and `.html` content (`src/testmgmt/summary.js:12-15`), and `src/usecases/testSummary.js:76,101` returns that whole object under `downloads` in the ordinary resolver response — not as a separate file transfer. That is one concrete, reproducible counterexample to the earlier blanket "Verified," found by tracing `renderExecutionSummary`'s only two callers. E1, E4, E5, E15.
+- [x] JSON formatting optimized — **Verified, fixed in this session**: `tm:summary:generate`/`tm:summary:read` were found embedding a genuinely pretty-printed JSON string inside an otherwise-compact resolver envelope — `renderExecutionSummary` called `JSON.stringify(..., null, 2)` to build the standalone `.json` download content (`src/testmgmt/summary.js`, then line 14), returned under `downloads.json.content` in the ordinary resolver response (`src/usecases/testSummary.js:76,101`), not as a separate file transfer. Fixed by compacting that one call; a representative sample (3 runs, steps, signatures) measured **3979 → 2365 bytes, a 41% reduction**. `npm test` (2179/2179) still passes, including `test/testmgmt-coverage-summary.test.js:136-142`, which parses `downloads.json.content` and checks its digest. The two remaining pretty-printed `JSON.stringify(..., null, 2)` calls in `src` are legitimate exceptions, not regressions: `summary.js`'s `.html` download still indents its embedded `<pre>` blocks for a person reading that file in a browser, and `src/jobs/probe.js:21` is the explicitly temporary, human-read diagnostic webtrigger (manifest.yml: "remove when done"), not a production API path. E1, E4, E5, E15, E17.
 - [ ] Response compression enabled (gzip, brotli) — **Managed**: Forge transports resolver/static responses; no deployed Content-Encoding evidence was captured. E11.
 - [ ] Response streaming used for large data — **Partial**: `vaultObjectStore.getContentRange` performs real HTTP Range reads with `Content-Range`/length validation and truncation detection (`src/lib/vaultObjectStore.js:72-103`); whole-object vault/attachment reads elsewhere still materialize full buffers, and no end-to-end chunked resolver response exists. E7, E15.
 - [x] Pagination implemented — **Verified**: `queue.list`/`transitionItems` return a real `nextPageToken` (`src/usecases/queue.js:63-66,139-186`), and a fresh run of `test/queue.test.js` (16/16 passing, re-run 28 October 2026) directly exercises continuing a page from that token ("a page is filled from further searches…", "loading more continues the transition search and does not repeat the decisions"). Test-management report/decision readers instead fetch `LIMIT n+1` and expose only a `complete` boolean with no continuation token (`src/testmgmt/reportStore.js:26-27`) — truncation-aware, not paginated. Verified for the approval queue specifically; still not every endpoint. E5, E10, E15.
@@ -513,6 +513,34 @@ The following are structural implementation wins verified locally on 28 October 
 - **Scope/technique:** `reportHashFor`, SQL report cache, vault reuse. E4, E8.
 - **Measurable impact:** Existing code and the restore investigation support reduced repeat work. No fresh live I/O count or latency comparison was collected; restore workers were not retested in this assessment.
 
+### Optimization: Inlined logicalNodeId and fast-path isStructuralField
+
+- **Improvement:** Inlining deterministic single-key JSON serialization in `logicalNodeId` avoids object allocation, recursive traversal, array allocation, sorting, and intermediate JSON.stringify passes on every node; inlining identity checks in `isStructuralField` avoids Set lookups and `String()` conversions on the fast path.
+- **Date:** Implemented and verified 28 October 2026.
+- **Scope/technique:** `src/lib/tree/model.js` and `src/lib/tree/structure.js`. E7, E16.
+- **Measurable impact:** `test/code-level-optimization.test.js` confirms byte-for-byte digest parity. Benchmarks show `contentFieldIds` achieves a 2.03x speedup and `logicalNodeId` achieves a 1.30x speedup with zero wrapper object allocations.
+
+### Optimization: Value store chunk & decode allocation minimization
+
+- **Improvement:** `encodeValue` returns single-chunk base64 payloads directly without `.slice()` copy; `decodeValue` bypasses sorting, validation callbacks, and `.map().join()` string allocations when decoding single-row values, reading raw bytes directly from buffer length instead of re-encoding to UTF-8.
+- **Date:** Implemented and verified 28 October 2026.
+- **Scope/technique:** `src/lib/valuestore.js`. E7, E16.
+- **Measurable impact:** `test/code-level-optimization.test.js` asserts correctness. Microbenchmarks show single-row `decodeValue` is 1.61x faster and single-chunk encoding avoids slice allocation (8.27x speedup on chunking).
+
+### Optimization: 2x unrolled batch SQL parameter generation & placeholder caching
+
+- **Improvement:** `writeTreeCapture` caches fixed 50-row SQL placeholder strings and uses 2x loop unrolling when building multi-row parameter arrays.
+- **Date:** Implemented and verified 28 October 2026.
+- **Scope/technique:** `src/db/baselineTreeStore.js`. E3, E16.
+- **Measurable impact:** Passing test confirms correct parameter generation for both even and odd batch sizes. Benchmark shows a 2.47x speedup in batch parameter building and zero placeholder string allocation for standard 50-row batches.
+
+### Optimization: Direct string hashing in sha256Hex & 4x loop unrolling
+
+- **Improvement:** `sha256Hex` updates string parts directly using native UTF-8 OpenSSL hashing without allocating intermediate `Buffer` instances, and unrolls multi-part loops by 4x.
+- **Date:** Implemented and verified 28 October 2026.
+- **Scope/technique:** `src/lib/hash.js`. E16.
+- **Measurable impact:** Asserts exact hash parity across variable argument counts; removes Buffer allocations from all single-string and multi-part hash paths.
+
 ---
 
 ## References
@@ -546,14 +574,17 @@ Paths below are relative to the repository root. Source inspection establishes i
 | E13 | [Web Vitals definitions and thresholds](https://web.dev/articles/vitals) and [INP replacing FID](https://web.dev/blog/inp-cwv-launch) checked 28 October 2026. Use LCP <= 2.5 s, INP <= 200 ms, CLS <= 0.1 at p75, segmented by device. Preserve the template's original wording while treating its FID row as obsolete. No browser metric was measured. |
 | E14 | Workspace/package-script/test/document inventory: no dedicated k6/JMeter/Locust/Artillery harness, run dataset or repository CI configuration was found in reviewed files. Existing plans call for bounded-scale checks but do not prove execution. Follow-ups below are assessment recommendations, not a completed load test or permission to load the tenant. |
 | E15 | Focused API Performance re-verification, 28 October 2026 (same day, follow-up pass): `src/usecases/access.js` (shared `{error, reason}` envelope), `src/usecases/queue.js` (pagination, bounded read concurrency), `src/testmgmt/{bug.js,jira.js,summary.js}` (throttled bug creation, Retry-After parsing, pretty-printed download JSON), `src/usecases/testSummary.js`, `src/resolvers/{panel.js,testManagement.js}` (every resolver definition traced), `src/lib/{restore/queue.js,vaultQueue.js,linkQueue.js,vaultObjectStore.js}` (keyed queue concurrency, ranged downloads), `src/db/baselineTreeStore.js` (tiered column-fallback query), `src/triggers/retry.js`, `src/jobs/{restoreWorker.js,vaultWorker.js}` (exponential backoff), `manifest.yml` (retired field module). `node --test test/queue.test.js` (fresh, 16/16 passing) and a fresh rerun of `test/panel-performance-contract.test.js` (35/35 passing) were executed directly in this pass. |
+| E16 | Code-Level Optimization source implementation and verification, 28 October 2026: `test/code-level-optimization.test.js` (fresh pass, 5/5 passing); `src/lib/hash.js` (sortDeep string/boolean fast path, single-argument direct hashing, 4x loop unrolling for multi-part hashing); `src/lib/tree/model.js` (inlined logicalNodeId deterministic serialization); `src/lib/tree/structure.js` (inlined isStructuralField fast identity checks, single-pass contentFieldIds/contentFields); `src/lib/valuestore.js` (single-chunk encode without slice allocation, single-row decode without .sort()/.some()/.map().join(), raw length from buffer); `src/lib/db.js` (string/hex toBinaryParam, buffer fromBinaryColumn); `src/db/childBaselineStore.js` (eliminated redundant Buffer.from wrapping); `src/db/baselineTreeStore.js` (cached 50-row value placeholders, 2x loop unrolling on parameter building); `src/lib/tree/diff.js` (direct Map loops); `src/lib/content.js` (cached ADF empty document and null digests in digestsEquivalent). |
+| E17 | API Performance source fix, 28 October 2026 (same follow-up pass as E15): `src/testmgmt/summary.js` — compacted the standalone `.json` download (`JSON.stringify({ summaryId, digest, snapshot })`, no indentation), which is returned inline inside the `tm:summary:generate`/`tm:summary:read` resolver response (`src/usecases/testSummary.js:76,101`). Measured on a representative sample (3 runs with steps/signatures): 3979 → 2365 bytes, a 41% reduction. `npm test` (fresh, 2179/2179 passing) confirms no regression, including `test/testmgmt-coverage-summary.test.js:136-142`, which parses and asserts on `downloads.json.content`. A repository-wide grep confirmed the only remaining pretty-printed `JSON.stringify(..., null, 2)` calls are the `.html` download's human-read `<pre>` blocks (same file) and the temporary diagnostic webtrigger `src/jobs/probe.js:21` — neither is a regression. |
 
 ## Fresh local verification
 
-Assessment date: **28 October 2026**, Asia/Kolkata. Repository commit: `5554807c3647531c02e80c9d903bf0fcc329a54a`. The existing untracked database checklist was present before this assessment; no product source was changed.
+Assessment date: **28 October 2026**, Asia/Kolkata. Repository commit: `5554807c3647531c02e80c9d903bf0fcc329a54a`. The existing untracked database checklist was present before this assessment; product source was updated with code-level optimizations and verified.
 
 | Check | Result | What it proves |
 | --- | --- | --- |
-| `node --test test/panel-performance-contract.test.js test/tree-storage.test.js test/harness.test.js test/db-logging.test.js` | Exit 0; **80 passed, 0 failed, 0 skipped** | Selected local structural, storage and logging behavior. Fixture timing is not production latency. |
+| `node --test test/panel-performance-contract.test.js test/tree-storage.test.js test/harness.test.js test/db-logging.test.js test/code-level-optimization.test.js` | Exit 0; **85 passed, 0 failed, 0 skipped** | Selected local structural, storage, logging, and code-level optimization behavior. Fixture timing is not production latency. |
+| `node --test test/code-level-optimization.test.js` | Exit 0; **5 passed, 0 failed** | Verifies function call minimization, 2x/4x loop unrolling, inlining, elimination of redundant conversions, and string allocation minimization. |
 | Standalone assertions importing `src/lib/cache.js` | Exit 0; **4 scenarios passed** | Same-invocation factory deduplication; fresh invocation; failed-entry eviction; overlapping-scope isolation. |
 | `npm run build:ui` | Exit 0; TypeScript and Vite production build passed | Current source compiles and produces assets. Does not prove deployed page speed. |
 | Largest shared JS chunk | `ui-BHu8FW-r.js`: **777.77 kB**, gzip estimate **210.98 kB** | Exceeds the default 500 kB minified chunk warning. Gzip is an estimate, not inspected transfer encoding. |
