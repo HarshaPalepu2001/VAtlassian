@@ -1,0 +1,310 @@
+{
+  "measuredAtUtc": "2026-10-28T18:09:04.387Z",
+  "source": {
+    "head": "b718ada843dce74015e8a3ca4f31a25407624743",
+    "sha256": {
+      "src/usecases/queue.js": "980396d73f0896751065ca8c2b24b9bf654283b3603f1a9476500a8ca92fb456",
+      "src/db/itemStateStore.js": "745e09efe01ef836324297ef9a9d54a788713b3ff8fa20cb844141abdfc44ed5",
+      "src/usecases/access.js": "dd878dcdaeabaf6ef551ed13a95365030813b185934f5eca0a24b5ae5dace874",
+      "src/testmgmt/messages.js": "7a5c0369e18f17d7961f118852869372f2a737a4b2e1b214b27f6e68ea93657a",
+      "src/usecases/panelSummary.js": "90d6548553c1165976f02ba14776a88c9b4cde71fa306776d36a75e1fa6fa794",
+      "src/usecases/testSummary.js": "61322ec6d543517436d3422f626cf296e84b17e898f645e7a8ba5c2881217041",
+      "src/testmgmt/summary.js": "823b0ab977b6fe5b943f0aa8086b4b65b81b09afcfbc60b3197ceaea89ae5939",
+      "src/testmgmt/requestReads.js": "1fe37889c4f57abb0fee9ad4c9d50944accc132cbb7dad238a331cac301fd0b5",
+      "src/lib/cache.js": "6afa8c62141c6123194a25872445d3ba87a8284c951d382c03c8d7dabd937798",
+      "src/lib/transitions.js": "66683ca3ef49b3fd1ba7b8cd18fe4437692d77baa69a7b40106ccfe6df82325d",
+      "src/testmgmt/jira.js": "5976ea3d9930f69530f956c2e5333435c94c929cff9cd81954c96cb69c2e652b",
+      "src/lib/hash.js": "4e9a5c4e9518805275f6429c582b8dd49f48b6f22c1b7a3c892c6521341409db",
+      "src/jobs/restoreWorker.js": "103184ec7fd99d70f36569a92d2cdc211146b64e6db8f029a8f8b6688474e325",
+      "src/jobs/vaultWorker.js": "af19bbd325055bfbf938a620b593c99b923edc5298f5ed316206a0917e825ed7"
+    }
+  },
+  "environment": {
+    "node": "v24.18.0",
+    "platform": "darwin",
+    "arch": "arm64",
+    "cpu": "Apple M3"
+  },
+  "methodology": {
+    "repeats": 9,
+    "serializationIterationsPerRun": 100000,
+    "warmupPerVariant": 5000,
+    "variantOrder": "alternating paired runs",
+    "fixtureRunsForTiming": 3,
+    "liveRequests": 0,
+    "byteCounts": "UTF-8, before transport compression; gzip/brotli sizes are local experiments"
+  },
+  "timings": {
+    "raw": {
+      "compactNs": [
+        4745.15541,
+        4755.42709,
+        4796.6075,
+        4795.83125,
+        4777.22541,
+        4750.39875,
+        4773,
+        4773.56333,
+        4731.47083
+      ],
+      "prettyNs": [
+        6731.68417,
+        6787.46417,
+        6844.03334,
+        6796.89583,
+        6853.55042,
+        6792.09667,
+        6749.07625,
+        6746.49667,
+        6779.76042
+      ],
+      "pairedSpeedups": [
+        1.4186435613496586,
+        1.427309060057527,
+        1.4268487342356029,
+        1.4172508321680417,
+        1.4346299016273547,
+        1.4297950608883094,
+        1.41401136601718,
+        1.413304109238664,
+        1.4329075806645095
+      ]
+    },
+    "compactNs": {
+      "median": 4773,
+      "min": 4731.47083,
+      "max": 4796.6075
+    },
+    "prettyNs": {
+      "median": 6787.46417,
+      "min": 6731.68417,
+      "max": 6853.55042
+    },
+    "pairedSpeedup": {
+      "median": 1.4268487342356029,
+      "min": 1.413304109238664,
+      "max": 1.4346299016273547
+    },
+    "sink": 7294300000
+  },
+  "payloads": [
+    {
+      "runs": 0,
+      "compactDownloadBytes": 396,
+      "prettyDownloadBytes": 517,
+      "responseBytes": 2015,
+      "responseWithPrettyDownloadBytes": 2157,
+      "responseGzipBytes": 986,
+      "responseWithPrettyDownloadGzipBytes": 1011,
+      "responseBrotliBytes": 743,
+      "responseWithPrettyDownloadBrotliBytes": 780,
+      "snapshotEnvelopeBytes": 396
+    },
+    {
+      "runs": 1,
+      "compactDownloadBytes": 1254,
+      "prettyDownloadBytes": 2154,
+      "responseBytes": 5339,
+      "responseWithPrettyDownloadBytes": 6328,
+      "responseGzipBytes": 1831,
+      "responseWithPrettyDownloadGzipBytes": 1935,
+      "responseBrotliBytes": 1451,
+      "responseWithPrettyDownloadBrotliBytes": 1579,
+      "snapshotEnvelopeBytes": 1254
+    },
+    {
+      "runs": 3,
+      "compactDownloadBytes": 2884,
+      "prettyDownloadBytes": 5212,
+      "responseBytes": 11529,
+      "responseWithPrettyDownloadBytes": 14066,
+      "responseGzipBytes": 1930,
+      "responseWithPrettyDownloadGzipBytes": 2060,
+      "responseBrotliBytes": 1528,
+      "responseWithPrettyDownloadBrotliBytes": 1639,
+      "snapshotEnvelopeBytes": 2884
+    },
+    {
+      "runs": 30,
+      "compactDownloadBytes": 24890,
+      "prettyDownloadBytes": 46496,
+      "responseBytes": 95096,
+      "responseWithPrettyDownloadBytes": 118531,
+      "responseGzipBytes": 2719,
+      "responseWithPrettyDownloadGzipBytes": 3229,
+      "responseBrotliBytes": 1710,
+      "responseWithPrettyDownloadBrotliBytes": 1863,
+      "snapshotEnvelopeBytes": 24890
+    },
+    {
+      "runs": 100,
+      "compactDownloadBytes": 81941,
+      "prettyDownloadBytes": 153527,
+      "responseBytes": 311748,
+      "responseWithPrettyDownloadBytes": 389363,
+      "responseGzipBytes": 4567,
+      "responseWithPrettyDownloadGzipBytes": 5701,
+      "responseBrotliBytes": 2032,
+      "responseWithPrettyDownloadBrotliBytes": 2218,
+      "snapshotEnvelopeBytes": 81941
+    },
+    {
+      "runs": 500,
+      "compactDownloadBytes": 407941,
+      "prettyDownloadBytes": 765127,
+      "responseBytes": 1549748,
+      "responseWithPrettyDownloadBytes": 1936963,
+      "responseGzipBytes": 13218,
+      "responseWithPrettyDownloadGzipBytes": 18260,
+      "responseBrotliBytes": 3180,
+      "responseWithPrettyDownloadBrotliBytes": 3532,
+      "snapshotEnvelopeBytes": 407941
+    }
+  ],
+  "readCounts": [
+    {
+      "runs": 1,
+      "distinctTests": false,
+      "issueAdapterCalls": 4,
+      "distinctIssueArguments": 2,
+      "sourceAdapterCalls": 2,
+      "projectAdapterCalls": 1,
+      "summaryStoreCalls": 1
+    },
+    {
+      "runs": 3,
+      "distinctTests": false,
+      "issueAdapterCalls": 6,
+      "distinctIssueArguments": 2,
+      "sourceAdapterCalls": 6,
+      "projectAdapterCalls": 1,
+      "summaryStoreCalls": 1
+    },
+    {
+      "runs": 30,
+      "distinctTests": false,
+      "issueAdapterCalls": 33,
+      "distinctIssueArguments": 2,
+      "sourceAdapterCalls": 60,
+      "projectAdapterCalls": 1,
+      "summaryStoreCalls": 1
+    },
+    {
+      "runs": 100,
+      "distinctTests": false,
+      "issueAdapterCalls": 103,
+      "distinctIssueArguments": 2,
+      "sourceAdapterCalls": 200,
+      "projectAdapterCalls": 1,
+      "summaryStoreCalls": 1
+    },
+    {
+      "runs": 1,
+      "distinctTests": true,
+      "issueAdapterCalls": 4,
+      "distinctIssueArguments": 2,
+      "sourceAdapterCalls": 2,
+      "projectAdapterCalls": 1,
+      "summaryStoreCalls": 1
+    },
+    {
+      "runs": 3,
+      "distinctTests": true,
+      "issueAdapterCalls": 6,
+      "distinctIssueArguments": 4,
+      "sourceAdapterCalls": 6,
+      "projectAdapterCalls": 1,
+      "summaryStoreCalls": 1
+    },
+    {
+      "runs": 30,
+      "distinctTests": true,
+      "issueAdapterCalls": 33,
+      "distinctIssueArguments": 31,
+      "sourceAdapterCalls": 60,
+      "projectAdapterCalls": 1,
+      "summaryStoreCalls": 1
+    },
+    {
+      "runs": 100,
+      "distinctTests": true,
+      "issueAdapterCalls": 103,
+      "distinctIssueArguments": 101,
+      "sourceAdapterCalls": 200,
+      "projectAdapterCalls": 1,
+      "summaryStoreCalls": 1
+    }
+  ],
+  "cacheTrials": [
+    {
+      "sameInvocationRequests": 30,
+      "sameInvocationFactories": 1,
+      "nextInvocationAdditionalFactories": 1,
+      "separateInvocationsAdditionalFactories": 30
+    },
+    {
+      "sameInvocationRequests": 30,
+      "sameInvocationFactories": 1,
+      "nextInvocationAdditionalFactories": 1,
+      "separateInvocationsAdditionalFactories": 30
+    },
+    {
+      "sameInvocationRequests": 30,
+      "sameInvocationFactories": 1,
+      "nextInvocationAdditionalFactories": 1,
+      "separateInvocationsAdditionalFactories": 30
+    },
+    {
+      "sameInvocationRequests": 30,
+      "sameInvocationFactories": 1,
+      "nextInvocationAdditionalFactories": 1,
+      "separateInvocationsAdditionalFactories": 30
+    },
+    {
+      "sameInvocationRequests": 30,
+      "sameInvocationFactories": 1,
+      "nextInvocationAdditionalFactories": 1,
+      "separateInvocationsAdditionalFactories": 30
+    },
+    {
+      "sameInvocationRequests": 30,
+      "sameInvocationFactories": 1,
+      "nextInvocationAdditionalFactories": 1,
+      "separateInvocationsAdditionalFactories": 30
+    },
+    {
+      "sameInvocationRequests": 30,
+      "sameInvocationFactories": 1,
+      "nextInvocationAdditionalFactories": 1,
+      "separateInvocationsAdditionalFactories": 30
+    },
+    {
+      "sameInvocationRequests": 30,
+      "sameInvocationFactories": 1,
+      "nextInvocationAdditionalFactories": 1,
+      "separateInvocationsAdditionalFactories": 30
+    },
+    {
+      "sameInvocationRequests": 30,
+      "sameInvocationFactories": 1,
+      "nextInvocationAdditionalFactories": 1,
+      "separateInvocationsAdditionalFactories": 30
+    }
+  ],
+  "counterexamples": {
+    "testsPassed": 5,
+    "repeatsEach": 9,
+    "queueCandidates": 50,
+    "queueSearchRequests": 1,
+    "queueIssueReads": 50,
+    "peakIssueReadConcurrency": 5,
+    "panelIssueReads": 1,
+    "panelMyselfReads": 1,
+    "panelTransitionsReads": 1,
+    "pendingDecisionsAvailable": 201,
+    "firstPagePendingDecisions": 200,
+    "nextPagePendingDecisions": 1,
+    "pendingDecisionContinuation": "present; item 201 reached",
+    "pendingDecisionFetchCap": 2000
+  }
+}

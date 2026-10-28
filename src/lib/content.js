@@ -230,17 +230,49 @@ export function candidateFields(jiraFields, declaredOverrides) {
  */
 const ADF_VOLATILE_KEYS = new Set(['localId', 'version']);
 
+/**
+ * Iterative on purpose: ADF documents nest one level per paragraph/list/table
+ * cell a user typed, and a long enough document used to blow Node's call
+ * stack in the original recursive walk (confirmed: ~2,000 levels). An
+ * explicit work-stack has no recursion depth to exceed. No visited set is
+ * needed here, unlike the logical-node tree walk elsewhere — ADF documents
+ * from Jira are plain trees, not graphs, so there is no cycle to guard
+ * against.
+ */
 export function normaliseAdf(node) {
-  if (node === null || node === undefined) return null;
-  if (Array.isArray(node)) return node.map(normaliseAdf);
-  if (typeof node !== 'object') return node;
+  const rootHolder = {};
+  const stack = [{ value: node, parent: rootHolder, key: 'v' }];
 
-  const out = {};
-  for (const key of Object.keys(node).sort()) {
-    if (ADF_VOLATILE_KEYS.has(key)) continue;
-    out[key] = normaliseAdf(node[key]);
+  while (stack.length > 0) {
+    const { value, parent, key } = stack.pop();
+
+    if (value === null || value === undefined) {
+      parent[key] = null;
+    } else if (Array.isArray(value)) {
+      const out = new Array(value.length);
+      parent[key] = out;
+      for (let i = 0; i < value.length; i++) {
+        stack.push({ value: value[i], parent: out, key: i });
+      }
+    } else if (typeof value !== 'object') {
+      parent[key] = value;
+    } else {
+      const out = {};
+      parent[key] = out;
+      // Push in descending order so the LIFO stack pops them back out in
+      // ascending order — out's key insertion order (and so its
+      // JSON.stringify/for-in order) then matches the original recursive
+      // version exactly, not just its parsed structure.
+      const keys = Object.keys(value).sort();
+      for (let i = keys.length - 1; i >= 0; i--) {
+        const k = keys[i];
+        if (ADF_VOLATILE_KEYS.has(k)) continue;
+        stack.push({ value: value[k], parent: out, key: k });
+      }
+    }
   }
-  return out;
+
+  return rootHolder.v;
 }
 
 /** Plain text: normalise line endings and trailing whitespace only. */
@@ -442,13 +474,26 @@ export function fieldDigest(field, normalised, { linkPolicy } = {}) {
  * empty document differs from the digest of a field that was never set, and
  * both mean nothing. Those baselines stay valid rather than drifting.
  */
+const ADF_EMPTY_DOC = { type: 'doc', version: 1, content: [] };
+const EQUIVALENT_DIGESTS_CACHE = new Map();
+
+function getEquivalentDigests(fieldId) {
+  let cached = EQUIVALENT_DIGESTS_CACHE.get(fieldId);
+  if (!cached) {
+    const none = sha256Hex(canonical({ f: fieldId, k: FIELD_KIND.ADF, v: null }));
+    const legacyEmpty = sha256Hex(canonical({ f: fieldId, k: FIELD_KIND.ADF, v: normaliseAdf(ADF_EMPTY_DOC) }));
+    cached = { none, legacyEmpty };
+    if (EQUIVALENT_DIGESTS_CACHE.size < 500) EQUIVALENT_DIGESTS_CACHE.set(fieldId, cached);
+  }
+  return cached;
+}
+
 export function digestsEquivalent(fieldId, a, b) {
   const x = a ?? null;
   const y = b ?? null;
   if (x === y) return true;
   if (x == null || y == null) return false;
-  const none = sha256Hex(canonical({ f: fieldId, k: FIELD_KIND.ADF, v: null }));
-  const legacyEmpty = sha256Hex(canonical({ f: fieldId, k: FIELD_KIND.ADF, v: normaliseAdf({ type: 'doc', version: 1, content: [] }) }));
+  const { none, legacyEmpty } = getEquivalentDigests(fieldId);
   return (x === none && y === legacyEmpty) || (x === legacyEmpty && y === none);
 }
 

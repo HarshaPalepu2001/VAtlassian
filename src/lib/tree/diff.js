@@ -12,8 +12,16 @@ export function diffTree({ baselineTree, currentTree, controlledFields, scopeFor
   const rootScopeIds = contentFieldIds(controlledFields ?? []);
   const scopeIdsOf = node => (scopeFor ? contentFieldIds(scopeFor(node) ?? []) : rootScopeIds);
 
-  const baselineNodes = new Map(baselineTree.nodes.map(n => [n.logicalNodeId, n]));
-  const currentNodes = new Map(currentTree.nodes.map(n => [n.logicalNodeId, n]));
+  const baselineNodes = new Map();
+  for (let i = 0; i < baselineTree.nodes.length; i++) {
+    const n = baselineTree.nodes[i];
+    baselineNodes.set(n.logicalNodeId, n);
+  }
+  const currentNodes = new Map();
+  for (let i = 0; i < currentTree.nodes.length; i++) {
+    const n = currentTree.nodes[i];
+    currentNodes.set(n.logicalNodeId, n);
+  }
 
   for (const curr of currentTree.nodes) {
     const base = baselineNodes.get(curr.logicalNodeId);

@@ -37,28 +37,68 @@ export function sqlStatementSummary(statement) {
 }
 
 /**
+ * Slow-query threshold, in milliseconds, for the per-query log line below.
+ *
+ * Forge SQL documents a 5 s SELECT / 10 s DML query timeout (see the "Known
+ * bounds" section of docs/PERFORMANCE-CHECKLIST.md). A query already past 2 s
+ * — 40% of the tightest of those budgets — is worth a loud line before it
+ * ever reaches the platform's own timeout, not after.
+ */
+export const SLOW_QUERY_MS = 2000;
+
+/**
+ * Logs every query's duration, and separately tags one that crosses
+ * `thresholdMs`. This IS the SQL wrapper's own alert: there is no outbound
+ * delivery for it the way lib/alerts.js delivers a security event to Jira.
+ * That pipeline exists specifically for 21 CFR 11.300(d) unauthorized-use
+ * detection, and db/alertStore.js implements it by calling executeQuery — so
+ * routing a slow-query signal through it would both conflate a performance
+ * concern with a compliance one and risk a query alerting on its own
+ * slowness. A distinguishable, always-on structured line, tagged so it is
+ * trivially greppable/alertable from log collection, is the honest scope of
+ * "alert" the wrapper can make on its own.
+ */
+function logQueryDuration(queryText, durationMs, thresholdMs, succeeded) {
+  const summary = sqlStatementSummary(queryText);
+  if (durationMs >= thresholdMs) {
+    console.warn('[SLOW_QUERY_ALERT]', JSON.stringify({ ...summary, durationMs, thresholdMs, succeeded }));
+  } else {
+    console.log('Forge SQL query', JSON.stringify({ ...summary, durationMs, succeeded }));
+  }
+}
+
+/**
  * Executes a Forge SQL query with parameter binding.
  * Fails closed upon encountering exceptions.
  *
  * @param {string} queryText - The SQL query with ? placeholders.
  * @param {Array<any>} params - The parameters to bind.
+ * @param {{ slowQueryMs?: number }} [options] - slowQueryMs overrides
+ *   SLOW_QUERY_MS; only tests should ever pass it.
  */
-export async function executeQuery(queryText, params = []) {
+export async function executeQuery(queryText, params = [], { slowQueryMs = SLOW_QUERY_MS } = {}) {
+  const startedAt = Date.now();
   try {
     // The installed @forge/sql exposes `bindParams`, not `bind` — `.bind()`
     // isn't a method on SqlStatement at all. Result shape is
     // `{ rows, metadata }`, not `{ rows, meta }`.
     const result = await sql.prepare(queryText).bindParams(...params).execute();
+    const durationMs = Date.now() - startedAt;
+    logQueryDuration(queryText, durationMs, slowQueryMs, true);
     return {
       result: true,
       data: result.rows,
       meta: result.metadata,
+      durationMs,
     };
   } catch (error) {
+    const durationMs = Date.now() - startedAt;
     console.error('Forge SQL Error:', sqlErrorSummary(error), 'Statement:', sqlStatementSummary(queryText));
+    logQueryDuration(queryText, durationMs, slowQueryMs, false);
     return {
       result: false,
       error,
+      durationMs,
     };
   }
 }
@@ -76,11 +116,20 @@ export async function executeQuery(queryText, params = []) {
  * `TO_BASE64(column) AS column` and decode with `fromBinaryColumn`.
  */
 export function toBinaryParam(buffer) {
-  return buffer.toString('base64');
+  if (typeof buffer === 'string') {
+    if (/^[0-9a-f]{32}$/i.test(buffer)) {
+      return Buffer.from(buffer, 'hex').toString('base64');
+    }
+    return buffer;
+  }
+  if (!buffer) return '';
+  return Buffer.isBuffer(buffer) ? buffer.toString('base64') : Buffer.from(buffer).toString('base64');
 }
 
 export function fromBinaryColumn(value) {
-  return value == null ? null : Buffer.from(value, 'base64');
+  if (value == null) return null;
+  if (Buffer.isBuffer(value)) return value;
+  return Buffer.from(value, 'base64');
 }
 
 /**

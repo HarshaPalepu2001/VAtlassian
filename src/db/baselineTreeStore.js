@@ -60,6 +60,17 @@ export async function beginTreeBaseline({ baseline, resume = null, query = store
 const NODE_BATCH = 50;
 const VALUE_BATCH = 50;
 
+const VALUE_ROW_PLACEHOLDER = '(FROM_BASE64(?), ?, ?, ?, ?, ?, ?)';
+const VALUE_PLACEHOLDERS_CACHE = new Map();
+function getValuePlaceholders(count) {
+  let cached = VALUE_PLACEHOLDERS_CACHE.get(count);
+  if (!cached) {
+    cached = Array(count).fill(VALUE_ROW_PLACEHOLDER).join(', ');
+    if (count <= VALUE_BATCH) VALUE_PLACEHOLDERS_CACHE.set(count, cached);
+  }
+  return cached;
+}
+
 function chunked(array, size) {
   const out = [];
   for (let i = 0; i < array.length; i += size) out.push(array.slice(i, i + size));
@@ -109,9 +120,20 @@ export async function writeTreeCapture({ baselineId, treeHash, nodes, values, qu
     }
   }
   for (const batch of chunked(valueRows, VALUE_BATCH)) {
-    const placeholders = batch.map(() => '(FROM_BASE64(?), ?, ?, ?, ?, ?, ?)').join(', ');
+    const placeholders = getValuePlaceholders(batch.length);
     const params = [];
-    for (const row of batch) {
+    const len = batch.length;
+    let i = 0;
+    // 2x loop unrolling for batch parameter building
+    for (; i + 1 < len; i += 2) {
+      const r0 = batch[i], r1 = batch[i + 1];
+      params.push(
+        bId, r0.logicalNodeId, r0.fieldId, r0.seq, r0.encoding, r0.rawBytes, r0.chunk,
+        bId, r1.logicalNodeId, r1.fieldId, r1.seq, r1.encoding, r1.rawBytes, r1.chunk
+      );
+    }
+    for (; i < len; i++) {
+      const row = batch[i];
       params.push(bId, row.logicalNodeId, row.fieldId, row.seq, row.encoding, row.rawBytes, row.chunk);
     }
     await query(

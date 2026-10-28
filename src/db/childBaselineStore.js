@@ -111,9 +111,9 @@ async function insertRow(row, baselineId, valueBytes, query) {
       toBinaryParam(baselineId), row.issue_id, row.project_id, row.issue_type_id, row.version,
       row.content_hash, row.field_digests, row.transition_id, row.from_status_id, row.to_status_id,
       row.approved_by, row.approved_name, row.transition_at, row.captured_at, row.assurance_level,
-      row.approval_id ? toBinaryParam(Buffer.from(row.approval_id)) : null, row.fidelity, row.field_count, valueBytes,
+      row.approval_id ? toBinaryParam(row.approval_id) : null, row.fidelity, row.field_count, valueBytes,
       row.required_role, row.required_assurance, row.controlled_fields_hash,
-      toBinaryParam(Buffer.from(row.captured_by_baseline_id)),
+      toBinaryParam(row.captured_by_baseline_id),
       ...(row.link_policy ? [serialiseLinkPolicy(row.link_policy)] : [])
     ]
   );
@@ -168,7 +168,7 @@ export async function writeChildBaselines({ rows, parentBaselineId, query = stor
  * Safe to call again; returns the child baselines now ACTIVE from this parent.
  */
 export async function publishChildBaselines({ parentBaselineId, requireEvidence = false, query = store.throwing, write = executeQuery }) {
-  const parentId = toBinaryParam(Buffer.from(parentBaselineId));
+  const parentId = toBinaryParam(parentBaselineId);
   // A capture that requires evidence must publish EVERY child it wrote: a child
   // left CAPTURING without its evidence would otherwise be skipped silently by
   // the update below, and the capture would report a child baseline that is not

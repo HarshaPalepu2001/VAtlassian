@@ -61,15 +61,19 @@ export function encodeValue(value) {
   const encoding = useGzip ? ENCODING.GZIP_B64 : ENCODING.PLAIN_B64;
   const b64 = (useGzip ? gzipped : rawBuffer).toString('base64');
 
-  const chunks = [];
-  for (let i = 0; i < b64.length; i += CHUNK_CHARS) {
-    chunks.push(b64.slice(i, i + CHUNK_CHARS));
+  // Minimize string allocations by avoiding slice copies for single-chunk payloads
+  let chunks;
+  if (b64.length === 0) {
+    chunks = [''];
+  } else if (b64.length <= CHUNK_CHARS) {
+    chunks = [b64];
+  } else {
+    chunks = [];
+    const len = b64.length;
+    for (let i = 0; i < len; i += CHUNK_CHARS) {
+      chunks.push(b64.slice(i, i + CHUNK_CHARS));
+    }
   }
-  // A genuinely empty payload still needs one row, so that "no rows" can mean
-  // "this field was never retained" rather than "this field was retained and
-  // happened to be empty". Those are different facts and the reject dialog
-  // says different things about them.
-  if (chunks.length === 0) chunks.push('');
 
   return { encoding, rawBytes, chunks };
 }
@@ -87,21 +91,45 @@ export function encodeValue(value) {
 export function decodeValue(rows) {
   if (!rows || rows.length === 0) return { present: false, value: null };
 
-  const ordered = [...rows].sort((a, b) => a.seq - b.seq);
-  const encoding = ordered[0].encoding;
-  if (!Object.values(ENCODING).includes(encoding)) throw new Error('BASELINE_VALUE_ENCODING');
-  if (ordered.some((row, index) => Number(row.seq) !== index || row.encoding !== encoding)) {
-    throw new Error('BASELINE_VALUE_INCOMPLETE');
+  const len = rows.length;
+  let ordered;
+  if (len === 1) {
+    ordered = rows;
+  } else {
+    ordered = [...rows].sort((a, b) => a.seq - b.seq);
   }
-  const b64 = ordered.map((r) => r.data ?? '').join('');
+
+  const first = ordered[0];
+  const encoding = first.encoding;
+  if (!Object.values(ENCODING).includes(encoding)) throw new Error('BASELINE_VALUE_ENCODING');
+
+  if (len === 1) {
+    if (first.seq !== 0 && Number(first.seq) !== 0) throw new Error('BASELINE_VALUE_INCOMPLETE');
+  } else {
+    for (let i = 0; i < len; i++) {
+      const r = ordered[i];
+      if ((r.seq !== i && Number(r.seq) !== i) || r.encoding !== encoding) {
+        throw new Error('BASELINE_VALUE_INCOMPLETE');
+      }
+    }
+  }
+
+  const b64 = len === 1 ? (first.data ?? '') : ordered.map((r) => r.data ?? '').join('');
   if (b64.length === 0) return { present: true, value: null };
 
   const buffer = Buffer.from(b64, 'base64');
-  const json = encoding === ENCODING.GZIP_B64
-    ? gunzipSync(buffer).toString('utf8')
-    : buffer.toString('utf8');
+  let json;
+  let rawLength;
+  if (encoding === ENCODING.GZIP_B64) {
+    const decompressed = gunzipSync(buffer);
+    rawLength = decompressed.length;
+    json = decompressed.toString('utf8');
+  } else {
+    rawLength = buffer.length;
+    json = buffer.toString('utf8');
+  }
 
-  if (ordered[0].raw_bytes != null && Buffer.byteLength(json, 'utf8') !== Number(ordered[0].raw_bytes)) {
+  if (first.raw_bytes != null && rawLength !== Number(first.raw_bytes)) {
     throw new Error('BASELINE_VALUE_INCOMPLETE');
   }
   return { present: true, value: JSON.parse(json) };
@@ -167,7 +195,10 @@ export function adfPlainText(doc) {
   const out = [];
   const walk = (node) => {
     if (!node || typeof node !== 'object') return;
-    if (Array.isArray(node)) { node.forEach(walk); return; }
+    if (Array.isArray(node)) {
+      for (let i = 0; i < node.length; i++) walk(node[i]);
+      return;
+    }
     if (node.type === 'text' && typeof node.text === 'string') { out.push(node.text); return; }
     if (node.type === 'mention') { out.push(node.attrs?.text ?? '@user'); return; }
     if (node.type === 'emoji') { out.push(node.attrs?.text ?? node.attrs?.shortName ?? ''); return; }

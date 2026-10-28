@@ -49,6 +49,58 @@ test('ADF localId and version are volatile and never affect the hash', () => {
   assert.deepEqual(normaliseAdf(a), normaliseAdf(b));
 });
 
+test('normaliseAdf walks iteratively: exact byte-for-byte output, captured before the recursion was removed', () => {
+  // Expected strings below are JSON.stringify(normaliseAdf(fixture)) captured
+  // from the original recursive implementation. They pin both structure AND
+  // key insertion order, not just deep-equal shape.
+  const nested = {
+    type: 'doc', version: 1, localId: 'root',
+    content: [
+      { type: 'bulletList', localId: 'l1', content: [
+        { type: 'listItem', localId: 'i1', content: [
+          { type: 'paragraph', localId: 'p1', content: [
+            { type: 'text', text: 'alpha', marks: [{ type: 'strong' }] },
+            { type: 'text', text: 'beta' }
+          ] }
+        ] },
+        { type: 'listItem', localId: 'i2', content: [] }
+      ] },
+      { type: 'table', localId: 't1', content: [
+        { type: 'tableRow', content: [
+          { type: 'tableCell', attrs: { colspan: 1, rowspan: 2 }, content: [{ type: 'paragraph', content: [] }] }
+        ] }
+      ] }
+    ]
+  };
+  assert.equal(
+    JSON.stringify(normaliseAdf(nested)),
+    '{"content":[{"content":[{"content":[{"content":[{"marks":[{"type":"strong"}],"text":"alpha","type":"text"},{"text":"beta","type":"text"}],"type":"paragraph"}],"type":"listItem"},{"content":[],"type":"listItem"}],"type":"bulletList"},{"content":[{"content":[{"attrs":{"colspan":1,"rowspan":2},"content":[{"content":[],"type":"paragraph"}],"type":"tableCell"}],"type":"tableRow"}],"type":"table"}],"type":"doc"}'
+  );
+  assert.equal(JSON.stringify(normaliseAdf([{ type: 'text', text: 'z', localId: 'q' }, { type: 'text', text: 'a' }])),
+    '[{"text":"z","type":"text"},{"text":"a","type":"text"}]');
+  assert.equal(normaliseAdf('just a string'), 'just a string');
+  assert.equal(normaliseAdf(null), null);
+});
+
+test('normaliseAdf has no recursion depth limit — the original recursive walk overflowed around 2,000 levels', () => {
+  // One nesting level per loop iteration, not per call frame.
+  const deepNest = (n) => {
+    let node = { type: 'text', text: 'leaf' };
+    for (let i = 0; i < n; i++) node = { type: 'paragraph', localId: `p${i}`, content: [node] };
+    return { type: 'doc', version: 1, content: [node] };
+  };
+  const leafOf = (node) => {
+    let cur = node;
+    while (cur && typeof cur === 'object' && Array.isArray(cur.content) && cur.content.length) cur = cur.content[0];
+    return cur;
+  };
+
+  // 2,000 levels reliably crashed the old recursive implementation with
+  // "Maximum call stack size exceeded"; 10,000 is well beyond that.
+  const result = normaliseAdf(deepNest(10000));
+  assert.deepEqual(leafOf(result), { text: 'leaf', type: 'text' });
+});
+
 test('reordering a multi-value is not a change', () => {
   assert.deepEqual(normaliseMulti(['b', 'a']), normaliseMulti(['a', 'b']));
 });

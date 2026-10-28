@@ -114,6 +114,38 @@ test('wrapWithHarness instruments resolver definitions with metrics', async () =
   }
 });
 
+test('wrapWithHarness logs the serialized response byte length alongside duration', async () => {
+  const originalLog = console.log;
+  let logged = '';
+  console.log = msg => { logged = msg; };
+  try {
+    const mockDefinitions = async () => ({ success: true, count: 5, note: 'abc' });
+    const handler = wrapWithHarness(mockDefinitions, { resolverName: 'testResolver' });
+    await handler({ call: { functionKey: 'test:fetchCount' }, payload: {}, context: {} });
+  } finally {
+    console.log = originalLog;
+  }
+  const expectedBytes = Buffer.byteLength(JSON.stringify({ success: true, count: 5, note: 'abc' }), 'utf8');
+  assert.match(logged, new RegExp(`"responseBytes":${expectedBytes}\\b`));
+});
+
+test('wrapWithHarness does not throw if the response cannot be serialized', async () => {
+  const originalLog = console.log;
+  let logged = '';
+  console.log = msg => { logged = msg; };
+  try {
+    const circular = { success: true };
+    circular.self = circular;
+    const mockDefinitions = async () => circular;
+    const handler = wrapWithHarness(mockDefinitions, { resolverName: 'testResolver' });
+    const result = await handler({ call: { functionKey: 'test:circular' }, payload: {}, context: {} });
+    assert.equal(result, circular);
+  } finally {
+    console.log = originalLog;
+  }
+  assert.match(logged, /"responseBytes":null/);
+});
+
 test('logAction resolver handles client action telemetry and propagates traceId', async () => {
   const result = await logAction({
     payload: {

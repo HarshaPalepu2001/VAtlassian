@@ -32,19 +32,24 @@ import { AsyncLocalStorage } from 'node:async_hooks';
  * single invocation collapses those repeated reads to one.
  *
  * USAGE:
- *   import { memo, withRequestCache } from '../lib/cache.js';
+ *   import { memo, withRequestCache, getCacheStats } from '../lib/cache.js';
  *   export const handler = (...args) => withRequestCache(() => realHandler(...args));
  *   const result = await memo(`config:site`, () => getConfig('site'));
+ *   const { hits, misses, evictions } = getCacheStats();
  */
 
 const _storage = new AsyncLocalStorage();
 // Only reachable from code that runs outside any withRequestCache() boundary
 // (e.g. a test that calls a store function directly). Never populated in
 // production, where every entry point opens its own scope first.
-const _fallback = new Map();
+const _fallback = { map: new Map(), stats: { hits: 0, misses: 0, evictions: 0 } };
+
+function currentScope() {
+  return _storage.getStore() ?? _fallback;
+}
 
 function currentCache() {
-  return _storage.getStore() ?? _fallback;
+  return currentScope().map;
 }
 
 /**
@@ -52,7 +57,7 @@ function currentCache() {
  * Call this once at each Forge entry point, wrapping the real handler.
  */
 export function withRequestCache(fn) {
-  return _storage.run(new Map(), fn);
+  return _storage.run({ map: new Map(), stats: { hits: 0, misses: 0, evictions: 0 } }, fn);
 }
 
 /**
@@ -67,12 +72,34 @@ export function withRequestCache(fn) {
  * @returns {Promise<T>}
  */
 export function memo(key, fn) {
-  const cache = currentCache();
-  if (cache.has(key)) return cache.get(key);
+  const scope = currentScope();
+  const cache = scope.map;
+  if (cache.has(key)) {
+    scope.stats.hits++;
+    return cache.get(key);
+  }
+  scope.stats.misses++;
   const promise = fn();
   cache.set(key, promise);
-  promise.catch(() => { if (cache.get(key) === promise) cache.delete(key); });
+  promise.catch(() => {
+    if (cache.get(key) === promise) {
+      cache.delete(key);
+      scope.stats.evictions++;
+    }
+  });
   return promise;
+}
+
+/**
+ * Return this scope's running { hits, misses, evictions } counters. A hit is
+ * a memo() call served from the map without calling fn(); a miss is a memo()
+ * call that invoked fn(); an eviction is a cached promise that rejected and
+ * was removed (see memo() above). Counters live and die with the scope they
+ * belong to — a fresh withRequestCache() call always starts at zero.
+ */
+export function getCacheStats() {
+  const { hits, misses, evictions } = currentScope().stats;
+  return { hits, misses, evictions };
 }
 
 /**

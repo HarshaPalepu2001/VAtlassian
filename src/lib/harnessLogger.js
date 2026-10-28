@@ -151,10 +151,21 @@ export function wrapWithHarness(definitions, { resolverName = 'resolver' } = {})
 
         if (!isHarnessLog) {
           const isSuccess = result?.success !== false && result?.ok !== false && !result?.error;
+          // Measuring, never replacing, what is returned: a response that
+          // cannot be stringified (none seen in practice; every resolver
+          // returns a plain JSON-safe object) must not turn an otherwise
+          // successful call into a thrown error over a log field.
+          let responseBytes;
+          try {
+            responseBytes = Buffer.byteLength(JSON.stringify(result ?? null), 'utf8');
+          } catch {
+            responseBytes = null;
+          }
           harnessLog(isSuccess ? 'RESOLVER' : 'ERROR', `resolver:${functionKey}`, {
             resolverName,
             functionKey,
             durationMs,
+            responseBytes,
             issueKey: req?.payload?.issueKey ?? req?.payload?.issueId ?? req?.context?.extension?.issue?.key,
             accountId: req?.context?.accountId,
             success: isSuccess,

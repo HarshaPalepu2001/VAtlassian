@@ -46,7 +46,9 @@
 export const STRUCTURAL_FIELD_IDS = new Set(['parent', 'subtasks']);
 
 export function isStructuralField(fieldId) {
-  return STRUCTURAL_FIELD_IDS.has(String(fieldId));
+  // Inlined fast identity check for known structural fields to avoid Set lookup and String conversion overhead
+  return fieldId === 'parent' || fieldId === 'subtasks'
+    || (typeof fieldId === 'string' ? STRUCTURAL_FIELD_IDS.has(fieldId) : STRUCTURAL_FIELD_IDS.has(String(fieldId)));
 }
 
 /**
@@ -54,9 +56,25 @@ export function isStructuralField(fieldId) {
  * writes back — everything except the structural ids above.
  */
 export function contentFields(controlledFields) {
-  return (controlledFields ?? []).filter(field => !isStructuralField(field.field_id));
+  if (!controlledFields || controlledFields.length === 0) return [];
+  const result = [];
+  for (let i = 0; i < controlledFields.length; i++) {
+    const field = controlledFields[i];
+    if (!isStructuralField(field.field_id)) {
+      result.push(field);
+    }
+  }
+  return result;
 }
 
 export function contentFieldIds(controlledFields) {
-  return contentFields(controlledFields).map(field => String(field.field_id));
+  if (!controlledFields || controlledFields.length === 0) return [];
+  const result = [];
+  for (let i = 0; i < controlledFields.length; i++) {
+    const fId = controlledFields[i].field_id;
+    if (!isStructuralField(fId)) {
+      result.push(typeof fId === 'string' ? fId : String(fId));
+    }
+  }
+  return result;
 }
