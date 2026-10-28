@@ -324,3 +324,181 @@
 
 /* The panel is a size container, so its rows can reflow in a narrow column. */
 .va-page--panel { container-type: inline-size; }
+
+/* ── 2026-10-26 refinement: quieter surfaces ─────────────────────────────── */
+
+/* Paragraphs inside cards carry no browser margin; the stack sets rhythm. */
+.va-base p, .va-sign p, .va-merge p { margin: 0; }
+
+/* The baseline card: a title line, one sentence, then only what is needed. */
+.va-base { border-radius: var(--va-radius); gap: 8px; padding: 12px 16px; }
+.va-base--drifted { padding: 12px 16px; gap: 8px; border-color: var(--va-border); }
+.va-base__head { display: flex; align-items: center; gap: 8px; }
+.va-base__title { font-weight: 600; }
+.va-changes { width: 100%; border-collapse: collapse; margin-top: 4px; }
+.va-changes .va-change-row { display: table-row; }
+.va-changes td { padding: 6px 0; border-top: 1px solid var(--va-border); vertical-align: top; }
+.va-changes .va-change-row__name { padding-right: 12px; font-weight: 500; white-space: nowrap; }
+/* The change itself takes what room is left and shortens before anything else does. */
+.va-changes .va-change-row__what { width: 100%; max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.va-changes .va-change-row__who { padding-left: 12px; text-align: right; white-space: nowrap; }
+@container (max-width: 460px) { .va-changes .va-change-row__who { display: none; } }
+.va-decision-row { gap: 8px; margin-top: 4px; }
+/* Reject and Approve travel together, so a narrow panel moves them to their own line as a pair. */
+.va-decision-row__actions { display: flex; gap: 8px; margin-left: auto; }
+.va-next { padding-top: 4px; }
+
+/* Severity: one small dot, never a badge. */
+.va-sev { display: inline-block; flex: none; width: 6px; height: 6px; border-radius: 50%; margin-right: 6px; vertical-align: 2px; background: var(--va-mat-cosmetic); }
+.va-sev--CRITICAL { background: var(--va-mat-critical); }
+.va-sev--MAJOR { background: var(--va-mat-major); }
+.va-sev--MINOR { background: var(--va-text-subtlest); }
+
+/* The review window. */
+.va-window__head { gap: 4px; }
+.va-window__meta { margin: 0 0 8px; color: var(--va-text-subtle); }
+.va-tab__count { background: var(--va-neutral-bg); color: var(--va-neutral-text); }
+.va-window__body { padding: 16px 24px; }
+.va-brief { background: var(--va-surface-sunken); border-radius: 3px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; }
+.va-brief p { margin: 0; max-width: 860px; }
+.va-brief--empty { background: none; padding: 0; }
+
+/* The merge view: work items on the left, each field's two values on the right. */
+.va-merge { display: block; }
+.va-merge--rail { display: grid; grid-template-columns: 240px minmax(0, 1fr); border: 1px solid var(--va-border); border-radius: 3px; min-height: 360px; }
+.va-merge__rail { display: flex; flex-direction: column; background: var(--va-surface-sunken); border-right: 1px solid var(--va-border); padding: 8px 0; }
+.va-merge__item {
+  all: unset; box-sizing: border-box; cursor: pointer; display: flex; flex-direction: column; gap: 2px;
+  padding: 10px 16px; border-left: 3px solid transparent;
+}
+.va-merge__item:hover { background: var(--va-surface-hover); }
+.va-merge__item:focus-visible { outline: 2px solid var(--va-focus); outline-offset: -2px; }
+.va-merge__item.is-selected { background: var(--va-surface); border-left-color: var(--va-brand); }
+.va-merge__item-key { font-size: var(--va-size-meta); color: var(--va-text-subtle); }
+.va-merge__item-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.va-merge__item-progress { font-size: var(--va-size-meta); color: var(--va-text-subtle); }
+.va-merge__item.is-done .va-merge__item-progress { color: var(--va-success-text); }
+.va-merge__bar { display: block; height: 3px; border-radius: 2px; background: var(--va-border); overflow: hidden; max-width: 96px; margin-top: 2px; }
+.va-merge__bar i { display: block; height: 100%; background: var(--va-brand); }
+.va-merge__item.is-done .va-merge__bar i { background: var(--va-success-text); }
+.va-merge__main { min-width: 0; }
+.va-merge--rail .va-merge__main { padding: 12px 20px 20px; }
+.va-merge__head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.va-merge__title { margin: 0; font-size: var(--va-size-lead); font-weight: 600; }
+.va-merge__note { color: var(--va-text-subtle); margin-bottom: 8px !important; }
+.va-merge__cols, .va-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.va-merge__cols--deciding, .va-pair--deciding { grid-template-columns: minmax(0, 1fr) 88px minmax(0, 1fr); }
+.va-merge__cols { font-size: var(--va-size-meta); font-weight: 600; color: var(--va-text-subtle); margin-bottom: 2px; }
+.va-mfield { padding: 12px 0; border-top: 1px solid var(--va-border); }
+.va-merge__cols + .va-mfield { border-top: 0; }
+.va-mfield__head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.va-mfield__head .va-sev { margin-right: 0; }
+.va-mfield__name { margin: 0; font-size: var(--va-size-body); font-weight: 600; }
+.va-mfield__who { font-size: var(--va-size-meta); color: var(--va-text-subtle); }
+.va-mfield__why { margin-top: 6px !important; }
+.va-pair { align-items: center; }
+.va-pair__side {
+  border: 1px solid var(--va-border); border-radius: var(--va-radius); padding: 8px 12px; min-height: 40px;
+  overflow-wrap: anywhere; transition: border-color .12s, box-shadow .12s, opacity .12s;
+}
+.va-pair.is-keep .va-pair__side--old { border-color: var(--va-del-line); box-shadow: 0 0 0 1px var(--va-del-line); }
+.va-pair.is-keep .va-pair__side--new { opacity: .45; }
+.va-pair.is-take .va-pair__side--new { border-color: var(--va-ins-line); box-shadow: 0 0 0 1px var(--va-ins-line); }
+.va-pair.is-take .va-pair__side--old { opacity: .45; }
+.va-pair__side .va-side__text > .va-block + .va-block { margin-top: 6px; }
+.va-switch { display: flex; height: 32px; border: 1px solid var(--va-border-strong); border-radius: var(--va-radius); overflow: hidden; background: var(--va-surface); }
+.va-switch button {
+  all: unset; box-sizing: border-box; flex: 1; display: flex; align-items: center; justify-content: center;
+  cursor: pointer; color: var(--va-text-subtle);
+}
+.va-switch button + button { border-left: 1px solid var(--va-border); }
+.va-switch button:focus-visible { outline: 2px solid var(--va-focus); outline-offset: -2px; }
+.va-switch__keep:hover:not(:disabled) { background: var(--va-del-bg); color: var(--va-del-ink); }
+.va-switch__take:hover:not(:disabled) { background: var(--va-ins-bg); color: var(--va-ins-ink); }
+.va-switch button:disabled { color: var(--va-border-strong); cursor: not-allowed; }
+.va-final {
+  display: flex; gap: 12px; align-items: flex-start; border: 1px solid var(--va-border);
+  border-radius: var(--va-radius); padding: 8px 12px; overflow-wrap: anywhere;
+}
+.va-final--took { border-left: 3px solid var(--va-ins-line); }
+.va-final--kept { border-left: 3px solid var(--va-del-line); }
+.va-final__value { flex: 1; min-width: 0; }
+/* The final value is the record as it will read: no change marks left in it. */
+.va-final__value del, .va-final__value ins { background: none; color: inherit; text-decoration: none; }
+.va-final__tag { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: var(--va-size-meta); font-weight: 600; padding: 0 8px; border-radius: 3px; white-space: nowrap; }
+.va-final__tag svg { width: 12px; height: 12px; }
+.va-final--took .va-final__tag { background: var(--va-ins-bg); color: var(--va-ins-ink); }
+.va-final--kept .va-final__tag { background: var(--va-del-bg); color: var(--va-del-ink); }
+.va-mfield__history { margin-top: 6px; }
+.va-mfield__history > summary { cursor: pointer; font-size: var(--va-size-meta); color: var(--va-text-subtle); width: fit-content; }
+.va-mfield__history[open] > summary { margin-bottom: 6px; }
+@container (max-width: 640px) {
+  .va-merge--rail { grid-template-columns: minmax(0, 1fr); }
+  .va-merge__rail { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--va-border); }
+}
+
+/* The signing sheet: meaning, signer, reason, credential, Sign. */
+.va-sign {
+  display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: 520px; box-sizing: border-box;
+  padding: 20px 24px; background: var(--va-surface); border-radius: 3px; border: 1px solid var(--va-border);
+}
+.va-sheet > .va-sign { box-shadow: var(--va-shadow-overlay); border: 0; }
+.va-sign__title { margin: 0; font-size: var(--va-size-title); line-height: 24px; font-weight: 600; }
+.va-sign__meaning { background: var(--va-surface-sunken); border-radius: 3px; padding: 10px 12px; }
+.va-sign__impact { margin: 0; padding: 0 0 0 18px; display: flex; flex-direction: column; gap: 4px; }
+div.va-sign__impact { padding-left: 0; }
+.va-sign__signer { display: flex; align-items: center; gap: 10px; }
+.va-sign .va-field { margin: 0; }
+.va-sign__fine { font-size: var(--va-size-meta); color: var(--va-text-subtle); }
+.va-sign__actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* The receipt: facts, no seal. */
+.va-receipt { border-radius: 3px; border-top-width: 2px; }
+.va-brief--empty { align-items: flex-start; }
+.va-del .va-pill { text-decoration: line-through; border-color: var(--va-del-line); }
+.va-ins .va-pill { border-color: var(--va-ins-line); }
+
+/* History: signed versions as a table, compare on each row. */
+.va-history { display: flex; flex-direction: column; gap: 12px; }
+.va-history p { margin: 0; }
+.va-history__table { width: 100%; border-collapse: collapse; }
+.va-history__table th { text-align: left; font-size: var(--va-size-meta); font-weight: 600; color: var(--va-text-subtle); padding: 6px 8px; border-bottom: 2px solid var(--va-border); }
+.va-history__table td { padding: 8px; border-bottom: 1px solid var(--va-border); vertical-align: middle; }
+.va-history__table td:first-child, .va-history__table th:first-child { width: 28px; padding-left: 0; }
+.va-history__table tr.is-picked td { background: var(--va-brand-bg); }
+.va-history__table .va-lozenge { margin-left: 8px; }
+.va-history__act { text-align: right; white-space: nowrap; }
+.va-history__heading { margin: 0; font-size: var(--va-size-body); font-weight: 600; }
+.va-history__latest { gap: 12px; }
+.va-history__fields > summary { cursor: pointer; color: var(--va-text-subtle); width: fit-content; }
+.va-history__fields[open] > summary { margin-bottom: 8px; }
+.va-history__field { display: grid; grid-template-columns: minmax(120px, 0.6fr) minmax(0, 1fr) auto; gap: 12px; padding: 6px 0; border-top: 1px solid var(--va-border); align-items: baseline; }
+.va-history__field-name { font-weight: 500; }
+.va-history__field-value { overflow-wrap: anywhere; color: var(--va-text-subtle); }
+.va-version-compare { border-top: 1px solid var(--va-border); padding-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.va-lozenge--default { background: var(--va-neutral-bg); color: var(--va-neutral-text); }
+
+/* Settings: label left, control right, the way Jira's own settings read. */
+.va-settings { display: flex; flex-direction: column; gap: 0; max-width: 880px; }
+.va-settings > p { margin: 0 0 8px; }
+.va-settings__group { margin: 24px 0 4px; font-size: var(--va-size-lead); font-weight: 600; }
+.va-setrow { display: grid; grid-template-columns: 260px minmax(0, 1fr); column-gap: 16px; row-gap: 4px; padding: 12px 0; border-bottom: 1px solid var(--va-border); align-items: start; cursor: default; }
+.va-setrow__label { font-weight: 500; padding-top: 6px; }
+.va-setrow__control { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.va-setrow__hint { font-size: var(--va-size-meta); color: var(--va-text-subtle); max-width: 560px; }
+.va-setrow__control .va-select, .va-setrow__control select { min-width: 240px; }
+.va-input--short { width: 96px; }
+.va-settings__save { display: flex; justify-content: flex-end; align-items: center; gap: 8px; padding-top: 16px; }
+.va-toggle { position: relative; display: inline-block; width: 40px; height: 20px; margin-top: 6px; cursor: pointer; }
+.va-toggle input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.va-toggle span { position: absolute; inset: 0; border-radius: 10px; background: var(--va-text-subtlest); transition: background .15s; }
+.va-toggle span::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .15s; }
+.va-toggle input:checked + span { background: var(--va-success-text); }
+.va-toggle input:checked + span::after { transform: translateX(20px); }
+.va-toggle input:focus-visible + span { outline: 2px solid var(--va-focus); outline-offset: 2px; }
+.va-toggle input:disabled + span { opacity: .5; cursor: not-allowed; }
+@container (max-width: 640px) { .va-setrow { grid-template-columns: minmax(0, 1fr); gap: 6px; } }
+.va-setrow__switch { display: contents; cursor: pointer; }
+.va-setrow__hint--below { grid-column: 2; }
+@container (max-width: 640px) { .va-setrow__hint--below { grid-column: 1; } }
+.va-sign--field { border: 0; padding: 0; max-width: none; background: none; }

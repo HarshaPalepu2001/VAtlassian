@@ -1,10 +1,11 @@
 import { view } from '@forge/bridge';
 import { useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import Button from '@atlaskit/button';
 import { invoke } from '../../lib/bridge';
-import { Affirmation, Badge, CodeInput, Field, Select } from '../../ui/primitives';
+import { Badge, CodeInput, Field, Select } from '../../ui/primitives';
 import { AssuranceChip, Notice } from '../../ui/feedback';
-import { Icon, Seal } from '../../ui/brand';
+import { Avatar, Icon } from '../../ui/brand';
 import { formatTimestamp } from '../../ui/format';
 import { plural } from '../../ui/format';
 import { approvalMode, assuranceLabel } from '../../lib/assurance';
@@ -77,7 +78,7 @@ const fileList = (files: RejectedFile[]) => files.map(f => f.issueKey ? `${f.fil
  * controlled by the parent when `onSelectTransition` is given; it does not
  * create a competing evidence read.
  */
-export default function ApprovalControls({ summary, issueKey, onDone, disabled = false, evidence, evidenceLoading, evidenceError, evidenceHeld = false, selectedTransitionId, onSelectTransition, variant = 'panel', onFinished, mixedRequest = null }: {
+export default function ApprovalControls({ summary, issueKey, onDone, disabled = false, evidence, evidenceLoading, selectedTransitionId, onSelectTransition, variant = 'panel', onFinished, mixedRequest = null, fieldDecisions, lead }: {
   summary: PanelSummary;
   issueKey?: string;
   onDone: () => Promise<void>;
@@ -100,6 +101,10 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
   mixedRequest?: MixedRequest | null;
   /** Window only: the reviewer closed the receipt. */
   onFinished?: () => void;
+  /** Window only, field by field: the running count and the one Sign button that signs every choice. */
+  fieldDecisions?: { text: string; enabled: boolean; reason: string; onSave: () => void };
+  /** Panel only, while drift is open: what sits at the start of the decision row (Review changes). */
+  lead?: ReactNode;
 }) {
   const transitions = summary.transitions ?? [];
   const fromStatusName = summary.issue?.status?.name;
@@ -157,7 +162,8 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
   const busy = session.phase !== null;
   const deviceReady = mode !== 'biometric' || device === null || device.usableHere;
   const canSign = session.challenge?.decision === 'REJECT' ? canRejectDecision : canApproveDecision;
-  const ready = approvalReady({ level, code: session.code, confirmed: session.confirmed, busy: busy || disabled, eligible: canSign });
+  // Signing with the meaning on screen is the affirmation; there is no separate tick box.
+  const ready = approvalReady({ level, code: session.code, confirmed: true, busy: busy || disabled, eligible: canSign });
   const pending = summary.approval.pending;
   const driftEvidenceBlocked = reviewingDrift && (Boolean(evidenceLoading) || !evidence);
 
@@ -235,13 +241,13 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
       decision: challenge.decision,
       mode,
       challengeId: challenge.id,
-      confirmed: session.confirmed,
       issueKey: targetKey
     });
     const recording = recordingProgress({ decision: challenge.decision, reviewingDrift, transition });
     const gen = begin('submit', mode === 'biometric' ? PROGRESS.biometric : recording, challenge.decision);
     if (gen === null) return;
-    const { code, confirmed, note } = session;
+    const { code, note } = session;
+    const confirmed = true;
     try {
       // The device check happens before anything is recorded: a refusal here
       // leaves the challenge open, records nothing, and notifies nobody.
@@ -360,100 +366,58 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
     return <div className="va-sheet" role="dialog" aria-modal="true"><SignedReceipt receipt={receipt} issueKey={targetKey} onFinished={onFinished} /></div>;
   }
 
-  // THE SIGNING MOMENT GETS ITS OWN TREATMENT. Once a challenge is open the
-  // reviewer is no longer browsing, they are signing. In the window it is a
-  // sheet over everything else; in the panel it replaces these controls.
+  // THE SIGNING MOMENT. One sheet, the same wherever a signature starts: what
+  // it means, who is signing, an optional reason, then the credential. The
+  // method is only the last line — a code box, or a note that a device window
+  // opens. The hash, method and exact coverage go on the receipt afterwards.
   if (session.challenge && canSign && mode !== 'unavailable') {
     const decline = session.challenge.decision === 'REJECT';
     const mixedSheet = session.challenge.decision === 'MIXED';
     const role = reviewingDrift ? summary.approval.requiredRole : transition?.requiredRole;
     const authors = [...new Set((evidence?.drift?.fields ?? []).flatMap(f => (f.attribution ?? []).map(a => a.authorName).filter(Boolean)))] as string[];
-    const automated = (evidence?.drift?.fields ?? []).some(f => (f.attribution ?? []).some(a => a.source === 'AUTOMATION'));
-    const signingView = <section className={decline ? 'va-attest va-attest--decline' : 'va-attest'} aria-label={mixedSheet ? 'Sign and save decisions' : decline ? 'Sign and restore' : 'Sign and approve'}>
-      <div className="va-attest__banner">
-        <p className="va-attest__eyebrow">{mixedSheet ? 'Saving your field decisions' : decline ? 'Rejecting these changes' : 'Approving this work item'}</p>
-        <p className="va-attest__label">What your signature means</p>
-        <p className="va-attest__meaning">{session.challenge.meaning}</p>
-        {session.challenge.linkPolicyNotice && <p>{session.challenge.linkPolicyNotice}</p>}
-      </div>
-      <div className="va-attest__body">
-        {selector}
-        {liveRegion}
-        {session.message && <div style={{ marginBottom: 16 }}><Notice danger={session.failed}>{session.message}</Notice></div>}
-        {mode === 'totp' && summary.credentialEnrolled === false && <div style={{ marginBottom: 16 }}><Notice>Enrol your authenticator in Jira personal settings, under VAtlassian authenticator, before signing.</Notice></div>}
-        <ul className="va-checks">
-          <li className="va-check va-check--ok"><Icon name="check" />
-            <span>Signing as <strong>{summary.actorName ?? 'you'}</strong>{role ? `, ${role}` : ''} — your name goes on the record</span></li>
-          {reviewingDrift && evidence?.evidenceHash && (
-            <li className="va-check va-check--ok"><Icon name="check" />
-              <span>You are deciding exactly the changes you reviewed · evidence <code className="va-hash">{shortHash(evidence.evidenceHash)}</code></span></li>
-          )}
-          {reviewingDrift && summary.actorName && authors.length > 0 && (authors.includes(summary.actorName)
-            ? <li className="va-check va-check--warn"><Icon name="warning" /><span>Some of these edits are yours. Your signature will be recorded alongside them.</span></li>
-            : <li className="va-check va-check--ok"><Icon name="check" /><span>Independent review — you made none of these edits</span></li>)}
-          {reviewingDrift && automated && (
-            <li className="va-check va-check--info"><Icon name="info" /><span>Some edits came from an automation rule and are recorded as such</span></li>
-          )}
+    const ownEdits = reviewingDrift && Boolean(summary.actorName) && authors.includes(summary.actorName!);
+    const rejection = evidence?.rejection;
+    const signingView = <section className={decline ? 'va-sign va-sign--decline' : 'va-sign'} aria-label={mixedSheet ? 'Sign decisions' : decline ? 'Sign rejection' : 'Sign approval'}>
+      <h3 className="va-sign__title">{mixedSheet ? 'Sign decisions' : decline ? 'Sign rejection' : 'Sign approval'}</h3>
+      <p className="va-sign__meaning">{session.challenge.meaning}</p>
+      {session.challenge.linkPolicyNotice && <p className="va-secondary">{session.challenge.linkPolicyNotice}</p>}
+      {mixedSheet && <MixedConsequence decisions={session.challenge.decisions ?? []} fields={session.challenge.fields ?? []} />}
+      {decline && (
+        <ul className="va-sign__impact">
+          <li>The signed values are put back on every changed field.</li>
+          {evidenceLoading && !evidence && <li className="va-muted">Loading what this puts back…</li>}
+          {!!rejection?.deleteIssueKeys?.length && <li className="va-warning-text">Deletes {rejection.deleteIssueKeys.join(', ')}</li>}
+          {!!rejection?.recreateCount && <li className="va-warning-text">Recreates {plural(rejection.recreateCount, 'missing work item')}</li>}
+          {!!rejection?.attachments?.deleteFiles?.length && <li className="va-warning-text">Deletes {fileList(rejection.attachments.deleteFiles)}</li>}
+          {!!rejection?.attachments?.restoreFiles?.length && <li>Uploads {fileList(rejection.attachments.restoreFiles)} again from the vault</li>}
+          {!!rejection?.attachments?.unrestorableFiles?.length && <li className="va-warning-text">Can't bring back {fileList(rejection.attachments.unrestorableFiles)}: no copy is kept</li>}
+          {!!rejection?.attachments?.mediaUnknownFiles?.length && <li className="va-warning-text">{fileList(rejection.attachments.mediaUnknownFiles)} come back, but images of them in text may not</li>}
         </ul>
-        <div className="va-attest__consequence">
-          <AssuranceChip level={level} />
-          {mixedSheet ? <MixedConsequence decisions={session.challenge.decisions ?? []} fields={session.challenge.fields ?? []} />
-          : decline ? (
-            <div className="va-stack" style={{ marginLeft: 12 }}>
-              <span>The governed issue tree will be returned to its approved content.</span>
-              {evidenceLoading && !evidence && <span className="va-muted">Loading impact details…</span>}
-              {evidenceError && !evidence && <span className="va-muted">Impact details could not be loaded. Signing still restores the approved record.</span>}
-              {!!evidence?.rejection?.deleteIssueKeys?.length && (
-                <span className="va-warning-text"><strong>Permanently delete:</strong> {evidence.rejection.deleteIssueKeys.join(', ')}</span>
-              )}
-              {!!evidence?.rejection?.recreateCount && (
-                <span className="va-warning-text"><strong>Recreate {evidence.rejection.recreateCount} missing nodes.</strong></span>
-              )}
-              {!!evidence?.rejection?.attachments?.deleteFiles?.length && (
-                <span className="va-warning-text"><strong>Permanently delete files:</strong> {fileList(evidence.rejection.attachments.deleteFiles)}</span>
-              )}
-              {!!evidence?.rejection?.attachments?.restoreFiles?.length && (
-                <span><strong>Upload again from the vault:</strong> {fileList(evidence.rejection.attachments.restoreFiles)}. Text that shows these files is pointed at the restored copies.</span>
-              )}
-              {!!evidence?.rejection?.attachments?.mediaUnknownFiles?.length && (
-                <span className="va-warning-text"><strong>Restored, but text that shows them may not be:</strong> {fileList(evidence.rejection.attachments.mediaUnknownFiles)}. The vault does not know which media file each is, so an image of them in a description cannot be re-pointed.</span>
-              )}
-              {!!evidence?.rejection?.attachments?.unrestorableFiles?.length && (
-                <span className="va-warning-text"><strong>Cannot be restored, no copy in the vault:</strong> {fileList(evidence.rejection.attachments.unrestorableFiles)}</span>
-              )}
-              {evidence?.rejection?.attachments?.vaultChecked === false && !!evidence.rejection.attachments.restoreFiles.length && (
-                <span className="va-muted">The vault could not be checked, so some of these files may not come back.</span>
-              )}
-            </div>
-          ) : (
-            <div className="va-stack" style={{ marginLeft: 12 }}>
-              <span>{reviewingDrift || transition?.capturesBaseline ? 'A recursive baseline will be captured from the approved issue tree.' : 'This transition records the approval without replacing the active baseline.'}</span>
-              {!!summary.baseline && !reviewingDrift && (
-                <span className="va-warning-text">This transition is blocked if there are unapproved changes.</span>
-              )}
-            </div>
-          )}
+      )}
+      {selector}
+      {liveRegion}
+      {session.message && <Notice danger={session.failed}>{session.message}</Notice>}
+      {mode === 'totp' && summary.credentialEnrolled === false && <Notice>Set up your authenticator first: Jira personal settings, then VAtlassian authenticator.</Notice>}
+      <div className="va-sign__signer">
+        <Avatar name={summary.actorName} size={32} />
+        <div className="va-stack va-stack--tight">
+          <strong>{summary.actorName ?? 'You'}</strong>
+          {role && <span className="va-subtlest">{role}</span>}
         </div>
-        {/* The reason travels with the signature, not ahead of it: it is read
-            at submit and stored on the approval, so it belongs where the
-            signer is committing rather than on the browsing screen. */}
-        <Field label="Reason" hint="Optional. Stored with your signature and shown in the audit trail.">
-          <textarea className="va-input" value={session.note} maxLength={4000} disabled={busy || disabled} onChange={e => patch(session.generation, { note: e.target.value })} rows={3} />
-        </Field>
-        <div className="va-chips" role="group" aria-label="Common reasons">
-          {(decline ? REJECT_REASONS : APPROVE_REASONS).map(reason => (
-            <button key={reason} type="button" className="va-chip-button" disabled={busy || disabled}
-              onClick={() => patch(session.generation, { note: session.note.trim() ? `${session.note.trim()} ${reason}.` : `${reason}.` })}>{reason}</button>
-          ))}
-        </div>
-        <Affirmation checked={session.confirmed} onChange={confirmed => patch(session.generation, { confirmed })} disabled={busy || disabled}>I have reviewed this work item and the changes shown. My decision will be recorded against my name.</Affirmation>
-        {session.confirmed && mode === 'totp' && <div style={{ marginBottom: 16 }}><Field label="Authenticator code"><CodeInput value={session.code} onChange={code => patch(session.generation, { code })} disabled={busy || disabled} onSubmit={() => { if (ready) void submit(); }} /></Field></div>}
-        {session.confirmed && mode === 'biometric' && <p className="va-secondary" style={{ marginBottom: 16 }}>Signing opens a separate device window for Face ID, Touch ID, or Windows Hello. Nothing is recorded until that check passes.</p>}
-        <p className="va-manifest">{summary.actorName ?? 'Your name'} · {formatTimestamp(Date.now())} · {session.challenge.meaning}</p>
-        <div className="va-row">
-          <Button appearance={decline ? 'danger' : 'primary'} isDisabled={!ready} onClick={() => void submit()}>{session.phase === 'submit' ? session.progress : mixedSheet ? 'Sign and save' : decline ? 'Sign and restore' : 'Sign and approve'}</Button>
-          <Button appearance="subtle" isDisabled={busy || disabled} onClick={() => patch(session.generation, { challenge: null, message: '', failed: false })}>Cancel</Button>
-        </div>
+      </div>
+      {ownEdits && <p className="va-warning-text">Some of these changes are yours. That is recorded with your signature.</p>}
+      {/* The reason travels with the signature: it is read at submit and stored on the approval. */}
+      <Field label="Reason (optional)">
+        <textarea className="va-input" value={session.note} maxLength={4000} disabled={busy || disabled} onChange={e => patch(session.generation, { note: e.target.value })} rows={2} />
+      </Field>
+      {mode === 'totp' && <Field label="Authenticator code"><CodeInput value={session.code} onChange={code => patch(session.generation, { code })} disabled={busy || disabled} onSubmit={() => { if (ready) void submit(); }} /></Field>}
+      <p className="va-sign__fine">
+        {mode === 'biometric' ? 'A small window opens for Face ID, Touch ID or Windows Hello. ' : ''}
+        Your name, the time and this meaning are recorded and can't be changed afterwards.
+      </p>
+      <div className="va-sign__actions">
+        <Button appearance="subtle" isDisabled={busy || disabled} onClick={() => patch(session.generation, { challenge: null, message: '', failed: false })}>Cancel</Button>
+        <Button appearance={decline ? 'danger' : 'primary'} isDisabled={!ready} onClick={() => void submit()}>{session.phase === 'submit' ? session.progress : mixedSheet ? 'Sign decisions' : decline ? 'Sign and restore' : 'Sign and approve'}</Button>
       </div>
     </section>;
     return variant === 'window' ? <div className="va-sheet" role="dialog" aria-modal="true">{signingView}</div> : signingView;
@@ -467,14 +431,13 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
     </Button>
   );
   const rejectButton = canRejectDecision && (
-    <Button appearance="danger" isDisabled={busy || disabled || !deviceReady || driftEvidenceBlocked} onClick={() => void requestChallenge('REJECT')}>{decisionLabel('REJECT', 'Reject and restore')}</Button>
+    <Button isDisabled={busy || disabled || !deviceReady || driftEvidenceBlocked} onClick={() => void requestChallenge('REJECT')}>{decisionLabel('REJECT', 'Reject and restore')}</Button>
   );
-  const decisionButtons = <>{approveButton}{rejectButton}</>;
   const providerNotices = <>
     {mode === 'unavailable' && <Notice>This approval provider is not configured. Ask an administrator to configure a supported assurance level.</Notice>}
     {mode === 'biometric' && device && !device.usableHere && <Notice>
-      {device.enrolled ? 'Your registered device cannot be used at this address. Register this browser before approving.' : 'This transition is signed with a biometric check. Register this device before approving.'}
-      {' '}<Button isDisabled={busy || disabled} onClick={() => void setupDevice()}>{session.phase === 'device' ? session.progress : 'Set up biometric approval'}</Button>
+      {device.enrolled ? 'Your registered device cannot be used at this address. Register this browser before approving.' : 'This approval is signed with Face ID, Touch ID or Windows Hello. Register this device first.'}
+      {' '}<Button isDisabled={busy || disabled} onClick={() => void setupDevice()}>{session.phase === 'device' ? session.progress : 'Register this device'}</Button>
     </Notice>}
   </>;
   const messages = <>
@@ -486,71 +449,55 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
     )}
   </>;
 
-  // THE WINDOW'S FOOTER. One line: what is being decided, how it is signed,
-  // and the two buttons — the same decision the panel offers, reachable
-  // without closing the review.
+  // THE WINDOW'S FOOTER. Field by field, it counts the choices and signs them
+  // all at once; otherwise it carries the whole-set decision.
   if (variant === 'window') {
+    const byField = reviewingDrift && canAct && fieldDecisions;
     return <div className="va-decision-bar">
       <div className="va-decision-bar__messages">{messages}{!canAct ? (explanation && <Notice>{explanation}</Notice>) : providerNotices}</div>
       <div className="va-decision-bar__row">
-        <Icon name="lock" />
-        <span className="va-secondary va-grow">
-          {reviewingDrift
-            ? <>You are deciding exactly these changes{evidence?.evidenceHash ? <> · evidence <code className="va-hash">{shortHash(evidence.evidenceHash)}</code></> : null}</>
-            : transition ? <>Sign the configured transition to {transitionDestination(transition)}</> : 'Choose which transition to approve.'}
-        </span>
-        {selector}
-        {canAct && mode !== 'unavailable' && <>
-          <AssuranceChip level={level} />
-          {(reviewingDrift ? summary.approval.requiredRole : transition?.requiredRole) && <span className="va-subtlest">{reviewingDrift ? summary.approval.requiredRole : transition?.requiredRole}</span>}
+        {byField ? <>
+          <span className="va-secondary va-grow">{fieldDecisions.text}</span>
+          <Button appearance="primary" isDisabled={!fieldDecisions.enabled || busy || disabled || !deviceReady}
+            onClick={fieldDecisions.onSave}>{decisionLabel('MIXED', 'Sign decisions')}</Button>
+        </> : <>
+          <span className="va-secondary va-grow">
+            {reviewingDrift ? 'Decide all of these changes together.'
+              : transition ? `Approve the move to ${transitionDestination(transition)}.` : 'Choose which transition to approve.'}
+          </span>
+          {selector}
           {/* Jira puts a window's primary action rightmost — in the markup too,
               so keyboard order matches what the eye sees. */}
-          {rejectButton}{approveButton}
+          {canAct && mode !== 'unavailable' && <>{rejectButton}{approveButton}</>}
         </>}
       </div>
     </div>;
   }
 
-  // DRIFT, IN THE BASELINE CARD. The drift is flagged where the baseline is,
-  // so its decision sits there too; the Approvals section only says what it
-  // is waiting for.
+  // DRIFT, ON THE BASELINE CARD: the whole-set decision beside Review changes.
   if (reviewingDrift) {
     return <div className="va-stack va-stack--tight">
       {messages}
-      {!canAct ? (explanation && <Notice>{explanation}</Notice>) : <>
-        {providerNotices}
-        {mode !== 'unavailable' && <div className="va-row va-decision-row">
-          {decisionButtons}
-          <span className="va-spacer" />
-          <AssuranceChip level={level} />
-        </div>}
-      </>}
-      <p className="va-subtlest va-footnote">
-        <Icon name="lock" size={14} />
-        <span>Review the tracked changes since baseline. Approving captures a new baseline; rejecting restores the latest baseline.
-          {summary.approval.requiredRole ? ` Decided by ${summary.approval.requiredRole}.` : ''}</span>
-      </p>
+      {canAct && providerNotices}
+      <div className="va-row va-decision-row">
+        {lead}
+        {canAct && mode !== 'unavailable' && <span className="va-decision-row__actions">{rejectButton}{approveButton}</span>}
+      </div>
+      {!canAct && explanation && <p className="va-subtlest">{explanation}</p>}
     </div>;
   }
 
-  return <div className="va-stack">
-    {/* Every viewer — eligible or not — sees the exact rule this work item is
-        controlled by. Nothing here is hidden behind a disclosure. */}
-    <ControlFacts
-      summary={summary}
-      fromStatusName={fromStatusName}
-      authoritativeReady={!summary.baseline || Boolean(evidence) || Boolean(evidenceError) || evidenceHeld}
-    />
+  // THE NEXT CONTROLLED MOVE, when nothing is waiting on the baseline.
+  if (!transitions.length) return messages;
+  return <div className="va-stack va-stack--tight">
     {messages}
-    {transition && <p className="va-secondary" style={{ margin: 0 }}>Sign the configured transition to {transitionDestination(transition)}.</p>}
-    {!canAct ? (explanation && <Notice>{explanation}</Notice>) : <>
+    {!canAct ? (explanation && <p className="va-subtlest">{explanation}</p>) : <>
       {selector}
-      {!transition && <p className="va-muted">Choose which transition to approve.</p>}
       {providerNotices}
       {mode !== 'unavailable' && <div className="va-row va-decision-row">
-        {decisionButtons}
+        {approveButton}
         <span className="va-spacer" />
-        <AssuranceChip level={level} />
+        {transition?.requiredRole && <span className="va-subtlest">{transition.requiredRole}</span>}
       </div>}
     </>}
   </div>;
@@ -587,9 +534,9 @@ function MixedConsequence({ decisions, fields }: { decisions: FieldDecision[]; f
   const deleted = rejectedFields.filter(f => f.kind === 'attachments').flatMap(f => (f.added ?? []).map(fileName));
   const uploaded = rejectedFields.filter(f => f.kind === 'attachments').flatMap(f => (f.removed ?? []).map(fileName));
   return (
-    <div className="va-stack" style={{ marginLeft: 12 }}>
+    <div className="va-sign__impact va-stack va-stack--tight">
       <span><strong>{plural(approved.length, 'change')} approved:</strong> {approved.join(', ') || 'none'}</span>
-      <span><strong>{plural(rejected.length, 'change')} rejected:</strong> {rejected.join(', ') || 'none'}{rejected.length ? ' — these are returned to their approved values.' : ''}</span>
+      <span><strong>{plural(rejected.length, 'change')} rejected:</strong> {rejected.join(', ') || 'none'}{rejected.length ? ', put back to their signed values' : ''}</span>
       {!!deleted.length && <span className="va-warning-text"><strong>Permanently delete files:</strong> {deleted.join(', ')}</span>}
       {!!uploaded.length && <span><strong>Upload again from the vault:</strong> {uploaded.join(', ')}</span>}
       <span>{approved.length
@@ -599,8 +546,6 @@ function MixedConsequence({ decisions, fields }: { decisions: FieldDecision[]; f
   );
 }
 
-const APPROVE_REASONS = ['Re-planned with the team', 'Agreed with the product owner', 'Correcting an error'];
-const REJECT_REASONS = ['Not agreed with the approver', 'Made outside the change process', 'Made in error'];
 
 /** "9f3a·c21e" — enough of a hash to compare by eye, the whole of it on hover elsewhere. */
 function shortHash(hash: string): string {
@@ -622,9 +567,7 @@ function SignedReceipt({ receipt, issueKey, onFinished }: { receipt: Receipt; is
   const utc = new Date(receipt.at).toISOString().replace('T', ' ').slice(0, 19);
   return <section className="va-receipt" aria-label="Signed record">
     <header className="va-receipt__head">
-      <Seal hash={receipt.approvalId ?? receipt.evidenceHash} size={56} tone="success" label="Seal of this signature" />
-      <div className="va-stack va-stack--tight">
-        <span className="va-receipt__eyebrow">Signed</span>
+            <div className="va-stack va-stack--tight">
         <h2 className="va-receipt__title">{mixed ? mixedHeadline(mixed)
           : approved
             ? (receipt.reviewingDrift ? 'Changes approved. A new baseline is now the approved record.' : `Approved${receipt.destination ? ` to ${receipt.destination}` : ''}.`)
@@ -680,13 +623,20 @@ function noActionExplanation(summary: PanelSummary, reviewingDrift: boolean): st
  * parent's signature, so a child's own restores never mention it: when that is
  * the newest restore to have touched this item, say so, and name the parent.
  */
-function restorationLabel(restore: PanelSummary['restore'], via: PanelSummary['restoredVia']): string {
+export function restorationLabel(restore: PanelSummary['restore'], via: PanelSummary['restoredVia']): string {
   const viaIsNewer = via && (!restore || (via.finishedAt ?? 0) > (restore.finishedAt ?? 0));
   if (via && viaIsNewer) {
     const when = formatTimestamp(via.finishedAt);
     return `${restoreStateLabel(via.state)} through ${via.parentIssueKey ?? 'its parent'}'s rejection${when ? ` · ${when}` : ''}`;
   }
   return restore ? restoreStateLabel(restore.state) : 'No restoration has run';
+}
+
+/** A parent's rejection that rewrote this work item, when that is the newest restore here; otherwise nothing. */
+export function restoredViaLine(summary: PanelSummary): string | null {
+  const via = summary.restoredVia;
+  if (!via || (summary.restore && (summary.restore.finishedAt ?? 0) >= (via.finishedAt ?? 0))) return null;
+  return restorationLabel(summary.restore, via);
 }
 
 export function ControlFacts({ summary, fromStatusName, authoritativeReady = true, held = false }: { summary: PanelSummary; fromStatusName?: string; authoritativeReady?: boolean; held?: boolean }) {

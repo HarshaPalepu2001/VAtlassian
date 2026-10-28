@@ -265,6 +265,15 @@ export default function DiagnosticsHud({
     NO_BASELINE: { bg: '#eae6ff', text: '#403294', border: '#c0b6f2' }
   };
 
+  // Folded, it is one quiet link at the foot of the panel.
+  if (!open) {
+    return (
+      <div style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end' }}>
+        <button type="button" className="va-link-button" style={{ fontSize: 12 }} onClick={() => setOpen(true)}>Diagnostics</button>
+      </div>
+    );
+  }
+
   return (
     <aside
       aria-label="VAtlassian Observability Harness"

@@ -4,14 +4,13 @@ import Button from '@atlaskit/button';
 import { Page } from '../ui/primitives';
 import { Notice } from '../ui/feedback';
 import useDecisionState from './useDecisionState';
-import ApprovalControls, { ControlFacts } from './sections/ApprovalControls';
+import ApprovalControls, { restoredViaLine } from './sections/ApprovalControls';
 import BaselineSection from './sections/BaselineSection';
-import { LatestApproval } from './sections/BaselineRecord';
 import RestoreStatus, { restoreBelongsTo, restoreFinished } from './sections/RestoreStatus';
 import { openReview } from '../review/openReview';
 import DiagnosticsHud from './DiagnosticsHud';
 import usePanelState from './usePanelState';
-import { resolveSelectedAction } from './approvalModel';
+import { resolveSelectedAction, transitionDestination } from './approvalModel';
 
 
 
@@ -138,6 +137,10 @@ function IssuePanelBody({ issueKey: issueKeyProp, onDone }: Props) {
   // server's live count, the same one the validator holds on) or by one above
   // it. A change below only asks this item for a decision.
   const heldHere = (summary?.drift?.count ?? 0) > 0 || Boolean(summary?.drift?.heldBy);
+  const heldMove = (summary?.transitions ?? []).find(t => t.canApprove) ?? summary?.transitions?.[0];
+  const heldNote = !heldHere
+    ? 'Only the changes below this work item are waiting; it is not held itself.'
+    : heldMove ? `Moving to ${transitionDestination(heldMove)} is held until these changes are decided.` : 'Controlled moves are held until these changes are decided.';
   const review = (tab: 'changes' | 'summary' | 'record') => {
     void openReview({ issueKey, tab, onClose: () => { void refresh(); onDone?.(); } }).catch(() => {});
   };
@@ -153,6 +156,7 @@ function IssuePanelBody({ issueKey: issueKeyProp, onDone }: Props) {
       evidenceHeld={Boolean(heldEvidence)}
       selectedTransitionId={selectedTransitionId}
       onSelectTransition={setSelectedTransitionId}
+      lead={<Button onClick={() => review('changes')}>Review changes</Button>}
     />
   );
   // Running, it is a card of its own; finished, one line of the baseline's record.
@@ -172,8 +176,7 @@ function IssuePanelBody({ issueKey: issueKeyProp, onDone }: Props) {
       {!summary && (
         <div className="va-stack" aria-busy={!error} aria-label="Approval summary">
           {(issueKeyProp ?? contextIssue?.key) && <p className="va-secondary">{issueKeyProp ?? contextIssue?.key}</p>}
-          <PanelSection title="Approvals"><SkeletonRow label="Control state" failed={!!error} /><SkeletonRow label="Available actions" failed={!!error} /></PanelSection>
-          <PanelSection title="Baseline"><SkeletonRow label="Latest baseline" failed={!!error} /><SkeletonRow label="Latest approval" failed={!!error} /></PanelSection>
+          <SkeletonRow label="Baseline" failed={!!error} />
         </div>
       )}
 
@@ -198,54 +201,32 @@ function IssuePanelBody({ issueKey: issueKeyProp, onDone }: Props) {
             </Notice>
           )}
 
-          {/* TWO SECTIONS, ALWAYS THE SAME TWO. Approvals is the workflow: every
-              controlled move from here and who may sign it. Baseline is the
-              record: what was signed, and — flagged on the same card — what has
-              changed since. Nothing in either expands; reading at length
-              happens in the review window. */}
-          <PanelSection title="Approvals" subtitle={reviewingDrift
-            ? (heldHere ? 'Held while changes to the baseline are undecided'
-              : 'Changes below this work item await a decision. It is not held: only they are')
-            : 'Your decision is recorded against your name and cannot be edited afterwards.'}>
-            {reviewingDrift
-              ? <ControlFacts summary={authoritativeSummary!} fromStatusName={summary.issue?.status?.name} held={heldHere}
-                  authoritativeReady={hasAuthoritativeEvidence || Boolean(evidenceError) || Boolean(heldEvidence)} />
-              : controls}
-            <LatestApproval approval={summary.latestApproval} />
-          </PanelSection>
-
-          <PanelSection title="Baseline" subtitle="The approved record this work item is held to">
-            <BaselineSection
-              summary={summary}
-              drift={shownDrift!}
-              evidence={shownEvidence}
-              evidenceReady={evidenceReady}
-              evidenceLoading={evidenceLoading}
-              evidenceError={evidenceError}
-              onRetryEvidence={retryEvidence}
-              onOpenReview={review}
-              decision={reviewingDrift ? controls : null}
-              restore={restoreFinished(summary.restore?.state) && restoreBelongsTo(summary.restore, summary.baseline) ? restoreStatus : null}
-            />
-            {!restoreFinished(summary.restore?.state) && restoreStatus}
-          </PanelSection>
+          {/* ONE CARD. The baseline's state in a line, the changes when there
+              are any, and the decision on them. With nothing waiting on the
+              baseline, the next controlled move sits under it. */}
+          <BaselineSection
+            summary={summary}
+            drift={shownDrift!}
+            evidence={shownEvidence}
+            evidenceReady={evidenceReady}
+            evidenceLoading={evidenceLoading}
+            evidenceError={evidenceError}
+            onRetryEvidence={retryEvidence}
+            onOpenReview={review}
+            decision={reviewingDrift ? controls : null}
+            heldNote={reviewingDrift ? heldNote : undefined}
+            restore={<>
+              {restoredViaLine(summary) && <p className="va-subtlest">{restoredViaLine(summary)}</p>}
+              {restoreFinished(summary.restore?.state) && restoreBelongsTo(summary.restore, summary.baseline) ? restoreStatus : null}
+            </>}
+          />
+          {!restoreFinished(summary.restore?.state) && restoreStatus}
+          {!reviewingDrift && (summary.transitions?.length ?? 0) > 0 && <div className="va-next">{controls}</div>}
         </>
       )}
 
-      <DiagnosticsHud summary={authoritativeSummary} evidence={evidence} />
+      {/* Diagnostics are for administrators, and folded away until asked for. */}
+      {summary?.adminIncidentCount != null &&       <DiagnosticsHud summary={authoritativeSummary} evidence={evidence} />}
     </div>
-  );
-}
-
-/** One of the panel's two sections: a quiet heading, then its content. Never a card in a card. */
-function PanelSection({ title, subtitle, children }: { title: string; subtitle?: string; children: ReactNode }) {
-  return (
-    <section className="va-panel-section" aria-label={title}>
-      <header className="va-panel-section__head">
-        <h3 className="va-panel-section__title">{title}</h3>
-        {subtitle && <span className="va-panel-section__sub">{subtitle}</span>}
-      </header>
-      <div className="va-stack">{children}</div>
-    </section>
   );
 }
