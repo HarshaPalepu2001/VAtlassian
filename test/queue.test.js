@@ -185,11 +185,11 @@ test('a child approved through its parent reaches the parent\'s role holders', a
 test('a site-wide grant finds changes in any project, and a project grant only its own', async () => {
   let calls = world({ grants: [grant('SDE-1', { project_id: null })] });
   await run();
-  assert.deepEqual(calls.decisionScope, { projectIds: [], siteWide: true });
+  assert.deepEqual(calls.decisionScope, { projectIds: [], siteWide: true, limit: 2000 });
 
   calls = world({ grants: [grant('SDE-1', { project_id: '10001' }), grant('QA', { project_id: '10002' })] });
   await run();
-  assert.deepEqual(calls.decisionScope, { projectIds: [10001, 10002], siteWide: false });
+  assert.deepEqual(calls.decisionScope, { projectIds: [10001, 10002], siteWide: false, limit: 2000 });
 });
 
 test('an item the viewer cannot browse is never listed, whatever the app recorded about it', async () => {
@@ -276,6 +276,32 @@ test('loading more continues the transition search and does not repeat the decis
   assert.ok(more.items.length > 0);
   assert.ok(more.items.every(i => i.kind === 'TRANSITION'));
   assert.equal(calls.searches.filter(q => q.startsWith('id in')).length, 1, 'the decisions are read once, on the first page');
+});
+
+test('every pending decision is reachable across pages, in order, and none of them leaks into transitions', async () => {
+  // 201 eligible decisions: one more than the old single-page cap. Each is
+  // also a live candidate for the transition search below, so if the skip set
+  // were ever rebuilt from only the page that finished decisions (losing the
+  // other 200 ids), this test would see transition items appear alongside
+  // them — items a validator would refuse, not actually decidable moves.
+  const COUNT = 201;
+  const issues = Array.from({ length: COUNT }, (_, n) => issue({ id: n + 1, transitions: [{ id: '101', name: 'Done', to: '5' }] }));
+  const decisions = Array.from({ length: COUNT }, (_, n) => changed(n + 1, { last_drift_at: 1000 + n }));
+  const baselines = Array.from({ length: COUNT }, (_, n) => baseline(n + 1));
+  world({ issues, decisions, baselines, rules: [{ from: '3', to: '5', role: 'SDE-1' }] });
+
+  const seen = [];
+  let token;
+  for (let page = 0; page < 10 && (page === 0 || token); page += 1) {
+    const result = await run({ nextPageToken: token });
+    seen.push(...result.items);
+    token = result.nextPageToken;
+  }
+
+  assert.equal(seen.length, COUNT, 'every eligible decision is eventually reachable, not capped at the old 200-row limit');
+  assert.equal(new Set(seen.map(i => i.issueKey)).size, COUNT, 'no decision repeats across pages');
+  assert.deepEqual(seen.map(i => i.lastDriftAt), [...seen.map(i => i.lastDriftAt)].sort((a, b) => a - b), 'oldest first, across the page boundary');
+  assert.ok(seen.every(i => i.kind === 'CHANGES'), 'every item under decision keeps that kind on every page: none leaked through as a transition');
 });
 
 test('someone with no approval role gets an empty list without any Jira search', async () => {

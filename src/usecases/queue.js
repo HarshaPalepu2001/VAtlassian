@@ -49,38 +49,95 @@ const SEARCH_PAGE = 50;
 const MAX_SEARCH_PAGES = 4;
 const SEARCH_BUDGET_MS = 12_000;
 const READ_CONCURRENCY = 5;
+/** Decisions shown per page — unchanged from the single page this used to be capped at. */
+const DECISIONS_PAGE = 200;
+/**
+ * Safety valve on how many outstanding decisions one call will ever fetch.
+ * Far above any healthy backlog. Past it, `decisionsOverflow` says so instead
+ * of silently acting as if the scan was complete — which an unbounded default
+ * limit used to do, invisibly, once a scope passed DECISIONS_PAGE records.
+ */
+const DECISIONS_HARD_CAP = 2000;
 
 export async function list({ payload = {}, context }) { return respond(async () => {
   const actor = actorFrom(context);
   const grants = await grantsFor(actor.accountId);
   if (!grants.length) return { items: [], nextPageToken: null };
-  // Every page needs to know which items have a decision waiting, to keep them
-  // out of the transitions; only the first page lists them.
-  const waiting = await decisionsFor(grants);
-  const firstPage = !payload.nextPageToken;
+  const { decisionsOffset, transitionsToken } = decodeToken(payload.nextPageToken);
+
+  // Recomputed on every page, not only while decisions are still being shown:
+  // it is what keeps an item under decision from ever also showing as a
+  // transition (gate.js holds it at the validator, but that does not remove
+  // it from Jira's own transition list). Losing this set after decisions
+  // finish paging would let such an item reappear once transitions resume.
+  // Storage only, no Jira read, so paying for it again each call is cheap.
+  const { items: all, overflow } = await decisionsFor(grants);
+  const skip = new Set(all.map(({ row }) => Number(row.issue_id)));
+  const pageRows = decisionsOffset != null ? all.slice(decisionsOffset, decisionsOffset + DECISIONS_PAGE) : [];
+  const decisionsDone = decisionsOffset == null || decisionsOffset + pageRows.length >= all.length;
+
   const [decisions, transitions] = await Promise.all([
-    firstPage ? decisionItems(waiting, actor) : [],
-    transitionItems({ grants, actor, pageToken: payload.nextPageToken ?? null,
-      skip: new Set(waiting.map(({ row }) => Number(row.issue_id))) })
+    pageRows.length ? decisionItems(pageRows, actor) : [],
+    decisionsDone
+      ? transitionItems({ grants, actor, pageToken: transitionsToken ?? null, skip })
+      : Promise.resolve({ items: [], nextPageToken: transitionsToken ?? null })
   ]);
-  return { items: [...decisions, ...transitions.items], nextPageToken: transitions.nextPageToken };
+
+  const nextPageToken = encodeToken({
+    decisionsOffset: decisionsDone ? null : decisionsOffset + pageRows.length,
+    transitionsToken: transitions.nextPageToken
+  });
+  return { items: [...decisions, ...transitions.items], nextPageToken, ...(overflow ? { decisionsOverflow: true } : {}) };
 }); }
+
+/**
+ * The app's own opaque continuation string — never Jira's raw token alone.
+ * It carries both where the decisions scan is and Jira's transition-search
+ * continuation, so cursoring through one can never lose the place in the
+ * other. `decisionsOffset: null` means the decisions scan is finished;
+ * no token yet (the first call) starts it at offset 0.
+ */
+function decodeToken(raw) {
+  if (!raw) return { decisionsOffset: 0, transitionsToken: null };
+  try {
+    const parsed = JSON.parse(raw);
+    return {
+      decisionsOffset: Number.isInteger(parsed.o) ? parsed.o : null,
+      transitionsToken: typeof parsed.t === 'string' ? parsed.t : null
+    };
+  } catch {
+    // Only ever reached with a token this function did not itself produce.
+    // Degrading to "decisions already finished" is safe: it never re-shows a
+    // decision, it only moves on to transitions sooner than it should.
+    return { decisionsOffset: null, transitionsToken: null };
+  }
+}
+function encodeToken({ decisionsOffset, transitionsToken }) {
+  return decisionsOffset == null && !transitionsToken ? null : JSON.stringify({ o: decisionsOffset, t: transitionsToken });
+}
 
 // ── Decisions: changes and unfinished restores ─────────────────────────────
 
-/** The recorded items this person may decide. Storage only; no Jira read. */
+/**
+ * Every recorded item this person may decide, oldest first, and whether the
+ * hard cap below was reached. Storage only; no Jira read. Bounded by
+ * DECISIONS_HARD_CAP, not by one page's display size (DECISIONS_PAGE) — the
+ * caller pages the already-fetched list in memory rather than re-querying.
+ */
 async function decisionsFor(grants) {
   const siteWide = grants.some(g => g.project_id == null);
   const projectIds = siteWide ? [] : [...new Set(grants.map(g => Number(g.project_id)).filter(Number.isFinite))];
-  const rows = await awaitingDecision({ projectIds, siteWide });
-  if (!rows.length) return [];
+  const rows = await awaitingDecision({ projectIds, siteWide, limit: DECISIONS_HARD_CAP });
+  const overflow = rows.length >= DECISIONS_HARD_CAP;
+  if (!rows.length) return { items: [], overflow };
   const baselines = byIssue(await activeBaselines(rows.map(row => Number(row.issue_id))));
-  return rows.flatMap(row => {
+  const items = rows.flatMap(row => {
     const baseline = baselines.get(Number(row.issue_id));
     const role = frozenRole(baseline);
     return role && grants.some(g => rowAuthorises(g, { projectId: row.project_id, issueTypeId: row.issue_type_id, role }))
       ? [{ row, baseline }] : [];
   });
+  return { items, overflow };
 }
 
 /** The role a change to this baseline needs, or null when it recorded no complete rule to decide it by. */
