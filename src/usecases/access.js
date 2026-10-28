@@ -31,12 +31,19 @@ export function serialise(value) {
 }
 
 /** The two fields a thrown error carries for a transient, retry-able failure
- *  (an upstream 429/503, mainly) — never fabricated, only forwarded when the
- *  thrower actually set them, so an ordinary refusal gains no extra fields.
+ *  — an upstream 429/503, and nothing else. Several Jira adapters (e.g.
+ *  testmgmt/jira.js's `json()`) deliberately set `error.status` to the raw
+ *  403/404 from Jira while collapsing both into the SAME `reason` ('NOT_FOUND'),
+ *  specifically so a caller can never tell "exists but you can't see it" from
+ *  "does not exist" — a permission-existence oracle. Forwarding `status`
+ *  unconditionally would hand that distinction straight back to the client,
+ *  so this only ever forwards it for a status that is itself the transient
+ *  signal (429/503), never fabricated, and never for any other code.
  *  Exported so tmRespond (testmgmt/messages.js) applies the same contract. */
 export function retryGuidance(error) {
+  if (error?.status !== 429 && error?.status !== 503) return {};
   return {
-    ...(Number.isInteger(error?.status) ? { status: error.status } : {}),
+    status: error.status,
     ...(Number.isFinite(error?.retryAfterMs) ? { retryAfterMs: error.retryAfterMs } : {})
   };
 }
