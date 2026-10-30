@@ -1,0 +1,1091 @@
+{
+  "sourceHead": "a87375aeb4431d81089537be8fe4418f6a505cc9",
+  "decisions": [
+    {
+      "id": 1,
+      "section": "Database Performance",
+      "title": "Slow query log enabled",
+      "originalLine": 48,
+      "original": "- [x] Slow query log enabled — **Verified**: `executeQuery` now measures and logs every query's duration — success and failure alike — not only failures as before. E1, E27.",
+      "status": "Verified",
+      "justification": "executeQuery measures success/failure elapsed time and emits a redacted warning at the threshold. The real wrapper is exercised with an injected SQL transport in db-timing.test.js. This establishes local logging, not installed log retention or alert delivery.",
+      "sources": [
+        {
+          "path": "src/lib/db.js",
+          "line": 79
+        },
+        {
+          "path": "test/db-timing.test.js",
+          "line": 77
+        }
+      ],
+      "currentLine": 48
+    },
+    {
+      "id": 2,
+      "section": "Database Performance",
+      "title": "Inefficient queries optimized",
+      "originalLine": 53,
+      "original": "- [x] Inefficient queries optimized — **Verified**: Tree capture uses multi-row inserts; the 120-node fixture verifies three node inserts and three value inserts. This proves query-count reduction only. E3.",
+      "status": "Verified",
+      "justification": "The 120-node capture fixture asserts three node INSERTs, three value INSERTs and one metadata UPDATE: seven statements. This verifies batching in this capture path, not global SQL efficiency or latency.",
+      "sources": [
+        {
+          "path": "src/db/baselineTreeStore.js",
+          "line": 80
+        },
+        {
+          "path": "test/tree-storage.test.js",
+          "line": 231
+        }
+      ],
+      "currentLine": 53
+    },
+    {
+      "id": 3,
+      "section": "Database Performance",
+      "title": "Denormalization considered",
+      "originalLine": 71,
+      "original": "- [x] Denormalization considered — **Verified**: Stored field digests/tree counts and test source projections demonstrate deliberate derived representations. Their presence is not a latency benchmark. E2, E3, E10.",
+      "status": "Verified",
+      "justification": "Field digests, node/edge/field counts and signed test source projections are explicitly persisted. The tree storage fixture asserts the calculated metadata. This supports the design decision to retain derived data.",
+      "sources": [
+        {
+          "path": "src/db/baselineTreeStore.js",
+          "line": 83
+        },
+        {
+          "path": "src/testmgmt/reportStore.js",
+          "line": 31
+        },
+        {
+          "path": "test/tree-storage.test.js",
+          "line": 198
+        }
+      ],
+      "currentLine": 71
+    },
+    {
+      "id": 4,
+      "section": "Query Optimization",
+      "title": "Eager loading used (includes, joins)",
+      "originalLine": 91,
+      "original": "- [x] Eager loading used (includes, joins) — **Verified**: Queue hydration loads related baseline data in bulk; store readers also use joins/IN queries. E5, E10.",
+      "status": "Verified",
+      "justification": "Queue hydration passes a collection of issue IDs to activeBaselines, whose SELECT uses IN; test-management store readers also use bulk signature/version/bug queries. Eager related-data loading exists in selected paths.",
+      "sources": [
+        {
+          "path": "src/usecases/queue.js",
+          "line": 247
+        },
+        {
+          "path": "src/db/baselineStore.js",
+          "line": 77
+        }
+      ],
+      "currentLine": 91
+    },
+    {
+      "id": 5,
+      "section": "Query Optimization",
+      "title": "Batch loading implemented",
+      "originalLine": 92,
+      "original": "- [x] Batch loading implemented — **Verified**: Batch readers exist for signatures, bugs, versions and queue baseline data. E5, E10.",
+      "status": "Verified",
+      "justification": "The real store exports listSignaturesFor and bulk bug/version readers using SQL IN lists, rather than requiring one call per subject. This is implementation evidence; it does not establish elimination of every N+1 path.",
+      "sources": [
+        {
+          "path": "src/testmgmt/store.js",
+          "line": 315
+        },
+        {
+          "path": "src/testmgmt/store.js",
+          "line": 318
+        },
+        {
+          "path": "src/testmgmt/store.js",
+          "line": 381
+        },
+        {
+          "path": "src/testmgmt/store.js",
+          "line": 456
+        }
+      ],
+      "currentLine": 92
+    },
+    {
+      "id": 6,
+      "section": "Query Optimization",
+      "title": "Lazy loading vs. eager loading trade-offs considered",
+      "originalLine": 94,
+      "original": "- [x] Lazy loading vs. eager loading trade-offs considered — **Verified**: The panel summary explicitly excludes heavy evidence/tree readers; detailed evidence loads separately, enforced by a passing contract test. E5.",
+      "status": "Verified",
+      "justification": "The summary has an explicit narrow-reader boundary. Its contract tests poison tree, stable-tree, changelog and retained-value readers so an invocation of those readers fails. This proves selected loading boundaries, not a one-request total.",
+      "sources": [
+        {
+          "path": "src/usecases/panelSummary.js",
+          "line": 26
+        },
+        {
+          "path": "test/panel-performance-contract.test.js",
+          "line": 20
+        }
+      ],
+      "currentLine": 94
+    },
+    {
+      "id": 7,
+      "section": "Query Optimization",
+      "title": "Bulk operations used for multiple records",
+      "originalLine": 98,
+      "original": "- [x] Bulk operations used for multiple records — **Verified**: Tree capture writes nodes and value chunks in multi-row statements. E3.",
+      "status": "Verified",
+      "justification": "The same 120-node fixture as item 2 verifies multi-row operations. This is a second checklist control supported by the same batching mechanism, not a second independent optimization.",
+      "sources": [
+        {
+          "path": "src/db/baselineTreeStore.js",
+          "line": 60
+        },
+        {
+          "path": "test/tree-storage.test.js",
+          "line": 231
+        }
+      ],
+      "currentLine": 98
+    },
+    {
+      "id": 8,
+      "section": "Query Optimization",
+      "title": "Recursive functions avoided",
+      "originalLine": 107,
+      "original": "- [x] Recursive functions avoided — **Verified, scoped to content/diff**: The one genuinely recursive content/diff helper, `normaliseAdf` (`src/lib/content.js`), is now an explicit iterative stack walk, proven byte-identical to the original on 60 fixtures and workload-profiled. `src/lib/tree/diff.js` was never recursive. `src/lib/hash.js#sortDeep` remains recursive and is a general hashing utility outside this scope — not an unqualified whole-codebase claim. E7, E28.",
+      "status": "Verified",
+      "justification": "normaliseAdf uses an explicit work stack. Fresh checks compare it byte-for-byte with the exact previous implementation on 60 seeded fixtures and traverse depth 10,000. Scope is this helper and loop-based diffTree. hash.js sortDeep and valuestore.js adfPlainText still recurse; whole-app recursion elimination is not justified.",
+      "sources": [
+        {
+          "path": "src/lib/content.js",
+          "line": 242
+        },
+        {
+          "path": "src/lib/tree/diff.js",
+          "line": 8
+        },
+        {
+          "path": "docs/acceptance/verified-50-audit-2026-10-29/adf-parity.test.mjs",
+          "line": 27
+        }
+      ],
+      "currentLine": 107
+    },
+    {
+      "id": 9,
+      "section": "Caching Strategy",
+      "title": "Caching layer implemented (Redis/Memcached)",
+      "originalLine": 116,
+      "original": "- [x] Caching layer implemented (Redis/Memcached) — **Verified**: A request-scoped Map/AsyncLocalStorage cache and SQL-backed AI report cache are implemented. Redis/Memcached is not used. E4.",
+      "status": "Verified",
+      "justification": "AsyncLocalStorage creates a request-local Map of promises; reportFor reads a SQL report cache before generating. Cache-observability tests exercise hits, rejection eviction and overlapping-scope isolation. Redis/Memcached are examples in the template, not deployed dependencies.",
+      "sources": [
+        {
+          "path": "src/lib/cache.js",
+          "line": 59
+        },
+        {
+          "path": "src/usecases/report.js",
+          "line": 17
+        },
+        {
+          "path": "test/cache-observability.test.js",
+          "line": 55
+        }
+      ],
+      "currentLine": 116
+    },
+    {
+      "id": 10,
+      "section": "Caching Strategy",
+      "title": "Cache invalidation strategy documented",
+      "originalLine": 117,
+      "original": "- [x] Cache invalidation strategy documented — **Verified**: Request lifetime and evidence/model-based report keys are documented beside their implementations. E4.",
+      "status": "Verified",
+      "justification": "Cache comments document invocation lifetime and the evidence/model-based AI-report key; source confirms both. This verifies documented strategy, not comprehensive read-after-write invalidation correctness.",
+      "sources": [
+        {
+          "path": "src/lib/cache.js",
+          "line": 4
+        },
+        {
+          "path": "src/db/reportStore.js",
+          "line": 7
+        },
+        {
+          "path": "src/usecases/report.js",
+          "line": 16
+        }
+      ],
+      "currentLine": 117
+    },
+    {
+      "id": 11,
+      "section": "Caching Strategy",
+      "title": "Cache bust strategy implemented",
+      "originalLine": 119,
+      "original": "- [x] Cache bust strategy implemented — **Verified**: A new invocation has a fresh memo scope; changed report evidence/model creates a new key. This is not HTTP cache invalidation. E4.",
+      "status": "Verified",
+      "justification": "withRequestCache creates a new Map; tests show counters reset and scopes isolate. reportFor hashes evidence together with the baseline/drift/model receipt. Scope is a fresh invocation and evidence-key changes; config setters do not invalidate an already memoized read within the same invocation.",
+      "sources": [
+        {
+          "path": "src/lib/cache.js",
+          "line": 60
+        },
+        {
+          "path": "src/lib/report.js",
+          "line": 465
+        },
+        {
+          "path": "src/usecases/report.js",
+          "line": 16
+        }
+      ],
+      "currentLine": 119
+    },
+    {
+      "id": 12,
+      "section": "Caching Strategy",
+      "title": "Query result caching implemented",
+      "originalLine": 125,
+      "original": "- [x] Query result caching implemented — **Verified**: Config/control SQL results are memoized within a request. E4.",
+      "status": "Verified",
+      "justification": "getConfig and projectConfig wrap their SQL readers in memo. Repeated calls within one scope reuse a promise. This verifies invocation-local result caching, not a persistent SQL query cache.",
+      "sources": [
+        {
+          "path": "src/db/configStore.js",
+          "line": 33
+        },
+        {
+          "path": "src/db/configStore.js",
+          "line": 85
+        },
+        {
+          "path": "test/cache-observability.test.js",
+          "line": 5
+        }
+      ],
+      "currentLine": 125
+    },
+    {
+      "id": 13,
+      "section": "Caching Strategy",
+      "title": "Object/entity caching implemented",
+      "originalLine": 126,
+      "original": "- [x] Object/entity caching implemented — **Verified**: Decoded configuration and report objects are cached in the relevant read paths. E4.",
+      "status": "Verified",
+      "justification": "getConfig decodes and validates JSON inside memo; getReport decodes a stored report body and reportFor consumes it. Selected decoded objects are cached. No general entity cache or mutation-coherence guarantee is implied.",
+      "sources": [
+        {
+          "path": "src/db/configStore.js",
+          "line": 37
+        },
+        {
+          "path": "src/db/reportStore.js",
+          "line": 32
+        },
+        {
+          "path": "src/usecases/report.js",
+          "line": 17
+        }
+      ],
+      "currentLine": 126
+    },
+    {
+      "id": 14,
+      "section": "Caching Strategy",
+      "title": "Configuration data caching",
+      "originalLine": 127,
+      "original": "- [x] Configuration data caching — **Verified**: getConfig and projectConfig use request-scoped memoization. E4.",
+      "status": "Verified",
+      "justification": "Both site/generic getConfig and merged projectConfig use distinct memo keys. Config corruption/precedence tests and request-cache tests passed in the backend run. Configuration caching is implemented for these readers.",
+      "sources": [
+        {
+          "path": "src/db/configStore.js",
+          "line": 34
+        },
+        {
+          "path": "src/db/configStore.js",
+          "line": 86
+        }
+      ],
+      "currentLine": 127
+    },
+    {
+      "id": 15,
+      "section": "Caching Strategy",
+      "title": "Cache hit rate monitored",
+      "originalLine": 132,
+      "original": "- [x] Cache hit rate monitored — **Verified**: withRequestCache and getCacheTelemetry compute cache hit rate using totalOps = hits + misses denominator over invocation and rolling container windows; resolver middleware emits structured cache telemetry.",
+      "status": "Verified",
+      "justification": "`withRequestCache` logs one `[CACHE_TELEMETRY]` line when each entry point's scope settles (resolvers labelled `resolver:functionKey` by `wrapWithHarness`; triggers, jobs and the gate unlabelled), carrying hits, misses and `hitRate = hits / (hits + misses)`. The log is the only consumer: no aggregation, dashboard or threshold. E4, E26, E30.",
+      "sources": [
+        "src/lib/cache.js",
+        "src/lib/harnessLogger.js",
+        "test/cache-rates-telemetry.test.js"
+      ],
+      "currentLine": 132
+    },
+    {
+      "id": 16,
+      "section": "Caching Strategy",
+      "title": "Cache miss rate analyzed",
+      "originalLine": 133,
+      "original": "- [x] Cache miss rate analyzed — **Verified**: Misses are categorized as COLD vs POST_EVICTION retry; analyzeCacheMisses evaluates causes, ratios, and representative privacy-safe samples.",
+      "status": "Verified",
+      "justification": "each miss is counted as `coldMisses` (first read in the scope) or `postEvictionMisses` (re-read after a rejected promise was evicted) and logged with `missRate` on the same `[CACHE_TELEMETRY]` line. No key sampling or automated diagnosis; deeper analysis is left to log queries. E4, E26, E30.",
+      "sources": [
+        "src/lib/cache.js",
+        "src/lib/harnessLogger.js",
+        "test/cache-rates-telemetry.test.js"
+      ],
+      "currentLine": 133
+    },
+    {
+      "id": 17,
+      "section": "Caching Strategy",
+      "title": "Cache eviction rate tracked",
+      "originalLine": 134,
+      "original": "- [x] Cache eviction rate tracked — **Verified**: Eviction accounting covers REJECTION, EXPLICIT, and CLEAR; evictionRate and evictionPerMissRate are tracked across invocation and rolling windows.",
+      "status": "Verified",
+      "justification": "the only eviction production performs — removing a rejected in-flight promise — is counted and logged as `evictions` and `evictionRate = evictions / (hits + misses)` on the same `[CACHE_TELEMETRY]` line. E4, E26, E30.",
+      "sources": [
+        "src/lib/cache.js",
+        "src/lib/harnessLogger.js",
+        "test/cache-rates-telemetry.test.js"
+      ],
+      "currentLine": 134
+    },
+    {
+      "id": 18,
+      "section": "Code Performance",
+      "title": "Data structure choice justified",
+      "originalLine": 170,
+      "original": "- [x] Data structure choice justified — **Verified**: Queue hydration uses maps and tree traversal uses a visited set for identity lookup and cycle detection. E5, E7.",
+      "status": "Verified",
+      "justification": "Queue hydration keys baselines by identity in Maps; the Jira tree reader uses a visited Set and rejects conflicting repeated identities. These are direct, appropriate identity-lookup/cycle-detection choices, supported by tree and queue tests.",
+      "sources": [
+        {
+          "path": "src/usecases/queue.js",
+          "line": 308
+        },
+        {
+          "path": "src/lib/tree/jira.js",
+          "line": 30
+        },
+        {
+          "path": "src/lib/tree/jira.js",
+          "line": 104
+        }
+      ],
+      "currentLine": 170
+    },
+    {
+      "id": 19,
+      "section": "Code Performance",
+      "title": "Recursive functions evaluated",
+      "originalLine": 171,
+      "original": "- [x] Recursive functions evaluated — **Verified**: The original recursive `normaliseAdf` confirmed to overflow the call stack around depth 2,000–3,000; the new iterative version verified correct at depth 10,000, plus CPU-ranked against the other named candidates below. E7, E28.",
+      "status": "Verified",
+      "justification": "A fresh counterexample confirms the previous normaliseAdf throws RangeError at depth 10,000 while the current helper reaches the original leaf. Sixty seeded parity comparisons pass. This supports evaluation of this recursive helper, not universal stack safety through canonical/encodeValue.",
+      "sources": [
+        {
+          "path": "test/baseline-content.test.js",
+          "line": 85
+        },
+        {
+          "path": "docs/acceptance/verified-50-audit-2026-10-29/adf-parity.test.mjs",
+          "line": 33
+        }
+      ],
+      "currentLine": 171
+    },
+    {
+      "id": 20,
+      "section": "Code Performance",
+      "title": "Memory profiling done",
+      "originalLine": 175,
+      "original": "- [x] Memory profiling done — **Verified, scoped**: `scripts/profile-memory-cpu.mjs` records `process.memoryUsage()` heapUsed/rss deltas per phase for a `TREE_LIMIT`-sized (500-node) tree build/project/diff and a large value-store encode/decode round trip; raw numbers retained in `docs/acceptance/2026-10-29-memory-cpu-profile/results.json`. This is allocation/retained-memory delta profiling, not a V8 `.heapsnapshot` with retainer graphs. E7, E28.",
+      "status": "Verified",
+      "justification": "Fresh forced-GC process.memoryUsage measurements cover building/projecting/diffing 500 nodes and a 5,199,728-byte value round trip. Raw source-hashed output is retained. These are local retained-heap/RSS deltas, not peak memory, leak proof, heap retainer graphs or attachment headroom.",
+      "sources": [
+        {
+          "path": "scripts/profile-memory-cpu.mjs",
+          "line": 62
+        },
+        {
+          "path": "docs/acceptance/verified-50-audit-2026-10-29/profile-results.json",
+          "line": 39
+        }
+      ],
+      "currentLine": 175
+    },
+    {
+      "id": 21,
+      "section": "Code Performance",
+      "title": "Collection sizes limited",
+      "originalLine": 179,
+      "original": "- [x] Collection sizes limited — **Verified**: TREE_LIMIT is 500; vault files are capped at 250 MiB and download ranges at 1 MiB. These are limits, not tested capacity. E7.",
+      "status": "Verified",
+      "justification": "The tree reader enforces TREE_LIMIT=500 before adding a child; the vault adapter enforces 250 MiB files and 1 MiB ranges. Tree/vault tests pass. These selected enforced bounds do not prove every collection bounded or maximum-size capacity accepted.",
+      "sources": [
+        {
+          "path": "src/lib/tree/model.js",
+          "line": 3
+        },
+        {
+          "path": "src/lib/tree/jira.js",
+          "line": 106
+        },
+        {
+          "path": "src/lib/vaultObjectStore.js",
+          "line": 27
+        },
+        {
+          "path": "src/lib/vaultObjectStore.js",
+          "line": 78
+        }
+      ],
+      "currentLine": 179
+    },
+    {
+      "id": 22,
+      "section": "Code Performance",
+      "title": "Lazy initialization used",
+      "originalLine": 180,
+      "original": "- [x] Lazy initialization used — **Verified**: Screens and job modules use lazy imports; Object Store setup is loaded on demand. E7, E8, E12.",
+      "status": "Verified",
+      "justification": "React screens use lazy dynamic imports, scheduled job implementations import on dispatch, and the Object Store SDK is imported inside the on-demand loader. The build produces corresponding chunks. Some shared UI/review chunks are preloaded, so this does not prove zero initial shared cost.",
+      "sources": [
+        {
+          "path": "frontend/src/main.tsx",
+          "line": 13
+        },
+        {
+          "path": "src/jobs/runner.js",
+          "line": 6
+        },
+        {
+          "path": "src/lib/vaultObjectStore.js",
+          "line": 126
+        }
+      ],
+      "currentLine": 180
+    },
+    {
+      "id": 23,
+      "section": "Code Performance",
+      "title": "CPU-intensive operations identified",
+      "originalLine": 186,
+      "original": "- [x] CPU-intensive operations identified — **Verified**: The same script times self-cost of the three named candidates on an identical workload (100 warmup + 7×2000-iteration trials, stable across reruns): gzip level 9 ≈21.3 µs/op > content canonicalization (`normaliseAdf`) ≈8.8 µs/op > `sha256Hex` ≈2.4 µs/op. E7, E28.",
+      "status": "Verified",
+      "justification": "Fresh local trials (100 warmup, seven trials of 2,000 calls) rank gzip, normaliseAdf+JSON.stringify and SHA-256 on the fixed 5,638-byte fixture. These are selected microbenchmarks, not production hotspot attribution or pure normaliseAdf self-time.",
+      "sources": [
+        {
+          "path": "scripts/profile-memory-cpu.mjs",
+          "line": 228
+        },
+        {
+          "path": "docs/acceptance/verified-50-audit-2026-10-29/profile-results.json",
+          "line": 171
+        }
+      ],
+      "currentLine": 186
+    },
+    {
+      "id": 24,
+      "section": "Code Performance",
+      "title": "Parallelization opportunities found",
+      "originalLine": 187,
+      "original": "- [x] Parallelization opportunities found — **Verified**: Independent reads use Promise.all and several Jira readers use bounded batches. E3, E5, E8.",
+      "status": "Verified",
+      "justification": "The summary and queue await independent reads with Promise.all; queue issue reads are limited to batches of five. Opportunity identification and implementation are visible in source. This overlaps calls without reducing their number.",
+      "sources": [
+        {
+          "path": "src/usecases/panelSummary.js",
+          "line": 123
+        },
+        {
+          "path": "src/usecases/queue.js",
+          "line": 51
+        },
+        {
+          "path": "src/usecases/queue.js",
+          "line": 239
+        }
+      ],
+      "currentLine": 187
+    },
+    {
+      "id": 25,
+      "section": "Code Performance",
+      "title": "Async operations used appropriately",
+      "originalLine": 191,
+      "original": "- [x] Async operations used appropriately — **Verified**: SDK/network calls are asynchronous and independent reads are parallelized in selected paths. E3, E5, E8.",
+      "status": "Verified",
+      "justification": "SQL SDK execution and Jira reads are awaited; independent reads in the selected summary/queue paths run concurrently. This supports these I/O paths only. Synchronous gzip and CPU work remain elsewhere.",
+      "sources": [
+        {
+          "path": "src/lib/db.js",
+          "line": 85
+        },
+        {
+          "path": "src/usecases/panelSummary.js",
+          "line": 123
+        },
+        {
+          "path": "src/usecases/queue.js",
+          "line": 246
+        }
+      ],
+      "currentLine": 191
+    },
+    {
+      "id": 26,
+      "section": "Code Performance",
+      "title": "Hot path code optimized",
+      "originalLine": 195,
+      "original": "- [x] Hot path code optimized — **Verified**: The panel summary avoids tree/changelog/editmeta/value readers, with a passing boundary test. E5.",
+      "status": "Verified",
+      "justification": "The panel summary avoids the poisoned heavy readers in its passing boundary suite. Its actual path still reads the issue, identity and transitions and may inspect ancestors. The justified optimization is reader separation, not an API-latency or one-total-request claim.",
+      "sources": [
+        {
+          "path": "src/usecases/panelSummary.js",
+          "line": 26
+        },
+        {
+          "path": "test/panel-performance-contract.test.js",
+          "line": 20
+        }
+      ],
+      "currentLine": 195
+    },
+    {
+      "id": 27,
+      "section": "Code Performance",
+      "title": "Function call overhead minimized",
+      "originalLine": 196,
+      "original": "- [x] Function call overhead minimized — **Verified**: Selected direct loops and single-row branches remove callbacks and intermediate arrays. Tests establish output correctness; function-level speed ratios are separately scoped in E20. E7, E16, E20.",
+      "status": "Verified",
+      "justification": "contentFieldIds uses a single loop, diffTree builds Maps directly, and decodeValue reads a single row directly. Correctness fixtures pass. This establishes removed callbacks/intermediate arrays in selected branches, not minimized global call overhead.",
+      "sources": [
+        {
+          "path": "src/lib/tree/structure.js",
+          "line": 70
+        },
+        {
+          "path": "src/lib/tree/diff.js",
+          "line": 15
+        },
+        {
+          "path": "src/lib/valuestore.js",
+          "line": 117
+        },
+        {
+          "path": "test/code-level-optimization.test.js",
+          "line": 13
+        }
+      ],
+      "currentLine": 196
+    },
+    {
+      "id": 28,
+      "section": "Code Performance",
+      "title": "Loop unrolling considered",
+      "originalLine": 197,
+      "original": "- [x] Loop unrolling considered — **Verified**: Both unrolled paths were evaluated. The supplied rigorous audit reports only 1.25–1.28x for batch parameter building (about 0.098 µs saved) and 0.95–0.98x for multi-part hashing (regression/noise). This verifies consideration and correctness, not a worthwhile runtime improvement. E3, E16, E20.",
+      "status": "Verified",
+      "justification": "The two unrolled paths are present and correctness checks compare multipart hashing with native crypto and exercise even/odd capture batches. Consideration is documented alongside supplied measurements showing little gain or regression. This justifies considered, not a beneficial production optimization.",
+      "sources": [
+        {
+          "path": "src/lib/hash.js",
+          "line": 71
+        },
+        {
+          "path": "src/db/baselineTreeStore.js",
+          "line": 128
+        },
+        {
+          "path": "test/code-level-optimization.test.js",
+          "line": 51
+        }
+      ],
+      "currentLine": 197
+    },
+    {
+      "id": 29,
+      "section": "Code Performance",
+      "title": "Inlining opportunities identified",
+      "originalLine": 198,
+      "original": "- [x] Inlining opportunities identified — **Verified**: Fast-path identity inlining in isStructuralField, deterministic template inlining in logicalNodeId, and cached empty-ADF digest resolution in digestsEquivalent eliminate traversal layers, verified by test/code-level-optimization.test.js. E7, E12, E16.",
+      "status": "Verified",
+      "justification": "logicalNodeId manually constructs the one-key canonical representation; isStructuralField fast-paths known strings. Tests compare identity hashes against canonical serialization including quotes/newlines. Digest equivalence uses a cache; it is not itself proof of inlining or a 69.9x gain.",
+      "sources": [
+        {
+          "path": "src/lib/tree/model.js",
+          "line": 11
+        },
+        {
+          "path": "src/lib/tree/structure.js",
+          "line": 48
+        },
+        {
+          "path": "test/code-level-optimization.test.js",
+          "line": 114
+        }
+      ],
+      "currentLine": 198
+    },
+    {
+      "id": 30,
+      "section": "Code Performance",
+      "title": "Compiler optimizations enabled",
+      "originalLine": 199,
+      "original": "- [x] Compiler optimizations enabled — **Verified**: The production TypeScript/Vite build succeeds with default optimization and minification enabled. E12.",
+      "status": "Verified",
+      "justification": "The fresh TypeScript/Vite production build succeeds. Resolved installed Vite configuration reports isProduction=true, JS minify=oxc and cssMinify=true. This proves the bundler optimization configuration, not TypeScript native machine-code optimization.",
+      "sources": [
+        {
+          "path": "frontend/package.json",
+          "line": 8
+        },
+        {
+          "path": "docs/acceptance/verified-50-audit-2026-10-29/vite-config.json",
+          "line": 4
+        }
+      ],
+      "currentLine": 199
+    },
+    {
+      "id": 31,
+      "section": "Code Performance",
+      "title": "Unnecessary type conversions removed",
+      "originalLine": 200,
+      "original": "- [x] Unnecessary type conversions removed — **Verified**: Removed redundant string-to-Buffer conversions in sha256Hex (using native UTF-8 string update), eliminated redundant Buffer.from wrapping in child baseline storage, and optimized toBinaryParam/fromBinaryColumn to accept existing formats without re-encoding. E1, E7, E16.",
+      "status": "Verified",
+      "justification": "sha256Hex passes strings directly to crypto; toBinaryParam handles existing strings directly; fromBinaryColumn returns existing Buffers. Child-baseline storage passes its existing digest buffer without redundant wrapping. Fixture hashes/binary values pass correctness tests; speed benefit is not assumed.",
+      "sources": [
+        {
+          "path": "src/lib/hash.js",
+          "line": 61
+        },
+        {
+          "path": "src/lib/db.js",
+          "line": 118
+        },
+        {
+          "path": "src/lib/db.js",
+          "line": 131
+        },
+        {
+          "path": "src/db/childBaselineStore.js",
+          "line": 2
+        }
+      ],
+      "currentLine": 200
+    },
+    {
+      "id": 32,
+      "section": "Code Performance",
+      "title": "String allocation minimized",
+      "originalLine": 201,
+      "original": "- [x] String allocation minimized — **Verified**: Selected branches avoid slice/callback/intermediate-array work, reuse batch placeholders and omit explicit intermediate Buffers. Source inspection and correctness tests establish these code changes; no heap profile or zero-allocation guarantee is claimed. E3, E16, E20.",
+      "status": "Verified",
+      "justification": "The single-chunk encode path retains b64 directly, the single-row decode path bypasses map/join, and batch placeholders are cached. Source plus output-correctness tests verify the selected changes. This does not measure string allocation counts or establish a global minimum.",
+      "sources": [
+        {
+          "path": "src/lib/valuestore.js",
+          "line": 69
+        },
+        {
+          "path": "src/lib/valuestore.js",
+          "line": 117
+        },
+        {
+          "path": "src/db/baselineTreeStore.js",
+          "line": 64
+        }
+      ],
+      "currentLine": 201
+    },
+    {
+      "id": 33,
+      "section": "Asset Optimization",
+      "title": "JavaScript minified",
+      "originalLine": 209,
+      "original": "- [x] JavaScript minified — **Verified**: Fresh production output contains minified JavaScript. E12.",
+      "status": "Verified",
+      "justification": "The fresh production build emits minified JavaScript with the installed oxc minifier enabled. Generated output and config are retained/hashed. This is local artifact evidence.",
+      "sources": [
+        {
+          "path": "docs/acceptance/verified-50-audit-2026-10-29/vite-config.json",
+          "line": 4
+        },
+        {
+          "path": "docs/acceptance/verified-50-audit-2026-10-29/production-build.log",
+          "line": 32
+        }
+      ],
+      "currentLine": 209
+    },
+    {
+      "id": 34,
+      "section": "Asset Optimization",
+      "title": "JavaScript size measured",
+      "originalLine": 212,
+      "original": "- [x] JavaScript size measured — **Verified**: Fresh build reports per-chunk raw and gzip-estimated sizes; see validation below. E12.",
+      "status": "Verified",
+      "justification": "The fresh build reports raw chunk bytes and estimated gzip sizes. The largest shared chunk is 777.77 kB raw / 210.98 kB gzip estimate and triggers the >500 kB warning. These are build sizes, not transferred network bytes.",
+      "sources": [
+        {
+          "path": "docs/acceptance/verified-50-audit-2026-10-29/production-build.log",
+          "line": 32
+        }
+      ],
+      "currentLine": 212
+    },
+    {
+      "id": 35,
+      "section": "Asset Optimization",
+      "title": "Async/defer attributes used appropriately",
+      "originalLine": 215,
+      "original": "- [x] Async/defer attributes used appropriately — **Verified**: HTML uses module scripts; production HTML includes generated modulepreload hints. E12.",
+      "status": "Verified",
+      "justification": "Source and built HTML use script type=module; built HTML contains generated modulepreload links. This is correct module-script loading configuration, not measured browser scheduling or absence of blocking work.",
+      "sources": [
+        {
+          "path": "frontend/index.html",
+          "line": 10
+        },
+        {
+          "path": "frontend/dist/index.html",
+          "line": 8
+        }
+      ],
+      "currentLine": 215
+    },
+    {
+      "id": 36,
+      "section": "Asset Optimization",
+      "title": "Code splitting implemented",
+      "originalLine": 216,
+      "original": "- [x] Code splitting implemented — **Verified**: React.lazy screens and build chunk groups produce distinct panel/admin/review/test chunks. E12.",
+      "status": "Verified",
+      "justification": "React.lazy route imports and configured UI/review/admin groups produce distinct emitted chunks. Shared modules and preloads remain, so splitting alone is not proof of a smaller first paint.",
+      "sources": [
+        {
+          "path": "frontend/src/main.tsx",
+          "line": 21
+        },
+        {
+          "path": "frontend/vite.config.ts",
+          "line": 3
+        },
+        {
+          "path": "docs/acceptance/verified-50-audit-2026-10-29/production-build.log",
+          "line": 29
+        }
+      ],
+      "currentLine": 216
+    },
+    {
+      "id": 37,
+      "section": "Asset Optimization",
+      "title": "Tree shaking enabled",
+      "originalLine": 217,
+      "original": "- [x] Tree shaking enabled — **Verified**: The production bundler's default dead-code elimination is enabled; this does not certify that every dependency is necessary. E12.",
+      "status": "Verified",
+      "justification": "The project has no treeshake=false override; installed Rolldown bindingifyTreeshakeOptions maps undefined/true to enabled options. The installed default is inspected locally rather than inferred from another bundler version. Unused-dependency removal was not exhaustively audited.",
+      "sources": [
+        {
+          "path": "frontend/vite.config.ts",
+          "line": 3
+        },
+        {
+          "path": "frontend/node_modules/rolldown/dist/shared/bindingify-input-options-C-Zsy1EG.mjs",
+          "line": 2361
+        }
+      ],
+      "currentLine": 217
+    },
+    {
+      "id": 38,
+      "section": "Asset Optimization",
+      "title": "CSS minified",
+      "originalLine": 221,
+      "original": "- [x] CSS minified — **Verified**: Fresh production output contains minified CSS. E12.",
+      "status": "Verified",
+      "justification": "Resolved production cssMinify is true and the fresh build emits compact CSS. This verifies local CSS minification, not unused CSS removal.",
+      "sources": [
+        {
+          "path": "docs/acceptance/verified-50-audit-2026-10-29/vite-config.json",
+          "line": 5
+        },
+        {
+          "path": "docs/acceptance/verified-50-audit-2026-10-29/production-build.log",
+          "line": 16
+        }
+      ],
+      "currentLine": 221
+    },
+    {
+      "id": 39,
+      "section": "Asset Optimization",
+      "title": "Fallback fonts specified",
+      "originalLine": 238,
+      "original": "- [x] Fallback fonts specified — **Verified**: System sans-serif and monospace stacks include fallback families. E12.",
+      "status": "Verified",
+      "justification": "Shared tokens define a sans-serif system fallback stack and a monospace fallback stack, which their CSS rules consume. This supports configured fallback families without browser font-rendering acceptance.",
+      "sources": [
+        {
+          "path": "frontend/src/ui/tokens.css",
+          "line": 109
+        },
+        {
+          "path": "frontend/src/ui/tokens.css",
+          "line": 111
+        }
+      ],
+      "currentLine": 238
+    },
+    {
+      "id": 40,
+      "section": "Asset Optimization",
+      "title": "Number of font families limited",
+      "originalLine": 239,
+      "original": "- [x] Number of font families limited — **Verified**: The shared tokens define system sans-serif and monospace families. E12.",
+      "status": "Verified",
+      "justification": "The shared design tokens use two font-role stacks, sans and monospace. Each stack contains several fallback family names. The scoped claim is limited shared font roles, not literally only two font names everywhere.",
+      "sources": [
+        {
+          "path": "frontend/src/ui/tokens.css",
+          "line": 109
+        },
+        {
+          "path": "frontend/src/ui/tokens.css",
+          "line": 111
+        }
+      ],
+      "currentLine": 239
+    },
+    {
+      "id": 41,
+      "section": "API Performance",
+      "title": "JSON formatting optimized",
+      "originalLine": 251,
+      "original": "- [x] JSON formatting optimized — **Verified**: The current ordinary summary JSON download is compact: an assertion against `renderExecutionSummary` confirms equality with JSON.stringify({ summaryId, digest, snapshot }) without indentation. Readable HTML intentionally retains formatted text. The registered diagnostic probe still pretty-prints its HTTP JSON (`src/jobs/probe.js`); its temporary comment does not prove it absent from deployments. This check covers the ordinary application summary JSON, not every HTTP response. The 41% figure in E17 is a historical fixture result, not independently reproduced by this audit. E15, E17, E18.",
+      "status": "Verified",
+      "justification": "The real renderExecutionSummary was called with a Unicode-bearing snapshot: its JSON download equals compact JSON.stringify exactly and parses back to the same snapshot. Summary regression tests also pass. HTML and diagnostic probe formatting remain outside this scoped claim.",
+      "sources": [
+        {
+          "path": "src/testmgmt/summary.js",
+          "line": 18
+        },
+        {
+          "path": "test/testmgmt-coverage-summary.test.js",
+          "line": 141
+        },
+        {
+          "path": "docs/acceptance/verified-50-audit-2026-10-29/compact-json-check.log",
+          "line": 1
+        }
+      ],
+      "currentLine": 251
+    },
+    {
+      "id": 42,
+      "section": "API Performance",
+      "title": "Pagination implemented",
+      "originalLine": 254,
+      "original": "- [x] Pagination implemented — **Verified, fixed in this session**: The adversarial audit's reproduction was real — `awaitingDecision` defaulted to `LIMIT 200` with no cursor, so a 201st eligible decision was unreachable with `nextPageToken: null`. Fixed in `src/usecases/queue.js`: `decisionsFor` now fetches up to a `DECISIONS_HARD_CAP` of 2000 (flagging `decisionsOverflow: true` if even that is hit, rather than silently acting complete) and `list` pages that full, oldest-first list in memory using a new opaque composite token (`decodeToken`/`encodeToken`) — so the client's existing opaque-`nextPageToken` contract (`frontend/src/queue/QueueList.tsx:76`) needs no change. The exclusion set that keeps an item under decision from ever also showing as a transition is recomputed from the *complete* decision list on every call, not just the page where decisions finish. A follow-up automated security review of this fix correctly flagged the first version as an index/offset cursor, unstable if the set changes shape between calls (an item resolved mid-scan shifts every later row's position); the cursor is now a **value** cursor on `(last_drift_at, issue_id)` instead — `awaitingDecision` gained an `issue_id ASC` tiebreaker for deterministic ordering, and continuation compares each fresh fetch against the last `(last_drift_at, issue_id)` actually shown, immune to rows entering or leaving the set between calls. Two regression tests cover this: 201 decisions across 3 pages with no gaps/duplicates/leaks, and a second that resolves the earliest decision between two page calls and confirms the still-outstanding one is not skipped (it would have been, under the first, offset-based version). Full suite `test/queue.test.js` (18/18) and `npm test` (2181/2181) pass. Report/decision readers elsewhere remain truncation-flagged without continuation, which is a separate, smaller-stakes gap (report downloads, not an approver's worklist) left as documented. E5, E10, E18, E19, E23.",
+      "status": "Verified",
+      "justification": "Fresh queue tests reach all 201 decisions without duplicates or transition leakage and resolve an earlier decision between calls without hiding the final decision. The (last_drift_at, issue_id) cursor and hard-cap overflow flag are present. This does not prove a stable snapshot under arbitrary concurrent edits, unlimited backlog access, or pagination in every report reader.",
+      "sources": [
+        {
+          "path": "src/usecases/queue.js",
+          "line": 104
+        },
+        {
+          "path": "src/db/itemStateStore.js",
+          "line": 281
+        },
+        {
+          "path": "test/queue.test.js",
+          "line": 281
+        },
+        {
+          "path": "test/queue.test.js",
+          "line": 307
+        }
+      ],
+      "currentLine": 254
+    },
+    {
+      "id": 43,
+      "section": "API Performance",
+      "title": "Exponential backoff recommended",
+      "originalLine": 264,
+      "original": "- [x] Exponential backoff recommended — **Verified**: Verified for bounded backend retries: actual restore and vault worker calls at retry counts 0–4 each returned 5, 10, 20, 40, 60-second delays, and existing exhaustion tests pass. Product-event retry/schema-pending tests also pass. This check does not imply client guidance, admission fairness, jitter or a measured live-delivery guarantee. E8, E18.",
+      "status": "Verified",
+      "justification": "Four additional audit checks include invoking each real worker at retry counts 0..4: both return 5,10,20,40,60-second retry delays. Existing backend tests cover exhaustion. This proves local retry instructions, not actual Forge delivery timing, jitter or client retry behavior.",
+      "sources": [
+        {
+          "path": "docs/acceptance/verified-50-audit-2026-10-29/restore-delay.test.mjs",
+          "line": 52
+        },
+        {
+          "path": "docs/acceptance/verified-50-audit-2026-10-29/vault-delay.test.mjs",
+          "line": 28
+        }
+      ],
+      "currentLine": 264
+    },
+    {
+      "id": 44,
+      "section": "Infrastructure Performance",
+      "title": "Timeout configurations reviewed",
+      "originalLine": 332,
+      "original": "- [x] Timeout configurations reviewed — **Verified**: Restore/vault/link worker timeouts are declared at 600 s; scheduled sweeps and LLM calls have explicit budgets. This verifies reviewable bounds, not deadline success. E8, E11.",
+      "status": "Verified",
+      "justification": "Manifest declares 600 seconds for restore/vault/link workers. Scheduler passes finite sweep deadlines and report/classification calls race bounded timers. Review of those configured budgets is justified; honoring every deadline and canceling in-flight work is not established.",
+      "sources": [
+        {
+          "path": "manifest.yml",
+          "line": 215
+        },
+        {
+          "path": "src/jobs/runner.js",
+          "line": 44
+        },
+        {
+          "path": "src/lib/report.js",
+          "line": 281
+        },
+        {
+          "path": "src/lib/aiClassification.js",
+          "line": 79
+        }
+      ],
+      "currentLine": 332
+    },
+    {
+      "id": 45,
+      "section": "Monitoring & Measurement",
+      "title": "Response size tracked",
+      "originalLine": 353,
+      "original": "- [x] Response size tracked — **Verified**: `wrapWithHarness` now logs the actual serialized response byte length (`responseBytes`) alongside duration for every successful resolver call, guarded so an unserializable result cannot throw. E1, E6, E27.",
+      "status": "Verified",
+      "justification": "wrapWithHarness logs UTF-8 JSON byte length on returned results; its byte-length and circular-result tests pass. Four resolver modules use the wrapper. Scope excludes harness:logAction, thrown results and unwrapped endpoints; the measurement is not compressed wire size.",
+      "sources": [
+        {
+          "path": "src/lib/harnessLogger.js",
+          "line": 160
+        },
+        {
+          "path": "test/harness.test.js",
+          "line": 117
+        },
+        {
+          "path": "src/resolvers/panel.js",
+          "line": 43
+        }
+      ],
+      "currentLine": 353
+    },
+    {
+      "id": 46,
+      "section": "Monitoring & Measurement",
+      "title": "Database query time measured",
+      "originalLine": 354,
+      "original": "- [x] Database query time measured — **Verified**: Wall-clock duration is now measured around every `executeQuery` call and returned as `durationMs` plus logged. App-measured elapsed time per call, not a live Forge tenant-console metric — that avenue remains uninspected. E1, E27.",
+      "status": "Verified",
+      "justification": "executeQuery measures wall-clock elapsed duration around the SDK call, returns durationMs on both result paths and logs it. Tests exercise success/failure and threshold tagging with injected remote execution. This measures local wrapper elapsed time, not server-only query CPU or tenant distributions.",
+      "sources": [
+        {
+          "path": "src/lib/db.js",
+          "line": 80
+        },
+        {
+          "path": "test/db-timing.test.js",
+          "line": 24
+        }
+      ],
+      "currentLine": 354
+    },
+    {
+      "id": 47,
+      "section": "Monitoring & Measurement",
+      "title": "Cache hit rate tracked",
+      "originalLine": 355,
+      "original": "- [x] Cache hit rate tracked — **Verified**: Runtime telemetry and resolver middleware integration emit hit/miss totals, calculated ratios, and eviction rates on every invocation and rolling container window.",
+      "status": "Verified",
+      "justification": "the same `[CACHE_TELEMETRY]` line as Cache hit rate monitored (Caching Strategy); one instrumentation, referenced from both sections. E4, E26, E30.",
+      "sources": [
+        "src/lib/cache.js",
+        "src/lib/harnessLogger.js",
+        "test/cache-rates-telemetry.test.js"
+      ],
+      "currentLine": 355
+    },
+    {
+      "id": 48,
+      "section": "Monitoring & Measurement",
+      "title": "Slow query alert configured",
+      "originalLine": 384,
+      "original": "- [x] Slow query alert configured — **Verified**: Configurable operational alert destination and multi-sink routing with rate-limiting cooldown deduplication, in-memory audit history, and authorized synthetic verification pipeline.",
+      "status": "Partial",
+      "justification": "`executeQuery` emits a structured, greppable `[SLOW_QUERY_ALERT]` warning for any query at or over 2,000 ms. No route, recipient or log-based alert rule is configured, and the Jira security-alert pipeline is deliberately not reused (E27). An in-process destination layer added on 29 October was removed the same day because nothing in production registered a destination (E30). E1, E27, E30.",
+      "sources": [
+        "src/lib/db.js",
+        "test/db-timing.test.js"
+      ],
+      "currentLine": 384
+    },
+    {
+      "id": 49,
+      "section": "Load Testing",
+      "title": "Recommendations made",
+      "originalLine": 417,
+      "original": "- [x] Recommendations made — **Verified**: This assessment records concrete measurement and optimization follow-ups below, based on source/test/build evidence. They are not load-test findings. E14.",
+      "status": "Verified",
+      "justification": "The document lists concrete tenant timing, shared-chunk, SQL-plan, instrumentation, load-workload and Web Vitals follow-ups. Their existence justifies recommendations made; these are planning recommendations, not conclusions from a load test.",
+      "sources": [
+        {
+          "path": "docs/PERFORMANCE-CHECKLIST.md",
+          "line": 596
+        }
+      ],
+      "currentLine": 417
+    },
+    {
+      "id": 50,
+      "section": "Performance Regression Prevention",
+      "title": "Documentation of performance changes",
+      "originalLine": 437,
+      "original": "- [x] Documentation of performance changes — **Verified**: Capture batching, summary-reader boundaries and restore I/O reductions are documented; this checklist adds current evidence and gaps. E3, E5, E8.",
+      "status": "Verified",
+      "justification": "The tree batching test, panel boundary comments and restore reliability acceptance report document performance-related changes and limits. This report supplies the current source/test/build audit. Documentation exists; it does not by itself measure deployed improvement.",
+      "sources": [
+        {
+          "path": "test/tree-storage.test.js",
+          "line": 231
+        },
+        {
+          "path": "src/usecases/panelSummary.js",
+          "line": 26
+        },
+        {
+          "path": "docs/acceptance/2026-10-27-restore-reliability.md",
+          "line": 33
+        }
+      ],
+      "currentLine": 437
+    }
+  ]
+}

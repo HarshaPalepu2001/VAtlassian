@@ -1,0 +1,190 @@
+{
+  "measuredAtUtc": "2026-10-28T19:10:01.191Z",
+  "source": {
+    "head": "a87375aeb4431d81089537be8fe4418f6a505cc9",
+    "sha256": {
+      "src/lib/content.js": "1160e5800cd6e51625405238141d4e1e050f196c2a886fdc4602947fc8d04b97",
+      "src/lib/tree/diff.js": "90420d5817c7f03934303ee9a77f960929148ee138d9f4c0be494921ca13bd3a",
+      "src/lib/tree/model.js": "c6b7d2e9e9d03809cf5d86090ca671d9384aec630eeec834150f2fce90f108bf",
+      "src/lib/valuestore.js": "252b1601398736ec32e3aedd4a78f23ef03e5d7931a369b7137070e98218874c",
+      "src/lib/hash.js": "4e9a5c4e9518805275f6429c582b8dd49f48b6f22c1b7a3c892c6521341409db"
+    }
+  },
+  "environment": {
+    "node": "v24.18.0",
+    "platform": "darwin",
+    "arch": "arm64",
+    "cpu": "Apple M3",
+    "cpuCount": 8,
+    "totalMemMiB": 16384,
+    "gcExposed": true
+  },
+  "treeFixture": {
+    "treeLimit": 500,
+    "nodeCount": 500,
+    "controlledFieldCount": 10,
+    "perNodeDescriptionParagraphs": 8,
+    "perNodeDescriptionSentencesPerParagraph": 4
+  },
+  "valueStoreFixture": {
+    "largeDescriptionParagraphs": 3000,
+    "largeDescriptionSentencesPerParagraph": 10,
+    "largeRawBytes": 5199728,
+    "chunkCharsThreshold": 60000,
+    "encodedChunkCount": 5,
+    "encodedEncoding": "GZIP_B64",
+    "encodedRawBytesField": 5199728,
+    "totalBase64Chars": 257324
+  },
+  "memoryPhases": [
+    {
+      "name": "build 500-node tree fixture (= TREE_LIMIT), 10 controlled fields each",
+      "ms": 1.85,
+      "heapUsedBeforeMiB": 12.89,
+      "heapUsedAfterMiB": 13.39,
+      "heapUsedDeltaMiB": 0.5,
+      "rssBeforeMiB": 70.17,
+      "rssAfterMiB": 72.09,
+      "rssDeltaMiB": 1.92
+    },
+    {
+      "name": "project() all 500 nodes' controlled fields (normalise + digest, content.js)",
+      "ms": 43.14,
+      "heapUsedBeforeMiB": 13.4,
+      "heapUsedAfterMiB": 15.77,
+      "heapUsedDeltaMiB": 2.37,
+      "rssBeforeMiB": 72.13,
+      "rssAfterMiB": 84.88,
+      "rssDeltaMiB": 12.75
+    },
+    {
+      "name": "diffTree() over two 500-node projected trees (10% of nodes changed)",
+      "ms": 1.25,
+      "heapUsedBeforeMiB": 15.77,
+      "heapUsedAfterMiB": 15.8,
+      "heapUsedDeltaMiB": 0.04,
+      "rssBeforeMiB": 84.89,
+      "rssAfterMiB": 85,
+      "rssDeltaMiB": 0.11
+    },
+    {
+      "name": "encodeValue() on one large ADF-like value (5199728 raw bytes)",
+      "ms": 44.89,
+      "heapUsedBeforeMiB": 15.32,
+      "heapUsedAfterMiB": 15.58,
+      "heapUsedDeltaMiB": 0.26,
+      "rssBeforeMiB": 102.34,
+      "rssAfterMiB": 112.72,
+      "rssDeltaMiB": 10.38
+    },
+    {
+      "name": "decodeValue() reassembling 5 chunks",
+      "ms": 7.37,
+      "heapUsedBeforeMiB": 15.58,
+      "heapUsedAfterMiB": 21.92,
+      "heapUsedDeltaMiB": 6.34,
+      "rssBeforeMiB": 112.72,
+      "rssAfterMiB": 119.28,
+      "rssDeltaMiB": 6.56
+    }
+  ],
+  "cpu": {
+    "methodology": "perf_hooks performance.now(); 100 warmup calls then 7 trials of 2000 iterations each; reported value is the median of the 7 per-iteration-averaged trial times, in microseconds per call",
+    "iterationsPerTrial": 2000,
+    "trials": 7,
+    "warmup": 100,
+    "sampleInputBytes": 5638,
+    "results": {
+      "gzipLevel9": {
+        "medianUs": 18.812,
+        "minUs": 17.604,
+        "maxUs": 23.047,
+        "usPerOp": [
+          23.047,
+          22.548,
+          20.38,
+          18.812,
+          18.569,
+          18.278,
+          17.604
+        ]
+      },
+      "hashingSha256": {
+        "medianUs": 2.623,
+        "minUs": 2.452,
+        "maxUs": 3.173,
+        "usPerOp": [
+          3.173,
+          2.664,
+          2.623,
+          2.508,
+          2.49,
+          2.628,
+          2.452
+        ]
+      },
+      "contentCanonicalizationNormaliseAdf": {
+        "medianUs": 9.148,
+        "minUs": 8.745,
+        "maxUs": 10.127,
+        "usPerOp": [
+          10.127,
+          9.148,
+          8.868,
+          8.809,
+          8.745,
+          10.073,
+          9.561
+        ]
+      }
+    },
+    "context": {
+      "genericCanonicalHashJs": {
+        "medianUs": 8.842,
+        "minUs": 8.729,
+        "maxUs": 9.066,
+        "usPerOp": [
+          9.066,
+          8.842,
+          8.729,
+          8.744,
+          8.94,
+          8.886,
+          8.752
+        ]
+      },
+      "fullProjectOneNode": {
+        "medianUs": 27.318,
+        "minUs": 26.571,
+        "maxUs": 31.326,
+        "usPerOp": [
+          27.318,
+          26.571,
+          26.986,
+          26.713,
+          28.038,
+          30.062,
+          31.326
+        ]
+      }
+    },
+    "rankedByMedianUsDescending": [
+      {
+        "rank": 1,
+        "name": "gzipLevel9",
+        "medianUs": 18.812
+      },
+      {
+        "rank": 2,
+        "name": "contentCanonicalizationNormaliseAdf",
+        "medianUs": 9.148
+      },
+      {
+        "rank": 3,
+        "name": "hashingSha256",
+        "medianUs": 2.623
+      }
+    ],
+    "sink": 163940700
+  }
+}

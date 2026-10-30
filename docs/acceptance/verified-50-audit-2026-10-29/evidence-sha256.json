@@ -1,0 +1,18 @@
+{
+  "restore-delay.test.mjs": "33b0378f980555c392ee18bc8761e0757758f6e8bcc49928e4e20946e8f7b08f",
+  "adf-parity.test.mjs": "06b9fd4f94c0ef92b6f77cea435352225f93a683691d57b7c86ebd3c2ec9da20",
+  "additional-checks.log": "1d155843f9a3757c1431ce8ff86307f0aacf3e51860bb3d7baea4820d25b1ebc",
+  "built-assets-and-inspected-bundler.json": "484d00d86c4b1262181458d07faeae42bf8fb32a6a31a7dcb4f4bbb73783c6e9",
+  "compact-json-check.log": "bbb3f4aedfb4087d7d7190fdd9c34de63ccedb3a23816c837afd3205b4c0ffc7",
+  "decisions.json": "bb4ee8ef2407cd2a51e3c2440ef98c94033327f070dc1504a851c83a6b99467a",
+  "ui-tests.log": "e6ca1b4106baa72ab3993ee8b3241b4264c2e6a9c10ff1bc30a447ff3cb6421d",
+  "profile-results.json": "3091ff71ee9cc4c68663b672dfdb618ba9953a89dfd829e3769a3682b47f6abc",
+  "profile.log": "ba11abca4d001d89a55bf039b14a2429129dc736b7cacda65acf30bccee19b72",
+  "backend-tests.log": "f54a38b5e86f5fa9fa22eef27e720748f96d51a31b8c99a648fc51ec913e6aaf",
+  "production-build.log": "f5f9c1ac5476167e1c89e206c86e90ea6529e8b31584ccb3b80e40f2511d2d09",
+  "source-snapshot-before.json": "a92faec8b6009ddc42669dbfcb3fb92fe22008a9b30d647ba574986a65c7f1e3",
+  "source-stability.json": "aacb3245e2649c9899025f997be9d718c574487983ecd33a4981e117e6407a15",
+  "vite-config.json": "17ca375be1a4378016c4b33614ea1fc37aeb465dab486bfa4c98629f2c4681c7",
+  "vault-delay.test.mjs": "a22df7c188e96cabfe484f5c7dc8c25f4f6fbe8f32200b2f7e90094347452631",
+  "original-checklist.md": "80fa185109aeb4e9224f5ff9bb76323886698e5bb65610e7eb8712b2c40541d7"
+}

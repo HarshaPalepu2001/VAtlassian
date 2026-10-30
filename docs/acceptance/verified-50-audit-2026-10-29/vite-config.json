@@ -1,0 +1,13 @@
+{
+  "mode": "production",
+  "isProduction": true,
+  "minify": "oxc",
+  "cssMinify": true,
+  "treeshake": "bundler default",
+  "groups": [
+    "ui",
+    "review",
+    "admin",
+    "webauthn"
+  ]
+}
