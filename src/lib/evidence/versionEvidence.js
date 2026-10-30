@@ -4,14 +4,10 @@ import { FIELD_KIND } from '../content.js';
 import { governedLinks } from '../linkPolicy.js';
 
 /**
- * THE EVIDENCE OF ONE BASELINE VERSION, AS ROWS
- * (docs/specs/2026-10-03-baseline-evidence-model-design.md §4).
- *
- * Pure. What a capture already knows (the fields it projected, their digests,
- * the rule it applied, who signed) becomes the rows that let a version be read
- * later exactly as it was signed, without consulting today's configuration.
- * Anything missing refuses the capture: a version is never published with
- * evidence that was guessed.
+ * Build one baseline version's evidence rows from capture-time fields,
+ * digests, rule and signer. The stored version can then be read without
+ * consulting current configuration. Refuse capture if evidence is missing.
+ * See docs/specs/2026-10-03-baseline-evidence-model-design.md section 4.
  */
 export const CAUSE = Object.freeze({
   OWN_TRANSITION: 'OWN_TRANSITION',

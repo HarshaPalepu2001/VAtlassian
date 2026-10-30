@@ -57,7 +57,7 @@ const FIELD_TYPES = {
   textarea: ['com.atlassian.jira.plugin.system.customfieldtypes:textarea', 'com.atlassian.jira.plugin.system.customfieldtypes:textsearcher']
 };
 
-log(`${APPLY ? 'APPLYING' : 'DRY RUN (read-only)'} on ${jira.site} — project ${projectKey}`);
+log(`${APPLY ? 'APPLYING' : 'DRY RUN (read-only)'} on ${jira.site}, project ${projectKey}`);
 log(`Reference: ${PLAN.source}\n`);
 
 // ── Preflight ──────────────────────────────────────────────────────────────
@@ -270,7 +270,7 @@ for (const t of TYPES) {
     ref[s.key] = randomUUID();
     const existing = siteStatuses.find((x) => lc(x.name) === lc(s.name) && x.scope?.type === 'GLOBAL');
     if (existing && existing.statusCategory !== s.statusCategory) throw new Error(`Existing status "${s.name}" is ${existing.statusCategory}, plan wants ${s.statusCategory}.`);
-    log(`  ${existing ? 'reuse ' : 'CREATE'}  status "${s.name}"${existing ? ` (${existing.id})` : ''} ${s.statusCategory}${s.editable === false ? ' — not editable' : ''}`);
+    log(`  ${existing ? 'reuse ' : 'CREATE'}  status "${s.name}"${existing ? ` (${existing.id})` : ''} ${s.statusCategory}${s.editable === false ? ', not editable' : ''}`);
     return { statusReference: ref[s.key], name: s.name, statusCategory: s.statusCategory, description: '', ...(existing ? { id: existing.id } : {}) };
   });
   const transitions = [{
@@ -428,7 +428,7 @@ if (!LINK_TYPES) {
   }
 }
 
-log(`\n${APPLY ? 'Done.' : 'Dry run complete — nothing was changed.'} Ledger: ${stateFile}`);
+log(`\n${APPLY ? 'Done.' : 'Dry run complete. Nothing was changed.'} Ledger: ${stateFile}`);
 log(`\nStill to do in VAtlassian administration → Test management → ${projectKey}:`);
 for (const d of PLAN.issueTypes) log(`  - ${d.vatlassianRole}: ${d.name}`);
 log('  - bug link type and a separate Verifies link type; keep the default sign-off chains; Save and enable');

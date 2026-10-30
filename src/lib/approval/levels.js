@@ -15,16 +15,11 @@ export function describeAssurance(level) {
 }
 
 /**
- * The assurance no policy may go below.
- *
- * SERVER-ENFORCED, NOT CONFIGURED. `va_controlled_transition.required_assurance`
- * may raise this; nothing may lower it. NATIVE_TRANSITION's provider accepts a
- * session confirmation with no signature, and this app's whole claim is that a
- * controlled record does not change without one — including on rejection, which
- * rewrites the issue through the restore path.
- *
- * Raising the floor is a code change on purpose: it is the kind of decision
- * that should appear in a change-control record, not in a settings screen.
+ * Minimum assurance for every controlled change, including rejection restores.
+ * va_controlled_transition.required_assurance may raise this level, never lower
+ * it. NATIVE_TRANSITION accepts session confirmation without a signature and
+ * therefore cannot satisfy the minimum. Changing the minimum requires a code
+ * change with a change-control record, rather than a setting.
  */
 export const MINIMUM_ASSURANCE = ASSURANCE_LEVEL.ESIGNATURE;
 
@@ -35,14 +30,11 @@ export function effectiveAssurance(required) {
 }
 
 /**
- * The EXACT authentication method configured for a controlled transition.
- *
- * Unlike effectiveAssurance(), this function NEVER silently raises weak levels:
- * it throws for anything that is not an explicit ESIGNATURE or BIOMETRIC choice.
- * Use it to (a) validate admin config — refuse NATIVE_TRANSITION/JSM_APPROVAL/
- * undefined as invalid controlled-transition policies — and (b) dispatch the
- * one exact provider at submit/challenge time. Never use it in the gate or in
- * any code that handles uncontrolled-transition rows.
+ * Validate the exact configured authentication method for a controlled transition.
+ * Throw unless the choice is explicitly ESIGNATURE or BIOMETRIC; unlike
+ * effectiveAssurance(), do not raise a weaker choice automatically. Use this
+ * for admin validation and provider selection at challenge/submit time, never
+ * in the gate or for uncontrolled-transition rows.
  */
 export function controlledAuthenticationMethod(required) {
   if (required === ASSURANCE_LEVEL.ESIGNATURE || required === ASSURANCE_LEVEL.BIOMETRIC) return required;

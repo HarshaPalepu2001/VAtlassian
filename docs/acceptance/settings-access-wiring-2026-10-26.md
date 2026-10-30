@@ -1,4 +1,4 @@
-# Settings and access wiring verification — 26 October 2026
+# Settings and access wiring verification. 26 October 2026
 
 ## Result and boundary
 

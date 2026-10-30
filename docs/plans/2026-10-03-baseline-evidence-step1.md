@@ -1,8 +1,8 @@
-# Baseline Evidence Model, Step 1: Schema and Evidence Rows Implementation Plan
+# Baseline evidence model, step 1: schema and evidence rows implementation plan
 
-**Goal:** Every new baseline version records its field definitions, the rule that required them, its signature and its links, and cannot become ACTIVE without them. Every drift observation records how much is known about it. What any reader shows stays the same.
+**Goal.** Every new baseline version records its field definitions, the rule that required them, its signature and its links, and cannot become ACTIVE without them. Every drift observation records how much is known about it. What any reader shows stays the same.
 
-**Architecture:** This is rollout step 1 of the spec (§9.5). It has three parts:
+**Architecture.** This is rollout step 1 of the spec (§9.5). It has three parts:
 
 - The draft tables are reshaped to the spec by append-only migrations.
 - A pure builder (`lib/evidence/versionEvidence.js`) turns what a capture already knows into rows. A store (`db/evidenceStore.js`) writes them, batched, while the version is still CAPTURING.
@@ -10,11 +10,11 @@
 
 Readers (panel, validator, collector comparison, restore) are not touched. They switch over in step 4.
 
-**Tech Stack:** Node 20 ESM, Forge SQL (MySQL/TiDB dialect, no transactions), `node:test`, `@forge/events` for retries.
+**Technology.** Node 20 ESM, Forge SQL (MySQL/TiDB dialect, no transactions), `node:test`, `@forge/events` for retries.
 
 **Spec:** `docs/specs/2026-10-03-baseline-evidence-model-design.md` (approved 2026-10-03). Sections used: §4 data model, §5.4 tree hash/pins, §7.1 observations, §9.1 schema, §9.5 step 1.
 
-## Global Constraints
+## Global constraints
 
 - **Before Task 1, make sure nothing else is editing this working tree.** Another writer added draft files there on 2026-10-03, between 16:23 and 16:32 IST.
 - **The working tree holds a large amount of unrelated uncommitted work, and `test/drift-store.test.js` is staged by someone else.**
@@ -38,7 +38,7 @@ Readers (panel, validator, collector comparison, restore) are not touched. They 
   - all: `npm test`. At plan time this was 1598 tests passing.
 - **Deploy happens only in Task 10.** Tasks 2 and 3 must ship together: v094 drops a column that the draft `recordDrift` still writes.
 
-## File Structure
+## File structure
 
 | File | Responsibility |
 |---|---|

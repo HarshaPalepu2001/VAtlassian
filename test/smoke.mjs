@@ -5,14 +5,12 @@ import { pathToFileURL } from 'url';
 /**
  * Import every backend module.
  *
- * The unit tests cover the pure logic; this covers the half of the codebase
- * they cannot reach — resolvers, triggers, jobs, stores and the gate all import
- * @forge/* and so are invisible to a pure-function test. Almost every mistake
- * that survives review in a Forge app is a bad import path, a name that was
- * renamed in one file and not another, or a top-level statement that throws on
- * load. Every one of those shows up here and nowhere else until deploy.
+ * Pure-function tests do not exercise the @forge/* imports in resolvers,
+ * triggers, jobs, stores, and the gate. This check catches missing import
+ * paths, mismatched export names, and top-level statements that throw on
+ * load before deployment.
  *
- * Run with `npm run smoke` (needs `npm install` first).
+ * Run with `npm run smoke` after `npm install`.
  */
 
 const ROOT = resolve(import.meta.dirname, '..');
@@ -27,17 +25,17 @@ function walk(dir, out = []) {
 }
 
 /**
- * Modules that CANNOT import outside the Forge runtime, and why.
+ * Modules that cannot import outside the Forge runtime.
  *
- * DELIBERATELY EMPTY. @forge/llm reaches into the runtime at module load and
- * throws "Forge runtime not found." anywhere else, which once made lib/report.js
- * and every resolver importing it unloadable here. The fix was to import it
- * lazily inside the one function that calls it — better for cold starts and for
- * degradation, not just for this check.
+ * The exception map is empty. @forge/llm accesses the runtime at module load
+ * and throws "Forge runtime not found." elsewhere. It once prevented
+ * lib/report.js and its resolvers from loading here. Importing it lazily in
+ * the calling function fixed that and improved cold starts and failure
+ * handling.
  *
- * An entry here is a confession that part of the backend cannot be verified
- * before deploy, so each one needs a reason. Reaching for this map should be the
- * last resort, after trying to remove the load-time dependency.
+ * Each exception needs a reason because it excludes backend code from this
+ * pre-deployment check. Try removing the load-time dependency before adding
+ * an exception.
  */
 const RUNTIME_ONLY = new Map();
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * VAtlassian ALM Observability & Diagnostics Harness CLI
+ * VAtlassian log and diagnostics CLI
  *
  * Real-time log streamer, event parser, issue lifecycle inspector, and ALM analytics tool.
  *
@@ -9,8 +9,8 @@
  *   node scripts/harness.mjs watch [options]              # Continuous live log stream
  *   node scripts/harness.mjs tail [limit=40] [options]    # Fetch and summarize recent Forge logs
  *   node scripts/harness.mjs parse <logfile> [options]    # Parse and filter local log file
- *   node scripts/harness.mjs stats [logfile|--limit N]    # Comprehensive ALM health & performance analytics
- *   node scripts/harness.mjs inspect <issueKey> [logfile] # Full chronological lifecycle reconstruction for an issue
+ *   node scripts/harness.mjs stats [logfile|--limit N]    # ALM health and performance statistics
+ *   node scripts/harness.mjs inspect <issueKey> [logfile] # Chronological events for an issue
  *   node scripts/harness.mjs replay <logfile> [--speed N] # Replay log file with relative timing
  *
  * Options:
@@ -69,7 +69,7 @@ export const CATEGORY_BADGES = {
 };
 
 /**
- * Parse an individual line or chunk into a structured Harness LogEvent.
+ * Parse a log line or chunk into a structured LogEvent.
  */
 export function parseHarnessEvent(line) {
   if (!line || !line.trim()) return null;
@@ -217,7 +217,7 @@ export function matchesFilter(event, options = {}) {
 }
 
 /**
- * Format a Harness LogEvent into terminal text with badges, timing, and highlighted properties.
+ * Format a LogEvent with status markers, timing and selected properties.
  */
 export function formatHarnessEvent(event) {
   if (!event) return null;

@@ -1,4 +1,4 @@
-# Drift approval and restoration verification — 9 September 2026
+# Drift approval and restoration verification. 9 September 2026
 
 These changes are in `/Users/sriharsha/VAtlassian` and were deployed to the Forge development environment after local verification. No interactive Jira/Chrome acceptance session was completed. The working tree already contained substantial changes; those were preserved.
 

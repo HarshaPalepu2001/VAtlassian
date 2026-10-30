@@ -1,4 +1,4 @@
-# Architecture review fixes — 28 October 2026
+# Architecture review fixes. 28 October 2026
 
 Scope: five reproduced defects in the current VAtlassian application, starting at `2a6f33a`. Five dedicated implementation agents handled the defects, followed by an independent local review and a scoped re-review. This report records the review checkpoint before commit and deployment.
 

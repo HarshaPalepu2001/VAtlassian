@@ -1,28 +1,17 @@
 /**
- * THE AUTOMATIC BUG — one intent per failed run, under the test's parent.
+ * Create one bug per fully signed Failed run under the test's parent and
+ * link it to the test and execution, under owner decisions 5 and 10.
  *
- * Owner decisions 5 and 10: a fully signed Failed run produces one bug, a
- * child of the failed test's parent (normally its Epic), linked to the test
- * and the execution.
+ * Persist a run-keyed intent before calling Jira and claim each create by
+ * compare-and-swap. Set the search marker label and confirming run property
+ * in the create request. Concurrent callers reconcile the intent instead of
+ * issuing another create.
  *
- * An uncertain create is never retried merely because Jira search is empty:
- *   1. An intent row keyed on the run is written BEFORE Jira is called. A
- *      second caller finds the row and reconciles instead of creating.
- *   2. The bug carries a marker label, to find it by, and an entity property
- *      naming the run, to confirm it by. Both are set in the create itself.
- *   3. Each create first claims an attempt on the row by compare-and-swap, so
- *      two callers can never both send one.
- *   4. A create whose answer was lost (a timeout or a 5xx: the issue may exist)
- *      is judged on a later call, once Jira's search has had SETTLE_MS to index
- *      a new issue: a search straight away can miss it, and a create after
- *      that miss would be a second bug. Then the marker is searched for, and
- *      every match is read back to confirm its property names this run. One
- *      confirmed match is the bug; no match requires an administrator's
- *      investigation and repair; anything else (two, a label on an issue
- *      the property does not confirm, a failed search) is NEEDS_REPAIR.
- *      Nothing retries blindly.
- *   5. Jira refusing the create (a 4xx) is NEEDS_REPAIR at once. The payload is
- *      never altered behind the admin's back to make it pass.
+ * After a timeout or 5xx, wait SETTLE_MS for Jira indexing before searching.
+ * Read back each match's property. Accept exactly one confirmed bug. Missing,
+ * ambiguous, unconfirmed or unreadable matches require administrator repair.
+ * A 4xx refusal immediately becomes NEEDS_REPAIR. Never retry an uncertain
+ * create or alter its payload automatically.
  */
 
 export const BUG_STATE = Object.freeze({ INTENT: 'INTENT', CREATED: 'CREATED', NEEDS_REPAIR: 'NEEDS_REPAIR' });

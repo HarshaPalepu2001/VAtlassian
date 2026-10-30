@@ -1,17 +1,15 @@
 /**
- * THE LINK DECISION WORKER — consumer of va-link-queue.
+ * Record linked-issue decisions from va-link-queue.
  *
- * An approval that decided a link change queues one job per other issue
- * (lib/approval/linkPropagation.js, from usecases/drift.js). This records the
- * decision on that other issue: a new baseline version with only its links
- * changed, authenticated by the same approval (db/derivedBaselineStore.js).
- * Off the approval's own 25-second budget, because the other issue may be a
- * tree whose whole record is copied.
+ * An approval of a link change queues one job per other issue through
+ * lib/approval/linkPropagation.js and usecases/drift.js. This worker creates
+ * a baseline version changing only that issue's links, authenticated by the
+ * same approval through db/derivedBaselineStore.js. Copying a tree's record
+ * runs outside the approval's 25-second budget.
  *
- * Idempotent: the other issue's standing record is read first, and a record
- * that already agrees is left alone, so a redelivered job writes nothing.
- * An other issue in the middle of its own decision or restore is retried
- * later, never written underneath it.
+ * Read the other issue's current record first. If it already agrees, a
+ * redelivered job writes nothing. Retry later if that issue is undergoing
+ * its own decision or restore.
  */
 import { applyLinkChanges, deriveFlatRecord, deriveTreeRecord, recordedLinks, mirrorLinkChange } from '../lib/approval/linkPropagation.js';
 import { baselineLinkPolicy, normaliseLinkPolicy, hydrateLinkPolicyIssue, excludesLink } from '../lib/linkPolicy.js';
@@ -58,10 +56,9 @@ const baselineIdentity = source => source ? canonical({
 }) : null;
 
 /**
- * The job, then its pending marker (db/linkPendingStore.js) cleared whatever
- * it concluded — recorded, already agreeing, or not recordable — so the other
- * issue stops saying a decision is on its way. A retry keeps it: the decision
- * is still coming. A thrown error keeps it too, and its age retires it.
+ * Run the job and clear its pending marker after recording, agreement or a
+ * non-recordable outcome. Keep the marker for retries and thrown errors; its
+ * age eventually retires it. See db/linkPendingStore.js.
  */
 export async function runLinkWorker(eventOrBody, overrides = null) {
   const body = eventOrBody?.body ?? eventOrBody;

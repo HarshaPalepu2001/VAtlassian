@@ -1,4 +1,4 @@
-# VAtlassian test management first — design
+# VAtlassian test management first design
 
 Status: proposed implementation target, 2026-10-20, revised the same day with the owner's decisions (next section). The feature is not built. This design supersedes the earlier test-plus-requirements draft; requirements management is a later product phase.
 
@@ -223,14 +223,14 @@ The owner asked that nothing in this design rest on an unchecked assumption abou
 | Controlled transitions, the validator holding a transition, no-eligible-signer denial | VAtlassian (live since 8.x, `va-gate`) | Proven |
 | TOTP signature bound to a content hash, single use, audit chain | VAtlassian (live) | Proven |
 | Baselines over Jira fields, links and attachments; drift flag and hold | VAtlassian (live-verified 2026-10-13) | Proven; adding the SQL version digest to the hash basis is new code |
-| Per-link-type filter in link drift | — | New VAtlassian code, no Jira dependency |
+| Per-link-type filter in link drift | Not applicable | New VAtlassian code, no Jira dependency |
 | Detailed records in Forge SQL | VAtlassian (`sql: main`, live) | Proven for today's volumes. AssureX keeps this on AWS PostgreSQL, so **its scale proves nothing for Forge SQL**. Scale test in the core acceptance (plan Task 10) |
 | App creating the automatic bug (`asApp`, `write:jira-work` already granted) | Standard Jira REST; VAtlassian already writes issues as the app (restore) | Expected to work; spike |
 | Reporter set to the signer on an app-created bug | Requires the app to hold *Modify reporter* and Reporter on the create screen | **Unproven.** Fallback: Reporter is the app and the signer is named in the bug and its audit entry |
 | CI upload through a static web trigger | Forge documented feature; AssureX uses its AWS API instead | Unproven on VAtlassian; spike in plan Task 11 |
 | AI suggestions on Forge LLM | VAtlassian declares `llm: va-llm` and `lib/aiClassification.js` uses it; AssureX uses its AWS backend | Partly proven; plan Task 13 |
 | Xray / Zephyr migration from export files | AssureX uses vendor APIs instead | Unproven; plan Task 12 |
-| Biometric sign-off under Runs on Atlassian | — | Deferred (owner decision 7) |
+| Biometric sign-off under Runs on Atlassian | Not applicable | Deferred (owner decision 7) |
 
 ## Relationship to AssureX and codebeamer (clean room)
 

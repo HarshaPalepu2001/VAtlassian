@@ -105,8 +105,8 @@ export async function updateControlledTransition(req, overrides) {
     const input = transitionInput(req.payload);
     const id = deps.toBinaryParam(Buffer.from(req.payload.ctId, 'hex'));
     // Re-read the live transition and re-derive every fact this row will
-    // claim, excluding this row itself from the no-conflicting-scope check —
-    // an edit is allowed to keep governing the edge it already governs.
+    // claim, excluding this row itself from the no-conflicting-scope check.
+    // An edit may keep governing the edge it already governs.
     await verifyControlledTransition(input, deps, { excludeCtId: id });
     if (input.captureBaseline) {
       const rows = await deps.declaredFieldRows({ projectId: input.projectId, issueTypeId: input.issueTypeId });

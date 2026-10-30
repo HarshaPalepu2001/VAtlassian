@@ -6,38 +6,22 @@ import { identityRecords } from '../../db/vaultStore.js';
 import { hydrateLinkPolicyIssue } from '../linkPolicy.js';
 
 /**
- * Proving the restore worked.
- *
- * WHY THIS EXISTS AS A SEPARATE PASS. A 204 from Jira means the request was
- * accepted, which is not the same as the field now holding the value we sent.
- * Values get coerced, screens silently drop fields they do not carry, workflow
- * post-functions overwrite things a moment later, and a custom field with a
- * validator can reject a value while the surrounding request succeeds.
- *
- * So the executor never marks anything verified, and this module is the only
- * thing that can. It re-reads the issue and compares digests — the same digests
- * content.js computes everywhere else, so "restored" means exactly what
- * "unchanged since approval" means, computed the same way. Anything else would
- * be two definitions of correct.
+ * Re-read restored fields and compare their content.js digests with the
+ * baseline. A successful Jira response confirms acceptance, not the final
+ * stored value. Coercion, screen rules, validators and post-functions may
+ * change the result. Only this verification pass marks fields verified.
  */
 
 /**
- * Re-read and confirm.
+ * Re-read and verify every field outcome against approved digests.
+ * If the read fails, leave all written fields unverified and failed.
  *
  * @param api
  * @param issueKey
  * @param controlledFields
  * @param baselineDigests   { fieldId: digest } from the baseline
  * @param detail            per-field outcomes from executeRestore
- *
- * @returns detail, with `verified` set truthfully on every entry.
- *
- * A FAILED VERIFICATION READ DOWNGRADES EVERYTHING. If the issue cannot be
- * re-read, nothing can be claimed, so every field that was written is reported
- * unverified and therefore failed. That is deliberately pessimistic: an
- * unverifiable restore reported as complete is the one outcome this whole
- * module exists to prevent, and "we could not confirm" is a fine thing to tell
- * a reviewer.
+ * @returns detail with verified set on every entry
  */
 export async function verifyRestore({ api, issueKey, controlledFields, baselineDigests, detail, expectedStatusId = null,
   readIdentity = identityRecords, linkPolicy = null }) {
@@ -63,15 +47,14 @@ export async function verifyRestore({ api, issueKey, controlledFields, baselineD
     currentStatusId = current.status?.id == null ? null : String(current.status.id);
   } catch (e) {
     console.error('restore: verification read failed', issueKey, e);
-    // Deliberately pessimistic. An unverifiable restore reported as complete is
-    // the one outcome this module exists to prevent. `unmatched` carries a
-    // sentinel so tally() cannot reach COMPLETE on an unread issue either.
+    // Mark unread fields unverified. The unmatched sentinel prevents tally()
+    // from declaring COMPLETE when the verification read failed.
     return {
       detail: detail.map((d) => (
         d.outcome === OUTCOME.SUCCEEDED
           ? {
               ...d, outcome: OUTCOME.FAILED, verified: false,
-              reason: 'The work item could not be re-read, so this restore could not be confirmed. Nothing is known to have failed — but nothing is confirmed either.'
+              reason: 'The work item could not be re-read, so this restore could not be confirmed. No failure was confirmed, but no result was verified.'
             }
           : { ...d, verified: false }
       )),
@@ -98,12 +81,8 @@ export async function verifyRestore({ api, issueKey, controlledFields, baselineD
     };
   });
 
-  // ── The whole tracked projection, not just what we tried to write ─────────
-  //
-  // A field this restore never touched can still be wrong: a post-function or
-  // a concurrent edit can change it between the plan and the re-read. Checking
-  // only attempted writes is how "restore complete" came to mean "every write
-  // we attempted landed", which is a different and much weaker claim.
+  // Verify all tracked fields, including unwritten fields that a concurrent
+  // edit or workflow post-function may have changed.
   const byId = new Map(controlledFields.map((f) => [f.field_id, f]));
   const unmatched = [];
   if (expectedStatusId != null && currentStatusId !== String(expectedStatusId)) {
@@ -131,11 +110,8 @@ export async function verifyRestore({ api, issueKey, controlledFields, baselineD
     });
   }
 
-  // ── Images a digest cannot see ────────────────────────────────────────────
-  //
-  // A restored copy's pointer is read as the original's, so text that still
-  // points at the DELETED original has the same digest as text that points at
-  // its live copy — and only one of them shows the image.
+  // Canonical digests treat restored copies as originals. Also check media
+  // pointers so text cannot pass verification while referencing a deleted file.
   for (const entry of await brokenImages({ raw, issueId, byId, readIdentity })) {
     if (unmatched.some(u => u.fieldId === entry.fieldId)) continue;
     unmatched.push(entry);

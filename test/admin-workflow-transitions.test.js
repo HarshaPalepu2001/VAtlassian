@@ -113,7 +113,7 @@ test('a DIRECTED transition reachable from two statuses becomes two exact edges'
   assert.ok(result.transitions.every(t => t.transitionId === '9'));
 });
 
-test('INITIAL transitions are never offered — issue creation has no from-status', async () => {
+test('INITIAL transitions without a from-status are never offered', async () => {
   const workflow = {
     id: 'wf', name: 'wf',
     transitions: [{ id: '1', name: 'Create', type: 'INITIAL', toStatusReference: '10004', links: [], validators: [] }]
@@ -242,7 +242,7 @@ test('Jira initial transition layout links without a source status do not invali
   assert.equal(workflow.transitions[1].links[0].fromStatusReference, '10004');
 });
 
-test('a controlled edge can be saved from Jira’s documented numeric status-reference response', async () => {
+test('a controlled edge can be saved from the documented Jira numeric status-reference response', async () => {
   const workflow = await readWorkflowForPair({ projectId: '1', issueTypeId: '2' }, {
     request: async () => ({ ok: true, json: async () => ({
       statuses: [{ id: '10004', statusReference: '10004' }, { id: '10006', statusReference: '10006' }],
@@ -261,7 +261,7 @@ test('a controlled edge can be saved from Jira’s documented numeric status-ref
   assert.equal(result.success, true, result.error);
 });
 
-test('the workflow read requests transition links in Jira’s current response format', async () => {
+test('the workflow read requests transition links in the current Jira response format', async () => {
   let sent;
   await defaultRequest({ projectId: '1', issueTypeId: '2' }, {
     asApp: () => ({ requestJira: async (path, options) => { sent = { path, options }; return { ok: true }; } }),

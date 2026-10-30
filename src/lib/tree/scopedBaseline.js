@@ -76,15 +76,10 @@ export function effectiveScopedBaselineTree({ governedTree, rootLogicalNodeId, o
 }
 
 /**
- * Resolve the exact approved tree for the work item being reviewed or
- * restored. A tree baseline owns its own stored tree; a field-level child
- * baseline created by a parent capture instead points back to that parent's
- * signed tree and contributes the child's latest approved fields at the
- * scoped root.
- *
- * Keeping this boundary shared is important: the interactive diff and the
- * queued restore must never disagree about whether descendants belong to the
- * approved hierarchy.
+ * Resolve the approved tree for review and restore. Tree baselines own their
+ * stored hierarchy. Field-level child baselines created by a parent capture
+ * use that parent's signed subtree and the child's latest approved root fields.
+ * Share this resolution so review and queued restore use the same hierarchy.
  */
 export async function resolveBaselineTree({ baseline, baselineValues, rootLogicalNodeId,
   baselineById, readBaselineTree }) {

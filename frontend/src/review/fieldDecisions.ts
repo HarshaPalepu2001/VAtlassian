@@ -1,14 +1,11 @@
 /**
- * PER-FIELD DRIFT DECISIONS, as the review window holds them before anything is
- * signed (docs/specs/2026-10-07-drift-field-decision-design.md).
+ * Draft field decisions for the review window.
+ * See docs/specs/2026-10-07-drift-field-decision-design.md.
  *
- * Pure: no React, no clock, no network. Nothing here is evidence of anything —
- * a choice is only a request, and the server re-derives and re-checks the whole
- * map before it is signed or applied. These functions exist so that swipe,
- * keyboard, the explicit buttons and Reset all produce the same state, and so
- * that "may this be saved?" has exactly one answer.
- *
- * A field with no entry is undecided. State is never mutated.
+ * These pure functions keep swipes, keyboard input, buttons and Reset all
+ * consistent. Draft choices are requests, not evidence. The server re-derives
+ * and checks the whole map before signing or applying it.
+ * A missing entry means undecided. These functions never mutate state.
  */
 export type Choice = 'APPROVE' | 'REJECT';
 export type Decisions = Record<string, Choice>;

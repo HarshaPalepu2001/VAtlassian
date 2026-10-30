@@ -97,32 +97,21 @@ export async function listStatusesForProject(req, overrides) {
 }
 
 /**
- * Every exact transition Jira's live workflow offers for one project + issue
- * type, normalized for the admin picker.
+ * Read Jira's live workflow for one project and issue type and return exact
+ * transitions for the admin picker. Previously, the console accepted typed
+ * source/destination statuses. Sibling transitions can share a destination,
+ * so those inputs could describe a nonexistent edge or match the wrong one
+ * (db/configStore.js gatedTransition).
  *
- * WHY THIS EXISTS. The old console asked an administrator to name a from-
- * status and a to-status and typed those into va_controlled_transition
- * directly. Two workflow transitions can share a destination status
- * (gatedTransition() in db/configStore.js), so a rule saved that way could
- * describe an edge Jira does not actually have, or silently collide with a
- * sibling transition the admin never meant to touch. This reads the workflow
- * Jira is actually running and hands back one row per real edge, so the
- * console can offer an exact transition id instead of a guess.
+ * Read every field, including this app's va-gate attachment, from Jira on each
+ * call. createControlledTransition and updateControlledTransition re-read the
+ * same workflow at save time through transitionsValidation.js
+ * verifyControlledTransition; the browser's earlier result is not authoritative.
  *
- * NEVER TRUSTS THE BROWSER. Every field here — including whether our own
- * va-gate validator is attached — comes from this live read, re-verified on
- * every call. createControlledTransition/updateControlledTransition
- * (transitionsValidation.js#verifyControlledTransition) read the same source
- * again at save time rather than trusting whatever this call returned
- * earlier.
- *
- * INITIAL transitions (issue creation) are excluded — they have no
- * from-status, so they can never be a controlled edge (see
- * gateDrift.js#transitionCovers). A DIRECTED transition reachable from
- * several statuses is exploded into one row per from-status, because that is
- * the exact edge the picker and the controlled-transition table both key on;
- * a GLOBAL transition is reachable from every status and is represented once
- * with the `fromStatusId: '*'` wildcard gateDrift.js already uses for that.
+ * Exclude INITIAL issue-creation transitions because they lack a source status
+ * (gateDrift.js transitionCovers). Expand DIRECTED transitions into one row per
+ * source status. Represent a GLOBAL transition once with fromStatusId: '*',
+ * matching gateDrift.js's wildcard representation.
  */
 export async function listWorkflowTransitions(req, overrides) {
   return runAdmin(req, async (deps) => {

@@ -1,25 +1,22 @@
 #!/usr/bin/env node
 /**
- * Creates the Requirements configuration described in plan.mjs.
+ * Create the Requirements configuration defined in plan.mjs.
  *
- *   node scripts/requirements-setup/setup.mjs            # DRY RUN — read-only, prints the plan
+ *   node scripts/requirements-setup/setup.mjs            # DRY RUN, read-only, prints the plan
  *   node scripts/requirements-setup/setup.mjs --apply    # creates what is missing
  *
- * SAFETY RULES
- *  - Dry run uses a read-only client: it cannot change the site.
- *  - Nothing existing is modified. Existing statuses, the reused Acceptance
- *    Criteria field, the signature field and VAT's permission grants are only
- *    READ or REFERENCED. New schemes are attached only to the new project.
- *  - A field THIS SCRIPT created keeps Jira's mandatory default global
- *    context. A project/work-type context holds its scoped variant/options,
- *    while the project's screen scheme controls where the field is displayed.
- *  - Every created id is written to .out/state.<host>.json the moment it
- *    exists, so a re-run skips it and nothing is ever created twice.
- *  - A "REQ: "-prefixed object that exists but is NOT in the state file stops
- *    the run: the script does not adopt objects it did not make.
- *  - The workflow is checked with Jira's validation endpoint before creation.
+ * Dry runs use a read-only client. Existing statuses, Acceptance Criteria,
+ * the signature field and VAT permission grants are referenced without changes.
+ * Attach new schemes only to the new project.
  *
- * Requires .out/inspect.json from inspect.mjs (for the va-gate validator key).
+ * New fields keep Jira's mandatory global context. Project/work-type contexts
+ * hold scoped options; screen schemes control where fields appear.
+ *
+ * Record each new ID immediately in .out/state.<host>.json so later runs skip
+ * it. Stop if a REQ:-prefixed object exists outside that ledger. Validate each
+ * workflow through Jira before creation.
+ *
+ * Requires .out/inspect.json from inspect.mjs for the va-gate validator key.
  */
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -67,7 +64,7 @@ const sigCandidates = allFields.filter((f) => f.custom && lc(f.name) === lc(PLAN
 if (sigCandidates.length !== 1) throw new Error(`Expected exactly one VAtlassian "${PLAN.signatureFieldName}" field, found ${sigCandidates.length}.`);
 const sigField = sigCandidates[0].id;
 const sigContexts = await jira.all(`/rest/api/3/field/${sigField}/context`);
-log(`Signature field: ${sigField} (${sigContexts.some((c) => c.isGlobalContext) ? 'global context — usable in the new project' : 'NOT global — must be added to the new project by hand'})`);
+log(`Signature field: ${sigField} (${sigContexts.some((c) => c.isGlobalContext) ? 'global context, usable in the new project' : 'NOT global, add it to the new project manually'})`);
 if (!sigContexts.some((c) => c.isGlobalContext && c.isAnyIssueType)) {
   throw new Error(`"${PLAN.signatureFieldName}" (${sigField}) has no global, all-types context. Stopping; adding the project to it would modify an existing field.`);
 }
@@ -250,7 +247,7 @@ if (existingWf) {
   workflowCreated = true;
 } else if (pendingIds) {
   writeFileSync(join(OUT, 'workflow.preview.json'), JSON.stringify(workflowPayload, null, 2));
-  log(`  CREATE  workflow "${wfName}" — validated after its screens/fields exist (preview: .out/workflow.preview.json)`);
+  log(`  CREATE  workflow "${wfName}", validated after its screens/fields exist (preview: .out/workflow.preview.json)`);
 } else {
   const v = await jira.post('/rest/api/3/workflows/create/validation', { payload: workflowPayload, validationOptions: { levels: ['ERROR', 'WARNING'] } });
   const errors = (v.errors ?? []).filter((e) => e.level === 'ERROR');
@@ -341,7 +338,7 @@ for (const l of PLAN.linkTypes) {
   });
 }
 
-log(`\n${APPLY ? 'Done.' : 'Dry run complete — nothing was changed.'} State: ${stateFile}`);
+log(`\n${APPLY ? 'Done.' : 'Dry run complete. Nothing was changed.'} State: ${stateFile}`);
 log('\nStill to do in VAtlassian administration (not Jira):');
 for (const t of PLAN.transitions.filter((x) => x.controlled)) {
   log(`  - Controlled transition "${t.name}" (${t.from.join('/')} → ${t.to}) for ${PLAN.project.key}/${PLAN.issueType.name}: role ${t.controlled.role}${t.controlled.captureBaseline ? ', capture baseline' : ''}`);

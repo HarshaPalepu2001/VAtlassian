@@ -1,4 +1,4 @@
-# Controlled transition Task 10 acceptance record
+# Controlled transition task 10 acceptance record
 
 Date: 2026-09-14
 
@@ -27,28 +27,28 @@ Installation: Up-to-date, Jira app version 3
 
 The repository was already dirty before Task 10 work. Existing unrelated edits and scratch/review files were preserved and are not represented as Task 10 evidence.
 
-### 2026-09-14 follow-up: Tasks 1-8 review remediation
+### 2026-09-14 follow-up: tasks 1-8 review remediation
 
 A separate rigorous review of Tasks 1-8 (`review_report.md`, not itself part of this plan) found 15 issues; commit `00b57a3` fixes the ones that were real defects, all under Task 10's own completion-gate rerun of the full local suite:
 
-- **Security (HIGH)**: `panel:getEvidence` (and the legacy `panel:getState` compatibility adapter) filtered descendant tree nodes to the viewer's own Jira permissions before returning them. Previously `createTreeReader`'s `asApp()` traversal — correct for the authoritative capture/restore/drift computation — was also what reached the reviewer's screen, bypassing Issue Security Schemes for evidence display. New regression test: `test/panel-state.test.js` ("evidence excludes a descendant node the viewer cannot browse...").
+- **Security (HIGH)**: `panel:getEvidence` (and the legacy `panel:getState` compatibility adapter) filtered descendant tree nodes to the viewer's own Jira permissions before returning them. Previously the reviewer's screen used `createTreeReader`'s `asApp()` traversal. That traversal is appropriate for authoritative capture, restore and drift computation, but bypassed Issue Security Schemes when displaying evidence. New regression test: `test/panel-state.test.js` ("evidence excludes a descendant node the viewer cannot browse...").
 - **Correctness**: baseline capture's `fields`-before-declaration `ReferenceError`, the `va_baseline_node_value.chunk` `TEXT`/64KB truncation risk, swapped from/to status ids in recall incident logging, Jira's omitted top-level `parent` field crashing tree capture, and a concurrent-capture version collision now retrying against a freshly read version instead of surfacing a raw duplicate-key failure (`test/baseline-capture-lifecycle.test.js`).
-- **Performance**: `writeTreeCapture` batches node/value-chunk inserts into fixed-size multi-row statements (`test/tree-storage.test.js` — a 120-node tree now issues 6 batched statements, not 120+ individual ones), keeping large-tree capture clear of the 25s Forge synchronous ceiling.
+- **Performance**: `writeTreeCapture` batches node/value-chunk inserts into fixed-size multi-row statements as checked by `test/tree-storage.test.js`. A 120-node tree now issues 6 batched statements rather than 120+ individual ones, avoiding the 25s Forge synchronous ceiling during large-tree capture.
 - **Restore preflight**: multi-project trees are now preflighted per distinct project the plan touches, not only against the root issue's project (`test/restore-correctness.test.js`).
 - **Frontend**: restore `QUEUING_FAILED`/`ERROR` states are labelled and retryable instead of an indefinite spinner, the WebAuthn Custom UI bridge checks `event.source` against the known popup/opener, drift approve/reject is disabled until evidence has actually loaded, the admin transitions page cancels stale async lookups, and the UI Kit field surfaces an explicit error when `evidenceHash` is missing.
 - **Declined**: the review's suggestion to roll back or mark published baseline N+1 as `TRANSITION_FAILED` when the subsequent Jira transition fails. Existing behavior (invalidate the spent approval, block `retryTransition` when a baseline is attached, require a fresh signature) already satisfies this plan's "validator-denied transition requires fresh review/signature" requirement; un-publishing durable review evidence would contradict the plan's own baseline-immutability rule. No code change made for this finding.
 
-No live Jira actions were taken during this follow-up — same restriction as the rest of this record.
+This follow-up performed no live Jira actions, consistent with the rest of this record.
 
-### Task 9 queue worker — local verification
+### Task 9 queue worker and local verification
 
 The implementation plan's own Task 9 checklist was still unchecked; this confirms the code matches its interfaces, not just that it exists.
 
-- `manifest.yml`: consumer `va-restore-consumer` on queue `va-restore-queue`, function `restore-worker` → `jobs/restoreWorker.handler`, `timeoutSeconds: 600` — present and matches the plan exactly.
-- `src/lib/restore/queue.js`: `enqueueRestore` pushes `{ restoreId, issueId, baselineId, baselineVersion }` with `concurrency: { key: 'restore:<issueId>', limit: 1 }` — present and matches.
-- Migration `v040_restore_progress`: `job_id`, `queued_at`, `heartbeat_at`, `total_steps`, `completed_steps`, `last_checkpoint`, `last_error` on `va_restore` — present.
-- `src/jobs/restoreWorker.js`: claims via CAS before any mutation, exits without mutating on a stale baseline/version, heartbeats progress, processes a bounded batch (25 actions), and either re-enqueues a continuation or performs terminal verification — read in full and matches the plan's described behavior.
-- `src/usecases/restore.js`: `restore:getState` reports progress and last error; `restore:retry` checks approval ownership, baseline role eligibility, and the candidate-to-baseline resume invariant, and only re-enqueues the same `restore_id` — never mints a new signature.
+- `manifest.yml`: consumer `va-restore-consumer` on queue `va-restore-queue`, function `restore-worker` → `jobs/restoreWorker.handler`, `timeoutSeconds: 600`. These match the plan.
+- `src/lib/restore/queue.js`: `enqueueRestore` pushes `{ restoreId, issueId, baselineId, baselineVersion }` with `concurrency: { key: 'restore:<issueId>', limit: 1 }`. These match the plan.
+- Migration `v040_restore_progress`: `job_id`, `queued_at`, `heartbeat_at`, `total_steps`, `completed_steps`, `last_checkpoint`, `last_error` are present on `va_restore`.
+- `src/jobs/restoreWorker.js`: claims via CAS before any mutation, exits without mutating on a stale baseline/version, heartbeats progress, processes a bounded batch (25 actions), and either re-enqueues a continuation or performs terminal verification. Full source review confirmed the plan's described behavior.
+- `src/usecases/restore.js`: `restore:getState` reports progress and last error; `restore:retry` checks approval ownership, baseline role eligibility, and the candidate-to-baseline resume invariant, and only re-enqueues the same `restore_id` without creating a new signature.
 - Focused tests (`node --test test/restore-worker.test.js test/restore-resume.test.js test/manifest-lint.test.js test/resolver-wiring.test.js test/migrations.test.js`): 25 passed, 0 failed, covering exactly the plan's own Step 1 list (signed rejection persists before enqueue, enqueue failure leaves resumable `QUEUING_FAILED`, at-least-once delivery does not replay, stale baseline/version exits without mutation, bounded batch republishes only while actions remain).
 
 Task 9 is code-complete and locally verified. What remains for it, same as everything else here, is live Jira exercise of a long restoration (Task 10 Step 6 item 7): partial restore, background continuation with the browser closed, and retry without a new signature.
@@ -59,7 +59,7 @@ Task 9 is code-complete and locally verified. What remains for it, same as every
 - App id: `<redacted app identifier>` (manifest.yml).
 - `forge install list`: one development installation on the redacted Jira site, for Jira, at app version 3, with status Up-to-date. Same target as the 2026-09-13 live session above.
 
-**Not yet deployed**: the Tasks 1-8 review-remediation commit above (`00b57a3`) is local only. The installed version 3 predates it. Live testing against the current fixes — including the descendant-tree-visibility security fix — requires `npm run deploy` (or the project's own deploy path) to this same development installation first, and that step was intentionally left for the operator to trigger rather than run automatically here.
+**Not yet deployed**: the Tasks 1-8 review-remediation commit above (`00b57a3`) is local only. The installed version 3 predates it. Live testing against these fixes, including the descendant-tree-visibility security fix, requires `npm run deploy` (or the project's own deploy path) to this same development installation first, and that step was intentionally left for the operator to trigger rather than run automatically here.
 
 ## Adversarial matrix
 

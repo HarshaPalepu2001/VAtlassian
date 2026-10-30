@@ -1,26 +1,14 @@
 import { FIELD_KIND } from './content.js';
 
 /**
- * THE BASELINE RECORD — what a work item looks like when there is nothing to do.
+ * Build the baseline record shown when an item has no pending action.
  *
- * A baselined item spends almost all of its life clean, and the panel's answer
- * to that state was a single green sentence: "All good. Unchanged since it was
- * approved by X." True, and it made the app invisible for the ninety-odd
- * percent of the time that nothing is wrong. Worse, it made the app
- * unfalsifiable — a reviewer had no way to see WHAT was being watched, so
- * "unchanged" was a claim they had to take on faith about a set of fields they
- * could not enumerate.
+ * Show tracked fields, approved values, value-retention status, approver,
+ * transition and assurance level. An "unchanged" message alone does not tell a
+ * reviewer which fields the baseline covers or let them inspect its contents.
  *
- * That is the wrong shape for a compliance tool. The clean state is exactly
- * where the audit belongs: which fields are tracked, what their approved values
- * are, which of them have their contents retained and which only have a digest,
- * who approved them, on what edge, and at what assurance. All of it is already
- * in the database at the moment the panel renders; none of it was being shown.
- *
- * PURE, AND SEPARATE FROM THE RESOLVER, for the reason every lib/ module here
- * is: this is the part with rules in it — what counts as a preview, how a
- * non-retained field is described, how long is too long — and rules that can
- * only be exercised by standing up Forge SQL do not get exercised.
+ * Keep preview rules, non-retained-field labels and length limits separate
+ * from resolver I/O so tests can exercise them without Forge SQL.
  */
 
 /** How much of a value to show before it stops being a preview. */
@@ -30,13 +18,8 @@ const PREVIEW_CHARS = 240;
 const PREVIEW_ITEMS = 8;
 
 /**
- * Flatten ADF to readable text.
- *
- * NOT A RENDERER. The record shows what a field CONTAINED, so a reviewer can
- * confirm the approved value is the one they remember; it is not trying to
- * reproduce Jira's formatting. Rendering rich text properly is DiffView's job
- * and it needs the whole node tree to do it — which is precisely why this
- * returns a preview and the full comparison lives on the diff path.
+ * Flatten ADF to a preview of the approved content. DiffView renders the
+ * full rich-text comparison from its node tree.
  */
 export function adfText(node) {
   if (node == null) return '';
@@ -120,9 +103,8 @@ export function previewOf(kind, value) {
     case FIELD_KIND.LINKS: {
       const list = Array.isArray(value) ? value : [];
       if (list.length === 0) return { text: null, truncated: false, empty: true, items: [] };
-      // Link targets are immutable numeric ids by design (see normaliseLinks —
-      // issue KEYS change when an item moves project). An id is not readable,
-      // so the preview counts them rather than pretending to name them.
+      // Link targets use stable numeric ids because Jira keys change across
+      // project moves. Count links in previews rather than displaying those ids.
       return {
         text: `${list.length} linked work item${list.length === 1 ? '' : 's'}`,
         truncated: false,

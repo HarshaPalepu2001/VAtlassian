@@ -33,7 +33,7 @@ test('an automation is distinguished from a person and from another app', () => 
   assert.equal(classifySource(null), SOURCE.UNKNOWN);
 });
 
-test('accountType is the primary signal — a display name alone never promotes to AUTOMATION', () => {
+test('accountType takes precedence and a display name alone cannot imply AUTOMATION', () => {
   // A display name is user-visible text a site admin can change and another app
   // could imitate, so it only ever REFINES an already-app account type.
   assert.equal(classifySource({ displayName: 'Automation for Jira', accountType: 'atlassian' }), SOURCE.USER);
@@ -101,7 +101,7 @@ const ENTRIES = [
 
 test('the per-field timeline is what turns a diff into an account of what happened', () => {
   // "Priority went from High to Highest" is a diff. "Raised by automation,
-  // lowered by Ana, raised again by Sam" is something a reviewer can act on —
+  // lowered by Ana, raised again by Sam" names the actors and sequence,
   // and only the changelog can supply it.
   const byField = attributionByField(ENTRIES, ['priority']);
   assert.equal(byField.priority.length, 3);
@@ -123,7 +123,7 @@ test('lastTouchByField reports who touched it last, and how many times', () => {
   assert.deepEqual(touched.priority.authors.sort(), ['ana', 'auto', 'sam']);
 });
 
-test('the timeline is SESSIONISED — one save touching two fields is one action', () => {
+test('the timeline groups one save touching two fields into one action', () => {
   // Presenting it as two separate changes overstates how much happened.
   const rows = timeline(ENTRIES, ['priority', 'summary']);
   const anaRow = rows.find((r) => r.authorName === 'Ana Rivera');

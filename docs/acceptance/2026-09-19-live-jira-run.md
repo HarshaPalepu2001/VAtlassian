@@ -1,4 +1,4 @@
-# Live Jira acceptance run — 2026-09-19
+# Live Jira acceptance run. 2026-09-19
 
 Driven against the real tenant, not a local double.
 
@@ -27,7 +27,7 @@ client (the Atlassian MCP connector), not that the app reported success.
 | 6 | Reviewer diff quality | Per-field cards with was/now (`Critical id 10000 → Medium id 3`), severity (Critical/Major), attribution and timestamp. |
 | 7 | Structural drift (`NODE_ADDED`) | A subtask added after approval was reported as `Added node · VJIRA-19`, separate from field changes. |
 | 8 | Destructive consequence disclosed before signing | Confirmation step states **"Permanently delete: VJIRA-19"** and names the baseline being restored to. |
-| 9 | Reject restores every tracked field | Read back from Jira: Summary `test 2`, Priority `Critical (10000)`, Labels `[]`, Subtasks `[]`. Status deliberately **not** reverted — content is restored, the signed transition is not undone. |
+| 9 | Reject restores every tracked field | Read back from Jira: Summary `test 2`, Priority `Critical (10000)`, Labels `[]`, Subtasks `[]`. Status is deliberately not reverted. The app restores content without undoing the signed transition. |
 | 10 | `DELETE_ADDED_NODE` really deletes | JQL for `VJIRA-19` returns zero rows. |
 | 11 | Restore verified by read-back, not by HTTP status | Panel: "Restored and verified — All tracked fields", under the stated rule that a field counts as restored only after Jira is re-read and matched. |
 | 12 | Deleted work item recorded before deletion | Ledger seq 893, `Tree restore node destroyed`, payload carries `issueKey`, `contentHash`, logical/parent node ids and the **full field values** including its summary. |
@@ -50,7 +50,7 @@ allow:   camera; clipboard-write; display-capture; fullscreen; microphone; local
 
 Both halves of the permissions-block rationale hold on a real Jira page:
 
-1. `publickey-credentials-get` is **absent** from `allow` — Jira does not delegate
+1. `publickey-credentials-get` is absent from `allow`. Jira does not delegate
    it, so `navigator.credentials.get()` cannot run inside the app frame. The
    popup approach is necessary.
 2. The `external.fetch.client` declaration **does** yield `allow-popups` and
@@ -59,7 +59,7 @@ Both halves of the permissions-block rationale hold on a real Jira page:
 
 ## Defects found
 
-### D1 — Blocked attempts never attach to a work item, and the counter reads a name nothing emits
+### D1. blocked attempts never attach to a work item, and the counter reads a name nothing emits
 
 Two independent faults that both zero the same number.
 
@@ -85,7 +85,7 @@ pick up the id once the snapshot resolves rather than passing it unconditionally
 controlled transition on it. This is the one finding I would fix before a
 compliance demo.
 
-### D2 — Drift decisions are invisible to the per-issue evidence summary
+### D2. drift decisions are invisible to the per-issue evidence summary
 
 `CHANGE_APPROVED` and `CHANGE_REJECTED` are defined (`ledger.js:249`) and read
 (`evidence.js:67`, `LedgerPage.tsx:61`) but **never emitted**. A drift decision is
@@ -98,14 +98,14 @@ history as "Approval recorded — Reject changes and restore baseline v3".
 
 The record is intact; the summary that an auditor reads first is not.
 
-### D3 — `restoreId` serialised as a byte map into hash-chained payloads
+### D3. `restoreId` serialised as a byte map into hash-chained payloads
 
-Ledger payloads carry `"restoreId": { "0": 233, "1": 132, "2": 92, … }` — a
+Ledger payloads carry `"restoreId": { "0": 233, "1": 132, "2": 92, … }`, a
 Buffer/`Uint8Array` JSON-stringified index-by-index instead of hex or base64. It
 bloats every tree-restore entry, and since the payload is canonicalised into the
 entry hash the noise is permanent.
 
-### D4 — Panel labels a count of changed *nodes* as "changed fields"
+### D4. panel labels a count of changed *nodes* as "changed fields"
 
 `DriftSection.tsx:56` renders `evidence.drift.changedFields.length`, but
 `buildTreeRejection` (`panelEvidence.js:55`) pushes one `FIELD_CHANGED` entry per
@@ -115,9 +115,9 @@ issue the panel reads:
 > 3 changes since approval · **1 changed fields**
 
 Two contradictory numbers, plus a hardcoded plural where the rest of the file
-uses `plural()`. The expanded diff is correct — this is the collapsed header only.
+uses `plural()`. The expanded diff is correct. The defect affects only the collapsed header.
 
-### D5 — `OUTCOME.SELF_REVERTED` is unreachable
+### D5. `OUTCOME.SELF_REVERTED` is unreachable
 
 `interception.js:19` defines it and `collect.js:177-190` handles it (including
 appending `DRIFT_SELF_REVERTED`), but no code path returns it. Reverting a value
@@ -125,7 +125,7 @@ by hand takes the `NO_CHANGE` branch at `interception.js:98`, whose comment is
 explicit and, in my view, correct: *"Returning values by hand does not erase the
 outstanding review decision."*
 
-So the behaviour is right and the dead branch is the problem — it describes a
+The behaviour is correct. The unused branch describes a
 policy the system deliberately does not implement. Either delete it or document
 why it is retained.
 
@@ -133,10 +133,10 @@ why it is retained.
 both "Matches the approved baseline" and "Control state: Changes since approval
 need a decision". Both are accurate but they read as a contradiction. The item
 remains actionable (the transition approval is still offered) and the gate keys
-off `driftCount`, not state (`gate.js:58`), so nothing is stuck — but the wording
+off `driftCount`, not state (`gate.js:58`), so nothing is stuck. The wording
 deserves a second pass.
 
-### D6 — Context module title collides with its own lozenge
+### D6. context module title collides with its own lozenge
 
 `jira:issueContext` title "Approval & Baseline" is too long for the details
 column, rendering as `Approv…line s[Changes need review]`. The `label` field
@@ -146,21 +146,21 @@ column, rendering as `Approv…line s[Changes need review]`. The `label` field
 
 These need setup this run did not do, and remain open from the matrix:
 
-1. **Live item 2 / 4** — `overrideScreenSecurity` / `overrideEditableFlag`
+1. **Live item 2 / 4.** `overrideScreenSecurity` / `overrideEditableFlag`
    against `PUT /issue/{key}` and `GET /issue/{key}/editmeta`. The restore here
    covered three fields and one node and reported "All tracked fields" verified,
    but no field was deliberately removed from the edit screen, so the override
    path is still unproven.
-2. **Live item 4** — a rejection over a genuinely large tracked set.
-3. **Live item 6** — capture/drift timing inside Forge invocation budgets under a
+2. **Live item 4.** a rejection over a genuinely large tracked set.
+3. **Live item 6.** capture/drift timing inside Forge invocation budgets under a
    100-field configuration.
-4. **Reviewer notification** — unchanged; still the known gap, nothing reads
+4. **Reviewer notification.** The known gap remains. Nothing reads
    `notifications.digest` or `restore.commentOnRestore`.
 
 ## Environment note
 
 The biometric ceremony cannot be completed in an embedded browser pane: the pane
-blocks the ceremony popup. The app handles this correctly — it detects the null
+blocks the ceremony popup. The app detects the null
 window, says "The device confirmation window was blocked. Allow pop-ups for this
 Jira site and try again.", and records nothing. The app-side ordering is right:
 `openCeremonyWindow()` runs at `deviceAuth.ts:165`, synchronously on the click
@@ -169,9 +169,9 @@ normal browser for this path.
 
 ## Test data left behind
 
-- **VJIRA-18** — restored to its approved content (`test 2`, Critical, no labels,
+- **VJIRA-18** was restored to its approved content (`test 2`, Critical, no labels,
   no subtasks); baseline v3 intact; drift cleared. One outstanding review
   decision remains on record by design (see D5).
-- **VJIRA-19** — created and permanently deleted by this run, as intended.
-- **VJIRA-6** — advanced to `In Progress` by a genuine biometric approval, with a
+- **VJIRA-19** was created and permanently deleted by this run, as intended.
+- **VJIRA-6** advanced to `In Progress` by a genuine biometric approval, with a
   new captured baseline.

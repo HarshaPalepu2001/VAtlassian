@@ -1,7 +1,7 @@
 import * as store from './store.js';
 
 /**
- * LINK DECISIONS ON THEIR WAY TO THIS ISSUE'S RECORD.
+ * Track queued link decisions awaiting this issue's record.
  *
  * An approval that decides a link queues a job that records it on the issue at
  * the other end (jobs/linkWorker.js), a few seconds later. Until it lands, that
@@ -10,7 +10,7 @@ import * as store from './store.js';
  * cleared when the worker finishes with it.
  *
  * A marker only means "expected shortly". One older than LINK_PENDING_TTL_MS is
- * ignored rather than trusted — a job that never finished must not leave an
+ * ignored. A job that never finished must not leave an
  * issue explaining a hold with a decision that is not coming.
  */
 export const LINK_PENDING_TTL_MS = 120_000;

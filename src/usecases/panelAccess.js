@@ -83,11 +83,11 @@ export async function snapshot({ issue, actor, requireAuthority = false, expecte
       route`/rest/api/3/issue/${issue.key}/changelog?startAt=${startAt}&maxResults=${maxResults}`
     ), { sinceMs: Number(baseline.transition_at), maxPages: 5 }) : { entries: [] }
   ]) : [{}, [], { entries: [] }];
-  // The map the restore planner reads, which is deliberately NOT the one above.
+  // The map the restore planner reads, which is different from the one above.
   //
   // `editmeta` is what THIS reviewer may edit, and capture records `writable`
   // from it, so widening it would change what that column means. The planner
-  // needs a different question answered: what can be written back AT ALL. A
+  // needs a different question answered: what can be written back. A
   // declared field that is not on this issue type's edit screen is absent from
   // the user-scoped read, and the planner would refuse to restore exactly the
   // field the reviewer rejected. Asked as the app, with the same overrides the
@@ -192,7 +192,7 @@ async function overrideEditmeta(issueKey) {
 }
 
 /**
- * DESCENDANT ISSUE SECURITY SCHEMES, ENFORCED FOR THE VIEWER.
+ * Enforce the viewer's issue security schemes for descendants.
  *
  * createTreeReader walks the recursive hierarchy with asApp() (full tenant
  * privilege, needed so capture/restore/drift-detection see the true tree
@@ -247,15 +247,15 @@ export function filterViewableTreeDiff(treeDiff, visibleTree) {
 
 /**
  * The same visibility boundary as filterViewableTreeDiff(), applied to the
- * reviewer-facing field list — lib/tree/reviewDiff.js's per-node issue key,
+ * reviewer-facing field list, including lib/tree/reviewDiff.js's per-node issue key,
  * field names, and before/after content, not just the structural tree change
  * it was rendered from. Every caller that surfaces reviewDiff.fields
  * (panel:getState, panel:getEvidence, the report) must filter through this
  * before returning it; the raw reviewDiff is not safe to hand back as-is.
  *
  * `reviewDiff` here is snapshot()'s field: treeReviewDiff()'s output when a
- * real treeDiff exists, but the plain root-issue diffIssue() result — never
- * carrying logicalNodeId — for a gate that says capture_baseline but whose
+ * real treeDiff exists, but the plain root-issue diffIssue() result, which never
+ * carries logicalNodeId, for a gate that says capture_baseline but whose
  * active baseline predates the tree feature. That fallback is inherently
  * root-scoped (gated by the ordinary issue read, not by tree-node
  * visibility), so a field with no logicalNodeId passes through untouched.

@@ -1,33 +1,24 @@
 #!/usr/bin/env node
 /**
- * Gives the global VAtlassian work types their fields and screens in one
- * company-managed project (after attach-project.mjs):
+ * Add project-scoped fields and screens after attach-project.mjs.
  *
- *   1. the Requirements and Source Document custom fields, each scoped to this
- *      project and its one work type;
- *   2. create / edit / view screens for both work types, and the Requirements
- *      transition screens (rework, retire, revision);
- *   3. a screen scheme per work type, mapped in the project's work type screen
- *      scheme;
- *   4. the transition screens and "filled in" validators on both workflows.
+ * Scope each custom field to this project and its one work type. Create fields
+ * for Requirements and Source Document, their create,
+ * edit and view screens, and Requirements rework, retire and revision screens.
+ * Map each screen scheme in the project's work-type screen scheme and add
+ * transition screens and filled-in validators to both workflows.
  *
  *   node scripts/requirements-setup/screens.mjs --project VAT            # DRY RUN
  *   node scripts/requirements-setup/screens.mjs --project VAT --apply
  *
- * SAFETY RULES
- *  - Only the work type screen scheme used by this ONE project is changed; a
- *    shared scheme stops the run. A work type already mapped there to another
- *    screen scheme stops the run.
- *  - A field, screen or screen scheme with a planned name that this setup did
- *    not create stops the run (Acceptance Criteria is reused by design).
- *  - Only the two VAtlassian workflows this setup created are updated, after
- *    Jira's validation endpoint passes. Every signed transition keeps the
- *    signature field on its screen.
- *  - Every scheme and workflow change is written to the ledger with how to
- *    undo it.
+ * Stop for shared work-type screen schemes or conflicting existing mappings.
+ * Stop for planned-name fields, screens or schemes not created by this setup,
+ * except the intentionally reused Acceptance Criteria field. Update only the
+ * two setup-owned workflows after Jira validation. Keep the signature field
+ * on signed transitions and record each change with its reversal instructions.
  *
- * Required fields are enforced by workflow validators, not by a field
- * configuration: the project may share the site's default field configuration.
+ * Use workflow validators for required fields because the project may share
+ * the site's default field configuration.
  */
 import { createClient } from './jira.mjs';
 import { PLAN } from './plan.mjs';
@@ -52,7 +43,7 @@ const FIELD_TYPES = {
   date: ['com.atlassian.jira.plugin.system.customfieldtypes:datepicker', 'com.atlassian.jira.plugin.system.customfieldtypes:daterange']
 };
 
-log(`${APPLY ? 'APPLYING' : 'DRY RUN (read-only)'} on ${jira.site} — project ${projectKey}\n`);
+log(`${APPLY ? 'APPLYING' : 'DRY RUN (read-only)'} on ${jira.site}, project ${projectKey}\n`);
 
 // ── Preflight ──────────────────────────────────────────────────────────────
 const project = await jira.get(`/rest/api/3/project/${encodeURIComponent(projectKey)}`);
@@ -305,7 +296,7 @@ for (const t of TYPES) {
   log(`  updated workflow (${wf.id})`);
 }
 
-log(`\n${APPLY ? 'Done.' : 'Dry run complete — nothing was changed.'} Ledger: ${stateFile}`);
+log(`\n${APPLY ? 'Done.' : 'Dry run complete. Nothing was changed.'} Ledger: ${stateFile}`);
 log(`\nNot done here:`);
-log(`  - Link types (Derives, Satisfies, …) — run link-types.mjs.`);
+log(`  - Link types (Derives, Satisfies, …). Run link-types.mjs.`);
 log(`  - VAtlassian controlled transitions and controlled fields for ${projectKey} (see attach-project.mjs output).`);

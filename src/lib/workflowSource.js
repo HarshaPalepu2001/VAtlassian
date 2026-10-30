@@ -1,26 +1,19 @@
 /**
- * WORKFLOW SOURCE — the one place this app reads what Jira's workflow engine
- * is actually enforcing, right now.
+ * Read the workflow Jira currently enforces for a project and issue type.
  *
- * Moved out of jobs/gatecheck.js, which was the first caller and is still one
- * of two: gatecheck diffs this read against va_controlled_transition on a
- * schedule (src/lib/gateDrift.js), and the admin transition picker
- * (src/usecases/adminDirectory.js#listWorkflowTransitions) calls it live, on
- * demand, so an administrator can select an exact Jira transition instead of
- * typing status ids that may or may not correspond to a real edge. Both
- * callers need the identical contract, so it lives once, here.
+ * jobs/gatecheck.js compares this data with va_controlled_transition on a
+ * schedule through lib/gateDrift.js. The admin transition picker in
+ * usecases/adminDirectory.js#listWorkflowTransitions reads it on demand so
+ * administrators can select an exact transition instead of typing status IDs.
+ * Both callers use the same response contract.
  *
- * ONE PAIR PER CALL. The bulk-get endpoint accepts several project/issue-type
- * pairs at once, but the response carries no mapping from each returned
- * workflow back to the pair that produced it — verified against a live instance
- * on 2026-08-31, where four issue types collapsed into a single unattributed
- * workflow. Sending one pair per call is what makes the attribution sound.
+ * Read one project/issue-type pair per request. The bulk-get response does not
+ * map workflows back to input pairs. A live check on 2026-08-31 returned one
+ * unattributed workflow for four issue types.
  *
- * FAIL CLOSED. `readWorkflowForPair` returns `null` on any error, missing
- * data, or thrown exception. Callers must treat `null` as "not read", never as
- * "workflow has no transitions" — see gatecheck.js's own header for why that
- * distinction matters for drift detection, and adminDirectory.js for why the
- * picker must refuse to offer a transition it could not itself verify live.
+ * readWorkflowForPair returns null for errors, missing data and exceptions.
+ * Treat null as an unread workflow, never an empty transition list. Failed
+ * reads must neither clear drift findings nor offer unverified transitions.
  */
 import { asApp, route, getAppContext } from '@forge/api';
 

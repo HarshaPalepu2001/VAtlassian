@@ -1,14 +1,14 @@
-# Per-field Drift Decisions Implementation Plan
+# Per-field drift decisions implementation plan
 
-**Goal:** Let a reviewer approve or reject each changed field in the review window, authenticate that complete choice once, restore only the rejected fields, and publish the resulting state as the next baseline — while whole-set Approve/Reject stays exactly as it is.
+**Goal.** Let a reviewer approve or reject each changed field in the review window, authenticate that complete choice once, restore only the rejected fields, and publish the resulting state as the next baseline. Keep whole-set Approve/Reject unchanged.
 
-**Architecture:** A pure `mixedDecision` module turns a canonical `{fieldId, decision}` map into a *target tree* (the approved baseline with every APPROVED field's digest replaced by the live one). The existing `planTreeRestore` and `verifyTreeRestore` run unchanged against that target tree, so "restore only rejected fields" and "verify rejected fields are at their approved value" fall out for free. A new `MIXED` decision flows through the existing challenge → authenticate → record → apply path; the restore worker owns the single durable boundary and captures the next baseline only after verification.
+**Architecture.** A pure `mixedDecision` module turns a canonical `{fieldId, decision}` map into a *target tree* (the approved baseline with every APPROVED field's digest replaced by the live one). The existing `planTreeRestore` and `verifyTreeRestore` run unchanged against that target tree, so they restore only rejected fields and verify those fields against their approved values. A new `MIXED` decision flows through the existing challenge → authenticate → record → apply path; the restore worker owns the single durable boundary and captures the next baseline only after verification.
 
-**Tech Stack:** Node ESM (`node --test`), Forge SQL (MySQL), Forge queues, React 19 + TypeScript frontend (`node --experimental-strip-types --test`, happy-dom).
+**Technology.** Node ESM (`node --test`), Forge SQL (MySQL), Forge queues, React 19 + TypeScript frontend (`node --experimental-strip-types --test`, happy-dom).
 
 **Spec:** `docs/specs/2026-10-07-drift-field-decision-design.md`
 
-## Global Constraints
+## Global constraints
 
 - Whole-set Approve and Reject keep their current contracts, records and tests. Existing whole-set records are unchanged by migrations.
 - The browser's field list, labels, counts and values are never trusted; the server recomputes the authoritative change set and requires an **exact one-to-one** decision map (no missing, duplicate, unknown or extra fields).
@@ -19,7 +19,7 @@
 - Projections stay authorization-filtered: a decision map never reveals hidden descendant keys or values.
 - No new authenticator, no AI deciding outcomes, no removal of whole-set actions.
 - UI: keyboard- and screen-reader-operable (not colour/drag alone), reduced-motion safe, decision written in text.
-- Repo rules: **no AI attribution in commit messages**; commit only when the user asks (the working tree already holds the user's uncommitted work, so this plan has no commit steps — run the checkpoint commands instead).
+- Repo rules: **no AI attribution in commit messages**; commit only when the user asks because the working tree already holds the user's uncommitted work. This plan has no commit steps. Run the checkpoint commands instead.
 
 ## Scope decisions (made from the code, flagged to the user at hand-off)
 
@@ -33,7 +33,7 @@
    baseline and no new version is created; if every field is approved, the
    current state is captured directly as the next version.
 
-## File Structure
+## File structure
 
 | File | Responsibility |
 |---|---|
@@ -284,7 +284,7 @@ Expected: PASS. If `FailClosed` does not expose `.reason`, check `src/lib/errors
 
 **Interfaces:**
 - Consumes: Task 1 exports.
-- Produces: `DECISION.MIXED = 'MIXED'`; `baselineDecisionMeaning('MIXED', v) → 'Save drift decisions against baseline v{v}'`; `challengeContextHash({..., prepared})` additionally hashes `prepared.mixed?.planHash ?? null`; `makeApproval({..., decisionMap, decisionMapHash})` stores `decision_map` (canonical JSON string) and `decision_map_hash`; both are keys of `evidenceHash()` and `validEvidence` requires `binding.decisionMapHash === row.decision_map_hash` (null-safe); `CAUSE.MIXED_DECISION = 'MIXED_DECISION'`.
+- Produces: `DECISION.MIXED = 'MIXED'`; `baselineDecisionMeaning('MIXED', v) → 'Save drift decisions against baseline v{v}'`; `challengeContextHash({..., prepared})` also hashes `prepared.mixed?.planHash ?? null`; `makeApproval({..., decisionMap, decisionMapHash})` stores `decision_map` (canonical JSON string) and `decision_map_hash`; both are keys of `evidenceHash()` and `validEvidence` requires `binding.decisionMapHash === row.decision_map_hash` (null-safe); `CAUSE.MIXED_DECISION = 'MIXED_DECISION'`.
 
 - [ ] **Step 1: Failing tests**
 
@@ -393,14 +393,21 @@ and add `mixed: prepared.mixed?.planHash ?? null,` to the object hashed by `chal
 - Produces: `challenge({payload:{intent:'DRIFT_MIXED', decisions, expectedEvidenceHash, issueKey}})` → same `{success, challengeId, nonce, meaning, requiredAssurance, expiresAt}` shape plus `mixed: {approve:[fieldId], reject:[fieldId], evidenceHash}`; `submit` requires the same `decisions` in the payload; `prepareApproval({..., decisions})` returns `prepared.mixed = { planHash, mapHash, decisions, approvedIds, rejectedIds, overlay, restore }`.
 
 Behaviour rules (each becomes a test):
-1. `intent: 'DRIFT_MIXED'` ⇒ challenge decision `'MIXED'`, **no transition**, baseline-owned policy exactly as drift APPROVE (`decisionContext` already routes `decision !== REJECT` without a transition; MIXED must take the *no-transition* branch like APPROVE — change the condition to `if (decision === 'REJECT')`).
+1. `intent: 'DRIFT_MIXED'` ⇒ challenge decision `'MIXED'`, **no transition**, baseline-owned policy exactly as drift APPROVE (`decisionContext` already routes `decision !== REJECT` without a transition; MIXED must take the *no-transition* branch like APPROVE. Change the condition to `if (decision === 'REJECT')`).
 2. Missing/duplicate/unknown/extra field → `DECISION_MAP_MISMATCH`/`DECISION_MAP_INVALID`; REJECT on non-restorable field → `FIELD_NOT_RESTORABLE`; structural drift → `MIXED_STRUCTURE_UNSUPPORTED`. All thrown during **challenge**, before any challenge row is written.
 3. Submit: recompute the plan from the fresh read; `challengeRow.operation_plan_hash` must equal `challengeContextHash` (which includes `mixed.planHash`) else `CONTENT_CHANGED`; the verified binding gets `decisionMapHash`; `makeApproval` gets `decisionMap` (canonical JSON) and `decisionMapHash`; audit `APPROVAL_RECORDED` payload gains `decisionMap` (canonical array), `approvedCount`, `rejectedCount`.
 4. A failed provider verification records nothing (reuse existing path; add the explicit test).
 5. `result.mixed = applied.mixed` so the receipt can show counts.
 6. Add the new reasons to `DENY` in `src/lib/errors.js` with plain-language copy.
 
-- [ ] **Step 1: Write failing usecase tests** in `test/mixed-approval.test.js` using the `fixture()` pattern from `test/approval-submit.test.js` (copy its helper; `prepare` returns a prepared object containing `reviewDiff: { fields }`, `baselineTree`, `currentTree`, `fields`, `fieldsFor`, and `mixed` computed by calling the real `planMixed`). Tests: (a) happy path — challenge then submit with the same map records one approval whose `decision === 'MIXED'`, `decision_map_hash` equals `decisionMapHash(canon)`, apply called once with `approval.decision === 'MIXED'`; (b) challenge refuses missing field, unknown field, duplicate, REJECT-on-NOT_RETAINED, and structure drift — and `writeChallenge` is **never called**; (c) submit with a different map than the challenge → `CONTENT_CHANGED`, no approval row; (d) replay of a consumed challenge → `NO_DECISION`; (e) wrong provider code → refused, `deps.record` not called; (f) whole-set APPROVE/REJECT tests in `approval-submit.test.js` still pass untouched.
+- [ ] **Step 1: Write failing usecase tests** in `test/mixed-approval.test.js` using the `fixture()` pattern from `test/approval-submit.test.js` (copy its helper; `prepare` returns a prepared object containing `reviewDiff: { fields }`, `baselineTree`, `currentTree`, `fields`, `fieldsFor`, and `mixed` computed by calling the real `planMixed`). Add these cases:
+
+  - A challenge followed by submit with the same map records one approval whose `decision === 'MIXED'` and whose `decision_map_hash` equals `decisionMapHash(canon)`. Apply runs once with `approval.decision === 'MIXED'`.
+  - The challenge refuses a missing field, unknown field, duplicate, REJECT-on-NOT_RETAINED, and structure drift without calling `writeChallenge`.
+  - Submitting a different map from the challenged map returns `CONTENT_CHANGED` and writes no approval row.
+  - Replaying a consumed challenge returns `NO_DECISION`.
+  - A wrong provider code is refused without calling `deps.record`.
+  - Existing whole-set APPROVE/REJECT tests in `approval-submit.test.js` still pass without changes.
 
 - [ ] **Step 2: Run** `node --test test/mixed-approval.test.js` → FAIL.
 
@@ -438,7 +445,7 @@ and use `decisionDiff` as for APPROVE (the `decide({ decision: 'MIXED', ... })` 
 
 ---
 
-### Task 4: Apply a mixed decision — queue the restore, capture after verification
+### Task 4: Apply a mixed decision, queue the restore, capture after verification
 
 **Files:**
 - Modify: `src/usecases/drift.js` (`applyApproval` MIXED branch; extract `captureDriftBaseline`, `publishBaselineSideEffects`)
@@ -450,7 +457,7 @@ and use `decisionDiff` as for APPROVE (the `decide({ decision: 'MIXED', ... })` 
 **Interfaces:**
 - Produces:
   - `queueRestore({ prepared, actor, approval, mixed })`: when `mixed` is given, the plan is `mixed.restore` (not `planTreeRestore(prepared…)`), and `detail = { actionPlan: steps, mixed: { overlay, mapHash } }`.
-  - `captureDriftBaseline({ checked, approval, actor, cause })` (extracted verbatim from the tree-capture block in `applyApproval`; returns the `capture` object) and `publishBaselineSideEffects({ capture, checked, approval, actor })` (= `queueVaulting` + `queueLinkDecisions`). `applyApproval` APPROVE keeps calling them in the same order — **no behaviour change for whole-set**.
+  - `captureDriftBaseline({ checked, approval, actor, cause })` (extracted verbatim from the tree-capture block in `applyApproval`; returns the `capture` object) and `publishBaselineSideEffects({ capture, checked, approval, actor })` (= `queueVaulting` + `queueLinkDecisions`). `applyApproval` APPROVE keeps calling them in the same order. Keep whole-set behaviour unchanged.
   - Worker dep `captureMixed({ restore, approval, prepared, baseline })` → `{ captured, baselineVersion?, reason? }`.
 
 Behaviour rules:
@@ -459,7 +466,7 @@ Behaviour rules:
 3. **Rejected fields:** `queueRestore({ …, mixed })`; return its queued result (`success:false, state:'RESTORING'`) with `mixed: counts`. The item stays `RESTORING` until the worker finishes. No baseline exists yet.
 4. Worker, for an approval whose `decision === 'MIXED'`: allow it (today it throws unless `REJECT`); build `prepared.targetTree = applyOverlay({ baselineTree: prepared.baselineTree, overlay: detail.mixed.overlay })` from the **frozen** overlay (never from live values, so an edit to an approved field after signing fails verification instead of being silently accepted); `defaultVerify` verifies against `prepared.targetTree ?? prepared.baselineTree`; `executeBatch` keeps using the original `baselineTree` for retained values. The finished `detail[0]` carries `mixed` so Retry can find it.
 5. Worker after `COMPLETE`/`COMPLETE_WITH_REPLACEMENTS` **and** `MIXED`: if `approvedIds.length > 0`, call `deps.captureMixed`. Success → `markDecided`, release the item as `BASELINED` with zero counters, and ledger `RESTORE_COMPLETED` with `payload.mixed = { approved, rejected, baselineCreated: true }`. If `approvedIds.length === 0`, do not call `captureMixed`; keep the existing v2 baseline active, mark the restore decision complete, release the item as `BASELINED` with zero counters, and ledger `RESTORE_COMPLETED` with `payload.mixed = { approved: [], rejected, baselineCreated: false }`. Capture failure → `release(ERROR)`, ledger `RESTORE_PARTIAL` with `payload.publication = 'INCOMPLETE'`, the `va_restore` row is **not** left looking clean (finish as `PARTIAL` with `last_error: 'BASELINE_PUBLICATION_INCOMPLETE'`), and no `markDecided`.
-6. Worker for a non-complete mixed restore: unchanged rules (`stateAfter`) — never captures.
+6. Worker for a non-complete mixed restore: retain the existing `stateAfter` rules and never capture.
 7. Retry (`usecases/restore.js`): accept `approval.decision === 'MIXED'`; build `baselineDigests` for `resumable()` from the overlay-applied tree: `approvedDigestsFor({ baseline, baselineTree: applyOverlay({ baselineTree: prepared.baselineTree, overlay }), issueId })`, where `overlay` is read from the restore's `detail`.
 
 - [ ] **Step 1: Failing worker tests** (`test/mixed-restore-worker.test.js`, using the fakes from `test/restore-worker.test.js`): (a) mixed v2 with one approved and one rejected field, verify matches ⇒ `captureMixed` called once after restore verification and produces v3; (b) all-approved mixed decision captures v3 without a restore; (c) all-rejected mixed decision never calls `captureMixed`, keeps v2 active, and completes the restore; (d) verify does not match ⇒ no capture, item `DRIFTED`/`ERROR` per `stateAfter`; (e) `captureMixed` rejects ⇒ `release(ERROR)`, no `markDecided`, ledger payload says publication incomplete; (f) the verify call receives the overlay-applied tree (approved digest present) and the persisted plan, proving only rejected fields are checked against baseline; (g) a REJECT approval never calls `captureMixed` (regression).
@@ -472,20 +479,20 @@ Behaviour rules:
 
 ---
 
-### Task 5: Evidence payload — what the client may decide
+### Task 5: Evidence payload, what the client may decide
 
 **Files:**
 - Modify: `src/usecases/panelEvidence.js`
 - Test: extend `test/panel-state.test.js` (or `test/panel-response.test.js`, whichever already asserts `getEvidence` shape)
 
 **Interfaces:**
-- Produces: `evidence.drift.mixed = { eligible, reason, fields:[{fieldId, restorable, retained}] }` from `mixedEligibility({ baseline, reviewFields: attributedReviewDiff.fields })`, using the **viewer-filtered** fields so a hidden descendant is never named. Each field in `drift.fields` already carries `fieldId` (`logicalNodeId:rawFieldId`) — the decision identity.
+- Produces: `evidence.drift.mixed = { eligible, reason, fields:[{fieldId, restorable, retained}] }` from `mixedEligibility({ baseline, reviewFields: attributedReviewDiff.fields })`, using the **viewer-filtered** fields so a hidden descendant is never named. Each field in `drift.fields` already carries `fieldId` (`logicalNodeId:rawFieldId`) as the decision identity.
 
 - [ ] **Step 1: Failing test:** eligible tree baseline ⇒ `mixed.eligible === true` and one entry per visible field; a `tree:NODE_ADDED:*` field ⇒ `{ eligible:false, reason:'STRUCTURE_CHANGED' }`; legacy baseline ⇒ `NOT_TREE_BASELINE`; a field the viewer cannot see is absent from `mixed.fields`.
 - [ ] **Step 2: Implement** by importing `mixedEligibility` and adding `mixed:` beside `groups` in the returned `drift` object.
 - [ ] **Step 3: Run** `npm test`.
 
-> Server-side note: authorization is **not** relaxed here. Because the challenge's exact-coverage check runs against the server's own *unfiltered authoritative* `prepared.reviewDiff.fields`, a reviewer who cannot see a hidden descendant gets `DECISION_MAP_MISMATCH` for a map that omits it. If that makes the mixed workflow unusable for such a viewer, the UI shows whole-set only (`eligible:false`) — so `mixedEligibility` must also return `eligible:false, reason:'HIDDEN_CHANGES'` when the filtered field count differs from `prepared.reviewDiff.fields.length`. Pass both counts in (`mixedEligibility({ baseline, reviewFields, authoritativeCount })`) and add a test.
+> Server-side note: authorization is **not** relaxed here. Because the challenge's exact-coverage check runs against the server's own *unfiltered authoritative* `prepared.reviewDiff.fields`, a reviewer who cannot see a hidden descendant gets `DECISION_MAP_MISMATCH` for a map that omits it. If that makes the mixed workflow unusable for such a viewer, the UI shows whole-set only (`eligible:false`). Therefore `mixedEligibility` must also return `eligible:false, reason:'HIDDEN_CHANGES'` when the filtered field count differs from `prepared.reviewDiff.fields.length`. Pass both counts in (`mixedEligibility({ baseline, reviewFields, authoritativeCount })`) and add a test.
 
 ---
 
@@ -502,7 +509,7 @@ Behaviour rules:
   - `swipe(state, fieldId, direction: 'ltr' | 'rtl')` → `ltr` ⇒ `REJECT`, `rtl` ⇒ `APPROVE` (spec: left-to-right rejects).
   - `key(state, fieldId, key: 'ArrowRight'|'ArrowLeft'|'Enter'|' '|'Escape'|'Backspace')` → same transitions as swipe (ArrowRight = REJECT, ArrowLeft = APPROVE, Escape/Backspace = reset; Enter/Space on an undecided card do nothing, on a decided card they re-confirm).
   - `summary(fields, state) → { approve, reject, undecided, text }` with `text` like `"3 approve · 2 reject · 0 undecided"`.
-  - `canSave({ fields, state, mixed, loading, error, eligible }) → { enabled, reason }` — disabled while any field is undecided, evidence loading/failed/held, reviewer ineligible, `mixed.eligible === false`, or any field with `restorable ∈ {NO,NOT_RETAINED}` is set to `REJECT` (reason strings are user-facing sentences).
+  - `canSave({ fields, state, mixed, loading, error, eligible }) → { enabled, reason }` disables Save while any field is undecided, evidence is loading/failed/held, the reviewer is ineligible, `mixed.eligible === false`, or any field with `restorable ∈ {NO,NOT_RETAINED}` is set to `REJECT` (reason strings are user-facing sentences).
   - `payload(fields, state) → [{fieldId, decision}]` sorted by `fieldId` (must equal the server's canonical order).
   - `blocked(field) → string | null` the non-restorable explanation ("Its approved value was not kept, so it can't be restored.").
 
@@ -518,14 +525,14 @@ Behaviour rules:
 **Files:**
 - Create: `frontend/src/review/FieldDecisionTrack.tsx`
 - Modify: `frontend/src/review/DiffView.tsx`, `frontend/src/ui/product.css` (track styles + `prefers-reduced-motion`)
-- Modify: `frontend/src/review/types.ts` (`DiffField.rawFieldId` already present; add `restorable`/`retained` already present — add nothing unless typing fails)
+- Modify: `frontend/src/review/types.ts` (`DiffField.rawFieldId` and `restorable`/`retained` are already present. Add nothing unless typing fails)
 - Test: `frontend/test/panel.test.mjs` (render tests, existing harness)
 
 **Interfaces:**
 - Consumes: Task 6 functions.
 - Produces:
-  - `FieldDecisionTrack({ field, choice, onChoose, onReset, blockedReason })` — `role="group"`, an `aria-live="polite"` status line ("Reject change selected for Summary"), explicit **Approve change** / **Reject change** / **Reset decision** buttons, drag via pointer events (threshold 40 px; ltr ⇒ reject, rtl ⇒ approve), `ArrowLeft/ArrowRight/Escape` keyboard handling, the selected choice written in text, Reject button disabled with `blockedReason` shown when the field is non-restorable. Under `@media (prefers-reduced-motion: reduce)` the thumb jumps with no transition.
-  - `DiffView` gains optional props `decisions?: { state: Decisions; onChange(next: Decisions): void; mixed: { eligible: boolean; reason: string | null } }`. When present and `mixed.eligible`, the detail pane shows the two-sided comparison — left **Approved value**, right **Current value** (field name, materiality, retention/restorability badge, last-editor attribution as today) — followed by the track; the list rows show a text badge ("Approve"/"Reject"/"Undecided"). **Whole-set controls are not rendered inside `DiffView`** (they never were; the footer `ApprovalControls` stays outside) — assert this in a test.
+  - `FieldDecisionTrack({ field, choice, onChoose, onReset, blockedReason })` has `role="group"` and an `aria-live="polite"` status line such as "Reject change selected for Summary". Provide **Approve change**, **Reject change**, and **Reset decision** buttons. Support pointer dragging with a 40 px threshold, left-to-right to reject, and right-to-left to approve. Handle `ArrowLeft/ArrowRight/Escape` and show the selected choice in text. Disable Reject for a non-restorable field and show `blockedReason`. Under `@media (prefers-reduced-motion: reduce)` the thumb jumps with no transition.
+  - `DiffView` gains optional props `decisions?: { state: Decisions; onChange(next: Decisions): void; mixed: { eligible: boolean; reason: string | null } }`. When present and `mixed.eligible`, the detail pane shows **Approved value** on the left and **Current value** on the right, followed by the decision track. Keep the field name, materiality, retention/restorability badge, and last-editor attribution. The list rows show an "Approve", "Reject", or "Undecided" text badge. Whole-set controls remain outside `DiffView` in the footer `ApprovalControls`. Assert this in a test.
   - A sticky save bar inside `DiffView`: `summary().text` and a **Save changes** button (`canSave`), calling `decisions.onSave()` (added to the prop type).
 
 - [ ] **Step 1: Failing render tests**: track renders all three buttons and live status; clicking Approve/Reject/Reset produces the Task 6 states; ArrowRight ⇒ reject, ArrowLeft ⇒ approve; pointer drag ltr/rtl; non-restorable field disables Reject and shows its reason; Save is disabled until every field is decided, enabled after, and absent when `mixed.eligible === false` (a "Review field by field isn't available: <reason>" note instead); `DiffView` without `decisions` renders exactly as before (existing tests green).
@@ -562,7 +569,7 @@ Behaviour rules:
 ### Task 9: Whole-system verification and acceptance notes
 
 **Files:**
-- Modify: `docs/acceptance/` — add `2026-10-07-drift-field-decision-run.md` (a checklist, **not** results: live Forge deploy/install and fresh Jira read-back are a separate gate the user runs).
+- Modify: `docs/acceptance/`. Add `2026-10-07-drift-field-decision-run.md` (a checklist, **not** results: live Forge deploy/install and fresh Jira read-back are a separate gate the user runs).
 
 - [ ] **Step 1:** `npm run verify` (backend tests, UI tests, smoke imports, UI build). Expected: all pass.
 - [ ] **Step 2:** `git diff --check` and `npm --prefix frontend run lint`. Expected: clean.

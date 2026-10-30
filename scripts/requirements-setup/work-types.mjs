@@ -1,26 +1,22 @@
 #!/usr/bin/env node
 /**
- * Creates the two VAtlassian work types and their workflows as GLOBAL objects:
+ * Create global Source Document and Requirements work types and workflows.
  *
- *   Source Document  Registered → Current → Superseded
- *   Requirements     Draft → In Review → Baselined → Released / Obsolete
+ * Source Document moves through Registered, Current and Superseded.
+ * Requirements moves through Draft, In Review, Baselined, Released or Obsolete.
  *
- *   node scripts/requirements-setup/work-types.mjs            # DRY RUN — read-only
+ *   node scripts/requirements-setup/work-types.mjs            # DRY RUN, read-only
  *   node scripts/requirements-setup/work-types.mjs --apply    # creates what is missing
  *
- * Nothing here is attached to a project, and no existing scheme is touched. A
- * company-managed project picks a work type up by adding it to its work type
- * scheme and mapping it to the workflow in its workflow scheme.
+ * Do not attach types to projects or change existing schemes. A company-managed
+ * project must add each type to its scheme and map the corresponding workflow.
  *
- * The workflows carry what can exist before the custom fields do: every
- * status and transition, va-gate on every transition, the Jira-native
- * "not editable" and attachment locks, and the VAtlassian signature screen on
- * every signed transition. The Requirements field validators ("filled in
- * before review") and the rework/retire screens come with the fields
- * (setup.mjs).
+ * Create statuses, transitions, va-gate on every transition, Jira editing and
+ * attachment locks, and the signature screen on signed transitions. Field
+ * validators and rework/retire screens are added with fields by setup.mjs.
  *
- * Shares the created-object ledger with setup.mjs (state.mjs).
- * Requires .out/inspect.json from inspect.mjs (for the va-gate validator key).
+ * Share state.mjs's created-object ledger with setup.mjs. Require
+ * .out/inspect.json from inspect.mjs for the va-gate validator key.
  */
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -113,7 +109,7 @@ async function ensureWorkflow({ name, description, statuses, transitions, layout
     if (existing && existing.statusCategory !== s.statusCategory) {
       throw new Error(`Existing status "${s.name}" is ${existing.statusCategory}, plan wants ${s.statusCategory}.`);
     }
-    log(`  ${existing ? 'reuse ' : 'CREATE'}  status "${s.name}"${existing ? ` (${existing.id})` : ''}${s.editable ? '' : ' — not editable'}${s.lockAttachments ? ', attachments locked' : ''}`);
+    log(`  ${existing ? 'reuse ' : 'CREATE'}  status "${s.name}"${existing ? ` (${existing.id})` : ''}${s.editable ? '' : ', not editable'}${s.lockAttachments ? ', attachments locked' : ''}`);
     return { statusReference: ref[s.key], name: s.name, statusCategory: s.statusCategory, description: '', ...(existing ? { id: existing.id } : {}) };
   });
   const wfTransitions = [{
@@ -187,4 +183,4 @@ await ensureWorkflow({
   layout: PLAN.requirementsLayout
 });
 
-log(`\n${APPLY ? 'Done.' : 'Dry run complete — nothing was changed.'} Ledger: ${stateFile}`);
+log(`\n${APPLY ? 'Done.' : 'Dry run complete. Nothing was changed.'} Ledger: ${stateFile}`);

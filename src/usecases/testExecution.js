@@ -1,5 +1,5 @@
 /**
- * TEST EXECUTION — runs of signed test versions, recorded step by step and
+ * Test execution runs signed test versions, recorded step by step and
  * closed by the project's sign-off chain.
  *
  * Every run pins the signed test version, the run sign-off chain in force, the

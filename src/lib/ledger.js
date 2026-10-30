@@ -5,37 +5,22 @@ export const MAX_APPEND_ATTEMPTS = 128;  // above any realistic burst; the deadl
 export const APPEND_DEADLINE_MS = 3_000;
 
 /**
- * Append-only, hash-chained audit ledger — without transactions.
+ * Append entries to the audit hash chain without transactions.
  *
- * The problem: appending is read-then-write (read the tail hash, then insert a
- * row linking to it). Forge SQL permits one statement per call and has no
- * BEGIN/COMMIT, so two concurrent appends can read the same tail and fork the
- * chain — producing two entries at the same seq with the same prev_hash, which
- * is exactly the corruption the chain exists to detect.
+ * An append reads the tail hash and inserts the next sequence. Forge SQL permits
+ * one statement per call and has no BEGIN/COMMIT. The seq primary key serializes
+ * concurrent appends: one atomic INSERT succeeds and competing inserts receive
+ * a duplicate-key error instead of creating two entries at the same sequence.
  *
- * The fix: `seq` is the PRIMARY KEY. Uniqueness on the primary key is the
- * serialisation mechanism. Two racing appends compute the same candidate seq;
- * the database admits exactly one and rejects the other with a duplicate-key
- * error. No transaction is required, because the INSERT itself is atomic.
+ * On collision, read the winning row at sequence N, use its hash as prev_hash
+ * and try N+1. Re-reading the tail on every collision previously made competing
+ * writers collide repeatedly; at 40 concurrent appends, some exhausted retries.
+ * Following the winning row advances one sequence per retry. With N concurrent
+ * writers, the last writer needs at most N attempts under this contention model.
  *
- * GUARANTEED FORWARD PROGRESS. The obvious retry — re-read the tail and try
- * again — starves under contention: every loser re-reads, they all land on the
- * same new seq, and they collide again. Measured at 40 concurrent appends, some
- * writers exhausted their retries and were refused. For this product that means
- * refusing a valid signature under load, which is not acceptable.
- *
- * So on collision we do NOT re-read the tail. We read the row that beat us at
- * seq N (it definitionally now exists), take its hash as our new prev_hash, and
- * try N+1. Each retry therefore advances by exactly one and can only be beaten
- * by a writer that itself made progress. With N concurrent writers the last one
- * finishes in at most N attempts, and no writer can be starved indefinitely.
- *
- * Bounded by BOTH an attempt count and a wall-clock deadline, because the
- * caller may be a workflow validator holding a Jira transition open.
- *
- * On exhaustion we FAIL CLOSED. An action whose audit event could not be
- * recorded must not take effect — an unrecorded signature is worse than a
- * refused one.
+ * Limit both attempts and elapsed time because callers may include a workflow
+ * validator. If audit recording exhausts its budget, refuse the action rather
+ * than allow an unrecorded signature.
  */
 export async function append(store, event, { now = Date.now, sleep = defaultSleep, deadlineMs = APPEND_DEADLINE_MS } = {}) {
   const deadline = now() + deadlineMs;
@@ -105,20 +90,13 @@ export async function append(store, event, { now = Date.now, sleep = defaultSlee
 const defaultSleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Walk the chain and report the first break.
+ * Walk the audit chain and report the first break under 21 CFR 11.10(a).
+ * This detects invalid or altered records; it cannot prevent tampering.
+ * Run daily and on demand from the admin console.
  *
- * This is the operational expression of 21 CFR 11.10(a) — "the ability to
- * discern invalid or altered records". It cannot prevent tampering; it detects
- * it, which is what the clause actually requires.
- *
- * Runs daily as a scheduled job and on demand from the admin console.
- *
- * `maxEntries` bounds a single call so a scheduled job can walk a large ledger
- * in windows without running past its invocation budget. A call that stops
- * short returns `partial: true` with the `nextSeq` to resume from — that is a
- * verdict on the window it covered, NOT on the whole chain. Only a result with
- * `partial` absent has reached the tail. See jobs/verify.js for what a
- * multi-run pass can and cannot claim.
+ * maxEntries bounds one call. A bounded window returns partial: true and nextSeq
+ * for resumption. That verdict covers only the window; a result without partial
+ * has reached the tail. See jobs/verify.js for multi-run verification limits.
  */
 export async function verifyChain(store, { from = 1, batchSize = 500, maxEntries = Infinity } = {}) {
   let expectedSeq = from;
@@ -178,11 +156,9 @@ export const EVENT = {
   SIGNATURE_CREATED: 'SIGNATURE_CREATED',
   SIGNATURE_CONSUMED: 'SIGNATURE_CONSUMED',
   SIGNATURE_VOIDED: 'SIGNATURE_VOIDED',
-  // 2026-08-18: an eligible signer explicitly declined to sign a gated
-  // transition (resolvers/panel.js's panel:reject) — an attested "no", not
-  // just an absence of a "yes". Distinct from TRANSITION_DENIED, which is
-  // gate.js refusing an unauthorized/invalid attempt, not a reviewer's own
-  // recorded decision.
+  // 2026-08-18: record the eligible reviewer's explicit refusal in panel:reject.
+  // Keep it separate from TRANSITION_DENIED, which records the gate's refusal of
+  // an unauthorized or invalid attempt.
   SIGNATURE_DECLINED: 'SIGNATURE_DECLINED',
   CONTENT_CHANGED: 'CONTENT_CHANGED',
   ITEM_FIRST_OBSERVED: 'ITEM_FIRST_OBSERVED',
@@ -206,43 +182,25 @@ export const EVENT = {
   ELIGIBILITY_CHANGED: 'ELIGIBILITY_CHANGED',
   CONTROLLED_TRANSITION_CHANGED: 'CONTROLLED_TRANSITION_CHANGED',
   SEGMENT_SEALED: 'SEGMENT_SEALED',
-  // 2026-08-31: an administrator produced a copy of the records under
-  // 21 CFR 11.10(b). Deliberately NOT reusing SEGMENT_SEALED, which means a
-  // ledger range was sealed for archival — a different act with different
-  // consequences. Two events sharing one name is how an audit trail starts
-  // describing things that did not happen.
-  //
-  // Taking a copy of the signature evidence is itself worth recording: who
-  // exported what, when, and the SHA-256 of what they took, so a copy that
-  // surfaces later can be tied back to the moment it was produced.
+  // 2026-08-31: record an administrator's export under 21 CFR 11.10(b), including
+  // who exported which range, when and its SHA-256. SEGMENT_SEALED instead records
+  // archival sealing and must remain a distinct event.
   RECORDS_EXPORTED: 'RECORDS_EXPORTED',
   CHAIN_VERIFIED: 'CHAIN_VERIFIED',
   CHAIN_BROKEN: 'CHAIN_BROKEN',
-  // 2026-08-31: jobs/gatecheck.js found the sig-gate validator missing,
-  // disabled, or orphaned on an edge va_controlled_transition says is
-  // controlled — or found a second ungated route into a controlled status.
-  //
-  // Audited rather than only tabled because this is the app noticing that its
-  // OWN control stopped applying, which is the one event it cannot record at
-  // the moment it happens: a detached validator means Jira never calls the
-  // gate, so there is no transition to deny and nothing to write. The ledger
-  // entry is therefore the only dated evidence that an edge went unenforced,
-  // and 11.10(f) is defensible at audit precisely to the extent this exists.
+  // 2026-08-31: record gatecheck findings for missing, disabled or orphaned
+  // validators and additional ungated routes. A removed validator cannot report
+  // its own absence because Jira stops invoking it. These dated findings record
+  // when scheduled checks discovered the enforcement gap.
   GATE_DRIFT_DETECTED: 'GATE_DRIFT_DETECTED',
   // The same finding stopped being observed. Recorded, not deleted: a window
   // in which a control was absent remains a fact about the record even after
   // someone reattaches the validator.
   GATE_DRIFT_CLEARED: 'GATE_DRIFT_CLEARED',
-  // 2026-08-31: 21 CFR 11.300(e) device testing. A correct TOTP code is the
-  // authenticator proving it still holds the right secret and a clock inside
-  // the window — there is nothing more meaningful we could administer. These
-  // three record that the test happened, that one is overdue, and that a
-  // long-silent device was used.
-  //
-  // DORMANT_DEVICE_USED is the one that earns its place. We cannot tell a
-  // returning employee from someone holding a secret cloned months ago, and we
-  // do not pretend to — but "this device had been silent for 214 days" is the
-  // context an investigator needs, and until now the record could not supply it.
+  // 2026-08-31: record successful TOTP device tests, overdue checks and use after
+  // dormancy under 21 CFR 11.300(e). A valid code proves the shared secret and
+  // accepted clock window. DORMANT_DEVICE_USED records inactivity duration for
+  // investigation; it cannot distinguish a returning owner from a copied secret.
   DEVICE_CHECK_PASSED: 'DEVICE_CHECK_PASSED',
   DEVICE_CHECK_DUE: 'DEVICE_CHECK_DUE',
   DORMANT_DEVICE_USED: 'DORMANT_DEVICE_USED',
@@ -266,13 +224,11 @@ export const EVENT = {
   DRIFT_RECONCILED: 'DRIFT_RECONCILED',
   DRIFT_SELF_REVERTED: 'DRIFT_SELF_REVERTED',
   DRIFT_RECALLED: 'DRIFT_RECALLED',
-  // 2026-09-13: `payload.reason` is one of NOT_GATED, NO_ROUTE, AMBIGUOUS_ROUTE,
-  // SCREEN_BLOCKED, JIRA_REFUSED, or BASELINE_POLICY_INCOMPLETE — see
-  // lib/recall.js's RECALL constants and lib/restore/recall.js's
-  // recordRecallFailure(). The same failure is also raised as a deduplicated
-  // administrator finding (db/incidentStore.js's recordRecallFinding); this
-  // ledger entry is this work item's own permanent record that it happened,
-  // the finding is the live, actionable one an admin works from.
+  // 2026-09-13: payload.reason records NOT_GATED, NO_ROUTE, AMBIGUOUS_ROUTE,
+  // SCREEN_BLOCKED, JIRA_REFUSED or BASELINE_POLICY_INCOMPLETE. See lib/recall.js
+  // and lib/restore/recall.js#recordRecallFailure. db/incidentStore.js also creates
+  // a deduplicated finding for admin action; this entry remains the issue's
+  // permanent failure record.
   DRIFT_RECALL_FAILED: 'DRIFT_RECALL_FAILED',
   DECISION_RECORDED: 'DECISION_RECORDED',
   DECISION_CONSUMED: 'DECISION_CONSUMED',

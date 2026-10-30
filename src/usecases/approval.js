@@ -66,7 +66,7 @@ function activeOperationLock(review, now) {
 }
 
 export function createApprovalUsecases(deps) {
-  // HELD FROM ABOVE (lib/ancestorHold.js): the validator refuses any
+  // Ancestor hold (lib/ancestorHold.js): the validator refuses any
   // transition of a work item whose ancestor has undecided drift, so a
   // signature for one is refused here, before any authentication is spent.
   // Drift decisions are about content, not movement, and are never refused.
@@ -115,7 +115,7 @@ export function createApprovalUsecases(deps) {
     if (prepared.baseline) {
       if (!ct) fail('BASELINE_POLICY_INCOMPLETE');
 
-      // APPROVING DRIFT CAPTURES A BASELINE. IT DOES NOT TAKE A TRANSITION.
+      // Approving drift captures a baseline without taking a transition.
       //
       // This used to replay the baseline's original edge: require the item to
       // be back at that edge's starting status, re-resolve the transition, and
@@ -123,15 +123,15 @@ export function createApprovalUsecases(deps) {
       // VJIRA-16 drifted in In Progress against a baseline captured on
       // Selected for Development -> In Progress, and its workflow offers no
       // route back to Selected for Development, so APPROVE was refused
-      // STATUS_CHANGED with no way to ever satisfy it — leaving reject and
+      // STATUS_CHANGED with no way to ever satisfy it, leaving reject and
       // restore as the only exit from an unreviewed change.
       //
-      // The two intents are genuinely different. A WORKFLOW action runs a gated
+      // The two intents differ. A WORKFLOW action runs a gated
       // edge and records a fresh signature for it, above. A drift decision
       // answers "is what is on this work item now the approved version", which
       // is a question about CONTENT and carries no opinion about where the item
       // should sit. Approving it therefore captures a new baseline in place,
-      // under the policy the latest baseline recorded — see drift.js's
+      // under the policy the latest baseline recorded. See drift.js's
       // ratification branch, which preserves that baseline's own transition,
       // review status and destination rather than promoting the item's current
       // status into a new policy edge.
@@ -211,7 +211,7 @@ export function createApprovalUsecases(deps) {
     try {
       const accountId = actorId(context);
 
-      // EVERY SIGNATURE ANSWERS A CHALLENGE. The challenge fixed, once, the
+      // Every signature answers a challenge. The challenge fixes the
       // meaning the signer was shown, the candidate content and the exact edge;
       // a submit without one would choose its own transition and could leave
       // the evidence hash out, approving content nobody reviewed. Every client

@@ -8,27 +8,15 @@ import type { PanelSummary } from './types';
 type Flight = { issueKey?: string; rerun: boolean; loud: boolean; done: Promise<void> };
 
 /**
- * THE COMPACT READ — one in-flight `panel:getSummary` request per issue.
+ * Share one in-flight panel:getSummary request per issue. Concurrent triggers
+ * join that request and schedule at most one follow-up. A different issue
+ * starts its own request. The sequence counter prevents old responses from
+ * overwriting newer results or updating a disposed component.
  *
- * Concurrent triggers for the same issue (a Jira event landing right after a
- * manual Refresh, or `focus` and `visibilitychange` firing back to back)
- * coalesce onto the request already running. Any number of triggers that
- * arrive mid-flight schedule exactly one follow-up once it settles, so a
- * change made after the request was dispatched is never missed and a refresh
- * storm cannot grow.
- *
- * A different issue key is never queued behind the old one: it starts its own
- * flight at once, and `sequence` guarantees the old response — however late —
- * can never overwrite the newer result or a disposed component.
- *
- * BACKGROUND REFRESHES ARE SILENT. A refresh nobody asked for (a Jira event,
- * focus, the replica-lag follow-ups — see lib/issueUpdates.ts) that fails
- * while a summary is already on screen keeps that summary and shows nothing;
- * the next one replaces it. The first load, and any refresh a person or an
- * action started, still reports its failure. This hides no authority: every
- * decision is re-derived and re-checked server-side against current content
- * (approval.js's challenge/submit), so a summary a few seconds old can make a
- * signer retry, never sign the wrong thing.
+ * A failed background refresh preserves an existing summary. First loads and
+ * refreshes started by a person or action report failures. The server checks
+ * every decision against current content in approval.js challenge/submit, so
+ * a stale summary can require a retry but cannot authorize the wrong record.
  */
 export default function usePanelState(issueKey?: string) {
   const [state, setState] = useState<PanelSummary | null>(null);

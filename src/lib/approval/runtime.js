@@ -183,21 +183,16 @@ export async function resolveEdge({ gated, transitions },
 }
 
 /**
- * Read as the user; where Forge cannot act as this user, read as the app.
+ * Read asUser, falling back to asApp only when Forge cannot act as that user.
  *
- * The validator is attached to every transition of a governed workflow, so it
- * runs for every Jira user and every automation rule — most of whom have never
- * opened VAtlassian and never granted it consent to act as them. Forge then
- * throws (NeedsAuthenticationError) or Jira answers 401/403. Refusing on that
- * would freeze the whole workflow for them, clean items included, although the
- * drift hold needs only facts the app can read as itself: the issue and its
- * transitions.
+ * The validator runs on every governed transition, including for users and
+ * automation that have never granted VAtlassian consent. NeedsAuthenticationError
+ * or a 401/403 must not freeze clean-item transitions when the app can read the
+ * issue and its transitions itself.
  *
- * Only "could not act as this user" falls back. Any other answer — a 404, a
- * 5xx, a list read that failed with such a status — is returned or rethrown
- * exactly as the user read gave it, and the caller fails closed as before.
- * `availableTransitions` reports a non-ok status only in its message, as
- * "(status N)", so that is where the status is read from.
+ * Preserve other failures, including 404, 5xx and failed list reads, for the
+ * caller to refuse. availableTransitions exposes a failed HTTP status only
+ * in its "(status N)" message, so extract it there.
  */
 const NOT_THIS_USER = new Set([401, 403]);
 export async function readAsUserOrApp(asUser, asApp) {
@@ -283,15 +278,13 @@ export async function gateRuntime() {
       // or exempt an existing Test Execution from its completion guard.
       const proposedFields = { ...issue.fields, ...modifiedFields };
 
-      // THE ITEM FIRST, THE EDGE SECOND. This validator is attached to every
-      // transition, and drift holds the item on all of them — so nothing about
-      // which transition this is may stand between a drifted item and its
-      // refusal. Everything below that can fail on the edge is reported, not
-      // thrown, and gate.js refuses on it only after the drift hold has run.
+      // Check item drift before transition-specific failures. The validator holds a
+      // drifted item on every transition. Return edge errors rather than throw here
+      // so gate.js can apply the drift hold first.
       const [items, scoped, health, active] = await Promise.all([
         query('SELECT state, baseline_version FROM va_item_state WHERE issue_id = ?', [issue.issueId]),
-        // A child of an approved tree is held to its root's fields, here as on
-        // every other path — or a file added to it would never hold anything.
+        // Use the approved tree root's fields, as every other comparison does.
+        // Otherwise an attachment added to a child could escape the drift hold.
         scopeForItem(issue, { activeRootsForNode }).then(async found => ({ found,
           fields: await config.controlledFields({ projectId: found.projectId, issueTypeId: found.issueTypeId }) })),
         config.projectConfig(issue.projectId),

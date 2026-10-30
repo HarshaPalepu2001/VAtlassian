@@ -1,14 +1,14 @@
-# Continuous Review and Scope Assurance Implementation Plan
+# Continuous review and scope assurance implementation plan
 
-**Goal:** Make the review timeline scrub freely in either direction, and prove baseline publication and assurance follow the field decision map and baseline that owns the decision scope.
+**Goal.** Make the review timeline scrub freely in either direction, and prove baseline publication and assurance follow the field decision map and baseline that owns the decision scope.
 
-**Architecture:** `ChangeTimeline` will convert a compact slider position to a timestamp and select the latest recorded event at or before that time. The existing backend separates restoration from publication and derives drift assurance from immutable baseline policy; focused regressions will make those contracts explicit for direct rejection, all-rejected maps, mixed maps, parent scope, and child scope.
+**Architecture.** `ChangeTimeline` will convert a compact slider position to a timestamp and select the latest recorded event at or before that time. The existing backend separates restoration from publication and derives drift assurance from immutable baseline policy; focused regressions will make those contracts explicit for direct rejection, all-rejected maps, mixed maps, parent scope, and child scope.
 
-**Tech Stack:** React and TypeScript, Node.js built-in test runner, Forge backend JavaScript.
+**Technology.** React and TypeScript, Node.js built-in test runner, Forge backend JavaScript.
 
 **Spec:** `docs/specs/2026-10-12-continuous-review-and-scope-assurance-design.md`
 
-## Global Constraints
+## Global constraints
 
 - The timeline is navigation only: it cannot record a decision, restore content, or create a baseline.
 - A direct full-set rejection restores the standing baseline and never publishes a replacement baseline.
@@ -17,7 +17,7 @@
 - Incomplete, ambiguous, stale, or changed evidence fails closed; current configuration cannot replace baseline authority.
 - Assurance comes from the immutable active baseline owning the exact decision scope, including tree provenance for inherited descendants.
 
-## Review Focus
+## Review focus
 
 - Reverse drag immediately below a later event returns to the preceding event; Task 1 adds a forward and reverse floor-semantics test.
 - A cursor before the first drift displays no selected event; Task 1 adds that test.
@@ -80,7 +80,7 @@ const momentAtOrBefore = (at: number) => orderedMoments.reduce<number | null>(
   (selected, [momentAt]) => momentAt <= at ? momentAt : selected, null);
 ```
 
-Store the range position, not raw epoch milliseconds. `scrubTo` converts position to a time, then calls `onPick` only when `momentAtOrBefore` changes. `pickMoment` stores the exact marker’s normalized position and timestamp. Render `min={0}`, `max={SCRUB_MAX}`, `step={1}`, `onInput`, and `aria-valuetext={formatTimestamp(cursorTime) ?? ''}`. Keep field chips unchanged.
+Store the range position, not raw epoch milliseconds. `scrubTo` converts position to a time, then calls `onPick` only when `momentAtOrBefore` changes. `pickMoment` stores the exact marker's normalized position and timestamp. Render `min={0}`, `max={SCRUB_MAX}`, `step={1}`, `onInput`, and `aria-valuetext={formatTimestamp(cursorTime) ?? ''}`. Keep field chips unchanged.
 
 - [ ] **Step 4: Run the focused frontend tests after implementation**
 
@@ -137,7 +137,7 @@ test('duplicate delivery of an all-rejected restore cannot publish a baseline', 
 });
 ```
 
-Match the worker’s documented terminal-idempotency result for the second delivery, while keeping the no-capture and one-completion-event assertions.
+Match the worker's documented terminal-idempotency result for the second delivery, while keeping the no-capture and one-completion-event assertions.
 
 - [ ] **Step 3: Run lifecycle tests before changing production code**
 
@@ -210,11 +210,11 @@ Add direct child preparation coverage that asserts `requiredAssurance === 'ESIGN
 
 Run: `node --test test/drift-functional.test.js test/child-baseline-decisions.test.js`
 
-Expected: the tests establish the resolver’s behavior. A failure identifies whether `prepareApproval`, ownership resolution, or mixed-capture mapping loses the governing baseline.
+Expected: the tests establish the resolver's behavior. A failure identifies whether `prepareApproval`, ownership resolution, or mixed-capture mapping loses the governing baseline.
 
 - [ ] **Step 4: Correct only the violated policy handoff**
 
-For parent scope, retain `baselinePolicy(active)` in `prepareApproval` and pass it to `snapshot` as `authorityPolicy`. For direct child scope, resolve the child’s active baseline before `baselinePolicy`. For inherited child scope, retain parent provenance and policy. In `defaultCaptureMixed`, continue deriving `gate.required_assurance` from `baselinePolicy(baseline)` rather than current configuration.
+For parent scope, retain `baselinePolicy(active)` in `prepareApproval` and pass it to `snapshot` as `authorityPolicy`. For direct child scope, resolve the child's active baseline before `baselinePolicy`. For inherited child scope, retain parent provenance and policy. In `defaultCaptureMixed`, continue deriving `gate.required_assurance` from `baselinePolicy(baseline)` rather than current configuration.
 
 - [ ] **Step 5: Rerun scope-policy tests**
 
@@ -267,12 +267,12 @@ git commit -m "test(review): verify scoped decisions and restore publication"
 
 Do not create an empty commit.
 
-## Self-Review
+## Self-review
 
-**Spec coverage:** Task 1 covers two-way read-only navigation. Task 2 covers direct rejection, all-rejected saves, approvals, verification, publication ordering, and duplicate delivery. Task 3 covers parent, owned-child, and inherited-child policy ownership and rejects mutable-policy substitution. Task 4 provides focused and repository-wide evidence without claiming live acceptance.
+**Spec coverage.** Task 1 covers two-way read-only navigation. Task 2 covers direct rejection, all-rejected saves, approvals, verification, publication ordering, and duplicate delivery. Task 3 covers parent, owned-child, and inherited-child policy ownership and rejects mutable-policy substitution. Task 4 provides focused and repository-wide evidence without claiming live acceptance.
 
-**Placeholder scan:** Every task names concrete files, interfaces, commands, and expected behavior.
+**Placeholder scan.** Every task names concrete files, interfaces, commands, and expected behavior.
 
-**Type consistency:** The timeline retains `onPick(fieldId: string)`. Backend tests use existing `decide`, `runRestoreWorker`, `prepareApproval`, `baselinePolicy`, and child-baseline ownership contracts.
+**Type consistency.** The timeline retains `onPick(fieldId: string)`. Backend tests use existing `decide`, `runRestoreWorker`, `prepareApproval`, `baselinePolicy`, and child-baseline ownership contracts.
 
-**Review Focus:** Each listed interaction or failure condition is exercised by the owning task.
+**Review focus.** Each listed interaction or failure condition is exercised by the owning task.

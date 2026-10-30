@@ -2,19 +2,13 @@ import { logicalNodeId } from './model.js';
 import { baselineLinkPolicy } from '../linkPolicy.js';
 
 /**
- * A CHILD'S OWN BASELINE, SEEN FROM ITS PARENT'S TREE.
+ * Use a child's active baseline for its content if this parent capture wrote
+ * it or it was captured at or after the parent. The parent's stored node
+ * continues to define structure.
  *
- * Since 2026-09-24 every child a parent's capture reaches gets its own baseline
- * (db/childBaselineStore.js). From then on the child's content is judged and
- * decided in the child, against that baseline; the parent's stored node is
- * only the structure it was signed with.
- *
- * A child's ACTIVE baseline is its own record, not the parent's, when it is
- * the latest recorded one: written by this very parent capture, or captured
- * at or after it (the child's own controlled transition or drift decision).
- * A child baselined only BEFORE the parent's capture, as every child of a tree
- * captured before per-child baselines existed, keeps today's behaviour: its
- * content is measured against the parent's stored node.
+ * A baseline older than the parent capture does not replace that stored node.
+ * This preserves comparison for trees captured before per-child baselines
+ * were introduced on 2026-09-24.
  */
 export function ownsItsContent(childBaseline, parentBaseline) {
   if (!childBaseline || !parentBaseline) return false;
@@ -71,21 +65,13 @@ function depthOf(tree, nodeId) {
 }
 
 /**
- * THE CHILD'S BRANCH, AS THE CHILD LAST SIGNED IT.
+ * Replace a child's branch with its own tree baseline if it is newer than
+ * the parent's capture. This includes the child's approved structural changes
+ * so a parent rejection cannot delete or detach them.
  *
- * A child that has its own tree baseline newer than the parent's capture (a
- * decision or a controlled transition on the child, covering its own
- * children) owns its whole branch, structure included: the sub-tasks it added
- * or removed are part of what it signed. Its branch in the parent's tree is
- * replaced by the child's own tree, so the tree stays connected to every
- * issue's latest record. A change the child already decided is not reported
- * again on the parent (live 2026-10-12: VAT-76 added under VAT-74 and approved
- * there kept showing as "Added node" on VAT-72), and a parent rejection never
- * deletes or detaches what the child signed for.
- *
- * Shallowest branch first. A node inside a grafted branch is then judged
- * against the capture that branch came from, so a grandchild's own baseline
- * wins only if it is newer than its parent's.
+ * Process shallowest branches first. Within a replaced branch, a grandchild's
+ * baseline takes precedence only if newer than that branch's capture.
+ * See the live regression from 2026-10-12 involving VAT-72, VAT-74 and VAT-76.
  */
 async function graftOwnedBranches({ parentBaseline, baselineTree, activeBaselines, readBaselineTree }) {
   let tree = baselineTree;
@@ -154,16 +140,10 @@ async function ownRecord(child, issueId, stored, { readAllValues, readBaselineTr
 }
 
 /**
- * THE TREE A PARENT DECISION RETURNS TO: the parent's baseline tree, with each
- * child that owns its content replaced by that child's own latest baseline.
- *
- * Rejecting the parent restores every issue to ITS OWN latest recorded
- * baseline, and the parent's review shows each child against exactly that
- * (spec 2026-09-24 §4.5, §4.7). Building it once, here, is what keeps the
- * review diff, the restore plan, the queued worker and the post-restore
- * verification comparing against the same thing. Structure stays the
- * parent's, except under a child that has since signed its own tree: that
- * branch is the child's (graftOwnedBranches above).
+ * Build the parent's target tree using each child's own latest applicable
+ * baseline. Share it across review, planning, queued execution and verification.
+ * Structure follows the parent's capture except where a child has since signed
+ * its own tree. See graftOwnedBranches and spec 2026-09-24 sections 4.5 and 4.7.
  */
 export async function withChildBaselines({ parentBaseline, baselineTree: signedTree, activeBaselines, readAllValues, readBaselineTree }) {
   const { tree: baselineTree, governorOf } = await graftOwnedBranches({ parentBaseline, baselineTree: signedTree,

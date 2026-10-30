@@ -13,31 +13,21 @@ import { resolveActions } from '../lib/journey.js';
 import { baselinePolicy } from '../lib/baselinePolicy.js';
 
 /**
- * MY APPROVALS — EVERYTHING WAITING ON THIS PERSON, BY THE ROLES THEY HOLD.
+ * List work awaiting this person's roles under the same rules used by signing.
  *
- * Three kinds of work, each offered under exactly the rule that would decide
- * it, so the list never offers what signing would refuse and never hides what
- * only this person can do:
+ * CHANGES: Read signed items changed since approval from va_item_state, wherever
+ *   they are in the workflow. Use the role stored in the baseline, as
+ *   usecases/drift.js prepareApproval does, rather than today's transition rule.
+ *   Removed rules and parent-approved children must remain reviewable while
+ *   Jira holds them for an outstanding decision.
+ * RESTORE: Include unfinished restoration of the current baseline. All holders
+ *   of the required role may approve or reject again. Only the rejecting
+ *   reviewer may retry (usecases/restore.js retry); canRetry identifies them.
+ * TRANSITION: Read the issue's current status and user-offered transitions live.
+ *   JQL results may still contain the status an issue has left.
  *
- *   CHANGES     A signed item edited since approval, wherever it now sits.
- *               Found in the app's own record (va_item_state), and offered to
- *               whoever holds the role FROZEN INTO ITS BASELINE — the role
- *               usecases/drift.js prepareApproval checks — not the role today's
- *               transition settings name. An item signed under a rule since
- *               removed, or a child approved through its parent, is still held
- *               by Jira until someone decides it, so it must still reach them.
- *   RESTORE     The same, where a rejection's restore of the current baseline
- *               did not finish. Everyone in the role sees it (they may approve
- *               or reject again); only the reviewer who rejected may retry it
- *               (usecases/restore.js retry), and `canRetry` says which.
- *   TRANSITION  A controlled transition this person may sign, read LIVE: one
- *               issue read carries both its current status and the transitions
- *               Jira offers this user from it, because the search index can
- *               still show the status an item has just left.
- *
- * Decisions come first, oldest waiting first. An item with a change to decide
- * is never also offered as a transition: Jira holds it on every move until the
- * change is decided (gate.js).
+ * Show decisions first, oldest first. Never also offer a transition for an item
+ * with an outstanding change decision, because gate.js holds those moves.
  */
 
 /** A restore in one of these states stopped short of the approved record. */
@@ -49,13 +39,12 @@ const SEARCH_PAGE = 50;
 const MAX_SEARCH_PAGES = 4;
 const SEARCH_BUDGET_MS = 12_000;
 const READ_CONCURRENCY = 5;
-/** Decisions shown per page — unchanged from the single page this used to be capped at. */
+/** Decisions per page, preserving the previous single-page size. */
 const DECISIONS_PAGE = 200;
 /**
- * Safety valve on how many outstanding decisions one call will ever fetch.
- * Far above any healthy backlog. Past it, `decisionsOverflow` says so instead
- * of silently acting as if the scan was complete — which an unbounded default
- * limit used to do, invisibly, once a scope passed DECISIONS_PAGE records.
+ * Limit the outstanding decisions fetched by one call. Report
+ * `decisionsOverflow` when this limit is reached. Previously, the default
+ * store limit silently truncated scopes larger than DECISIONS_PAGE.
  */
 const DECISIONS_HARD_CAP = 2000;
 
@@ -75,7 +64,7 @@ export async function list({ payload = {}, context }) { return respond(async () 
   const skip = new Set(all.map(({ row }) => Number(row.issue_id)));
 
   // A VALUE cursor, not a row position: re-filtered against this call's own
-  // fresh fetch, so an item resolved or added between calls shifts nothing —
+  // fresh fetch, so an item resolved or added between calls does not shift the cursor because
   // it only ever compares each row against the last one this viewer actually
   // saw. An offset/index cursor would skip or repeat rows whenever the set
   // changed shape between calls; this cannot, because "after" means after a
@@ -108,15 +97,12 @@ function isAfterCursor(row, cursor) {
 }
 
 /**
- * The app's own opaque continuation string — never Jira's raw token alone.
- * It carries both where the decisions scan is and Jira's transition-search
- * continuation, so cursoring through one can never lose the place in the
- * other. The decisions side is a value cursor — the last `(last_drift_at,
- * issue_id)` actually shown — never a row position/offset: a cursor built
- * from a position would silently skip or repeat rows once the underlying set
- * changed shape between calls (an item resolved, or a new one arrived).
- * `'done'` means the decisions scan is finished; no token yet (the first
- * call) means `'start'`, from the very beginning.
+ * Encode both decision and transition-search positions in the app's opaque
+ * continuation string. Jira's token alone cannot preserve both positions.
+ * The decision cursor records the last (last_drift_at, issue_id) shown, so
+ * resolving or adding another item does not shift the cursor as an offset would.
+ * `done` marks the end of decisions; the first call without a token starts at
+ * `start`.
  */
 function decodeToken(raw) {
   if (!raw) return { decisionsCursor: 'start', transitionsToken: null };
@@ -142,7 +128,7 @@ function encodeToken({ decisionsCursor, transitionsToken }) {
 /**
  * Every recorded item this person may decide, oldest first, and whether the
  * hard cap below was reached. Storage only; no Jira read. Bounded by
- * DECISIONS_HARD_CAP, not by one page's display size (DECISIONS_PAGE) — the
+ * DECISIONS_HARD_CAP, not by one page's display size (DECISIONS_PAGE). The
  * caller pages the already-fetched list in memory rather than re-querying.
  */
 async function decisionsFor(grants) {

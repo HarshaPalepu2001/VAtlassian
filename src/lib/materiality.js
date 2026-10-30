@@ -1,14 +1,11 @@
 /**
- * How much a reviewer should care about a change.
+ * Classify the importance of a tracked-field change for review.
  *
- * This module is what stops Baseline from being muted. An app that pages a
- * reviewer because somebody bolded a word will be switched off within a week,
- * and it will take the genuinely important alerts with it. So the ladder below
- * is deliberately opinionated, and cosmetic changes are suppressed by default
- * rather than merely ranked low.
+ * Cosmetic changes are suppressed by default so formatting edits do not trigger
+ * the same notifications as changes that affect approval.
  *
- * Pure: no I/O, no clock, no database. The caller supplies the field, the
- * configured rule and the two values; this returns a level.
+ * These functions do no I/O. The caller supplies the field, configured rule
+ * and both values; the result is a materiality level.
  */
 
 export const MATERIALITY = {
@@ -34,26 +31,15 @@ export function maxMateriality(values) {
 }
 
 /**
- * The out-of-the-box ladder, applied to any field an admin has not given an
- * explicit materiality.
+ * Default materiality for fields without an explicit administrator setting.
  *
- * The reasoning behind each level, since these are product decisions rather
- * than mechanics:
+ * CRITICAL covers changes to what completion means, including description,
+ * due date, priority and security. MAJOR covers responsibility, timing or
+ * destination and needs review without an interruption. MINOR covers metadata,
+ * recorded and queued last.
  *
- *   CRITICAL — the field changes what "done" means. If description, due date,
- *   priority or security level move after approval, the approval is stale and
- *   the reviewer needs to see it now.
- *
- *   MAJOR — the field changes who does it, when, or where it lands. Worth a
- *   review, not worth an interruption.
- *
- *   MINOR — the field is metadata. Recorded for the trail, queued at the
- *   bottom.
- *
- * Anything not listed defaults to MINOR, not MAJOR: an unrecognised custom
- * field is far more likely to be a team's own bookkeeping than a scope control,
- * and defaulting unknown fields high is the other reliable way to get an app
- * muted.
+ * Unlisted custom fields default to MINOR to avoid treating team bookkeeping
+ * as a critical scope change.
  */
 export const DEFAULT_LADDER = {
   description: MATERIALITY.CRITICAL,
@@ -81,19 +67,15 @@ export const DEFAULT_MATERIALITY = MATERIALITY.MINOR;
  * Classify one field change.
  *
  * @param fieldId
- * @param configured   the admin's va_controlled_field.materiality, or null
- * @param before       normalised baseline value
- * @param after        normalised current value
- * @param opts.semanticChange
- *        Supplied by the diff engine for rich text: false means the rendered
- *        text is identical and only formatting moved. When the diff engine has
- *        not run (the trigger path, which works on digests alone) this is
- *        undefined and no cosmetic determination is made — the queue is
- *        recomputed with the diff on panel open, which is where a cosmetic
- *        change gets demoted. Being briefly over-cautious between an edit and a
- *        panel open is the right way round: a change that turns out to be
- *        cosmetic costs one queue row, a change wrongly suppressed costs the
- *        product its purpose.
+ * @param configured Administrator's va_controlled_field.materiality, or null.
+ * @param before Normalised baseline value.
+ * @param after Normalised current value.
+ * @param opts.semanticChange false when the rich-text diff finds identical
+ *        rendered text with only formatting changes.
+ *
+ * Digest-only trigger checks have no semanticChange value and cannot classify
+ * formatting. Recompute the queue after the panel's full diff. Temporary extra
+ * review rows are preferable to suppressing a material change.
  */
 export function classify(fieldId, configured, before, after, opts = {}) {
   // Same value, no change at all. Callers should not reach here, but a
@@ -112,15 +94,11 @@ export function classify(fieldId, configured, before, after, opts = {}) {
 }
 
 /**
- * Two fields where the DIRECTION of a change decides how much it matters.
+ * Use change direction to demote priority, estimate and due-date changes.
+ * Lower priority or earlier completion can be less material; higher priority
+ * or later completion can change agreed scope or timing.
  *
- * Priority dropping after approval is housekeeping; priority rising is somebody
- * quietly reclassifying work that was already agreed. Estimates and due dates
- * behave the same way — moving in is a team going faster, moving out is scope
- * or schedule slipping past the point where it was signed off.
- *
- * Only ever DEMOTES. A rule that could promote a change above the level an
- * admin explicitly configured would make the configuration screen a lie.
+ * Never promote above the administrator's configured materiality.
  */
 function applyDirection(fieldId, level, before, after) {
   if (fieldId === 'priority') {

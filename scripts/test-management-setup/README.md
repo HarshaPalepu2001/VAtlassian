@@ -1,9 +1,9 @@
 # Test-management setup
 
-Brings the six test work types into a company-managed project, each with its
-own fields, screens and workflow, ready to map on VAtlassian's Test management
-page. Read-only dry run unless given `--apply`. Uses the requirements setup's
-credentials (`.env.requirements`), Jira client and created-object ledger — see
+Adds six test work types to a company-managed project, each with its own fields,
+screens and workflow. Map them on VAtlassian's Test management page. Scripts run
+as read-only previews unless given `--apply`. Uses the requirements setup's
+credentials (`.env.requirements`), Jira client and created-object ledger. See
 [../requirements-setup/README.md](../requirements-setup/README.md).
 
 ```

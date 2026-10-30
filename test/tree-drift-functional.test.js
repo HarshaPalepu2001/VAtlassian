@@ -4,21 +4,19 @@ import { registerHooks } from 'node:module';
 import { project } from '../src/lib/content.js';
 
 /**
- * Functional coverage for the aggregate tree collector (src/lib/collect.js's
- * collectTree/affectedTreeRoots/collectAffectedTrees/
- * discoverActiveRootsByAncestor).
+ * Functional coverage for src/lib/collect.js's aggregate tree collector:
+ * collectTree, affectedTreeRoots, collectAffectedTrees, and
+ * discoverActiveRootsByAncestor.
  *
- * diffTree()'s own drift-category logic already has dedicated unit coverage
- * in test/tree-diff.test.js. What is untested anywhere else is the GLUE this
- * task adds: reading the real (governed) tree, diffing it against the signed
- * baseline, and replacing — never appending to — the tree's drift set, with
- * no baseline meaning nothing is read or written at all.
+ * test/tree-diff.test.js covers diffTree()'s categories. This suite covers
+ * reading the governed tree, comparing it with the signed baseline, and
+ * replacing the tree's drift set without appending. Without a baseline,
+ * the collector must read and write nothing.
  *
- * Every DB- and Jira-facing module collect.js imports is replaced with a thin
- * fixture, the same technique test/drift-functional.test.js and
- * test/signature-gate-drift.test.js use: real business logic (diffTree,
- * planTreeCapture, readStableTree, createTreeReader) runs unmodified; only
- * the persistence and network boundaries are swapped out.
+ * Fixtures replace the DB and Jira modules imported by collect.js, as in
+ * test/drift-functional.test.js and test/signature-gate-drift.test.js.
+ * diffTree, planTreeCapture, readStableTree, and createTreeReader run
+ * unmodified.
  */
 const modules = {
   'db/configStore.js': ['controlledFields', 'projectConfig', 'reviewStatusIds', 'recallTargetStatus',
@@ -82,13 +80,12 @@ function rawNodes(children) {
 }
 
 /**
- * A tiny governed tree: root FEAT-1 (id 1) plus whatever children are given.
+ * A governed tree with root FEAT-1 (id 1) and the supplied children.
  *
- * The baseline tree is built with the SAME planTreeCapture() the live read
- * path uses, over `baselineChildren` — never hand-rolled logical ids or
- * digests, which would drift out of step with the real hashing scheme
- * (sha256 of the issue id, content-hashed field digests) and produce false
- * diffs that have nothing to do with the collector under test.
+ * Build its baseline with planTreeCapture() over baselineChildren, as the
+ * live read path does. Manually constructed logical ids or digests could
+ * differ from the hashing scheme, SHA-256 of issue ids and content-hashed
+ * field digests, and produce false differences unrelated to the collector.
  */
 function baseFixture({ baselineChildren = [{ id: '2', summary: 'story' }], liveChildren = baselineChildren } = {}) {
   const replaceTreeDriftCalls = [];
@@ -131,8 +128,8 @@ function baseFixture({ baselineChildren = [{ id: '2', summary: 'story' }], liveC
       const ok = body => ({ status: 200, json: async () => body });
       if (options.method === 'POST' && String(url).includes('/search/jql')) {
         const body = JSON.parse(options.body);
-        // Only the root's own children are ever asked for in this fixture —
-        // a search for anyone else's children (i.e. a grandchild lookup)
+        // This fixture reads only the root's own children.
+        // A search for anyone else's children (i.e. a grandchild lookup)
         // comes back empty, keeping this a two-level tree.
         const issues = body.jql.includes('FEAT-1')
           ? liveChildren.map(c => ({ id: c.id, key: `LIVE-${c.id}`, fields: {
@@ -275,7 +272,7 @@ test('a new descendant not in the baseline is diffed as NODE_ADDED and replaces 
   const result = await collectTree({ rootIssueId: 1, rootIssueKey: 'FEAT-1', actorAccountId: 'acct-1', eventId: 'e1', eventAt: 5, now: 1000 });
   assert.equal(result.outcome, 'DRIFT_RECORDED');
   assert.ok(result.kinds.includes('NODE_ADDED'));
-  assert.equal(f.replaceTreeDriftCalls.length, 1, 'exactly one replace call — never an append');
+  assert.equal(f.replaceTreeDriftCalls.length, 1, 'exactly one replace call without an append');
   assert.ok(f.replaceTreeDriftCalls[0].driftRows.some(r => r.fieldId === 'NODE_ADDED'));
   assert.equal(f.tryAppendCalls.length, 1);
   assert.equal(f.tryAppendCalls[0].actorAccountId, 'acct-1');
@@ -394,15 +391,17 @@ test('reconcile.sweep enumerates active tree roots and runs the aggregate collec
 });
 
 /**
- * discoverActiveRootsByAncestor() end to end — the ancestor-walk fallback for
- * a node created after its tree was baselined, so no baseline row indexes it
- * yet. Every other test in this file (and in tree-trigger-fanout.test.js and
- * baseline-trigger-retry.test.js) either mocks affectedTreeRoots() directly
- * or forces activeRootsForNode() to answer immediately, so the real walk —
- * the one piece of this task that talks to @forge/api — was never actually
- * exercised. These two tests replace globalThis.vaFlow with a minimal fixture
- * of their own: only activeRootsForNode() and the Jira parent-fetch request()
- * this function calls, nothing collectTree() needs.
+ * End-to-end discoverActiveRootsByAncestor() fallback.
+ *
+ * A node created after its tree's baseline has no baseline row indexing it.
+ * Other tests here, in tree-trigger-fanout.test.js, and in
+ * baseline-trigger-retry.test.js mock affectedTreeRoots() or return roots
+ * directly from activeRootsForNode(). They do not exercise the ancestor
+ * walk or its @forge/api requests.
+ *
+ * These two tests replace globalThis.vaFlow with a fixture providing only
+ * activeRootsForNode() and the Jira parent-fetch request() used by the walk.
+ * They provide no collectTree() dependencies.
  */
 test('the ancestor walk climbs past an unindexed parent to find an active governed root at the grandparent', async () => {
   const activeRoot = [{ rootIssueId: 1, rootIssueKey: 'FEAT-1' }];
@@ -461,7 +460,7 @@ test('the starting node itself is protected from a one-hop cycle back to it', as
     activeRootsForNode: async () => [],
     request: async (identity, url) => {
       requests.push(url);
-      // Issue 2's own native parent is reported as issue 10 — the node that
+      // Issue 2's native parent is reported as issue 10, the node that
       // is asking. visited seeds with the asking issue's own id specifically
       // to catch this.
       return { status: 200, json: async () => ({ fields: { parent: { id: '10' } } }) };
@@ -481,7 +480,7 @@ test('the starting node itself is protected from a one-hop cycle back to it', as
 // drift_count) and the panel showed a change nobody was allowed to decide.
 //
 // The cause was counting undecided va_drift ROWS. A row is skipped whenever the
-// dedupe key already holds one, and no later pass can recover it — every sweep
+// dedupe key already holds one. Later passes cannot recover it because each sweep
 // skips the same row and recounts the same zero.
 
 test('a field whose drift row is deduped away is still counted as drift', async () => {

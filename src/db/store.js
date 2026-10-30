@@ -2,17 +2,13 @@ import { randomBytes } from 'crypto';
 import { executeQuery, toBinaryParam, fromBinaryColumn, limitClause } from '../lib/db.js';
 
 /**
- * Forge SQL implementation of the audit ledger's store contract
- * (lib/ledger.js's `append` / `verifyChain`), backed by va_audit.
+ * Implement the audit store contract used by lib/ledger.js append/verifyChain
+ * with va_audit. Keep the six methods and semantics aligned with
+ * test/fake-store.js FakeStore.
  *
- * Mirrors test/fake-store.js's FakeStore exactly — same six methods, same
- * semantics — because lib/ledger.js is written entirely against that interface.
- *
- * These methods THROW on failure rather than returning `{ result: false }` like
- * lib/db.js's executeQuery normally does, because lib/ledger.js's `append` is
- * written to catch a thrown duplicate-key error and retry. That is the whole
- * mechanism keeping concurrent appends from forking the chain; swallowing the
- * error here would silently break it.
+ * Throw on failure instead of returning executeQuery's { result: false }.
+ * append catches duplicate-key errors and retries to serialize concurrent
+ * appends. Swallowing those errors would break that concurrency protection.
  */
 
 /** A fresh BINARY(16) id for event_id / baseline_id / decision_id / etc. */
@@ -21,22 +17,14 @@ export function newId() {
 }
 
 /**
- * BINARY(16) ids reach the frontend as base64 strings.
+ * Convert BINARY(16) IDs to base64 before returning them to Custom UI.
+ * A Buffer crosses invoke as { type: 'Buffer', data: [ ... ] }, which cannot
+ * serve as a React key or round-trip ID and renders as "[object Object]".
  *
- * A Buffer does not survive the Custom UI invoke boundary intact — it arrives
- * as `{ type: 'Buffer', data: [ … ] }`, which is unusable as a React key,
- * unusable as a value to send back, and renders as "[object Object]" if anyone
- * puts it on screen. Anything crossing that boundary has to be converted first.
- *
- * LIVES HERE RATHER THAN IN resolvers/admin.js, where it was, because the admin
- * console was not the only place that needed it and being private to that file
- * is how the other places went without. recordFirstApprovalOnly() returned
- * `decisionId` — a raw randomBytes(16) — straight to the transition screen, so
- * a first approval taken there came back with an unusable id in the one field
- * the receipt is built from.
- *
- * Takes a row or a bare Buffer, so a caller with a single id does not have to
- * wrap it in an object to convert it.
+ * This shared helper replaces a private resolvers/admin.js helper that other
+ * callers missed. Previously recordFirstApprovalOnly() returned raw
+ * randomBytes(16) as decisionId, leaving the transition receipt unusable.
+ * Accept either a row or a bare Buffer.
  */
 export function serialiseIds(value) {
   if (Buffer.isBuffer(value)) return value.toString('base64');
@@ -52,8 +40,8 @@ export function serialiseIds(value) {
 /**
  * Forge SQL is MySQL-compatible, so a primary-key collision surfaces the way
  * the mysql2 driver reports it. Falls back to a message match in case the
- * wrapped error doesn't carry a `.code` — better to catch a real duplicate and
- * retry than to mistake it for a fatal error and abort the append.
+ * wrapped error lacks `.code`. This lets append retry a real duplicate instead
+ * of treating it as fatal.
  */
 export function isDuplicateKey(err) {
   const code = err?.code === 'ER_DUP_ENTRY' ? err.code : err?.context?.debug?.code;
@@ -127,7 +115,7 @@ export async function entryHashAt(seq) {
 }
 
 export async function readRange(fromSeq, limit) {
-  // LIMIT is inlined via limitClause, not bound — Forge SQL rejects a
+  // LIMIT is inlined via limitClause, not bound because Forge SQL rejects a
   // placeholder there outright (ER_WRONG_ARGUMENTS). See lib/db.js.
   const rows = await throwing(
     `SELECT ${AUDIT_COLUMNS} FROM va_audit WHERE seq >= ? ORDER BY seq ASC LIMIT ${limitClause(limit)}`,
@@ -156,7 +144,7 @@ export const auditStore = { readTail, insertEntry, entryAt, entryHashAt, readRan
  *
  * Used on paths where the durable fact has ALREADY happened and refusing it
  * because the ledger is slow would turn a bookkeeping problem into a blocked
- * user. Never used where the append is the thing authorising an action — those
+ * user. Never used where the append is the evidence authorizing an action. Those
  * paths use `append` directly and fail closed, per lib/ledger.js.
  */
 export async function tryAppend(event, options) {

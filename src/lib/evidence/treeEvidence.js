@@ -1,15 +1,13 @@
 import { versionEvidence, linkRows, trackedLinks, linkedIssueIds, CAUSE, RULE_SOURCE } from './versionEvidence.js';
 
 /**
- * Each node's security level as Jira gave it, for va_baseline_node
- * (db/evidenceStore.js recordNodeSecurity). Pure.
+ * Record Jira's node security levels for va_baseline_node using
+ * db/evidenceStore.js recordNodeSecurity. This function is pure.
  *
- * ABSENT IS NOT "NO LEVEL". Jira gives `security: null` for a node with no
- * level, and leaves the field out when the app could not see it (tree/jira.js
- * reads it so). An unseen level is recorded as UNKNOWN, which the deleted-node
- * rule (spec §8.1, read from rollout step 4, §9.5) treats as hidden; a level
- * with no readable id is equally unseen. Only a null is no level, and records
- * nothing.
+ * Jira returns security: null for no level and omits security when the app
+ * cannot see it. Omitted levels and levels without a readable id become
+ * UNKNOWN, which the deleted-node rule treats as hidden. Null records nothing.
+ * See spec section 8.1 and rollout step 4, section 9.5.
  */
 export function nodeSecurityLevels(nodes) {
   return (nodes ?? []).flatMap(node => {
@@ -21,15 +19,12 @@ export function nodeSecurityLevels(nodes) {
 }
 
 /**
- * THE EVIDENCE OF EVERY VERSION A TREE CAPTURE WRITES
- * (docs/specs/2026-10-03-baseline-evidence-model-design.md §4, §5.4): the
- * parent's own, and each child's, whose rule is the parent's, inherited from
- * this capture. Written before anything publishes; publication requires it.
- * A retried capture rewrites its children under new ids; evidence left under
- * the old ids names versions that no longer exist and is never read.
+ * Build evidence for the parent's version and every child version before
+ * publication. Child rules are inherited from the parent capture.
+ * A retry creates new child ids, so rewrite evidence for those new versions.
+ * See docs/specs/2026-10-03-baseline-evidence-model-design.md sections 4 and 5.4.
  *
- * Pure but for `activeBaselines`, the one read of the versions the tracked
- * links point at.
+ * activeBaselines is the only read. It resolves versions for tracked links.
  */
 export async function treeCaptureEvidence({ rootIssueId, parentBaselineId, parentVersion, rootDigests, controlledFields,
   children, nodeOf, fieldsFor, ruleScope, cause, policy, approval, transitionAt, signedAt, controlledFieldsHash,

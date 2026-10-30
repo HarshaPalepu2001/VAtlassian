@@ -5,18 +5,16 @@ export function ancestorDriftMessage(found) {
 }
 
 /**
- * Has Forge refused to act as this person because they never granted the app
- * consent? @forge/api's asUser() throws this for anyone who has not clicked
- * "Allow access" — every new user, on every new site. Forge shows its consent
- * screen only when the error leaves the resolver, so a catch-all that turns it
- * into a message strands the person on "no access" with nothing to click.
+ * Recognize Forge's missing-user-consent error from asUser(). Let it leave
+ * the resolver so Forge displays "Allow access". Turning it into an ordinary
+ * error message would leave new users without a consent prompt.
  */
 export function needsUserConsent(error) {
   return error?.name === 'NEEDS_AUTHENTICATION_ERR';
 }
 
 export const DENY = {
-  NO_DECISION: 'This transition needs a reviewer\'s approval first. Open the VAtlassian panel on this work item, review the changes, and choose Approve — then run this transition again.',
+  NO_DECISION: 'This transition needs a reviewer\'s approval first. Open the VAtlassian panel on this work item, review the changes, and choose Approve. Then run this transition again.',
   DECISION_EXPIRED: 'The review decision expired before this transition was performed. Open the VAtlassian panel and approve again.',
   UNDECIDED_DRIFT: 'This work item has changed since it was approved, and those changes have not been reviewed. Open the VAtlassian panel to see what changed and either approve or revert it.',
   ANCESTOR_DRIFT: 'A work item above this one has changed since it was approved, and those changes have not been reviewed. This work item cannot move until they are approved or reverted there.',
@@ -36,11 +34,11 @@ export const DENY = {
   CONTENT_CHANGED: 'This work item changed after approval. Review the current content and approve again.',
   SEGREGATION_VIOLATION: 'The signer is not eligible to authorise this transition.',
   RECORD_LOCKED: 'This record is locked and cannot be transitioned.',
-  RAW_CODE_ON_SCREEN: 'Your authenticator code was typed into an ordinary Jira field, which stores it in this work item\'s history, so this transition was blocked. The electronic signature field is not rendering correctly on this screen — it is most likely the wrong field. Sign from the VAtlassian panel on the work item instead, and report this to your VAtlassian administrator.',
+  RAW_CODE_ON_SCREEN: 'Your authenticator code was typed into an ordinary Jira field, which stores it in this work item\'s history, so this transition was blocked. The electronic signature field is not rendering correctly on this screen. It is most likely the wrong field. Sign from the VAtlassian panel on the work item instead, and report this to your VAtlassian administrator.',
   INSUFFICIENT_ASSURANCE: 'This transition requires stronger approval assurance. Open the VAtlassian panel and approve using the required method.',
   TEST_RUNS_OPEN: 'This test execution cannot be completed while a test run in it is unfinished or a failed run is still waiting for its bug. Open the Test management panel on this execution.',
   CONFIRMATION_REQUIRED: 'Confirm that you reviewed this work item before approving.',
-  NEW_EVIDENCE_REQUIRES_APPROVAL: 'This work item changed after you signed. Review the new changes and decide again — the earlier signature does not cover them.',
+  NEW_EVIDENCE_REQUIRES_APPROVAL: 'This work item changed after you signed. Review the new changes and decide again. The earlier signature does not cover them.',
   NO_SIGNED_CANDIDATE: 'This restore predates candidate capture, so there is no record of what was signed. Review and decide again.',
   WRONG_AUTHENTICATION_METHOD: 'The authentication method you submitted does not match what this transition requires. Use the method configured for this transition.',
   POLICY_CHANGED: 'The approval rule configuration for this transition was modified. Reopen the transition dialog to sign with the current rule.',
@@ -68,11 +66,11 @@ export const DENY = {
   SCHEMA_PENDING: 'VAtlassian is finishing an update, so nothing was changed. Try again in a few minutes.',
 };
 export const DENY_DETAIL = {
-  ITEM_NEVER_OBSERVED: 'No electronic signature has been recorded for this work item, so this transition was blocked. If you just entered a code in this dialog and it did not confirm "Signed as …", the signature field is not collecting it — sign from the Electronic Signature panel on the work item instead.',
-  NO_CANDIDATE_ROW: 'No review decision was recorded for this specific transition, so it was blocked. A decision is created the moment a reviewer selects Approve in the VAtlassian panel — check that the panel confirmed "Approved by …" before you selected the transition.',
-  CANDIDATE_STATE_CONSUMED: 'That approval has already been used. One approval authorises one transition, by design — approve again to perform this one.',
+  ITEM_NEVER_OBSERVED: 'No electronic signature has been recorded for this work item, so this transition was blocked. If you just entered a code in this dialog and it did not confirm "Signed as …", the signature field is not collecting it. Sign from the Electronic Signature panel on the work item instead.',
+  NO_CANDIDATE_ROW: 'No review decision was recorded for this specific transition, so it was blocked. A decision is created the moment a reviewer selects Approve in the VAtlassian panel. Check that the panel confirmed "Approved by …" before you selected the transition.',
+  CANDIDATE_STATE_CONSUMED: 'That approval has already been used. One approval authorises one transition. Approve again to perform this one.',
   CANDIDATE_STATE_VOID: 'The approval for this transition was voided, because the work item changed again after it was approved. Review the new changes and approve again.',
-  TRANSITION_SCREEN_TOKEN_MISMATCH: 'The signature submitted on this screen does not match the one on record for this transition, so it was blocked. The dialog may have been open since an earlier attempt — close it, reopen the transition, and enter a current code.',
+  TRANSITION_SCREEN_TOKEN_MISMATCH: 'The signature submitted on this screen does not match the one on record for this transition, so it was blocked. The dialog may have been open since an earlier attempt. Close it, reopen the transition, and enter a current code.',
   CAS_LOST_RACE: 'Another attempt at this transition used the approval a moment before this one, so this attempt was blocked. Nothing was changed twice. Approve again if the transition still needs to happen.',
   NO_ELIGIBLE_SIGNER: 'This transition requires an electronic signature, but nobody can currently give one: no active signer holds the role it requires. That is a configuration gap in VAtlassian, not a problem with this work item or with anything you entered, and signing again will not clear it. Ask a VAtlassian administrator to grant the required role to at least one person under Approver roles.',
   ITEM_NEVER_BASELINED: 'Baseline has never recorded an approved version of this work item, so there is nothing for it to gate against. If this transition should be gated, ask your Jira administrator to check the Baseline configuration for this project.',

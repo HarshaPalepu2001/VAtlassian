@@ -3,10 +3,9 @@ import crypto from 'crypto';
 import { FailClosed } from '../lib/errors.js';
 
 /**
- * The Jira reads and writes test management needs. Reads that decide what a
- * person may do are made AS THAT PERSON, so Jira's own permissions decide
- * visibility. The automatic bug is created AS THE APP (spec: "Created by the
- * app"), because the signer may not hold Create Issues and the bug must exist.
+ * Use the viewer's Jira permissions for reads that determine their authority
+ * or visibility. Create automatic bugs asApp, as the spec requires, because
+ * the signer may lack Create Issues permission.
  */
 
 const forge = api?.asUser ? api : api.default;

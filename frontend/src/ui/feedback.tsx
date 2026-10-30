@@ -6,11 +6,8 @@ import { assuranceLabel } from '../lib/assurance';
 export function Notice({ children, danger = false }: { children: ReactNode; danger?: boolean }) { return <div role={danger ? 'alert' : 'status'} className={`va-banner va-banner-${danger ? 'danger' : 'info'}`}>{children}</div>; }
 export function AssuranceChip({ level }: { level?: string | null }) { return <Badge tone={level === 'ESIGNATURE' ? 'brand' : 'neutral'}>{assuranceLabel(level)}</Badge>; }
 /**
- * How much attention a change is owed.
- *
- * Sentence case, and "Formatting" rather than "COSMETIC" — the enum is how the
- * backend classifies a change, not how a reviewer would say it out loud. A row
- * of shouted enum names reads as a database dump.
+ * Display materiality in sentence case. Render COSMETIC as "Formatting"
+ * rather than exposing the backend enum.
  */
 const MATERIALITY: Record<string, { tone: 'danger'|'warning'|'brand'|'neutral'; label: string }> = {
   CRITICAL: { tone: 'danger', label: 'Critical' },
@@ -25,12 +22,8 @@ export function MaterialityBadge({ level }: { level?: string }) {
 }
 export function When({ ms }: { ms?: number | string | null }) { return <time>{formatTimestamp(ms == null ? null : Number(ms)) ?? 'Time not recorded'}</time>; }
 /**
- * A disclosure.
- *
- * Deliberately NOT a card. It used to wrap itself in `.va-card`, so every use
- * inside a card produced a border inside a border — the nested-panel look that
- * makes an interface feel assembled rather than designed. It is a rule and a
- * control; the surface it sits on is the caller's business.
+ * A disclosure control without a card border. Callers provide its container
+ * so disclosures inside cards do not create nested borders.
  */
 export function Collapsible({open,onToggle,header,children}: {open:boolean;onToggle:()=>void;header:ReactNode;children:ReactNode}) {
  const id=useId();

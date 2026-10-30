@@ -1,47 +1,27 @@
 /**
- * GATE CHECK — does Jira still enforce what we say is enforced?
+ * Detect missing or misconfigured Jira workflow validators.
  *
- * The compliance argument for this file is in lib/gateDrift.js's header; this
- * one is the I/O around it. In short: if an administrator detaches the sig-gate
- * validator, Jira stops calling us and the edge silently stops being controlled
- * while every surface we own keeps reporting that it is. That is the only
- * silent-permit path in the app, and it is unreachable from gate.js, because
- * gate.js is what was removed. This job is the detection that replaces the
- * enforcement we cannot perform.
+ * If an administrator detaches va-gate, Jira no longer calls the validator.
+ * This scheduled check compares live workflow data with configured controls.
+ * See lib/gateDrift.js for the comparison rules and compliance rationale.
  *
- * ONE PAIR PER CALL. The bulk-get endpoint accepts several project/issue-type
- * pairs at once, but the response carries no mapping from each returned
- * workflow back to the pair that produced it — verified against a live instance
- * on 2026-08-31, where four issue types collapsed into a single unattributed
- * workflow. Sending one pair per call is what makes the attribution sound. The
- * call count is bounded by how many distinct pairs an admin has configured,
- * which is small, and identical pairs are grouped before any request is made.
+ * Read one project/issue-type pair per request. The bulk-get response does not
+ * attribute each workflow to its input pair. A live check on 2026-08-31 returned
+ * one unattributed workflow for four issue types. Group identical pairs before
+ * requesting them to avoid duplicate calls.
  *
- * A FAILED READ IS NOT A CLEAN BILL OF HEALTH. This is the rule the whole job
- * turns on. Findings are cleared by absence — a finding not observed this run
- * is treated as resolved — so a Jira outage that returns nothing would clear
- * every open finding at once and report the instance as healthy. Clearing is
- * therefore scoped to pairs that were READ SUCCESSFULLY this run; a pair whose
- * request failed keeps its findings untouched and is retried next run. An
- * unreachable Jira must leave the record exactly as it was, never improve it.
+ * Clear findings only for pairs read successfully in this run. An outage or
+ * unreadable response must retain existing findings for the next attempt.
+ * Otherwise an empty failed read would incorrectly resolve every finding.
  *
- * BASELINES KEEP A PAIR UNDER WATCH. va-gate does two jobs: it asks for a
- * signature on controlled transitions, and on every transition it holds a
- * baselined work item whose content has drifted. The second job outlives the
- * first. When an admin deletes every controlled transition for a project and
- * issue type, the ACTIVE baselines there are still held on drift, by nothing
- * but the validator. A check that only visits pairs with rows would go silent
- * at exactly that moment, and a validator detached afterwards would never be
- * reported. So the pairs checked are the union of those with ACTIVE controlled
- * transitions and those with ACTIVE baselines (pairsToCheck), and a pair with
- * baselines but no rows is judged for HOLD_ABSENT alone.
+ * Check the union of pairs with ACTIVE controlled transitions and pairs with
+ * ACTIVE baselines. A baseline still needs a drift hold after an administrator
+ * deletes its last controlled-transition row. For pairs with baselines but no
+ * rows, check HOLD_ABSENT only.
  *
- * IT DOES NOT REPAIR ANYTHING. Reattaching a validator means writing to the
- * customer's workflow, which needs a stale-read-safe round trip through their
- * entire workflow definition and, more to the point, an authorization from a
- * named administrator rather than from a vendor's scheduled job. Detection is
- * this job's whole remit; remediation belongs to the admin console, where a
- * person clicks it and the ledger records who.
+ * This job detects problems; it never rewrites customer workflows. Repair
+ * requires an administrator's authorization and an audited, stale-read-safe
+ * update through the admin console.
  */
 import { executeQuery } from '../lib/db.js';
 import { append, EVENT } from '../lib/ledger.js';
@@ -232,9 +212,8 @@ export async function run({ request, appId, tmExecutionPairs: providedTestManage
   const rows = await loadActiveControlledTransitions();
   const baselinePairs = await loadActiveBaselinePairs();
   const tmExecutionPairs = providedTestManagementPairs ?? await loadEnabledTestManagementPairs();
-  // Nothing controlled AND nothing baselined: no workflow has anything for
-  // va-gate to do, so there is nothing to check. Rows alone are not enough to
-  // stop here — baselines still depend on the validator for their drift hold.
+  // Skip only when the pair has neither controlled rows nor baselines.
+  // Baselined items still need the validator's drift hold after rows are deleted.
   if (rows.length === 0 && baselinePairs.length === 0 && tmExecutionPairs.length === 0) {
     const summary = { ok: true, pairs: 0, findings: 0, note: 'no ACTIVE controlled transitions, baselines or enabled test management', ms: 0 };
     console.log('gatecheck:', JSON.stringify(summary));
@@ -253,7 +232,7 @@ export async function run({ request, appId, tmExecutionPairs: providedTestManage
     const workflow = await readWorkflowForPair(group, { request });
     if (!workflow) {
       unreadable += 1;
-      continue; // NOT evaluated — its findings must survive untouched.
+      continue; // Not evaluated. Retain its existing findings.
     }
     let executionFindings = [];
     if (group.testManagementExecution) {
@@ -281,11 +260,9 @@ export async function run({ request, appId, tmExecutionPairs: providedTestManage
     if (!(await upsertFinding(finding, now))) continue;
     if (!knownOpen.has(finding.key)) {
       raised += 1;
-      // Only CRITICAL findings page anyone. GATE_ORPHANED and
-      // GATE_BYPASS_PATH are real and belong in the console, but neither lets
-      // anything through unsigned, and an alert channel that fires on things
-      // nobody must act on tonight stops being read — which would cost us the
-      // two findings that genuinely mean items are crossing unsigned.
+      // Page only for CRITICAL findings. Show GATE_ORPHANED and GATE_BYPASS_PATH in
+      // the console for review without paging; neither directly permits an unsigned
+      // transition here.
       if (finding.severity === SEVERITY.CRITICAL) {
         const alertInput = {
           findingKey: finding.key,

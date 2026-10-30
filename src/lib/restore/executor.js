@@ -12,22 +12,19 @@ import { governedLinks, hydrateLinkPolicyIssue } from '../linkPolicy.js';
 export { OUTCOME, RESTORE_STATE, digestOf, tally };
 
 /**
- * Performing a restore, and proving it worked.
+ * Write planned restore values and verify them with fresh Jira reads.
  *
- * THE GUARANTEE: a field is reported `succeeded` only after the issue has been
- * read back and that field has been confirmed to match the baseline. Not
- * because the PUT returned 204 — a 204 means Jira accepted the request, which
- * is not the same as the field now holding the value we sent. Fields get
- * silently coerced, screens drop values they do not carry, and workflow
- * post-functions overwrite things a moment later.
+ * Report a field as succeeded only after read-back confirms it matches the
+ * baseline. A 204 response means Jira accepted the request, not that the field
+ * retained the supplied value. Jira may coerce values, omit fields absent from
+ * a screen or overwrite them through workflow post-functions.
  *
- * An app whose headline promise is "one click puts it back exactly" cannot
- * report a success it has not confirmed. A partial restore that reports itself
- * complete is worse than one that fails loudly, because nobody goes looking.
+ * Unverified writes must not count toward a complete restore.
  */
 
 /**
- * Execute a plan.
+ * Execute a restore plan and record every field outcome. Jira failures
+ * return outcomes rather than escaping as exceptions.
  *
  * @param api          @forge/api
  * @param plan         from planner.js
@@ -36,15 +33,9 @@ export { OUTCOME, RESTORE_STATE, digestOf, tally };
  * @param actAs        'app' | 'user'
  * @param notifyUsers
  * @param perFieldRetries
- * @param actorAccountId, approvalId  the signed rejection, for the audit
- *                     entries an attachment restore writes
- * @param attachmentDeps  I/O for ./attachments.js; built from `api` if absent
- *
+ * @param actorAccountId, approvalId  signed rejection for attachment audit entries
+ * @param attachmentDeps  I/O for attachments.js, built from api if absent
  * @returns { state, counters, detail }
- *
- * NEVER THROWS on a Jira failure. Every field's outcome is captured and
- * reported; an exception escaping here would leave a half-rewritten issue with
- * no record of which half.
  */
 export async function executeRestore({
   api,
@@ -83,14 +74,9 @@ export async function executeRestore({
   const writes = { ...plan.fieldWrites };
   let writeIds = Object.keys(writes);
 
-  // ── Declare our own writes BEFORE making them ─────────────────────────────
-  //
-  // A restore produces a changelog entry and an avi:jira:updated:issue event
-  // exactly like a human edit. Without this, the drift collector would record
-  // the restoration as fresh drift and leave the item DRIFTED immediately after
-  // being restored — with the reviewer's own reversion sitting in their queue.
-  // A loop, and an embarrassing one. Declared first so the window opens before
-  // the event can possibly fire.
+  // Declare restore writes before issuing them. Their Jira changelog and
+  // issue-update events otherwise look like user edits, causing the collector
+  // to report the restored values as fresh drift.
   const declare = async (ids, valueOf) => {
     const CONCURRENCY_LIMIT = 5;
     for (let i = 0; i < ids.length; i += CONCURRENCY_LIMIT) {
@@ -115,14 +101,9 @@ export async function executeRestore({
   const client = actAs === 'user' ? api.asUser() : api.asApp();
   const write = { notifyUsers, override: actAs !== 'user' };
 
-  // ── Phase 0: files, before any rich text ──────────────────────────────────
-  //
-  // A description that shows a file can only be written while Jira has that
-  // file. So removed files are uploaded again first, and then every rich-text
-  // value about to be written points at the files that are there: unchanged
-  // where the original survives (byte for byte), the restored copy where it
-  // did not. The digests declared above are of the approved values, which is
-  // what a canonical read of the result compares against.
+  // Restore removed files before writing rich text. Repoint descriptions to
+  // live copies while preserving surviving original pointers. The declared
+  // digests remain those of approved values, matching canonical read-back.
   const attachments = async () => attachmentDeps
     ?? (await import('./attachmentAdapters.js')).createAttachmentRestoreDeps({ api, route, actorAccountId, approvalId });
   const fileStep = plan.steps.find((s) => s.strategy === 'attachments');
@@ -209,13 +190,8 @@ export async function executeRestore({
     }
   }
 
-  // ── Phase 2: per-field retry ──────────────────────────────────────────────
-  //
-  // Jira's 400 body maps errors to the fields that caused them, so the fields
-  // it did NOT complain about are probably fine and worth retrying
-  // individually. One bad value must not sink thirteen good ones — that is the
-  // difference between "one field could not be restored" and "the restore
-  // failed", and a reviewer deserves the first answer when it is the true one.
+  // Jira's 400 response identifies invalid fields. Retry the other fields
+  // individually so one refused value does not prevent unrelated restores.
   if (bulkErrors) {
     const badIds = Object.keys(bulkErrors);
     const goodIds = writeIds.filter(id => !badIds.includes(id));
@@ -273,21 +249,12 @@ export async function executeRestore({
 }
 
 /**
- * PUT, with the error body parsed.
+ * Return the PUT result and Jira's field errors without throwing so callers
+ * can record per-field outcomes.
  *
- * Returns a plain result rather than throwing so the caller can record an
- * outcome per field. Jira's per-field `errors` map is the useful part — "Labels
- * is not on the appropriate screen" tells an admin exactly what to fix;
- * "restore failed" tells them nothing.
- *
- * THE OVERRIDE IS WHY A 100-FIELD BASELINE CAN ACTUALLY REVERT. The tracked set
- * is every field the administrator declared (see lib/trackedFields.js), and a
- * declared field is not necessarily on this issue type's edit screen. Without
- * overrideScreenSecurity those fields are baselined, diffed and shown to the
- * reviewer — and then silently refused at the one moment the reviewer asked for
- * them back. Both parameters require Jira administrator permission, so they are
- * sent ONLY on the app-attributed path; asUser() would take a 403 for a
- * reviewer who is not an admin, which is worse than not asking.
+ * On app-attributed writes, use overrideScreenSecurity for declared fields
+ * missing from the edit screen. These parameters require Jira administrator
+ * permission, so never send them through asUser for ordinary reviewers.
  */
 async function put(client, issueKey, { notifyUsers, override }, body) {
   let res;
@@ -330,11 +297,8 @@ async function put(client, issueKey, { notifyUsers, override }, body) {
 }
 
 /**
- * Fields that are not field writes.
- *
- * Each of these is a genuinely different API and each is genuinely partial —
- * which is why the planner marks them SPECIAL and the dialog says so, rather
- * than letting a reviewer believe issue links restore as cleanly as a summary.
+ * Use dedicated APIs for SPECIAL fields. Report partial support in preflight
+ * rather than treating them as ordinary field writes.
  */
 async function runHandler(client, { strategy, issueKey, issueId, step, write, attachments, approvedLinksOf = null, linkPolicy = null }) {
   switch (strategy) {
@@ -366,11 +330,8 @@ async function runHandler(client, { strategy, issueKey, issueId, step, write, at
       return restoreLinks(client, issueKey, step.targetValue, { issueId, approvedLinksOf, linkPolicy });
 
     case 'transition':
-      // Status is restored by moving the item, not by writing a field, and the
-      // decision path already handles transitions properly — with the right
-      // transition id, the required-field plan and the reviewer's own
-      // permissions. Doing it here as well would be a second, worse
-      // implementation of something that already exists.
+      // The decision path handles status changes using the exact transition id,
+      // required-field plan and reviewer's permissions. Do not duplicate that here.
       return {
         ok: false,
         skipped: true,

@@ -4,24 +4,21 @@ import assert from 'node:assert/strict';
 import { resolveActions, tierFor, BLOCKER } from '../src/lib/journey.js';
 
 /**
- * THE RULES THAT DECIDE WHAT A SIGNER IS SHOWN.
+ * Transition scope shown to the signer.
  *
- * Every case below is drawn from the configuration that produced a real
- * failure on a live instance, not from an invented example — the two Bug rules
- * in project "Jira ALM features":
+ * The cases reproduce a live failure in project "Jira ALM features" with
+ * two Bug rules:
  *
  *   A. In-Review -> Selected for Development, ESIGNATURE, signed by SDE-1
  *   B. Any status -> Done,                    BIOMETRIC,  signed by SDE-1
  *
- * Standing at In-Review, Jira offers both edges and the same person holds the
- * role on both. That is what made the original bug so hard to see: nothing was
- * unauthorised. The Electronic Signature field, mounted on the "Create
- * Baseline" screen, offered rule B and told the signer "Signing this moves
- * VJIRA-7 to Done" — a true sentence about the wrong transition, shown inside
- * the right dialog.
+ * Jira offered both transitions from In-Review, and the signer held the role
+ * on both. The Electronic Signature field on the "Create Baseline" screen
+ * offered rule B and displayed "Signing this moves VJIRA-7 to Done" while
+ * the dialog concerned the other transition.
  *
- * So the assertions that matter here are not about authority. They are about
- * whether the thing being signed is the thing the signer is looking at.
+ * These tests check that the signed transition matches the one shown to
+ * the signer, even when both transitions are authorized.
  */
 
 const DONE = '10001';

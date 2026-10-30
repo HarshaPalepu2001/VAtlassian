@@ -1,39 +1,22 @@
 /**
- * DIRECTORY RECONCILIATION — taking away what someone should no longer have.
+ * Revoke signer eligibility after confirmed account deactivation.
  *
- * 21 CFR 11.300(b) asks that identification code issuances be "periodically
- * checked, recalled, or revised". Two halves: checking that a credential still
- * works, which is lib/deviceCheck.js, and recalling one that should no longer
- * exist, which is this.
+ * 21 CFR 11.300(b) calls for periodic checks, recall or revision of identification
+ * code issuances. lib/deviceCheck.js checks authenticator use; this module
+ * checks whether an account should retain signing authority.
  *
- * THE GAP THIS CLOSES. Revoking eligibility by hand already takes effect
- * instantly — resolvers/panel.js checks va_eligibility live before creating a
- * signature, and gate.js re-checks it again before consuming one, so a revoked
- * signer cannot sign and cannot even complete a transition on a signature they
- * made minutes earlier. What nothing did was notice that a person had left. An
- * employee whose Atlassian account is deactivated on their last day keeps an
- * ACTIVE va_eligibility row indefinitely, because deactivation happens in
- * Atlassian's directory and this app was never looking at it.
+ * Manual revocation already takes effect at signing and again at signature
+ * consumption through live va_eligibility reads in resolvers/panel.js and
+ * gate.js. Directory reconciliation also removes ACTIVE eligibility rows after
+ * an Atlassian account is deactivated. Without it, the console and historical
+ * authority records could continue to list a former employee as authorized.
  *
- * In practice their session dies with the account, so this is not an open door
- * so much as a lie in the record: the console goes on listing them as an
- * authorised signer, and "who was authorised to sign in March" — the question
- * an auditor actually asks — gets the wrong answer forever.
+ * Revoke only after an explicit inactive-account response. A missing account,
+ * partial bulk response, rate limit or directory error does not prove
+ * inactivity. Refusing a signature on uncertain evidence is safe; revoking
+ * someone's authority on uncertain evidence would change their access.
  *
- * NEVER REVOKE ON SILENCE. The rule that shapes everything here. Revocation is
- * destructive and, for a signer mid-approval, disruptive. The directory can be
- * unreachable, rate-limited, or partial; an account id can be missing from a
- * bulk response for reasons that have nothing to do with the person. So this
- * revokes ONLY on a positive statement that the account is inactive. Missing is
- * not inactive. An error is not inactive. An empty response is not everyone
- * having left the company.
- *
- * That is the opposite of the fail-closed posture everywhere else in this
- * codebase, and deliberately so: failing closed means refusing an action, which
- * is safe. Revoking on incomplete information means TAKING an action on the
- * strength of something we did not confirm.
- *
- * PURE. Policy here; jobs/reconcile.js does the I/O.
+ * This module contains pure policy functions; jobs/reconcile.js performs the I/O.
  */
 
 export const REVOCATION_REASON = {
@@ -77,12 +60,9 @@ export function revocations(rows, directory, { lookupFailed = false } = {}) {
 }
 
 /**
- * Account ids that the directory could not account for.
- *
- * Reported rather than acted on: an eligibility row for an account Jira has
- * never heard of is worth an administrator's attention — a deleted user, a
- * mistyped id, a row that outlived a site migration — but it is not something
- * to resolve by guessing.
+ * Report account IDs the directory did not return, without changing access.
+ * An administrator may need to investigate a deleted user, mistyped ID or
+ * post-migration row. Missing data does not justify automatic revocation.
  */
 export function unresolved(rows, directory) {
   if (!directory) return [];

@@ -716,7 +716,7 @@ export const MIGRATIONS = [
   // backfill otherwise retried a refused grant every hour for ever; with this
   // it asks again once a day (db/vaultStore.js projectsNeedingVault).
   { id: 'v070_vault_space_app_delete_check', sql: `ALTER TABLE va_vault_space ADD COLUMN app_delete_checked_at BIGINT NULL` },
-  // THE VAULT HAS TWO HOMES. A site with Confluence keeps copies in its private
+  // The vault supports two storage locations. A site with Confluence keeps copies in its private
   // vault space; a Jira-only site keeps them in the Forge Object Store
   // (lib/vaultTier.js). A copy records where it went, so a restore reads it
   // back from there: `storage` is CONFLUENCE or OBJECT_STORE, and an Object
@@ -826,7 +826,7 @@ export const MIGRATIONS = [
   )` },
   { id: 'v086_security_level', sql: `ALTER TABLE va_baseline_node ADD COLUMN security_level_id VARCHAR(64) NULL` },
   { id: 'v087_baseline_cause', sql: `ALTER TABLE va_baseline ADD COLUMN cause VARCHAR(32) NULL` },
-  // ── THE BASELINE EVIDENCE MODEL (docs/specs/2026-10-03-baseline-evidence-model-design.md §4, §9.1) ──
+  // Baseline evidence model (docs/specs/2026-10-03-baseline-evidence-model-design.md §4, §9.1).
   // v075–v087 were an early draft of these tables and may already have run on a
   // site. Nothing ever wrote to the draft tables, so they are replaced, not
   // altered: dropped, then created in the spec's shape. Never edit v075–v087.

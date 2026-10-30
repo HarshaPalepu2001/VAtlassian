@@ -1,52 +1,43 @@
 /**
- * ALERTS — turning a detected security event into something a person is told.
+ * Security-alert rendering and deduplication.
  *
- * 21 CFR 11.300(d) asks for two things and this app only did the first: safeguards
- * to prevent unauthorized use, AND to "detect and report in an immediate and
- * urgent manner any attempts at their unauthorized use". A lockout written to
- * va_audit is detection. Nobody is reading va_audit at 2am, so on its own it is
- * not reporting, and certainly not urgent reporting.
+ * 21 CFR 11.300(d) calls for detecting and reporting attempts at unauthorized
+ * use. A lockout in va_audit records detection; delivery also needs to notify
+ * someone. db/alertStore.js persists the outbox and jobs/alerts.js delivers it.
  *
- * WHY JIRA IS THE CHANNEL, AND NOT A WEBHOOK. The obvious answer is an outbound
- * call to Slack, PagerDuty or an email relay. Forge makes that a bad trade:
- * egress domains must be declared statically in the manifest, so a
- * customer-supplied webhook URL needs either a wildcard or customer-managed
- * egress — and per the permissions reference, declaring external egress at all
- * "may make your app ineligible for Runs on Atlassian", while
- * `external.configurable.enabled` is immutable once deployed to production.
- * Trading that away for a notification we can get for free is a poor bargain
- * for an app whose entire pitch is trustworthiness.
+ * Alerts become Jira work items using the existing write:jira-work scope.
+ * The customer's Jira notification scheme handles email, push and escalation.
+ * The work item records its assignee, status, discussion and resolution.
+ * An external webhook would require declared egress and could affect Runs on
+ * Atlassian eligibility. external.configurable.enabled cannot change after
+ * production deployment.
  *
- * Raising a Jira work item instead costs no new scope (write:jira-work is
- * already granted), and hands the actual notifying to the customer's own
- * notification scheme — the email, mobile push and escalation paths they have
- * already validated and already read. It also gives the alert somewhere to
- * live: an assignee, a status, a comment thread, a resolution. A Slack message
- * is a notification; a work item is a record that someone responded.
+ * Alert projects have ordinary Jira permissions. Include only account IDs,
+ * timestamps and counts, never codes, secrets or fragments of either. Apply
+ * the same redaction rule as gate.js's rawCodeSubmitted().
  *
- * REDACTION. Nothing here may carry a code, a secret, or any part of one. An
- * alert is delivered into an ordinary Jira project with ordinary permissions,
- * so it must be readable by whoever runs security without disclosing anything
- * that would help them impersonate the signer. Account IDs, timestamps and
- * counts only. This is the same rule as gate.js's rawCodeSubmitted(): a
- * credential that lands in another system's record is a Part 11 problem, and
- * an alert is another system's record.
- *
- * PURE. Rendering and dedupe live here so they can be tested without Jira or a
- * database; db/alertStore.js persists, jobs/alerts.js delivers.
+ * These functions do no I/O and can be tested without Jira or a database.
  */
 
 export const ALERT_KIND = {
-  /** MAX_FAILED_ATTEMPTS wrong codes against one credential — 11.300(d)'s
-   *  "attempts at unauthorized use", which is the clause's own language. */
+  /**
+ * MAX_FAILED_ATTEMPTS incorrect codes against one credential, reported under
+ * 11.300(d)'s "attempts at unauthorized use".
+ */
   CREDENTIAL_LOCKED: 'CREDENTIAL_LOCKED',
-  /** The audit chain failed verification — 11.10(e). */
+  /**
+ * Audit-chain verification failed under 11.10(e).
+ */
   CHAIN_BROKEN: 'CHAIN_BROKEN',
-  /** A controlled transition is running without our validator — 11.10(f).
-   *  Items are crossing unsigned right now. */
+  /**
+ * A controlled transition lacks its validator and can complete without a
+ * signature. This finding concerns the control described by 11.10(f).
+ */
   GATE_UNENFORCED: 'GATE_UNENFORCED',
-  /** A transition does not carry our validator, so it does not hold a work
-   *  item with unreviewed changes — it can change status across it right now. */
+  /**
+ * A transition lacks the validator that holds work items with unreviewed
+ * changes, so those items can currently change status through it.
+ */
   DRIFT_HOLD_ABSENT: 'DRIFT_HOLD_ABSENT'
 };
 
@@ -72,10 +63,11 @@ const SEVERITY_OF = {
   [ALERT_KIND.DRIFT_HOLD_ABSENT]: ALERT_SEVERITY.CRITICAL
 };
 
-/** Anything matching this must never reach an alert body. Six or more digits in
- *  a row is a TOTP code or a fragment of one; there is no legitimate reason for
- *  one to appear in a notification. Applied as a last line of defence over the
- *  rendered text, not as the only one — callers still pass structured values. */
+/**
+ * Reject code-like text from alert bodies. Six or more consecutive digits
+ * could expose a TOTP code or fragment. Check rendered text as well as requiring
+ * callers to supply structured, redacted values.
+ */
 const CODE_LIKE = /\b\d{6,}\b/g;
 
 export function redact(text) {
@@ -124,17 +116,16 @@ export function chainBrokenAlert({ brokenAt, reason, checked, occurredAt }) {
       `Reason: ${reason}`,
       `Entries verified before the failure: ${checked}`,
       'The audit trail is hash-chained, so this means an entry does not match the hash recorded for it, an entry is missing, or the sequence is not contiguous.',
-      'Do not modify the audit trail. Preserve it as it stands and follow your data integrity procedure — the state of the record is itself evidence.'
+      'Do not modify the audit trail. Preserve it as it stands and follow your data integrity procedure. The current record is evidence.'
     ]
   });
 }
 
 /**
- * Build the alert for a controlled transition running without its gate.
+ * Build an alert for a controlled transition running without its gate.
  *
- * Deduped on the finding key from lib/gateDrift.js, which is stable across runs
- * — so an unenforced edge raises exactly one work item however many hourly
- * passes observe it, and that work item's age is how long the lapse has run.
+ * The stable finding key from lib/gateDrift.js deduplicates repeated checks
+ * into one work item. Its age records how long the lapse has been observed.
  */
 export function gateUnenforcedAlert({ findingKey, findingType, detail, projectKey, occurredAt }) {
   const where = projectKey ? ` in ${projectKey}` : '';
@@ -187,9 +178,10 @@ function build({ kind, dedupeKey, title, lines, occurredAt }) {
   };
 }
 
-/** Minimal ADF document — one paragraph per line. Deliberately not built from
- *  lib/adf.js, which converts ADF to text for display and must not grow a
- *  second, opposite responsibility. */
+/**
+ * Build a minimal ADF document with one paragraph per line. Keep it separate
+ * from lib/adf.js, which converts ADF to display text.
+ */
 export function toAdf(lines) {
   return {
     version: 1,

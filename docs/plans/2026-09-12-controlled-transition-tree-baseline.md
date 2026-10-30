@@ -1,14 +1,14 @@
-# Controlled Transition and Recursive Tree Baseline Implementation Plan
+# Controlled transition and recursive tree baseline implementation plan
 
-**Goal:** Route every controlled transition to its exact configured authentication provider and make baseline, drift, rejection, and read-back verification operate over the root issue's complete native Jira descendant tree.
+**Goal.** Route every controlled transition to its exact configured authentication provider and make baseline, drift, rejection, and read-back verification operate over the root issue's complete native Jira descendant tree.
 
-**Architecture:** Keep the existing `va_approval` lifecycle and provider registry, but bind every call to Jira's exact transition id and require the configured provider rather than inferring one from client payload. Extend the root baseline into a versioned aggregate with node/value rows, use one stable Jira tree reader for capture, drift, and verification, and journal destructive restore steps so retries are idempotent.
+**Architecture.** Keep the existing `va_approval` lifecycle and provider registry, but bind every call to Jira's exact transition id and require the configured provider rather than inferring one from client payload. Extend the root baseline into a versioned aggregate with node/value rows, use one stable Jira tree reader for capture, drift, and verification, and journal destructive restore steps so retries are idempotent.
 
-**Tech Stack:** Atlassian Forge Node.js 22, Jira Cloud REST API v3, Forge SQL/MySQL, React 18, Atlaskit, UI Kit, SimpleWebAuthn, Node test runner, TypeScript, Vite.
+**Technology.** Atlassian Forge Node.js 22, Jira Cloud REST API v3, Forge SQL/MySQL, React 18, Atlaskit, UI Kit, SimpleWebAuthn, Node test runner, TypeScript, Vite.
 
 **Spec:** `docs/specs/2026-09-12-controlled-transition-tree-baseline-design.md`
 
-## Global Constraints
+## Global constraints
 
 - Preserve the existing dirty worktree. Inspect each target file before editing and stage only task-owned hunks; never sweep unrelated files into a commit.
 - Do not add AI, co-author, or generated-with attribution to commits.

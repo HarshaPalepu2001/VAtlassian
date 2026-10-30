@@ -1,16 +1,13 @@
 /**
- * THE REQUIREMENTS BLUEPRINT, AS DATA.
+ * Define the names and configuration created by Requirements setup.
  *
- * Everything the setup creates is named here. Every Jira object the setup
- * creates carries PLAN.prefix in its name ("REQ: ...") so it is recognisable on
- * the admin screens and never confused with an existing site object. Work-type,
- * status, field and link-type names are the user-facing names and carry no
- * prefix.
+ * Setup-owned configuration objects use PLAN.prefix, "REQ: ...", to identify
+ * them on admin screens. User-facing work-type, status, field and link-type
+ * names have no prefix.
  *
- * Statuses, fields and link types that ALREADY EXIST on the site with the same
- * name are REUSED by reference, never modified. The only thing setup ever
- * changes on an existing object is nothing: new schemes are attached to a new
- * project, and no shared/default scheme is touched.
+ * Reuse existing same-named statuses, fields and link types by reference without
+ * modifying them. Attach new schemes only to a new project; leave shared and
+ * default schemes unchanged.
  */
 
 export const PLAN = {
@@ -86,10 +83,10 @@ export const PLAN = {
     sourceDocument: { create: 'VAtlassian Source Document Create', edit: 'VAtlassian Source Document Edit', view: 'VAtlassian Source Document View', scheme: 'VAtlassian Source Document Screen Scheme' }
   },
 
-  // statusCategory uses the Jira workflows API vocabulary: TODO | IN_PROGRESS | DONE.
-  // `editable: false` sets jira.issue.editable=false on that status in this
-  // workflow only — the Jira-native half of "Baselined and Released are not
-  // editable"; VAtlassian's drift hold is the other half.
+  // statusCategory uses the workflow API values TODO, IN_PROGRESS and DONE.
+  // editable: false sets jira.issue.editable=false for this status in this workflow.
+  // That Jira setting and VAtlassian's drift hold enforce the Baselined/Released
+  // editing policy together.
   statuses: [
     { key: 'draft', name: 'Draft', statusCategory: 'TODO', editable: true },
     { key: 'review', name: 'In Review', statusCategory: 'IN_PROGRESS', editable: false },
@@ -119,8 +116,8 @@ export const PLAN = {
     { key: 'verification', name: 'Verification Method', kind: 'multicheckbox', options: ['Test', 'Analysis', 'Inspection', 'Demonstration'], requireBeforeReview: true,
       description: 'How the requirement will be verified.' },
     { key: 'classification', name: 'Safety / Regulatory Classification', kind: 'select',
-      // PLACEHOLDER VOCABULARY — the blueprint says "project-controlled"; the
-      // project administrator replaces these in the field context.
+      // The blueprint requires project-specific values. The project administrator
+      // replaces these placeholders in the field context.
       options: ['Not classified', 'Safety-related', 'Regulatory', 'Safety-related and regulatory'],
       description: 'Project-controlled safety / regulatory classification. Set before review when applicable.' },
     { key: 'obsolescence', name: 'Obsolescence Rationale', kind: 'textarea',
@@ -157,9 +154,9 @@ export const PLAN = {
     { name: 'Reject', from: ['review'], to: 'rejected', screen: 'rework' },
     { name: 'Resubmit for review', from: ['rework'], to: 'review', requireBeforeReview: true },
     { name: 'Release', from: ['baselined'], to: 'released' },
-    // The CCB check (linked Change Request is approved) is a VAtlassian gap —
-    // see docs/plans. Until it ships, this transition is a VAtlassian-controlled
-    // transition requiring a signature, and the screen asks for the link.
+    // The linked Change Request approval check is not implemented; see docs/plans.
+    // This transition currently requires a VAtlassian signature and the screen asks
+    // for the Change Request link.
     { name: 'Authorize revision', from: ['baselined', 'released'], to: 'revision', screen: 'revision', controlled: { role: 'APPROVER', captureBaseline: false } },
     { name: 'Submit revision for review', from: ['revision'], to: 'review', requireBeforeReview: true },
     { name: 'Retire', from: ['baselined', 'released'], to: 'obsolete', screen: 'retire', requireFields: ['obsolescence'] }

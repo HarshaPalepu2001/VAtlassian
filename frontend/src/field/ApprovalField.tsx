@@ -1,27 +1,18 @@
 /**
- * THE TRANSITION-SCREEN SIGNING FORM — the one form behind the Electronic
- * signature field.
+ * The Electronic signature field uses the same signing form for both fields
+ * in manifest.yml. It shows meaning, signer and credential. Custom UI provides
+ * navigator.credentials for device checks, which UI Kit lacks.
  *
- * It looks and reads like the signing sheet on the issue panel: what the
- * signature means, who is signing, then the credential — an authenticator
- * code, or a device check that opens its own small window. Both fields
- * registered in manifest.yml mount this same form, so a signer meets one
- * signing step whatever an administrator put on the screen. It is Custom UI
- * because a device check needs `navigator.credentials`, which UI Kit lacks.
+ * Jira supplies the exact transition in context.extension.issueTransition.id.
+ * The server resolves its rule and returns read-only facts. A missing id,
+ * multiple matching rules or a rule for any other transition fails closed,
+ * even if that transition reaches the same status.
  *
- * ONE EXACT ACTION, NEVER A CHOICE. Jira has already chosen the transition:
- * `context.extension.issueTransition.id`. The server resolves the rule for
- * that id, and this screen shows it as read-only facts. A missing id, more
- * than one matching rule, or a rule for any other transition — including a
- * sibling that reaches the same status — fails closed.
- *
- * THE SUBMITTED VALUE CARRIES NO AUTHORITY. It is a receipt. The approval is
- * recorded server-side first, and src/gate.js finds the row by scanning the
- * modified fields for its 32-hex id — a forged field value has no matching
- * PENDING row and the transition is denied. Never submit the raw code as the
- * field value: gate.js's rawCodeSubmitted() treats a 6-digit value as an
- * authenticator code leaking into the work item's change history and refuses
- * the transition outright.
+ * The submitted field value is a receipt, not authorization. The server first
+ * records the approval. src/gate.js scans modified fields for its 32-hex id.
+ * A forged value has no matching PENDING row and the gate denies it.
+ * Never submit the raw code. rawCodeSubmitted() refuses 6-digit field values
+ * to prevent authenticator codes entering the work item's change history.
  */
 import { useEffect, useRef, useState } from 'react';
 import { invoke } from '../lib/bridge';
@@ -185,7 +176,7 @@ export default function ApprovalField({ context }: { context?: { extension?: { i
         ...(webauthn ? { webauthn } : {})
       }));
       setSigned(result.approvalId);
-      setMessage(`Signed as ${result.printedName ?? signerName ?? 'you'} — ${result.meaning ?? challenge.meaning}`);
+      setMessage(`Signed as ${result.printedName ?? signerName ?? 'you'}. ${result.meaning ?? challenge.meaning}`);
       // Submitted as soon as it exists as well as on the dialog's own submit:
       // the blur that carries the value is the same click that presses the
       // transition button, and an async round trip inside it races Jira.

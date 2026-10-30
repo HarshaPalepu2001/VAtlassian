@@ -8,8 +8,8 @@ import { normaliseLinkPolicy, serialiseLinkPolicy } from '../lib/linkPolicy.js';
 export async function beginTreeBaseline({ baseline, resume = null, query = store.throwing }) {
   if (resume) {
     if (resume.state !== 'CAPTURING') throw new FailClosed('CAPTURE_INCOMPLETE');
-    // writeTreeCapture's inserts use `ON DUPLICATE KEY UPDATE chunk = chunk` —
-    // a no-op, so it stays idempotent for a byte-identical replay of the same
+    // writeTreeCapture's inserts use `ON DUPLICATE KEY UPDATE chunk = chunk`.
+    // This no-op keeps a byte-identical replay idempotent for the same
     // row. A resumed capture instead replays from a fresh tree read, which can
     // legitimately differ from what an earlier, crashed attempt already wrote
     // (a field's chunk count shrank, a node dropped out). Clearing this
@@ -219,7 +219,7 @@ export async function publishTreeBaseline({ baselineId, issueId, version, requir
 }
 
 /**
- * The ROOT node's field digests for one tree baseline — the tree's
+ * The root node's field digests for one tree baseline are the tree's
  * equivalent of va_baseline.field_digests, which a tree baseline leaves as
  * '{}'. One indexed row, no values: panel:getSummary may call this, where
  * readBaselineTree (which decodes every retained value) is off limits.
@@ -290,28 +290,15 @@ export async function readBaselineTree(baselineId, query = store.throwing) {
 }
 
 /**
- * Every active baseline that covers this work item, with the provenance of the
- * approval that created it.
+ * Return every active baseline covering this work item and the approval that
+ * created it. A tree baseline binds one signature to the hash of every node;
+ * that aggregate hash defines the approved scope and reveals changes to it.
  *
- * ─── WHY THE PROVENANCE IS PART OF THE ANSWER ────────────────────────────────
- *
- * A tree baseline is ONE approval over a composite record: a single signature,
- * bound to a tree hash computed over every node. That is a sound model — it is
- * how a validation package or a batch record is approved, and it is stronger
- * than N independent signatures because the aggregate hash makes the scope
- * unambiguous and tamper-evident.
- *
- * It carries an obligation, though, and the app was not meeting it. An auditor
- * looking at a CHILD work item asks "who approved this, when, and to what
- * standard?" — and every surface answered "no baseline", because va_baseline
- * has a row for the root only. The signature covered the child; nothing could
- * show that it did. An approval nobody can trace from the record it governs is
- * an audit finding whatever the hash says.
- *
- * So this returns the approver, the moment, the assurance level and the version
- * along with the root, and panelAccess.snapshot() attaches it to any item that
- * has no baseline of its own. Children are not separately signed — they are
- * demonstrably covered, which is the thing that was missing.
+ * va_baseline stores a row for the root only. Previously, a child without its
+ * own baseline appeared unbaselined even though the tree signature covered it.
+ * Return the approver, time, assurance level and version with the root so
+ * panelAccess.snapshot() can show that coverage. Children remain covered by
+ * the tree approval rather than receiving separate signatures.
  */
 export async function activeRootsForNode(issueId, query = store.throwing) {
   const rows = await query(
@@ -355,7 +342,7 @@ export async function activeRootsForNode(issueId, query = store.throwing) {
 }
 
 /**
- * How many descendants of this tree baseline are DRIFTED in their own right —
+ * How many descendants of this tree baseline are DRIFTED under their own baselines,
  * children that carry a baseline of their own (db/childBaselineStore.js) and
  * whose content no longer matches it. A parent decision covers them, so the
  * parent's panel offers one while any is waiting. One indexed read, no values:
@@ -372,12 +359,13 @@ export async function driftedDescendants(baselineId, query = store.throwing) {
 }
 
 /**
- * DRIFT BELOW A WORK ITEM THAT IS NOT A TREE ROOT ITSELF. A child captured by
- * its parent has a field-level baseline, so driftedDescendants (counted over a
- * tree baseline's own nodes) never reaches the items under it. Its subtree is
- * the slice of the parent's signed tree under its node — the same slice its
- * review and restore use (lib/tree/scopedBaseline.js) — so the flag climbs to
- * every ancestor, not only the root. Counted over the CURRENT item state.
+ * Count drift below a work item that is not itself a tree root.
+ *
+ * A child captured by its parent has a field-level baseline. driftedDescendants
+ * counts a tree baseline's own nodes, so it cannot find descendants under that
+ * child. Use the subtree below its node in the parent's signed tree, matching
+ * review and restore in lib/tree/scopedBaseline.js. This propagates drift to
+ * every ancestor, including intermediate children. Count current item states.
  */
 export async function driftedDescendantsOfNode(parentBaselineId, issueId, query = store.throwing) {
   const nodes = await query(

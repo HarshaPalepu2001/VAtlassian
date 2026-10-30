@@ -1,4 +1,4 @@
-# Test management UI cleanup — local verification
+# Test management UI cleanup and local verification
 
 Implemented 25 October 2026. This record covers local UI verification, not deployment or live Jira acceptance.
 

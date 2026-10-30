@@ -1,9 +1,9 @@
 /**
- * Outstanding drift always holds a work item still.
+ * Outstanding drift blocks workflow transitions.
  *
- * There is no per-rule switch: drift is a compliance state of the item, not an
- * option on an edge. The validator fails CLOSED — a drift count it cannot read
- * blocks the move, and so does any count above zero, whatever the rule says.
+ * Drift is an item compliance state with no per-rule switch. The validator
+ * fails closed when it cannot read the drift count or when the count is
+ * above zero, regardless of the rule's settings.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -154,7 +154,7 @@ test('a baselined item whose controlled transition was later deleted is still he
   // The baseline was captured on a controlled transition; the admin has since
   // deleted that row. The signature half has nothing left to ask for, but the
   // baseline still stands, so its drift still holds the item on every
-  // transition the validator sits on — and releases it once decided.
+  // transition with the validator attached. Deciding the drift releases it.
   const held = await gateFixture({ driftCount: 2, ct: null, pendingRow: null });
   const refused = await held.gate(held.payload);
   assert.equal(refused.result, false);

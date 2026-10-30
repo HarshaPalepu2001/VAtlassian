@@ -1,4 +1,4 @@
-# API speed claims audit — 28 October 2026
+# API speed claims audit. 28 October 2026
 
 **The API work contains real reductions in bytes and repeated reads, but no deployed API speedup has been established.** Compact JSON survives the audit. Broad claims about minimal responses, one-request panel summaries, complete caching and rate-limit handling need qualification.
 

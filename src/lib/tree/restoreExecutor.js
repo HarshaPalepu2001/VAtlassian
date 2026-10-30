@@ -18,38 +18,18 @@ function errorDetail(error) {
 }
 
 /**
- * Is this failure about the WHOLE restore, or only about this one step?
+ * Separate systemic failures from refusals of individual restore steps.
+ * Stop and requeue on missing responses, authentication or authorization
+ * failures, rate limits and Jira 5xx errors. Treat unknown errors as systemic
+ * so they cannot silently settle an unrestorable step.
  *
- * ─── WHY THE DIFFERENCE DECIDES EVERYTHING ───────────────────────────────────
+ * For specific refusals, record Jira's reason, settle the step and continue
+ * with unrelated steps. Retrying the same refused field would prevent
+ * verification and could leave the whole hierarchy in ERROR.
  *
- * This loop used to `break` on any error. One field Jira would not accept
- * therefore threw away every step after it — including writes to completely
- * unrelated work items — and the restore came back with `remaining > 0`. The
- * worker requeued it, the same step failed again, the no-progress guard fired,
- * and the item was left in ERROR, where the workflow gate denies every
- * transition. A single refused field could freeze a whole hierarchy.
- *
- * So the two cases are separated. A SYSTEMIC failure — no response at all, an
- * authentication or authorisation failure, a rate limit, a Jira 5xx — says
- * nothing about this step in particular and everything about whether the next
- * one can succeed. Stopping is right: the batch is requeued and tried again.
- *
- * Anything else is Jira REFUSING this specific action: a field that is not on
- * any screen, a value its validator rejects, an issue type that will not take
- * the change. Retrying cannot help, and it is not a reason to abandon the rest
- * of the tree. The step is settled, named with Jira's own words, and the
- * restore carries on — which is what the single-issue planner has always done
- * by naming `cannotRestore` up front instead of failing mid-write.
- *
- * Unknown shapes count as systemic. "We could not tell" must not silently
- * settle a step as un-restorable; a retry that turns out to be pointless is
- * cheap, and the worker's no-progress guard stops the loop.
- *
- * 404 counts as systemic, which looks surprising until you read the
- * DELETE_ADDED_NODE branch below: "not found" is not Jira refusing the action,
- * it is Jira reporting a state we did not expect, and the SECOND attempt at the
- * same step is what tells us whether we caused it ourselves. Settling it on the
- * first attempt would remove the only evidence that distinction rests on.
+ * Treat 404 as systemic too. DELETE_ADDED_NODE needs a second attempt to
+ * determine whether this restore caused the missing record. The worker's
+ * no-progress guard bounds retries.
  */
 const SYSTEMIC_STATUSES = new Set([401, 403, 404, 408, 425, 429]);
 
@@ -123,9 +103,8 @@ export async function executeTreeRestore({
   let attempted = 0;
   let stopped = false;
   let retryableError = null;
-  // A node whose replacement Jira refused has no identity to act on, so every
-  // step that targets it — or that would hang a child under it — is settled as
-  // refused too rather than attempted and failed one by one.
+  // If Jira refused a replacement, settle steps targeting it or attaching a
+  // child to it as refused too. There is no replacement identity to use.
   const unavailable = new Set(refused.filter(entry => entry.kind === 'CREATE_REPLACEMENT')
     .map(entry => String(entry.logicalNodeId)));
 
@@ -246,22 +225,10 @@ export async function executeTreeRestore({
           target: step.attachments ?? [] });
       } else if (step.kind === 'DELETE_ADDED_NODE') {
         if (target == null) throw new Error('Delete target is unavailable');
-        // ── EVIDENCE BEFORE DESTRUCTION ────────────────────────────────────
-        //
-        // This is the only irreversible thing a restore does. A subtask added
-        // after approval has to go — it cannot exist apart from its parent, so
-        // detaching it the way a link is detached is not available and leaving
-        // it means the hierarchy was not returned to its approved shape. But
-        // the DELETE takes a Jira record with it: its changelog, its comments,
-        // and the trail of who created it.
-        //
-        // 21 CFR Part 11 §11.10(e) requires the audit trail to record actions
-        // that create, modify OR DELETE electronic records, and that record
-        // changes "shall not obscure previously recorded information". So the
-        // item's controlled content is written into the hash-chained ledger
-        // FIRST, and the delete only happens if that write succeeded. If the
-        // ledger is unavailable the work item survives — losing the audit trail
-        // is a reason to keep a record, never a reason to destroy it quietly.
+        // Before deleting a post-approval subtask, write its controlled content to
+        // the hash-chained ledger. Deletion removes its Jira history and comments,
+        // so 21 CFR Part 11 section 11.10(e) requires a retained audit record.
+        // Delete only after that write succeeds. If the ledger fails, keep the item.
         if (typeof adapters.appendLedger !== 'function') {
           throw new Error('No audit ledger is available, so this work item cannot be deleted.');
         }

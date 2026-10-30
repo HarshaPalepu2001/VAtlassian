@@ -22,8 +22,8 @@ export function createTotpUsecases(deps) {
       const row = await deps.read(accountId);
       const state = row?.state ?? 'NONE';
       // A working credential can only be replaced on an administrator's grant,
-      // so the page has to say whether one is waiting and who could issue it —
-      // otherwise its only button is one the server will refuse.
+      // so the page has to say whether one is waiting and who could issue it.
+      // Otherwise its only button triggers a request the server will refuse.
       const needsGrant = state === 'ACTIVE' || state === 'LOCKED';
       const [grant, roster] = needsGrant
         ? await Promise.all([deps.grant(accountId), deps.administrators?.().catch(() => null) ?? null])

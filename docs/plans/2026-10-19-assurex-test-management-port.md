@@ -21,7 +21,7 @@ Every one of them has a Forge-hosted equivalent (section 3).
 | Environment | Version | Verdict | Reasons |
 |---|---|---|---|
 | development | 8.21.0 | **not eligible** | "App is egressing data"; "App is using a webtrigger module that can egress data" |
-| production | 1.1.0 | eligible | — |
+| production | 1.1.0 | eligible | Not applicable |
 
 The flags it checks: `HAS_REMOTES`, `HAS_CONNECT_MODULES`, `HAS_DEFINED_EGRESS`
 (true), `HAS_EXPOSED_CREDENTIALS`, `HAS_EGRESS_WEBTRIGGER_MODULE` (true),
@@ -29,36 +29,35 @@ The flags it checks: `HAS_REMOTES`, `HAS_CONNECT_MODULES`, `HAS_DEFINED_EGRESS`
 Object Store, queues and Forge LLMs are not on the list.
 
 The two causes are in `manifest.yml`:
-- `permissions.external.fetch.client: "*"` — kept only so the biometric
+- `permissions.external.fetch.client: "*"` remains only so the biometric
   (WebAuthn) ceremony popup gets `allow-popups`; the comment already says "THIS
   BLOCK FORFEITS RUNS ON ATLASSIAN".
-- `webtrigger: va-probe` — marked "TEMPORARY live probe ... Remove when done",
-  dynamic response.
+- `webtrigger: va-probe` is marked "TEMPORARY live probe ... Remove when done"
+  and uses a dynamic response.
 
-So porting AssureX cleanly is pointless unless phase 0 makes VAtlassian itself
-eligible again and keeps it that way.
+Phase 0 must restore and preserve VAtlassian's eligibility before the AssureX port.
 
 ## 2. AssureX feature inventory (what "exact functionality" means)
 
 Source key: **G** product guide, **S** Marketplace screenshot, **C** Confluence/AI
 guide, **T** API-token guide, **D** data/terms pages.
 
-### Work types (created per project when enabled) — G
+### Work types (created per project when enabled), G
 Test (TestCase), Test Plan, Test Set, Test Precondition, Test Execution, and
 (live, 6a) TestDefect. Enabling is per project, company-managed only.
 
-### Issue panels — G, S
+### Issue panels, G, S
 | Panel | On | Behaviour |
 |---|---|---|
-| Test Details | Test | Tabs: Test Details / Test Plans / Preconditions / Test Sets / Test Runs. Test type selector (Manual + admin-defined step-based types). Steps of Action / Data / Expected Result, each a rich-text editor; drag to reorder; per-step attachments; Add Step; Edit in Dialog; collapse/expand. `${Param}` tokens in Data bound to a **Dataset** (data-driven). **Versions**: "Version 1 is out of sync — 1 drafted change is not yet part of Version 1. 4 changes remain before sync is required", with View Version / Create Version / Sync Now. **Import** and **Export** (To csv, To json). |
+| Test Details | Test | Tabs: Test Details / Test Plans / Preconditions / Test Sets / Test Runs. Test type selector (Manual + admin-defined step-based types). Steps of Action / Data / Expected Result, each a rich-text editor; drag to reorder; per-step attachments; Add Step; Edit in Dialog; collapse/expand. `${Param}` tokens in Data bound to a **Dataset** (data-driven). **Versions**: "Version 1 is out of sync. 1 drafted change is not yet part of Version 1. 4 changes remain before sync is required", with View Version / Create Version / Sync Now. **Import** and **Export** (To csv, To json). |
 | Tests | Test Plan | Grouped tests; link, sort, paginate. |
 | Precondition details | Precondition | Conditions required before linked tests run. |
 | Test Sets | Test | Add/remove the test to one or more sets (smoke, regression). |
 | Test Run | Test | Lists runs; Play starts an execution and opens the board. |
-| Execution Details | Execution | Not described publicly — **gap**. |
+| Execution Details | Execution | Not described publicly. This remains a gap. |
 | Test Coverage | configured types (default Story) | Tabs Test Cases / Test Plans; Add; table Key, Summary, Status, Test Status (e.g. PASSED). "Generate Test Cases" (AI, beta). |
 
-### AssureX Board (project page tab) — G, S
+### AssureX Board (project page tab), G, S
 - Test Executions list: key, summary, status lozenge, linked plan chip,
   pass/fail/todo progress bar, assignee; Create Test Execution; pagination.
 - Execution view: breadcrumb Projects / AX / Test Plans / AX-8 / Test Executions /
@@ -66,15 +65,15 @@ Test (TestCase), Test Plan, Test Set, Test Precondition, Test Execution, and
   Environments); pass/fail totals bar; per-test row with result, assignee,
   dataset/iteration icon, Play; Add tests; Edit.
 - Step runner: step statuses, notes, attachments, iterations, environments.
-- Traceability report: per requirement — Tests (fully / partially covered),
+- Traceability report: per requirement, Tests (fully / partially covered),
   Test Runs (failed / passed / to do), Defects; quick filters Fully covered,
   Partially covered, Not applicable, Not covered; fix version.
 
-### History — G
+### History, G
 "AssureX History" option in the issue Activity section of AssureX work items:
 updates, executions, status changes.
 
-### Administration — G, S
+### Administration, G, S
 Global (Apps → AssureX): Settings, Configuration, Test Types, Import Test, Test
 Statuses, Test Step Statuses, Test Environments, Parameter Value Lists, Xray
 Migration (Credentials → Backup → Discovery → Validation → Execution; Xray
@@ -85,7 +84,7 @@ Project settings: enable, Test Coverage Settings (which types get the panel), AI
 Settings (one PRD source per project: Confluence page or uploaded document →
 AI briefing, with Replace / Unlink / Retry).
 
-### AI test generation — C
+### AI test generation, C
 From an issue with the coverage panel: gathers summary, description, type,
 comments, subtasks, linked issues, supported attachments, existing linked tests,
 previously rejected scenarios, project PRD briefing, linked Confluence pages
@@ -93,11 +92,11 @@ previously rejected scenarios, project PRD briefing, linked Confluence pages
 select, reject, restore, regenerate, "generate more"; creates the selected ones
 as Test issues. Never auto-creates. Confluence is read-only, no macro.
 
-### Automation API — T
+### Automation API, T
 Per-user bearer tokens (named, expiry ≤ 1 year, shown once, revocable), owned
 by the creating user and bound to the site; calls evaluated with that user's Jira
 and project permissions. `GET /health`, `GET /automation/health`; other
-`/automation` endpoints not documented publicly — **gap**.
+`/automation` endpoints not documented publicly. This remains a gap.
 
 ## 3. Runs-on-Atlassian mapping
 
@@ -107,11 +106,11 @@ and project permissions. `GET /health`, `GET /automation/health`; other
 | PostgreSQL on AWS | remote storage | Forge SQL (`sql: main`, already declared); new `tm_*` tables |
 | AWS object storage (attachments) | remote storage | Jira attachments on the Test / Test Execution issue (Jira-permissioned, visible natively); Forge Object Store (`fos`, already declared) only where an immutable copy is needed |
 | Remote AI backend | egress of issue + Confluence content | Forge LLMs (`llm: va-llm`, `model: [claude]`, already declared; same pattern as `src/lib/aiClassification.js`) |
-| Confluence PRD / page fetch | — (Atlassian API) | `requestConfluence` with Confluence read scopes as an optional product; **spike**: cross-product install and scopes |
+| Confluence PRD / page fetch | Not applicable (Atlassian API) | `requestConfluence` with Confluence read scopes as an optional product; **spike**: cross-product install and scopes |
 | "Atlassian connection" (OAuth 3LO) | needed only by the AWS backend | not needed: `asApp` / `asUser` |
 | `/automation` REST with bearer tokens | inbound API on vendor host | **static** web trigger (`response.type: static`, fixed `outputs` such as 202 / 400 / 401) + app-issued tokens (hash in SQL) + queue consumer that parses JUnit / Cucumber JSON / TestNG / Xray JSON. Behaviour change: the CI caller cannot get created keys back in the response; it tags the upload with its own run id and finds the execution by JQL. |
 | Xray / Zephyr migration via their cloud APIs | egress to getxray.app / smartbear | File-based import: the admin exports from Xray / Zephyr and uploads the file; parsing and mapping run in Forge. Same wizard steps minus "Credentials". Behaviour change: no live discovery against the source tool. |
-| CSV / JSON export | — | client-side Blob download (existing `frontend/src/lib/result.ts` `download`) |
+| CSV / JSON export | Not applicable | client-side Blob download (existing `frontend/src/lib/result.ts` `download`) |
 
 Rule for the whole port: **no `remotes`, no `external.*` permissions, no dynamic
 web triggers, no personal API tokens.** Enforced by phase 0's gate.
@@ -249,7 +248,7 @@ Cucumber = Gherkin; reorderable, any can be default, more can be added.
 
 **Statuses** (run and step, separate lists; defaults PASSED, TO DO, EXECUTING,
 FAILED). A status has Name, Description, Color, **Test Coverage Status**
-(required: OK / UNKNOWN / NOTRUN / NOK — how runs with that status count toward
+(required: OK / UNKNOWN / NOTRUN / NOK, specifying how runs with that status count toward
 coverage), **Is Final**, and scope (all projects or selected).
 
 **Environments**: Name, Description, URL. **Parameter value lists**: Name +
@@ -258,8 +257,8 @@ columns.
 
 **Access control** (global defaults, optional project overrides; no rule =
 everyone allowed), per action by roles / groups / users:
-Steps — Create, Edit, Delete, Reorder, Version ("create and sync step
-versions"); Test Runs — Create, Update; Test Run Step Status.
+Steps support Create, Edit, Delete, Reorder, and Version ("create and sync step
+versions"); Test Runs support Create and Update; Test Run Step Status.
 
 **Project settings** (12 pages): Settings, Step Field Settings, Test Run Field
 Settings, Test Coverage Settings, Defect Settings, Access Control, Test Types,
@@ -273,17 +272,17 @@ Value Lists.
   or every type when neither exists; none enabled = no defect creation/linking.
 - AI PRD source: upload PDF / .txt / .md up to 25 MB, or link a Confluence page.
 
-**Import Test** (admin): 5-step wizard — Upload File → Project Mapping →
+**Import Test** (admin): 5-step wizard. Upload File → Project Mapping →
 Column Mapping → Value Mapping → Import; XLSX; template kind (Steps); optional
 target projects add their custom step fields as template columns.
 
-**AssureX Board navigation**: Testing Board — Test Repository, Test Plans,
-Test Executions. Reporting Center — Test Runs List, Test Executions List, Test
+**AssureX Board navigation**: Testing Board includes Test Repository, Test Plans,
+Test Executions. Reporting Center includes Test Runs List, Test Executions List, Test
 Plans List, Test Sets List, Tests List, Test Coverage Report, Test Plans
 Metrics, Requirement Traceability, Defect Traceability, **Compliance Report**.
 Each needs the project's work types, except Compliance Report.
 
-**Compliance Report — Audit Trail**: JQL picks issues; every field change from
+**Compliance Report, Audit Trail**: JQL picks issues; every field change from
 the Jira changelog becomes a row: Author, Field Name, Action (Updated / Added),
 Old Value, New Value, Changed On, chronological; 50 issues per page; Share;
 export Excel / PDF / CSV for all or per issue.
@@ -298,7 +297,7 @@ Created on harshapalepu01 (all in new project ATX, nothing elsewhere touched):
 | Item | What | How |
 |---|---|---|
 | Project **ATX** (id 10001) "AssureX Observation" | company-managed Scrum (`classic`), lead Harsha Palepu | Jira REST `POST /rest/api/3/project` |
-| 6 AssureX work types in ATX | TestCase, TestPlan, TestExecution, TestSet, TestPrecondition, TestDefect | AssureX project Settings → "Add Issue Types (6)" — appended to ATX's own scheme `ATX: Scrum Issue Type Scheme` (10147), used only by ATX |
+| 6 AssureX work types in ATX | TestCase, TestPlan, TestExecution, TestSet, TestPrecondition, TestDefect | AssureX project Settings → "Add Issue Types (6)" appended to ATX's own scheme `ATX: Scrum Issue Type Scheme` (10147), used only by ATX |
 | **ATX-1** (10004) TestCase "Login with valid credentials" | 3 steps; Version 1; 1 later draft change | Jira REST create; steps, version and edit in AssureX's Test Details panel |
 | Dataset on ATX-1 | parameters `username`, `password` (Text); rows `alice`/`demo-pass-1`, `bob`/`demo-pass-2` (dummy values) | AssureX Dataset dialog |
 | **ATX-2** (10005) TestPlan "Release 1.0 login plan" | contains ATX-1 | Board → Create Test Plan (Jira create dialog); plan panel → Add Tests → Existing |
@@ -318,13 +317,13 @@ Observed:
 - **Create** buttons in AssureX open **Jira's own create dialog** with the
   work type preset.
 - **Versioning**: every saved step edit is a *drafted change*. Before any
-  version: "Initial draft changes are unpublished — N drafted changes are not
+  version: "Initial draft changes are unpublished. N drafted changes are not
   yet published. Create a version to publish them." Create Version:
   "Snapshot Current Steps … permanent historical record … captures the exact
   state of all actions, data, results, and attachments … A new version number
   will be assigned automatically." After Version 1 and one edit: "Version 1 is
   out of sync. 1 drafted change is not yet part of Version 1. 9 changes remain
-  before sync is required" — a hard cap of 10 unversioned changes (the
+  before sync is required". This sets a hard cap of 10 unversioned changes (the
   Marketplace screenshot showed a cap of 5, so it is likely configurable).
   Version menu: Create Version, View Versions ("Version 1 (10/19/2026, 12:22:45
   PM)"), Compare Versions; banner: View Version, Create Version, Sync Now (not
@@ -339,7 +338,7 @@ Observed:
   attachments; toolbar open / collapse / move / duplicate / delete; Expand all,
   Edit in Dialog.
 - **Test plan panel**: tabs Tests / Test Executions; Add Tests (New test |
-  Existing tests — by search or JQL); Create Test Execution (**All test | With
+  Existing tests by search or JQL); Create Test Execution (**All test | With
   status**); view on board; Overall Execution Status bar and counts.
 - **Execution Details panel**: Overall Execution Status (bar + count per
   status), Total tests, Add Tests, ⋯, view on board; table Key, Summary,
@@ -354,7 +353,7 @@ Observed:
     Test; View Execution; Dataset; Reset.
   - **Edit gate**: "The current execution status is 'To Do'. Modification is
     only allowed when the execution status category is 'In Progress'. Add
-    assignee to ATX-3 execution issue." — results can be recorded only while
+    assignee to ATX-3 execution issue." Results can be recorded only while
     the Jira execution issue is in an In Progress category status **and** has
     an assignee.
   - Run fields: Execution Status (TO DO), Timer (start / reset, "No time
@@ -370,7 +369,7 @@ Observed:
   - The run shows **Version 1's step text**, not the later unversioned draft:
     runs are built from the published version.
   - **Dataset layering**: the run's Dataset dialog reads "Dataset for Test 10004
-    in Test Execution 10006 — No dataset is defined in this context. This is
+    in Test Execution 10006. No dataset is defined in this context. This is
     the resolved dataset, defined in Test. You can change the dataset by
     overriding it or creating a new one. [Override] [Create new]". The test's
     dataset is the default; an execution can override or replace it.
@@ -380,22 +379,22 @@ Observed:
   DRAFT shown as a red-before / green-after diff. **The dataset save does not
   appear in history.**
 
-### 6b. Open questions — status
+### 6b. Status of open questions
 
-1. Execution Details panel content — **answered** (6d).
-2. Fields on the work types — **answered**: no AssureX custom fields.
-3. Version semantics — **answered**: drafts per saved step edit, snapshot
+1. Execution Details panel content is answered in 6d.
+2. The work types have no AssureX custom fields.
+3. Version semantics are answered. There are drafts per saved step edit, snapshot
    versions, cap on unversioned changes, compare; what Sync Now does is open.
-4. Dataset model — **answered**: columns = parameters (Text / List,
-   combinatorial), rows = iterations; the test holds the default dataset and an
+4. The dataset model is answered. Columns are parameters (Text / List,
+   combinatorial), and rows are iterations; the test holds the default dataset and an
    execution can override or replace it; the run lists one iteration per row,
    labelled with its values, each with its own status and the values
    substituted into every step. Row limits not tested.
-5. `/automation` endpoints — **open**; not shown in the UI.
-6. Defect linking — **partly**: defect types come from Defect Settings; a
+5. `/automation` endpoints remain unknown because the UI does not show them.
+6. Defect linking is partly answered. Defect types come from Defect Settings; a
    "AssureX Defect" link type exists; actual defect creation not exercised.
-7. Test types — **answered**: kind Steps / Unstructured / Gherkin.
-8. Jira vs AWS — **answered**: Jira holds only the work items (standard
+7. Test types are answered. The kinds are Steps, Unstructured, and Gherkin.
+8. Jira and AWS responsibilities are answered. Jira holds only the work items (standard
    fields) and panel properties; steps, datasets, versions, plan / execution
    membership, run results and history are in AssureX's backend.
 

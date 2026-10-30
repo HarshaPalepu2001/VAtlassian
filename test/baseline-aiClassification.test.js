@@ -29,7 +29,7 @@ test('buildPayload drops anything with no field id, and caps a runaway batch', (
   assert.equal(buildPayload(huge).length, 500);
 });
 
-// ─── heuristicClassify — the deterministic fallback ────────────────────────────
+// heuristicClassify provides the deterministic fallback.
 
 test('heuristicClassify pins every ALWAYS_CONTROLLED_FIELDS id as GxP', () => {
   const out = heuristicClassify(ALWAYS_CONTROLLED_FIELDS.map((f) => F(f.field_id, f.field_name)));
@@ -54,7 +54,7 @@ test('heuristicClassify flags planning-shaped names as non-GxP', () => {
   assert.ok(out.every((c) => c.decision === CLASSIFICATION.NON_GXP));
 });
 
-test('heuristicClassify defaults an unrecognised field to GxP — the safe side of a compliance baseline', () => {
+test('heuristicClassify defaults an unrecognised field to GxP', () => {
   // The opposite default from materiality.js's DEFAULT_LADDER, and deliberately
   // so: that ladder ranks already-tracked fields for alert volume, where
   // over-alerting gets an app muted. This is deciding what enters the baseline
@@ -64,7 +64,7 @@ test('heuristicClassify defaults an unrecognised field to GxP — the safe side 
   assert.equal(c.decision, CLASSIFICATION.GXP);
 });
 
-// ─── validate — schema enforcement AND coverage enforcement ────────────────────
+// validate enforces schema and classification coverage.
 
 test('validate keeps only classifications for fields actually sent', () => {
   const fields = buildPayload([F('a', 'A'), F('b', 'B')]);
@@ -79,7 +79,7 @@ test('validate keeps only classifications for fields actually sent', () => {
   assert.deepEqual(out.map((c) => c.fieldId), ['a', 'b']);
 });
 
-test('validate fills in ANY field the model left unclassified, from the heuristic — coverage is never partial', () => {
+test('validate uses the heuristic for every field the model left unclassified', () => {
   const fields = buildPayload([F('a', 'A'), F('customfield_1', 'Sprint')]);
   const parsed = { classifications: [{ fieldId: 'a', decision: CLASSIFICATION.GXP, rationale: 'Named explicitly' }] };
   const out = validate(parsed, fields);
@@ -114,7 +114,7 @@ test('validate truncates an over-long rationale rather than passing it through u
   assert.ok(out[0].rationale.length <= 200);
 });
 
-// ─── classifyFields — the async entry point, exercised without the network ────
+// classifyFields is the async entry point, tested without network calls.
 
 test('classifyFields short-circuits to the heuristic when AI is disabled for the project', async () => {
   const result = await classifyFields({ fields: [F('a', 'Sprint')], model: 'claude-haiku-4-5-20251001', aiEnabled: false });
@@ -132,7 +132,7 @@ test('classifyFields returns an empty, non-degraded result for an empty field li
 test('classifyFields chunks a large batch and still covers every field when the model is unreachable', async () => {
   // No @forge/llm mock is set up here, so the lazy `import('@forge/llm')` inside
   // classifyChunk() throws "Forge runtime not found" exactly as it would for
-  // any test importing this module outside a deployed app — which exercises
+  // any test importing this module outside a deployed app. This exercises
   // the real failure path (LLM_UNAVAILABLE) across MULTIPLE PARALLEL CHUNKS at
   // once, the scenario a single giant request used to time out on.
   const fields = Array.from({ length: 120 }, (_, i) => F(`customfield_${i}`, `Field ${i}`));
@@ -149,7 +149,7 @@ test('classifyFields chunks a large batch and still covers every field when the 
   );
 });
 
-// ─── partitionForBaseline — the pure write-shaping rule ────────────────────────
+// partitionForBaseline shapes the write without I/O.
 
 test('partitionForBaseline pins ALWAYS_CONTROLLED_FIELDS into tracked no matter what decision arrives for them', () => {
   const classifications = ALWAYS_CONTROLLED_FIELDS.map((f) => ({
@@ -193,7 +193,7 @@ test('partitionForBaseline ignores a duplicate fieldId in the submitted payload,
   assert.equal(excluded.filter((f) => f.fieldId === 'customfield_1').length, 0);
 });
 
-// ─── buildBaselineAuditPayload — compliance metadata enforcement ──────────────────
+// buildBaselineAuditPayload enforces compliance metadata.
 
 test('buildBaselineAuditPayload enforces required metadata and maps fields correctly', () => {
   const tracked = [

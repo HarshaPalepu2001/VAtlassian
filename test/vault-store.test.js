@@ -132,7 +132,7 @@ test('projectsNeedingVault lists ACTIVE baseline-capturing projects not yet full
   assert.match(captured.sql, /app_delete_granted_at IS NOT NULL/, 'a project without the app grant is picked up');
   assert.match(captured.sql, /app_delete_checked_at > \?/);
   assert.deepEqual(captured.params, [100_000_000 - 24 * 60 * 60 * 1000], 'a refused grant is asked again after a day');
-  // Forge SQL refuses `LIMIT ?` (ERROR 1210) — the limit is inlined as a checked integer.
+  // Forge SQL refuses `LIMIT ?` (ERROR 1210), so inline a checked integer.
   assert.doesNotMatch(captured.sql, /LIMIT \?/);
   assert.match(captured.sql, /LIMIT 10\b/);
 });

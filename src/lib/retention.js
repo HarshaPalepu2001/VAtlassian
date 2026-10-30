@@ -1,38 +1,24 @@
 /**
- * RETENTION AND PRUNING — 21 CFR 11.10(c).
+ * Retention and pruning policy for 21 CFR 11.10(c).
  *
  * "Protection of records to enable their accurate and ready retrieval
  * throughout the records retention period."
  *
- * READ THAT CLAUSE AGAIN BEFORE CHANGING ANYTHING HERE. It requires records to
- * be protected and retrievable for as long as they must be kept. It does NOT
- * require deleting them afterwards. Pruning is an operational convenience for
- * customers who want it, not a compliance obligation — which means the safe
- * configuration is the one that never prunes, and that is the default.
+ * The requirement calls for retention and retrieval, not deletion afterwards.
+ * An unconfigured instance retains all records indefinitely. Part 11 defers
+ * the retention period to the applicable predicate rule: 21 CFR 211.180 uses
+ * expiry plus a year, 820.180 uses device lifetime with a two-year minimum,
+ * and 312.62 uses two years past approval. No single default fits every customer.
  *
- * WHY NO DEFAULT PERIOD. Part 11 defers to the predicate rule, and predicate
- * rules run to years: 21 CFR 211.180 measures batch-record retention from
- * expiry plus a year, 820.180 from the device's lifetime with a two-year floor,
- * 312.62 two years past approval. There is no number we could pick that is
- * right for the next customer, and a wrong one does not fail loudly — it
- * silently destroys records somebody was legally required to keep, on our
- * schedule, with our name on the job that did it. So an unconfigured instance
- * retains everything, forever, and says so.
+ * A proposed 90-day period came from the separate device-check interval.
+ * To guard against that mistake, a period below one year requires an explicit
+ * acknowledgement and produces a warning on each run until acknowledged.
  *
- * THE FLOOR EXISTS BECAUSE OF A NEAR MISS. During design, 90 days was proposed
- * as the retention period; it had drifted across from the device-check
- * interval, which is an operational number in an entirely different unit of
- * meaning. Anything under a year almost certainly has the same origin — someone
- * typed an operational number into a legal field — so a short period is
- * accepted only with an explicit acknowledgement, and warns on every run until
- * it gets one.
+ * A segment may be pruned only after sealing, export and verification of the
+ * export's hash by read-back, and after its retention period has elapsed.
+ * va_chain_segment records export_sha256, verified_at and pruned_at.
  *
- * PRUNING IS GATED ON EVIDENCE, NOT ON TIME. A segment may only be pruned when
- * it has been sealed, exported, and the export's hash read back and verified.
- * Time elapsing is the last condition, never the first. va_chain_segment's
- * export_sha256 / verified_at / pruned_at columns were always shaped for this.
- *
- * PURE. Policy here; jobs/seal.js does the I/O.
+ * This module contains pure policy functions; jobs/seal.js performs the I/O.
  */
 
 /** va_config keys. */
@@ -93,12 +79,8 @@ export function retentionPolicy(config = {}) {
 }
 
 /**
- * May this sealed segment be pruned from va_audit?
- *
- * The order of these checks is the compliance argument. Evidence conditions
- * come first and time comes last, so a segment can never be pruned merely
- * because it is old — it has to have been sealed, copied out, and the copy
- * proven readable first.
+ * Require sealing, export and verified read-back before checking a segment's
+ * age. Age alone never permits pruning from va_audit.
  */
 export function prunable(segment, policy, now = Date.now()) {
   if (!policy?.mayPrune) {
@@ -141,8 +123,8 @@ export function prunable(segment, policy, now = Date.now()) {
  *  "Retained indefinitely" is a deliberate posture, and an empty field would
  *  read as an unfinished setting rather than the safe default it is. */
 export function describeRetention(policy) {
-  if (!policy.configured) return 'Retained indefinitely — nothing is ever pruned';
-  if (!policy.mayPrune) return `Configured at ${policy.days} days, not in effect — needs acknowledgement`;
+  if (!policy.configured) return 'Retained indefinitely. Nothing is pruned.';
+  if (!policy.mayPrune) return `Configured at ${policy.days} days. Awaiting acknowledgement before taking effect.`;
   return `${policy.days} days after sealing, once exported and verified`;
 }
 

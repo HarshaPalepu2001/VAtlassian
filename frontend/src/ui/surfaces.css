@@ -1,10 +1,7 @@
 /**
- * The panel, the review window and the worklist.
- *
- * Everything here draws from tokens.css so it follows Jira's own light and
- * dark themes. The one addition is the "discovery" purple Atlassian uses for
- * AI features: the AI summary wears it, and nothing else does, so a reviewer
- * always knows which words on screen a model wrote.
+ * Styles for the panel, review window and worklist. Shared tokens follow
+ * Jira's light and dark themes. Reserve Atlassian's discovery purple for
+ * AI summaries so reviewers can identify model-written text.
  */
 
 :root {
@@ -120,7 +117,7 @@
 
 .va-decision-row { flex-wrap: wrap; }
 
-/* The baseline card. One card, three moods. */
+/* Baseline card states. */
 .va-base {
   border: 1px solid var(--va-border); border-radius: var(--va-radius-lg);
   padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; background: var(--va-surface);
@@ -235,7 +232,9 @@
 .va-decision-bar__row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .va-decision-bar__row .va-field { margin: 0; min-width: 280px; }
 
-/* Signing in the window: a sheet over the review, so the act has the screen. */
+/**
+ * Place the signing sheet over the review window.
+ */
 .va-sheet {
   position: fixed; inset: 0; z-index: 10; overflow: auto; padding: 32px 16px;
   background: rgba(9, 30, 66, 0.54);
@@ -316,7 +315,7 @@
 
 /* ── 2026-10-26 refinement: quieter surfaces ─────────────────────────────── */
 
-/* Paragraphs inside cards carry no browser margin; the stack sets rhythm. */
+/* Paragraphs inside cards carry no browser margin; the stack sets spacing. */
 .va-base p, .va-sign p, .va-merge p { margin: 0; }
 
 /* The baseline card: a title line, one sentence, then only what is needed. */
@@ -333,7 +332,7 @@
 .va-changes .va-change-row__who { padding-left: 12px; text-align: right; white-space: nowrap; }
 @container (max-width: 460px) { .va-changes .va-change-row__who { display: none; } }
 .va-decision-row { gap: 8px; margin-top: 4px; }
-/* Reject and Approve travel together, so a narrow panel moves them to their own line as a pair. */
+/* Move Reject and Approve to their own line together in narrow panels. */
 .va-decision-row__actions { display: flex; gap: 8px; margin-left: auto; }
 .va-next { padding-top: 4px; }
 
@@ -441,7 +440,7 @@ div.va-sign__impact { padding-left: 0; }
 .va-sign__fine { font-size: var(--va-size-meta); color: var(--va-text-subtle); }
 .va-sign__actions { display: flex; justify-content: flex-end; gap: 8px; }
 
-/* The receipt: facts, no seal. */
+/* Signature receipt. */
 .va-receipt { border-radius: 3px; border-top-width: 2px; }
 .va-brief--empty { align-items: flex-start; }
 .va-del .va-pill { text-decoration: line-through; border-color: var(--va-del-line); }

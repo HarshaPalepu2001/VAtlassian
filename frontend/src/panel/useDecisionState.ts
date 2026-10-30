@@ -19,9 +19,8 @@ export function evidenceCounts(evidence: PanelEvidence | null, summary: PanelSum
 }
 
 /**
- * The current record, read once and paired with the permissions that belong
- * to it — shared by the issue panel and the review window, so the two can
- * never disagree about how many changes there are or who may decide them.
+ * Share the current record and its permissions between the issue panel and
+ * review window so their change counts and decision controls agree.
  */
 export default function useDecisionState(summary: PanelSummary | null, issueKey: string | undefined, refresh: () => unknown) {
   const { evidence, heldEvidence, loading: evidenceLoading, error: evidenceError, retry: retryEvidence } = usePanelEvidence({
@@ -38,23 +37,16 @@ export default function useDecisionState(summary: PanelSummary | null, issueKey:
     onStale: () => { void refresh(); }
   });
   const hasAuthoritativeEvidence = !summary?.baseline || Boolean(evidence);
-  // What the informational sections show: the authoritative read, or — while
-  // its replacement for the same baseline loads — the previous one, so a
-  // background refresh updates in place instead of flashing "Checking…".
+  // Informational sections use authoritative evidence, or the previous
+  // same-baseline read while its replacement loads, to avoid flashing "Checking…".
   const shownEvidence = evidence ?? heldEvidence;
   const evidenceReady = hasAuthoritativeEvidence || Boolean(evidenceError) || Boolean(heldEvidence);
   const { driftCount: evidenceDriftCount, materialCount: evidenceMaterialCount } = evidenceCounts(evidence, summary);
-  // PERMISSION TRAVELS WITH THE COUNT IT BELONGS TO.
-  //
-  // Substituting the live re-diff's count for display while leaving
-  // canApprove/canReject as the server computed them from the STORED counter is
-  // what produced VJIRA-17: the panel entered drift-review mode on one number
-  // (1 change) and refused on a verdict about another (0 recorded), then
-  // explained the refusal by naming a role that had never been checked.
-  //
-  // `drift.eligible` is the viewer's own standing on this baseline, answered
-  // independently of any count (panelSummary.js), so it is the right thing to
-  // pair with whichever count is actually on screen.
+  // Pair permissions with the count they describe. VJIRA-17 displayed the live
+  // re-diff count but used permissions derived from a stored count, causing a
+  // refusal based on a different record state.
+  // Use drift.eligible, which panelSummary.js computes independently of the
+  // count, with the count displayed here.
   const canDecideShownDrift = evidenceDriftCount > 0 && summary?.drift.eligible === true;
   const displaySummary = summary && evidence
     ? { ...summary, drift: { ...summary.drift, count: evidenceDriftCount, materialCount: evidenceMaterialCount,

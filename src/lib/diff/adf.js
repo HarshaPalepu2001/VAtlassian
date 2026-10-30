@@ -5,41 +5,17 @@ import { describeStructure } from './structure.js';
 import { diffText, similarity, isWhitespaceOnly, coalesce, OP } from './text.js';
 
 /**
- * Atlassian Document Format diffing.
+ * Compare Atlassian Document Format using the same normaliseAdf function
+ * as content hashing.
  *
- * The showpiece, and the reason a reviewer can look at a changed description
- * and understand it in seconds rather than re-reading two paragraphs
- * side by side hunting for the difference.
+ * Flatten documents into blocks, find unchanged signatures with LCS and pair
+ * remaining blocks by similarity. Detect moves, then compare words, marks
+ * and structure separately. Formatting-only changes can be cosmetic while
+ * structural changes, such as checkbox state or panel type, remain material.
  *
- * THE ALGORITHM, and why each stage earns its place:
- *
- *   1. NORMALISE using content.js's own normaliseAdf, so the diff and the hash
- *      can never disagree about what a document is. Sharing that function is
- *      not a convenience — if the differ stripped a key the hasher kept, a
- *      field could report "changed" with an empty diff, which reads as a bug in
- *      the app rather than as an edit.
- *   2. FLATTEN to blocks. People edit documents a paragraph at a time.
- *   3. LCS over block signatures — the unchanged blocks, found exactly.
- *   4. PAIR the leftovers by similarity. Without this, editing one sentence
- *      renders as "paragraph deleted, paragraph inserted": true, and useless.
- *   5. DETECT MOVES. Reordering a list is one fact, not twenty.
- *   6. INLINE DIFF inside modified blocks, at word granularity.
- *   7. MARK PASS, separately, so "this sentence became a link" is a formatting
- *      change and not a delete-plus-insert of identical text. This is what
- *      makes cosmetic suppression possible for rich text at all.
- *   8. STRUCTURE PASS. Everything a block is besides its words and marks — its
- *      own attrs, the containers it sits in and theirs, the inline nodes that
- *      are not text — named in a sentence a reviewer can read.
- *
- * THE DIFF SEES EVERY BYTE THE HASH SEES. content.js hashes the whole
- * normalised document, so a panel turned from warning to info, a checkbox
- * ticked or a checklist item turned into a plain sentence is drift. This file
- * used to compare a block by its type, text and mark NAMES only, so each of
- * those compared EQUAL or rendered with nothing to say what had changed — and a
- * field whose blocks all compared equal was reported unchanged, which the
- * restore planner skips. A block is now equal only when its normalised bytes
- * AND its container chain are, and diffAdf() refuses to call two documents the
- * same when their bytes are not.
+ * Exact block equality includes normalised bytes and the container chain.
+ * If document bytes differ after all blocks compare equal, report a structural
+ * change. The diff must not hide a change that content hashing detects.
  */
 
 // The block layer lives in blocks.js; re-exported so callers keep one import.
@@ -54,10 +30,10 @@ export const BLOCK_OP = {
   /** Same text, different formatting. Never queues a review on its own. */
   MARK_ONLY: 'markOnly',
   /**
-   * Same text, different structure: a type, an attr, or the containers around
-   * it. `structureChange` says what, one sentence per difference. Material —
-   * a checkbox ticked or a warning downgraded to info changes what was agreed.
-   */
+ * Same text with changed node type, attrs or containers. structureChange
+ * names each difference. These changes are material, including checkbox state
+ * and warning-to-info changes.
+ */
   STRUCTURE: 'structure'
 };
 
@@ -112,10 +88,8 @@ export function diffAdf(before, after, options = {}) {
 
   const withMoves = detectMoves(result);
 
-  // THE BACKSTOP. Every difference inside a block is caught above; one that
-  // lives only in a container with no text beneath it would still compare
-  // every block equal. Two documents whose hashed bytes differ are never
-  // reported as the same — "changed" with a vague note beats "unchanged".
+  // Different document bytes may come from an empty container with no blocks.
+  // Report those as structural changes even if every block compared equal.
   if (withMoves.every((blk) => blk.op === BLOCK_OP.EQUAL)
       && canonical(normaliseAdf(before)) !== canonical(normaliseAdf(after))) {
     withMoves.push({ op: BLOCK_OP.STRUCTURE, structureChange: [{ kind: 'document', text: 'Document structure changed' }] });
@@ -129,11 +103,8 @@ export function diffAdf(before, after, options = {}) {
 }
 
 /**
- * Index pairs of identical blocks, longest common subsequence.
- *
- * Same complexity guard as the text differ: enormous documents fall back to a
- * positional match, which is cruder but instant. A panel that renders a rough
- * diff beats one that times out.
+ * Find identical block pairs by longest common subsequence.
+ * For large documents, use positional matching to bound computation.
  */
 function lcsMatch(a, b) {
   const n = a.length;
@@ -167,29 +138,16 @@ function lcsMatch(a, b) {
 }
 
 /**
- * Turn a run of unmatched deletes and inserts into the smallest honest set of
- * operations.
- *
- * Greedy best-match pairing: each deleted block takes the most similar
- * remaining inserted block, provided they are similar enough to be the same
- * block edited rather than two different blocks. Greedy rather than optimal
- * because the gaps are small (a handful of blocks), and an optimal assignment
- * would cost more to explain than it would ever buy.
+ * Pair unmatched deletes with the most similar remaining insert above the
+ * similarity threshold. Use greedy matching for these small gaps.
  */
 function pairGap(deletes, inserts) {
   const out = [];
   const takenInserts = new Set();
 
-  // ONE OUT, ONE IN IS ALWAYS AN EDIT.
-  //
-  // A gap containing exactly one deleted block and one inserted block is a
-  // paragraph somebody rewrote, essentially always — and treating it as one is
-  // safe even when the two are unrelated, because the inline diff of two
-  // dissimilar strings degenerates to delete-everything plus insert-everything,
-  // which renders identically to the alternative. Similarity thresholds are for
-  // the ambiguous many-to-many case; insisting on one here means a short
-  // paragraph like "First." becoming "First, now edited." scores below the
-  // threshold and is reported as a deletion and an unrelated insertion.
+  // Pair a single delete and insert as one edit without a similarity threshold.
+  // Unrelated strings still render as complete deletion and insertion. Reserve
+  // the threshold for ambiguous many-to-many gaps.
   if (deletes.length === 1 && inserts.length === 1) {
     const [del] = deletes;
     const [ins] = inserts;
@@ -239,14 +197,9 @@ function modified(del, ins) {
 }
 
 /**
- * Two blocks with the same words that are not the same bytes.
- *
- * Marks alone is formatting — its own op, so materiality can demote it to
- * COSMETIC instead of paging a reviewer because somebody bolded a word.
- * Anything else is structure, and says what. There is no third outcome: a pair
- * that differs in a way nothing here can name is still reported, as structure,
- * because the only alternative is rendering a changed block with nothing to
- * say about it.
+ * Classify mark-only differences as formatting so materiality can use
+ * COSMETIC. Report all other byte differences as structure, even when no more
+ * specific description is available.
  */
 function sameText(del, ins) {
   const structure = describeStructure(del, ins);
@@ -264,15 +217,8 @@ function sameText(del, ins) {
 }
 
 /**
- * Cells, compared BY POSITION.
- *
- * A table's meaning is positional — the third cell is the Type column whatever
- * it says — so a reviewer needs to know which column moved, not which text is
- * similar to which other text. Pairing by similarity instead would happily
- * report the Type column's "Gas Giant" as an edit of the Diameter column.
- *
- * A row that gained or lost a column therefore reports that cell as added or
- * removed and leaves every other cell where it is.
+ * Compare table cells by position to keep changes in their original column.
+ * Report added or removed columns without matching similar text across columns.
  */
 function diffCells(before, after) {
   const out = [];
@@ -305,11 +251,8 @@ function sameMarks(a, b) {
 
 
 /**
- * A block deleted here and inserted there, with identical content, is a MOVE.
- *
- * Worth the extra pass because reordering a checklist is one thing a person
- * did, and rendering it as ten deletions and ten insertions buries the two
- * blocks that genuinely changed underneath twenty that did not.
+ * Recognize identical content deleted in one position and inserted in
+ * another as a move.
  */
 function detectMoves(blocks) {
   const deletes = new Map();
@@ -346,22 +289,14 @@ function detectMoves(blocks) {
 }
 
 /**
- * Did anything change that a reader would notice?
- *
- * False when every difference is formatting, whitespace or a pure move. This is
- * the value materiality.js reads to decide whether a description edit is
- * COSMETIC, and therefore whether it belongs in a reviewer's queue at all.
- *
- * A MOVE counts as cosmetic here on purpose, and it is a judgement call worth
- * naming: reordering the acceptance criteria does not change what they say. If
- * a customer disagrees, they raise the field's configured materiality, which
- * overrides this.
+ * Return false for formatting, whitespace and pure moves. materiality.js
+ * uses this to classify description edits as COSMETIC. Moving acceptance
+ * criteria preserves their text. A customer's configured field materiality
+ * can override this classification.
  */
 function computeSemanticChange(blocks, aBlocks, bBlocks) {
-  // Structure is meaning. The words did not move, but a ticked box, a lost
-  // checkbox or a warning downgraded to info changes what a reader is told —
-  // and the whitespace test below, which compares text alone, would call it
-  // nothing at all.
+  // Structural changes are semantic even when text is unchanged. Text-only
+  // whitespace comparison cannot detect checkbox or panel-type changes.
   if (blocks.some((b) => b.op === BLOCK_OP.STRUCTURE || (b.structureChange?.length ?? 0) > 0)) return true;
 
   const changed = blocks.some((b) =>
@@ -369,8 +304,7 @@ function computeSemanticChange(blocks, aBlocks, bBlocks) {
   );
   if (!changed) return false;
 
-  // A "modified" block whose only difference is whitespace is still cosmetic —
-  // the pairing stage matched it on similarity, not on identity.
+  // A similarity-paired modified block may differ only in whitespace.
   const allText = (list) => list.map((x) => x.text).join('\n');
   return !isWhitespaceOnly(allText(aBlocks), allText(bBlocks));
 }

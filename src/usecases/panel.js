@@ -22,7 +22,7 @@ export async function getState(args) { return respond(async () => {
     baseline?.approval_id ? approvalById(baseline.approval_id) : null,
     issueControlStatus({ issueId: state.issueId, projectId, issueTypeId }).catch(() => ({ unavailable: true, incidents: [], gateFindings: [] })),
     // A recorded approval whose Jira transition did not land. Held in component
-    // state by the panel, which does not survive a reload — so without this the
+    // state by the panel, which does not survive a reload. Without this the
     // reviewer's only route back to approval:retryTransition disappears.
     pendingApprovalForActor({ issueId: state.issueId, accountId: actor.accountId,
       fromStatusId: String(issue.fields.status?.id) }).catch(() => null),
@@ -67,7 +67,7 @@ export async function getState(args) { return respond(async () => {
   });
   // A change since approval is its own call to action, and it is not a workflow
   // move. `state.eligible` is authority over THIS item's baseline edge, already
-  // resolved by snapshot() — an item can sit for weeks in a status no rule
+  // resolved by snapshot(). An item can sit for weeks in a status no rule
   // fires out of and still carry a change somebody has to decide.
   const pendingDrift = Boolean(state.baseline)
     && (state.reviewDiff?.changedFieldCount ?? state.diff?.changedFieldCount ?? state.treeDiff?.changes?.length ?? 0) > 0;
@@ -79,7 +79,7 @@ export async function getState(args) { return respond(async () => {
     livingState = "Changes since approval need a decision";
   } else if (pendingDrift) {
     // Something does need a signature here; it is simply not theirs to give.
-    // Name the role if ANY rule in play knows it — the baseline's own edge
+    // Name the role from any applicable rule, including the baseline's own edge
     // first, then whatever is gated out of the current status. Reading only the
     // first would print the anonymous fallback whenever the baseline's rule has
     // been removed, which is exactly when the reviewer most needs telling who

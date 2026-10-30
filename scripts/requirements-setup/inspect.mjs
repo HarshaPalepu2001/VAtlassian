@@ -35,7 +35,7 @@ await step('me', async () => {
   const perms = await jira.get('/rest/api/3/mypermissions?permissions=ADMINISTER');
   return { accountId: me.accountId, displayName: me.displayName, isJiraAdmin: !!perms.permissions?.ADMINISTER?.havePermission };
 });
-if (report.me?.isJiraAdmin === false) problem('The credential is not a Jira administrator — setup needs Administer Jira.');
+if (report.me?.isJiraAdmin === false) problem('The credential is not a Jira administrator. Setup requires Administer Jira.');
 
 await step('changeItem', async () => {
   const i = await jira.get(`/rest/api/3/issue/${encodeURIComponent(cmIssueKey)}?fields=issuetype,status,project,summary`);
@@ -164,7 +164,7 @@ writeFileSync(outFile, JSON.stringify(report, null, 2));
 const ci = report.changeItem;
 console.log(`Site:            ${report.site}`);
 console.log(`Credential:      ${report.me?.displayName ?? '?'} (Jira admin: ${report.me?.isJiraAdmin ?? '?'})`);
-console.log(`Change item:     ${ci?.key ?? '?'} — type "${ci?.issueType?.name ?? '?'}" (${ci?.issueType?.id ?? '?'}), status "${ci?.status?.name ?? '?'}"`);
+console.log(`Change item:     ${ci?.key ?? '?'}, type "${ci?.issueType?.name ?? '?'}" (${ci?.issueType?.id ?? '?'}), status "${ci?.status?.name ?? '?'}"`);
 console.log(`Project key ${projectKey}: ${report.projectKey?.existingProject ? 'TAKEN by ' + report.projectKey.existingProject.name : 'free'}`);
 console.log(`"Requirement" type exists: ${(report.issueTypes ?? []).some?.((t) => t.name.toLowerCase() === 'requirement') ?? '?'}`);
 console.log(`Planned field names already in use: ${(report.fields ?? []).filter?.((f) => f.plannedName).map((f) => f.name).join(', ') || 'none'}`);

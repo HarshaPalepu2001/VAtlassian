@@ -43,17 +43,10 @@ function decode(row) {
 }
 
 /**
- * Open a restore record before any write happens.
- *
- * WRITTEN FIRST, ON PURPOSE, even though the report is only meaningful once
- * verification has run. If the executor dies halfway — a timeout, a deploy, an
- * unhandled Jira error — an issue that has been half-rewritten with no record
- * of it is the worst possible outcome. A row in state RUNNING with a
- * `started_at` and no `finished_at` is what lets the admin console show
- * "a restore on ABC-12 started and never completed", which is a thing somebody
- * can act on.
- *
- * The counters are all zero here and are only trustworthy after finish().
+ * Create a restore record before writing any issue fields. If execution stops
+ * because of a timeout, deployment or Jira error, the RUNNING row with started_at
+ * and no finished_at lets the admin console identify the interrupted restore.
+ * Counters start at zero and are trustworthy only after finish() verifies them.
  */
 export async function startRestore({
   approvalId, issueId, projectId, baselineId, baselineVersion, actorAccountId, now,
@@ -215,7 +208,7 @@ export async function restoresForIssue(issueId, limit = 20) {
  * The latest restore of ANOTHER work item that wrote to this one.
  *
  * A parent's restore puts each child back to the child's own record, under the
- * parent's signature, so restoresForIssue() — restores started FROM this item —
+ * parent's signature, so restoresForIssue(), which returns restores started from this item,
  * never finds it. One indexed read (idx_restore_action_issue); null when no
  * parent's restore has rewritten this item.
  */
@@ -236,7 +229,7 @@ export async function restoreReaching(issueId) {
 
 /**
  * The latest restore of each item, in one read: Map(issueId -> row), for the
- * worklist. Only what it shows is selected — never the detail blob.
+ * worklist. Select only the displayed columns, excluding the detail blob.
  */
 export async function latestRestoresFor(issueIds) {
   const ids = [...new Set((issueIds ?? []).map(Number).filter(Number.isFinite))];
@@ -283,10 +276,10 @@ export const SUPPRESSION_TTL_MS = 2 * 60 * 1000;
 /**
  * Declare a write BEFORE making it.
  *
- * WHY THIS EXISTS. A restore writes to the issue. That write produces a
+ * A restore writes to the issue. That write produces a
  * changelog entry and an avi:jira:updated:issue event exactly like any human
  * edit, and without this table the drift collector would faithfully record the
- * restoration itself as fresh drift — leaving the item DRIFTED immediately
+ * restoration itself as fresh drift and leave the item DRIFTED immediately
  * after being restored to CLEAN, with the reviewer's own reversion sitting in
  * their queue as something to review. A loop, and an embarrassing one.
  *
@@ -296,7 +289,7 @@ export const SUPPRESSION_TTL_MS = 2 * 60 * 1000;
  * behaviour you want: suppressing by time would silently swallow a real edit
  * that happened to land while a restore was running.
  *
- * Note that suppressed changes are still RECORDED, with source = 'BASELINE' —
+ * Record suppressed changes with source = 'BASELINE'.
  * the restoration is a real change to the work item and belongs in its history.
  * It is simply not drift.
  */

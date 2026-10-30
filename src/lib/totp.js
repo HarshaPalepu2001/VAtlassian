@@ -1,38 +1,24 @@
 import { createHmac, randomBytes, timingSafeEqual, createCipheriv, createDecipheriv } from 'crypto';
 
 /**
- * TOTP (RFC 6238, over HOTP RFC 4226) — replaces the PIN as the second
- * identification component. Supersedes lib/pin.js.
+ * Implement TOTP RFC 6238 over HOTP RFC 4226 as the second identification
+ * component, replacing lib/pin.js. Authenticator apps compute six-digit codes
+ * locally from a shared secret and a 30-second time step. Forge verifies them
+ * locally too, without external identity-provider calls.
  *
- * WHY THIS KEEPS ZERO EGRESS: Microsoft Authenticator (and Google
- * Authenticator, Authy, 1Password, etc.) all implement the same open
- * standard. When an account is added via "Other account (Google, Microsoft,
- * etc.)" using a QR code / manual key, the app never talks to Microsoft's
- * servers again — the 6-digit code is a local HMAC over the shared secret and
- * the current 30-second time step, computed entirely on-device. We verify the
- * same way, entirely inside this Forge function. No remotes, no external
- * call, no forfeiting Runs on Atlassian.
+ * This uses standard QR/manual-key TOTP enrolment rather than Entra ID push
+ * or PingID. See BUILD-PLAN.md's authentication-factor tradeoff.
  *
- * THIS IS NOT the same thing as Microsoft Entra ID push approval or PingID —
- * those require calling Microsoft's / Ping's identity servers at sign-in
- * time, which is egress. See BUILD-PLAN.md "Authentication factor" section
- * for that tradeoff; this module deliberately implements the egress-free
- * option.
- *
- * ONE THING THIS MODULE CANNOT DO THAT pin.js DID NOT NEED TO: a PIN is only
- * ever hashed (one-way, PBKDF2) because verification just re-hashes the
- * guess. A TOTP secret must be reversible — verification recomputes HMAC
- * codes FROM the secret — so it is symmetrically ENCRYPTED (AES-256-GCM), not
- * hashed. The encryption key must come from Forge's encrypted app storage
- * (`forge variables set --encrypt`), never from a value computed in this
- * file. That key never leaves the app's own execution environment either, so
- * this still does not introduce egress.
+ * Verification needs the original secret to recompute HMAC codes. Encrypt it
+ * with AES-256-GCM instead of hashing it as a PIN. Load the encryption key
+ * from Forge's encrypted app storage using forge variables set --encrypt.
+ * Never derive that key in this file or send it outside the app environment.
  */
 
 export const TOTP_ALGO = 'TOTP-SHA1';   // SHA1 is what Microsoft/Google/Authy authenticator apps expect; RFC 6238 default.
 export const TOTP_DIGITS = 6;
 export const TOTP_PERIOD_SECONDS = 30;
-export const TOTP_SECRET_BYTES = 20;    // 160 bits — RFC 4226 recommended minimum
+export const TOTP_SECRET_BYTES = 20;    // 160 bits, the RFC 4226 recommended minimum
 export const TOTP_WINDOW = 1;           // accept the code one step early/late (clock drift)
 export const MAX_FAILED_ATTEMPTS = 3;   // same lockout policy as the PIN it replaces
 
@@ -45,7 +31,7 @@ export const CREDENTIAL_STATE = {
 
 const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
-/** RFC 4648 base32, no padding — the form every authenticator app's QR scanner expects. */
+/** RFC 4648 base32 without padding for authenticator QR codes. */
 export function base32Encode(buf) {
   let bits = 0, value = 0, out = '';
   for (const byte of buf) {
@@ -123,9 +109,9 @@ export function generateCode(secret, now = Date.now(), period = TOTP_PERIOD_SECO
 }
 
 /**
- * Why a verification failed. The distinction is load-bearing, not cosmetic:
- * CODE_FORMAT means nothing was ever compared against the secret, so it must
- * NOT count toward MAX_FAILED_ATTEMPTS — see countsAsFailedAttempt.
+ * Distinguish format errors from incorrect codes. CODE_FORMAT never compares
+ * against the secret and must not count toward MAX_FAILED_ATTEMPTS.
+ * See countsAsFailedAttempt.
  */
 export const VERIFY_REASON = {
   CODE_FORMAT: 'CODE_FORMAT',
@@ -133,45 +119,30 @@ export const VERIFY_REASON = {
 };
 
 /**
- * Authenticator apps render codes with a separating space for legibility
- * ("123 456"), and both Microsoft Authenticator's copy button and an ordinary
- * select-and-copy carry that space — plus whatever leading/trailing
- * whitespace a mobile keyboard adds — into the field the signer pastes into.
- * Stripping it here, in the one place every caller goes through, is the
- * difference between a signer's correct code being accepted and it being
- * counted as a wrong guess. gate.js's rawCodeSubmitted() already trims for
- * the same reason.
+ * Strip whitespace from copied authenticator codes such as "123 456".
+ * Apply the same cleanup for every caller so a valid pasted code is not
+ * counted as incorrect. gate.js rawCodeSubmitted also trims.
  */
 export function normalizeCode(code) {
   return typeof code === 'string' ? code.replace(/\s+/g, '') : code;
 }
 
 /**
- * Whether a rejected verification should be held against the account's
- * lockout budget. A wrong or replayed code is a real failed attempt. A
- * malformed one is a typing/paste accident that never touched the secret —
- * counting it means three bad pastes lock a signer out of signing entirely,
- * with admin-mediated recovery the only way back (there is deliberately no
- * self-service unlock), which is a denial of service dressed up as a control.
+ * Count wrong and replayed codes toward lockout. Do not count malformed
+ * input, which never reached secret verification. Recovery requires an
+ * administrator's grant; there is no self-service unlock.
  */
 export function countsAsFailedAttempt(verification) {
   return !verification.valid && verification.reason !== VERIFY_REASON.CODE_FORMAT;
 }
 
 /**
- * Verify a code against a window of time steps to tolerate clock drift.
+ * Verify within a time-step window to tolerate clock drift. Use the digits
+ * and period stored with the credential so changed defaults do not invalidate
+ * existing enrolments.
  *
- * `digits` and `period` are parameters rather than constants because the
- * va_credential row stores its own — a credential enrolled under one policy
- * must keep verifying under that policy even if the app's defaults change,
- * otherwise a settings change silently invalidates every existing
- * authenticator.
- *
- * REPLAY GUARD: returns the matched step so the caller can enforce
- * last_used_step >= matchedStep as a rejection — otherwise the same 6-digit
- * code could be replayed for its entire ~30-90s validity window. This is the
- * TOTP analogue of the PIN's constant-time compare; both exist because a
- * short, low-entropy code is only as strong as everything wrapped around it.
+ * Return the matched step. Callers must reject last_used_step >= matchedStep
+ * to prevent replay during the code's validity window.
  */
 export function verifyCode(code, secret, { now = Date.now(), period = TOTP_PERIOD_SECONDS, digits = TOTP_DIGITS, window = TOTP_WINDOW, lastUsedStep = null } = {}) {
   const normalized = normalizeCode(code);
@@ -191,12 +162,9 @@ export function verifyCode(code, secret, { now = Date.now(), period = TOTP_PERIO
 }
 
 /**
- * Read the digits/period a stored credential was enrolled under, falling back
- * to this module's defaults for rows written before those columns carried
- * anything meaningful. Forge SQL's JSON wire protocol can hand an INT column
- * back as a string, so both are coerced rather than trusted — a string
- * `"6"` interpolated into verifyCode's `{digits}` regex quantifier still
- * works by luck, but `hotp`'s `10 ** digits` would not.
+ * Read a credential's enrolled digits and period, falling back to module
+ * defaults for older rows. Coerce Forge SQL numeric strings to numbers before
+ * using them in HOTP calculations.
  */
 export function credentialPolicy(row = {}) {
   const digits = Number(row.digits);
@@ -207,14 +175,10 @@ export function credentialPolicy(row = {}) {
   };
 }
 
-// --- Secret-at-rest encryption -------------------------------------------
-// AES-256-GCM. The key is an app-level secret provisioned via
-// `forge variables set --encrypt TOTP_ENC_KEY_V1` (Atlassian-managed
-// encryption at rest for Forge app variables — GA, zero egress) and read in
-// the resolver via `process.env`, never hard-coded and never derived from
-// anything stored in Forge SQL. `keyVersion` is stored alongside the
-// ciphertext so a future key rotation can decrypt old rows before
-// re-encrypting them; it is not itself a secret.
+// Encrypt secrets with AES-256-GCM using the app-level secret provisioned
+// by forge variables set --encrypt TOTP_ENC_KEY_V1. Read it from process.env;
+// never hard-code it or derive it from Forge SQL data. Store keyVersion with
+// the ciphertext to support rotation and decryption of older rows.
 
 export function encryptSecret(secret, key, keyVersion) {
   const iv = randomBytes(12);
@@ -231,14 +195,10 @@ export function decryptSecret({ ciphertext, iv, tag }, key) {
 }
 
 /**
- * Begin enrolment. Returns the secret ONCE, for QR display, plus the
- * encrypted form to store. The plaintext secret must never be persisted or
- * logged — only ever held in memory for the single response that renders the
- * QR code, exactly as a PIN was only ever handled in memory in pin.js.
- *
- * State starts PENDING_CONFIRM, not ACTIVE: see confirmEnrolment. Activating
- * on enrolment alone would let a typo'd or half-scanned secret silently lock
- * the user out at the first real signature.
+ * Return the plaintext secret once for QR display and its encrypted form
+ * for storage. Never persist or log plaintext. Keep it only in memory for
+ * that response. Start in PENDING_CONFIRM and activate only after a valid
+ * confirmation code proves the enrolment succeeded.
  */
 export function enrol({ key, keyVersion }) {
   const secret = generateSecret();
@@ -260,15 +220,12 @@ export function confirmEnrolment(code, secret, { now = Date.now(), digits = TOTP
 }
 
 /**
- * Pure decision for what a WRONG confirmation code does to attempt/lockout
- * state — deliberately factored out of resolvers/totp.js so the lockout
- * policy is unit-testable without Forge SQL, the same way every other
- * decision in this codebase (lib/interception.js's `observe`, lib/signatures.js's
- * `evaluate`) is pure and the resolver around it is thin I/O glue.
+ * Compute attempt and lockout state after an incorrect confirmation code.
+ * Keep the policy pure for tests outside Forge SQL.
  *
- * Recovery from LOCKED is deliberately NOT exposed here — see
- * db/migrations.js v011_credential_reset_grant: an admin issues a time-boxed
- * grant, the owner redeems it themselves. There is no self-service unlock.
+ * LOCKED recovery requires an administrator's time-limited reset grant,
+ * redeemed by the owner. See migration v011_credential_reset_grant.
+ * There is no self-service unlock.
  */
 export function recordFailedAttempt(currentFailedAttempts, maxAttempts = MAX_FAILED_ATTEMPTS) {
   const attempts = currentFailedAttempts + 1;

@@ -1,14 +1,14 @@
-# VAtlassian P0 Correctness Implementation Plan
+# VAtlassian P0 correctness implementation plan
 
-**Goal:** Fix every defect in the 2026-09-07 audit that is wrong under *both* the `STRICT` and `DETECT` operating models, so the locking architecture in Plan 2 is built on a restore path that cannot silently lie.
+**Goal.** Fix every defect in the 2026-09-07 audit that is wrong under *both* the `STRICT` and `DETECT` operating models, so the locking architecture in Plan 2 is built on a restore path that reports failures.
 
-**Architecture:** Nine independent tasks against the existing Forge app. Pure decision logic goes in modules with no I/O (matching `lib/decision.js`, `lib/interception.js`); anything importing `@forge/api` stays a thin shell so tests can reach the rules without a Forge runtime. Two new SQL migrations (`v021`, `v022`) append to the existing consolidated set. No new dependencies, no egress.
+**Architecture.** Nine independent tasks against the existing Forge app. Pure decision logic goes in modules with no I/O (matching `lib/decision.js`, `lib/interception.js`); anything importing `@forge/api` stays in an I/O adapter so tests can exercise the rules without a Forge runtime. Two new SQL migrations (`v021`, `v022`) append to the existing consolidated set. No new dependencies, no egress.
 
-**Tech Stack:** Node 22 ESM, `node --test`, Forge SQL (MySQL), `@forge/api`, `@forge/resolver`, React 18 + Vite for `frontend/`.
+**Technology.** Node 22 ESM, `node --test`, Forge SQL (MySQL), `@forge/api`, `@forge/resolver`, React 18 + Vite for `frontend/`.
 
 **Spec:** `docs/AUDIT-2026-09-07.md`
 
-## Global Constraints
+## Global constraints
 
 - **Zero egress.** No `remotes:` and no `permissions.external` may appear in `manifest.yml`. `test/manifest-lint.test.js` asserts this; never weaken it.
 - **No new runtime dependencies.** `package.json` dependencies stay exactly as they are.
@@ -40,7 +40,7 @@ Run: `npm test 2>&1 | grep -E "^ℹ (tests|pass|fail)"`
 Expected: `tests 453`, `pass 452`, `fail 1`.
 
 Run: `grep -n "experience" manifest.yml`
-Expected: two lines, `experience: [ issue-view ]` and `experience: [ issue-transition ]` — spaces inside the brackets. This confirms the manifest is right and the assertion is the problem.
+Expected: two lines, `experience: [ issue-view ]` and `experience: [ issue-transition ]`. Include spaces inside the brackets. This confirms the manifest is right and the assertion is the problem.
 
 - [ ] **Step 2: Rewrite the assertion to normalise inline-sequence whitespace**
 
@@ -251,7 +251,7 @@ test('the adapter version is exported so a restore can record which rules ran', 
 - [ ] **Step 2: Run it to make sure it fails**
 
 Run: `node --test test/restore-adapters.test.js`
-Expected: FAIL — `Cannot find module '../src/lib/restore/adapters.js'`.
+Expected failure. `Cannot find module '../src/lib/restore/adapters.js'`.
 
 - [ ] **Step 3: Write the adapter registry**
 
@@ -472,7 +472,7 @@ git commit -m "fix: explicit restore field adapters; ADF no longer stringified, 
 
 ### Task 3: The planner restores every tracked difference
 
-`src/lib/restore/planner.js:136` skips any field whose `semanticChange` is false. `diff.fields` only ever contains fields whose *normalised* value changed (`src/lib/diff/index.js:87` drops the rest), so every entry in that list is genuine integrity drift. A tracked text field edited from `"hello"` to `"  hello"` has `changed: true` and `semanticChange: false` (`src/lib/diff/fields.js:140`): it is recorded as drift, never restored, and — because the verifier only inspects fields the executor attempted — the restore reports `COMPLETE` with the field still wrong.
+`src/lib/restore/planner.js:136` skips any field whose `semanticChange` is false. `diff.fields` only ever contains fields whose *normalised* value changed (`src/lib/diff/index.js:87` drops the rest), so every entry in that list is genuine integrity drift. A tracked text field edited from `"hello"` to `"  hello"` has `changed: true` and `semanticChange: false` (`src/lib/diff/fields.js:140`): it is recorded as drift but never restored. The verifier only inspects fields the executor attempted, so the restore reports `COMPLETE` with the field still wrong.
 
 Integrity and presentation must be separate: the summary may say "formatting only"; the restore may not skip it.
 
@@ -554,7 +554,7 @@ test('the plan records which adapter version produced it', () => {
 - [ ] **Step 2: Run to verify they fail**
 
 Run: `node --test test/baseline-restore.test.js`
-Expected: FAIL — `plan.fieldWrites.summary` is `undefined` (the field was skipped) and `plan.preflight.formattingOnly` is `undefined`.
+Expected failure. `plan.fieldWrites.summary` is `undefined` (the field was skipped) and `plan.preflight.formattingOnly` is `undefined`.
 
 - [ ] **Step 3: Rewrite `planRestore`'s loop**
 
@@ -677,7 +677,7 @@ Expected: PASS, including the four new cases.
 - [ ] **Step 5: Run the whole suite**
 
 Run: `npm test 2>&1 | grep -E "^ℹ (tests|pass|fail)"`
-Expected: `fail 0`. If `test/baseline-diff.test.js` or a panel test asserts the old "every change is formatting only" summary string, update that assertion to the new copy — the behaviour change is intended.
+Expected: `fail 0`. If `test/baseline-diff.test.js` or a panel test asserts the old "every change is formatting only" summary string, update that assertion to the new copy. This is the intended behaviour change.
 
 - [ ] **Step 6: Commit**
 
@@ -690,7 +690,7 @@ git commit -m "fix: restore every tracked difference; formatting-only drives wor
 
 ### Task 4: Verify the whole tracked baseline, not just attempted writes
 
-`src/lib/restore/verifier.js:64` returns early for any field whose outcome is not `SUCCEEDED`, so a tracked field that was never written — or that a workflow post-function changed *during* the restore — is never compared. `tally` then reports `COMPLETE`, `markDecided` clears the drift and `release` sets the item to `BASELINED`.
+`src/lib/restore/verifier.js:64` returns early for any field whose outcome is not `SUCCEEDED`, so it never compares a tracked field that was never written or that a workflow post-function changed during the restore. `tally` then reports `COMPLETE`, `markDecided` clears the drift and `release` sets the item to `BASELINED`.
 
 Completion must mean the entire tracked projection matches.
 
@@ -703,7 +703,7 @@ Completion must mean the entire tracked projection matches.
 **Interfaces:**
 - Consumes: `project()` from `src/lib/content.js`, `OUTCOME`/`RESTORE_STATE` from `outcome.js`.
 - Produces:
-  - `verifyRestore({...}): Promise<{ detail: Detail[], unmatched: { fieldId, fieldName, expected, actual }[] }>` — **breaking change**, it previously returned `detail` directly.
+  - `verifyRestore({...}): Promise<{ detail: Detail[], unmatched: { fieldId, fieldName, expected, actual }[] }>`. This is a breaking change because it previously returned `detail` directly.
   - `tally(detail, unmatched = []): { counters, state }` where `counters` gains `unmatched: number` and `state` can never be `COMPLETE` while `unmatched.length > 0`.
   - `describeResult({ counters, state })` mentions unmatched fields.
 
@@ -749,7 +749,7 @@ test('tally without an unmatched argument keeps the old behaviour', () => {
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `node --test test/restore-verification.test.js`
-Expected: FAIL — the second test gets `COMPLETE` because `tally` ignores its second argument, and `counters.unmatched` is `undefined`.
+Expected failure. The second test gets `COMPLETE` because `tally` ignores its second argument, and `counters.unmatched` is `undefined`.
 
 - [ ] **Step 3: Extend `tally`**
 
@@ -909,7 +909,7 @@ and add `unmatched` to the returned object and the ledger payload:
 - [ ] **Step 8: Run the whole suite**
 
 Run: `npm test 2>&1 | grep -E "^ℹ (tests|pass|fail)"`
-Expected: `fail 0`. Any test calling `verifyRestore` and treating the result as an array must be updated to destructure `{ detail, unmatched }` — that is the intended breaking change.
+Expected: `fail 0`. Any test calling `verifyRestore` and treating the result as an array must be updated to destructure `{ detail, unmatched }`. This is the intended breaking change.
 
 - [ ] **Step 9: Commit**
 
@@ -922,7 +922,7 @@ git commit -m "fix: verify the whole tracked baseline before declaring a restore
 
 ### Task 5: A retry resumes the signed operation instead of re-signing today's content
 
-`src/usecases/restore.js:25` calls `applyApproval({ approval: { ...approval, content_hash: prepared.contentHash } })`. `applyApproval` then compares `approval.content_hash` against a fresh read — comparing today's hash with itself. The signature's binding to specific content is discarded, which is precisely the substitution the spec forbids.
+`src/usecases/restore.js:25` calls `applyApproval({ approval: { ...approval, content_hash: prepared.contentHash } })`. `applyApproval` then compares `approval.content_hash` against a fresh read, so it compares today's hash with itself. This discards the signature's binding to specific content and violates the spec.
 
 Removing the substitution alone makes every retry fail `STALE_EVIDENCE`, because a partially applied restore has by definition changed the content. The spec's rule is the fix: a retry is valid only when every tracked field currently holds **either** the signed candidate value **or** the baseline target value. Anything else is a third party's edit and requires a new review.
 
@@ -940,7 +940,7 @@ That needs the signed candidate's per-field digests to be durable, which also sa
 - Consumes: nothing new.
 - Produces: `resumable({ baselineDigests, candidateDigests, currentDigests }): { ok: boolean, reason: string|null, intruded: string[] }`.
   `startRestore` gains a `candidateDigests` argument (`{ fieldId: digest }`, defaulting to `{}`).
-  `restoreById`/`restoresForIssue` rows gain `candidate_digests` — a parsed object, `{}` when the column is null or unparseable.
+  `restoreById`/`restoresForIssue` rows gain `candidate_digests`, a parsed object, `{}` when the column is null or unparseable.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -997,7 +997,7 @@ test('a missing candidate snapshot refuses rather than guessing', () => {
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `node --test test/restore-resume.test.js`
-Expected: FAIL — `Cannot find module '../src/lib/restore/resume.js'`.
+Expected failure. `Cannot find module '../src/lib/restore/resume.js'`.
 
 - [ ] **Step 3: Write the pure resume rule**
 
@@ -1246,7 +1246,7 @@ git commit -m "fix: retries resume the signed operation; signed content hash is 
 
 ### Task 6: Server-enforced minimum assurance for both decisions
 
-`src/usecases/approval.js:42` uses `ct.required_assurance` directly, and `va_controlled_transition.required_assurance` may be configured to `NATIVE_TRANSITION`, whose provider (`src/lib/approval/providers/native.js:3`) accepts `confirmed: true` with no signature. This is the shared approve/reject path, so a rejection — which triggers a restore that rewrites the issue — can also run unsigned.
+`src/usecases/approval.js:42` uses `ct.required_assurance` directly, and `va_controlled_transition.required_assurance` may be configured to `NATIVE_TRANSITION`, whose provider (`src/lib/approval/providers/native.js:3`) accepts `confirmed: true` with no signature. This is the shared approve/reject path, so a rejection can run unsigned and trigger a restore that rewrites the issue.
 
 **Files:**
 - Modify: `src/lib/approval/levels.js`
@@ -1259,7 +1259,7 @@ git commit -m "fix: retries resume the signed operation; signed content hash is 
 - Consumes: nothing new.
 - Produces:
   - `MINIMUM_ASSURANCE: 'ESIGNATURE'`
-  - `effectiveAssurance(required): string` — the stronger of `required` and the floor; throws nothing, returns the floor for unknown input.
+  - `effectiveAssurance(required): string` returns the stronger of `required` and the floor. It never throws and returns the floor for unknown input.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1292,7 +1292,7 @@ test('an unknown or missing policy falls back to the floor, never below it', () 
 - [ ] **Step 2: Run to verify they fail**
 
 Run: `node --test test/approval-assurance.test.js`
-Expected: FAIL — `effectiveAssurance is not a function`.
+Expected failure. `effectiveAssurance is not a function`.
 
 - [ ] **Step 3: Add the floor**
 
@@ -1372,7 +1372,7 @@ Add imports `import { meetsAssurance, MINIMUM_ASSURANCE } from '../lib/approval/
 - [ ] **Step 7: Run the whole suite**
 
 Run: `npm test 2>&1 | grep -E "^ℹ (tests|pass|fail)"`
-Expected: `fail 0`. Tests that configured `required_assurance: 'NATIVE_TRANSITION'` and expected a native approval to succeed must be updated to expect `INSUFFICIENT_ASSURANCE` — that is the intended behaviour change. Find them with `grep -rn "NATIVE_TRANSITION" test/`.
+Expected: `fail 0`. Tests that configured `required_assurance: 'NATIVE_TRANSITION'` and expected a native approval to succeed must be updated to expect `INSUFFICIENT_ASSURANCE`. This is the intended behaviour change. Find them with `grep -rn "NATIVE_TRANSITION" test/`.
 
 - [ ] **Step 8: Commit**
 
@@ -1385,7 +1385,7 @@ git commit -m "feat: server-enforced ESIGNATURE floor for approvals and rejectio
 
 ### Task 7: Transition before promotion
 
-`src/usecases/approval.js:59` runs `if (true) { applied = await deps.apply(...) }` — capture and baseline publication — and only then, at line 67, asks Jira to transition. Jira can refuse (a transition screen with a required field, a permission, another validator), leaving a published baseline for a status the item never reached.
+`src/usecases/approval.js:59` runs `if (true) { applied = await deps.apply(...) }` to capture and publish the baseline. Only then, at line 67, does it ask Jira to transition. Jira can refuse (a transition screen with a required field, a permission, another validator), leaving a published baseline for a status the item never reached.
 
 The approval row must still be activated before the transition, because the workflow validator consumes it. Only the *promotion* moves after.
 
@@ -1449,7 +1449,7 @@ test('a rejection still applies immediately: there is no transition to wait for'
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `node --test test/approval-submit.test.js`
-Expected: FAIL — the first test's `calls` is `['apply', 'transition']`, so `calls.includes('apply')` is `true`.
+Expected failure. The first test's `calls` is `['apply', 'transition']`, so `calls.includes('apply')` is `true`.
 
 - [ ] **Step 3: Reorder**
 
@@ -1495,7 +1495,7 @@ Expected: PASS.
 - [ ] **Step 5: Run the whole suite**
 
 Run: `npm test 2>&1 | grep -E "^ℹ (tests|pass|fail)"`
-Expected: `fail 0`. `test/gate-approval.test.js` and `test/resolver-wiring.test.js` exercise the same path — if either asserts a call order, update it to the new one.
+Expected: `fail 0`. `test/gate-approval.test.js` and `test/resolver-wiring.test.js` exercise the same path. If either asserts a call order, update it to the new one.
 
 - [ ] **Step 6: Commit**
 
@@ -1508,7 +1508,7 @@ git commit -m "fix: promote only after Jira accepts the transition"
 
 ### Task 8: Record an unauthorized transition as an issue-level incident
 
-`src/triggers/issue-transitioned.js:96` logs `not baselined` and falls through to ordinary drift collection. `captureBaseline` returns `reason: 'NO_APPROVAL'` when the edge **is** a configured gate and no consumed approval exists, and `'INSUFFICIENT_ASSURANCE'` when one exists but is too weak. Both mean a controlled transition happened without authorization — most often because the validator is missing from the published workflow. `jobs/gatecheck.js` finds the *configuration* problem; nothing records the *event* against the affected issue.
+`src/triggers/issue-transitioned.js:96` logs `not baselined` and falls through to ordinary drift collection. `captureBaseline` returns `reason: 'NO_APPROVAL'` when the edge **is** a configured gate and no consumed approval exists, and `'INSUFFICIENT_ASSURANCE'` when one exists but is too weak. Both mean a controlled transition happened without authorization. The most common cause is a missing validator in the published workflow. `jobs/gatecheck.js` finds the *configuration* problem; nothing records the *event* against the affected issue.
 
 Ambiguous evidence must stay unresolved: the incident records what was observed and does not infer authorization from a nearby signature.
 
@@ -1525,7 +1525,7 @@ Ambiguous evidence must stay unresolved: the incident records what was observed 
 - Consumes: `tryAppend` from `src/db/store.js`, `EVENT` from `src/lib/ledger.js`.
 - Produces:
   - `classifyTransition({ captureReason, transition, hasChangelog }): { unauthorized: boolean, kind: string|null, confidence: 'OBSERVED'|'AMBIGUOUS'|null }` (pure)
-  - `recordIncident({ issueId, projectId, kind, confidence, actorAccountId, occurredAt, detectedAt, evidence }): Promise<Buffer>` — returns the new `incident_id`
+  - `recordIncident({ issueId, projectId, kind, confidence, actorAccountId, occurredAt, detectedAt, evidence }): Promise<Buffer>` returns the new `incident_id`
   - `openIncidentsForIssue(issueId): Promise<Row[]>`
   - `openIncidentsForProject(projectId, limit = 100): Promise<Row[]>`
 
@@ -1578,7 +1578,7 @@ test('a capture error is ambiguous rather than a clean bill of health', () => {
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `node --test test/incidents.test.js`
-Expected: FAIL — `Cannot find module '../src/lib/incidents.js'`.
+Expected failure. `Cannot find module '../src/lib/incidents.js'`.
 
 - [ ] **Step 3: Write the pure classifier**
 
@@ -1834,12 +1834,12 @@ In `src/usecases/panel.js`'s `getState`, add `incidents: await openIncidentsForI
 
 Run: `grep -n "eligibility, approval, record, drift" src/usecases/panel.js frontend/src -r`
 
-The merge contract in `docs/IMPLEMENTATION.md` states the panel response "may add issue, transitions, credentialEnrolled, error" — adding `incidents` is consistent with that. Update that line in `docs/IMPLEMENTATION.md` to list `incidents` too.
+The merge contract in `docs/IMPLEMENTATION.md` states the panel response "may add issue, transitions, credentialEnrolled, error". Adding `incidents` is consistent with that. Update that line in `docs/IMPLEMENTATION.md` to list `incidents` too.
 
 - [ ] **Step 8: Run the whole suite**
 
 Run: `npm test 2>&1 | grep -E "^ℹ (tests|pass|fail)"`
-Expected: `fail 0`. If a control-wiring test asserts every `va_*` table is referenced by code, `va_incident` now is — via `incidentStore.js`.
+Expected: `fail 0`. If a control-wiring test asserts every `va_*` table is referenced by code, `incidentStore.js` now references `va_incident`.
 
 - [ ] **Step 9: Commit**
 
@@ -1854,7 +1854,7 @@ git commit -m "feat: record UNAUTHORIZED_TRANSITION incidents against the affect
 
 `src/lib/restore/executor.js:99` picks `api.asApp()` by default (`DEFAULT_PROJECT_CONFIG.restore.actAs === 'app'`) while every PUT requests `overrideScreenSecurity=true&overrideEditableFlag=true`. Those overrides are honoured for a caller with **Administer Jira**; `asApp()` is not a general bypass. The first time anyone learns this is mid-rejection, when the write fails.
 
-The probe must be non-destructive: a PUT of a field to the value it already holds, or — better — `GET /rest/api/3/mypermissions` for the acting identity plus an `editmeta` read. Both are needed: permission tells you whether the override will be honoured, `editmeta` tells you whether the tracked fields are on a screen at all.
+The probe must be non-destructive: a PUT of a field to the value it already holds, or preferably `GET /rest/api/3/mypermissions` for the acting identity plus an `editmeta` read. Both reads are needed. Permission tells you whether Jira will honour the override. `editmeta` tells you whether the tracked fields are on a screen.
 
 **Files:**
 - Create: `src/lib/restore/writeIdentity.js`
@@ -1935,7 +1935,7 @@ test('unknown permissions fail closed rather than passing', () => {
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `node --test test/restore-write-identity.test.js`
-Expected: FAIL — `Cannot find module '../src/lib/restore/writeIdentity.js'`.
+Expected failure. `Cannot find module '../src/lib/restore/writeIdentity.js'`.
 
 - [ ] **Step 3: Write the classifier**
 
@@ -2089,7 +2089,7 @@ Run: `grep -n "adminDiagnostics\|define(" src/resolvers/admin.js | head -20`
 - [ ] **Step 6: Run the whole suite**
 
 Run: `npm test 2>&1 | grep -E "^ℹ (tests|pass|fail)"`
-Expected: `fail 0`. `test/resolver-wiring.test.js` asserts manifest↔code wiring — if it enumerates admin endpoints, add the new one there.
+Expected: `fail 0`. `test/resolver-wiring.test.js` asserts manifest↔code wiring. If it enumerates admin endpoints, add the new one there.
 
 - [ ] **Step 7: Commit**
 

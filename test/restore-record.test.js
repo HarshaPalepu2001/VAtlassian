@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 
 /**
- * WHAT A FINISHED RESTORE LEAVES ON THE RECORD.
+ * Record a completed restore.
  *
- * The panel folds a finished restore into one line on the Baseline card, and
- * the review window's Baseline record lists every restore. Both need who
- * triggered it, when it finished, and which version it put the item back to —
- * all already on the restore row and its reject approval.
+ * The panel summarizes a finished restore on the Baseline card, and the
+ * review window lists each restore in the Baseline record. Both need the
+ * actor, completion time, and restored version from the restore row and its
+ * reject approval.
  */
 
 const modules = {

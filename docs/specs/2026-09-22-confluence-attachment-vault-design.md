@@ -1,8 +1,8 @@
-# Confluence Attachment Vault — Design (Phases 1 & 2)
+# Confluence attachment vault design, phases 1 and 2
 
 > **Superseded 2026-10-12**: VAtlassian drops every Confluence integration. Attachments are vaulted in the Forge Object Store only.
 
-> **Revised 2026-09-23 — supersedes "Confluence layout" below.**
+> **Revised 2026-09-23. Supersedes "Confluence layout" below.**
 > - **One vault space for the whole site** (`VATVAULT`, recorded in `va_vault_site`),
 >   not one per project: each project is a page under the vault home page, each
 >   work item a child page of its project. A site with 1000 controlled projects
@@ -28,8 +28,8 @@
 Status: approved for spec review, not yet implemented.
 Scope: vault provisioning + attachment-deletion lockdown (Phase 1) and baseline-time
 attachment push to the vault (Phase 2). Detecting a deleted vaulted attachment and
-restoring it (Phase 3) is a **separate, later spec** — it touches the existing
-tree/field restore engine and deserves its own design pass.
+restoring it (Phase 3) needs a separate, later spec because it changes the
+existing tree/field restore engine.
 
 ## Problem
 
@@ -37,13 +37,13 @@ tree/field restore engine and deserves its own design pass.
 ([baseline.js](../../../src/lib/baseline.js)): attachment changes arrive from Jira's
 changelog as per-item add/remove rows with no whole-value `from`, so there is nothing
 to rewind to, and the app has always refused to guess. That leaves attachments as the
-one controlled-field kind with no compliance story: if one is deleted from an
+one controlled-field kind without reliable detection or recovery: if one is deleted from an
 approved issue, the app can neither detect it precisely nor recover it.
 
-The frontend already stubs a fix for this — [`ConfluenceSpaceSetup.tsx`](../../../frontend/src/confluence/ConfluenceSpaceSetup.tsx)
+The frontend has unused controls for this. [`ConfluenceSpaceSetup.tsx`](../../../frontend/src/confluence/ConfluenceSpaceSetup.tsx)
 has an "Attachment Mode: Vaulting" option, and [`governanceCore.js`](../../../src/lib/governanceCore.js)
-carries an unused `vaultMode` field — but nothing behind either does anything. This
-spec is that missing backend piece, scoped to Jira issue attachments specifically
+carries an unused `vaultMode` field. Neither has a backend implementation. This
+spec defines that implementation for Jira issue attachments
 (a distinct concern from the existing Confluence-native content governance system
 built around `GovernedObjectRef`/`ConfluenceAdapter`, which this reuses only for its
 Confluence REST plumbing, not its data model).
@@ -57,16 +57,16 @@ Confluence REST plumbing, not its data model).
 - Every time a baseline is captured for an issue in such a project, that issue's
   current attachments are copied into the vault space as durable, hashed evidence.
 - None of this can fail an approval or a config save. Vaulting is defense-in-depth,
-  not the system of record — the baseline row already is.
+  while the baseline row remains the system of record.
 
 ## Non-goals (this spec)
 
 - Detecting that a vaulted attachment was deleted, and restoring it. That is Phase 3.
 - Reversing the attachment-deletion lockdown if the controlled transition is later
   revoked. Evidence already collected should not become deletable again just because
-  a gate was turned off; this is a deliberate one-way door.
+  a gate was turned off; this is a permanent restriction.
 - Any new admin-console UI. Per discussion, this is meant to be invisible to
-  ordinary users and not surfaced with new UI chrome — admins can already see it by
+  ordinary users and needs no new controls. Admins can see it by
   visiting the Confluence space directly once it exists.
 
 ## Architecture
@@ -75,9 +75,8 @@ Confluence REST plumbing, not its data model).
 
 [`createControlledTransition`](../../../src/usecases/transitions.js) and
 `updateControlledTransition` are where an admin sets `capture_baseline = true` on an
-`ACTIVE` controlled transition — this is the one place "a project gets a baseline
-condition" actually happens, and the project id is already a mandatory part of that
-input. When a save results in an ACTIVE row with `capture_baseline: true`, it calls
+`ACTIVE` controlled transition. These functions enable baseline capture for a
+project, and their input already requires the project id. When a save results in an ACTIVE row with `capture_baseline: true`, it calls
 a new `provisionVault(projectId)` (in a new `src/lib/vaultProvision.js`) which does
 two independent, individually-idempotent things:
 
@@ -85,8 +84,8 @@ two independent, individually-idempotent things:
 2. `lockAttachmentDeletion(projectId)`
 
 Both failures are caught and audited but **never fail the controlled-transition
-save** — the transition rule itself is the authoritative configuration; vault
-provisioning is a side effect that self-heals (see Idempotency below).
+save**. The transition rule is the authoritative configuration. Vault
+provisioning retries after failure (see Idempotency below).
 
 ### Push point: baseline capture
 
@@ -144,10 +143,9 @@ current Jira config.
 
 ## Confluence layout
 
-- Space key: `VLT<PROJECTKEY>` (project key uppercased, non-alnum stripped). On a
-  409 (key already taken — e.g. a half-finished earlier attempt whose DB insert
-  failed), look the space up by key via `GET /wiki/api/v2/spaces?keys=...` and adopt
-  its id rather than erroring. This makes `ensureVaultSpace` idempotent across
+- Space key: `VLT<PROJECTKEY>` (project key uppercased, non-alnum stripped). If the API returns
+  409 because the key exists, look the space up by key via `GET /wiki/api/v2/spaces?keys=...` and adopt
+  its id rather than failing. This recovers from an earlier failed DB insert and makes `ensureVaultSpace` idempotent across
   partial failures without needing a two-phase commit.
 - One Confluence page per issue, titled with the issue key, created lazily by the
   vault worker on the first attachment it ever vaults for that issue. All of that
@@ -172,16 +170,16 @@ current Jira config.
 3. Record `permission_scheme_id`/`permission_locked_at` on `va_vault_space` and
    append an audit event `ATTACHMENT_DELETE_LOCKED` with the scheme id **and the
    full list of other project keys currently using the same scheme**, so the
-   ledger always shows the true blast radius even though the action isn't blocked
-   by it.
+   ledger names every affected project even though shared use does not block
+   the action.
 
-This is deliberately **project-wide, not per-issue and not per-attachment** — Jira's
+This applies project-wide because Jira's
 permission model has no finer granularity than the permission scheme, which is
 shared by every issue in the project (and, if the admin has set it up that way,
 by other projects too). Confirmed acceptable: projects that don't have a VAtlassian
 controlled transition configured were never going to have drift tracked on them
-regardless of this side effect. The lockdown is **one-way** — it is never reversed
-by revoking the controlled transition (see Non-goals).
+regardless of this side effect. Revoking the controlled transition never reverses the lockdown
+(see Non-goals).
 
 A determined actor with elevated Jira/site-admin rights can still bypass a
 permission scheme (e.g., by editing it back before deleting). That is exactly why
@@ -191,16 +189,14 @@ detection is the actual guarantee.
 ## Idempotency & error handling
 
 - `ensureVaultSpace` and `lockAttachmentDeletion` are both check-then-act with a
-  durable row (`va_vault_space`) as the source of truth for "already done" — safe
-  to call repeatedly from both the eager (config-save) and lazy (vault-worker
-  fallback, in case the eager call failed) call sites.
+  durable row (`va_vault_space`) to record completion. Both can be called
+  repeatedly from config saves and the vault-worker fallback.
 - The vault worker skips any `(baseline_id, jira_attachment_id)` pair already in
   `va_vault_attachment` (Forge queues are at-least-once).
 - Per-attachment upload failures are caught individually and audited
   (`ATTACHMENT_VAULT_FAILED`) without aborting the rest of that baseline's
-  attachments — same "don't let one bad item block the others" rule gatecheck.js
-  already follows. Since every baseline pushes the *current* full attachment set,
-  a transient failure self-heals on the issue's next baseline.
+  attachments. `gatecheck.js` already isolates failures this way. Since every baseline pushes the *current* full attachment set,
+  the issue's next baseline retries a transient failure.
 - New audit events (`src/lib/ledger.js`): `VAULT_SPACE_CREATED`,
   `VAULT_SPACE_CREATE_FAILED`, `ATTACHMENT_DELETE_LOCKED`,
   `ATTACHMENT_DELETE_LOCK_FAILED`, `VAULT_QUEUE_FAILED`, `ATTACHMENT_VAULTED`,

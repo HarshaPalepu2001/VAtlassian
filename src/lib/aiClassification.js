@@ -1,28 +1,21 @@
 import { ALWAYS_CONTROLLED_FIELDS } from './content.js';
 
 /**
- * AI-assisted GxP field classification — decision support, and nothing else.
+ * Suggest GxP field classifications for administrator review.
  *
- * THE ONE RULE THIS MODULE IS BUILT AROUND, same as lib/report.js's: the model
- * never decides anything by itself. It sorts each field into a bucket and gives
- * a short reason; an administrator reviews the split, can move any field before
- * committing, and only resolvers/admin.js's admin:saveControlledFieldsBaseline —
- * fired by a human pressing "Track & Save Baseline" — ever writes a row to
- * va_controlled_field. Nothing here calls that resolver, queries the database,
- * or has an opinion once its answer is returned.
+ * The model assigns each field a category and a short reason. An administrator
+ * can change each assignment before saving. Only the human-triggered
+ * admin:saveControlledFieldsBaseline resolver writes va_controlled_field.
+ * This module neither calls that resolver nor queries the database.
  *
- * ZERO EGRESS. Classification runs on Forge LLMs (`@forge/llm`, the `bl-llm`
- * module, `model: [claude]`), the same as the AI report — inference stays on
- * the Atlassian platform and nothing here adds a `remotes` block or an external
- * fetch. Only field ids, names and Jira schema types are sent; never a field's
- * VALUE, and never the issue the field lives on.
+ * Classification uses Forge LLMs through @forge/llm, the bl-llm module and
+ * model: [claude], as the AI report does. It sends field IDs, names and schema
+ * types, never field values or issue content. It adds no remotes or external
+ * fetch configuration; inference stays on the Atlassian platform.
  *
- * FAIL CLOSED TO A HEURISTIC, NEVER TO A BLOCKED SCREEN. If the model is
- * disabled, unavailable, over quota, or returns something unparseable, the
- * admin still gets a full classification — heuristicClassify() below — and the
- * response says so (`degraded: true`) so the screen can be honest about which
- * kind of answer the administrator is reviewing. An app that says "AI could not
- * run, so start over" turns a decision-support feature into an outage.
+ * If the model is disabled, unavailable, over quota or returns unparseable
+ * output, heuristicClassify() supplies a complete fallback classification.
+ * The response sets degraded: true so the UI identifies the fallback.
  */
 
 export const CLASSIFICATION = {
@@ -31,10 +24,8 @@ export const CLASSIFICATION = {
 };
 
 /**
- * Models that reject `temperature`; sending it is a 400. Kept as its own short
- * list rather than imported from lib/report.js — the two modules make
- * independent calls to the LLM module and neither should have to change because
- * the other's model set did.
+ * Models that reject temperature with a 400 response. Keep this list separate
+ * from lib/report.js because the modules make independent model calls.
  */
 const NO_SAMPLING_PARAMS = new Set([
   'claude-opus-4-7',
@@ -44,37 +35,25 @@ const NO_SAMPLING_PARAMS = new Set([
 ]);
 
 /**
- * A hard cap on one classification request's total batch size. Not a
- * real-world limit — a company-managed project rarely declares more than a
- * few hundred fields — but a resolver with a bounded budget must never hand an
- * unbounded list to a network call.
+ * Bound the total number of fields in one resolver request. Projects usually
+ * have only a few hundred fields, but network input must still have a limit.
  */
 const MAX_FIELDS_PER_CALL = 500;
 
 /**
- * How many fields go into ONE completion. THIS, not MAX_FIELDS_PER_CALL, is
- * what keeps a large project from timing out.
- *
- * A single completion asked to emit structured JSON for hundreds of fields is
- * slow in direct proportion to its OUTPUT size — every field costs another
- * {fieldId, decision, rationale} object — so a 500-field project sent as one
- * request is the classic way this feature times out, and raising the timeout
- * to compensate only buys a little room before the next larger project hits
- * it again. Chunking is the fix that scales: 50 fields is a few seconds of
- * generation, whatever REQUEST_TIMEOUT_MS is set to, and chunks are requested
- * IN PARALLEL (see classifyFields), so a 500-field project is ~10 concurrent
- * small calls rather than one huge one — bounded by the slowest chunk, not
- * their sum. A chunk that times out or comes back unparseable degrades to the
- * heuristic ON ITS OWN; the rest of the project keeps its real classification.
+ * Fields per completion. Output size determines generation time: each field
+ * adds a {fieldId, decision, rationale} object. Split requests into concurrent CHUNK_SIZE-field chunks rather than increasing
+ * the timeout.
+ * Total time then depends on the slowest chunk. A timeout or invalid response
+ * falls back to the heuristic for that chunk only.
  */
 const CHUNK_SIZE = 150;
 
 /**
  * Per-chunk wall-clock budget. admin:classifyFieldsForBaseline runs from a
- * Custom UI click, not a validator, so it has more headroom than the panel's
- * 25s budget — but chunking already does the heavy lifting here. This mostly
- * exists to catch a genuinely stuck request rather than to accommodate a large
- * payload, which chunking has already made small.
+ * Custom UI click rather than a validator, so it has more than the panel's
+ * 25-second budget. Chunking bounds payload size; this timeout stops stalled
+ * requests.
  */
 const REQUEST_TIMEOUT_MS = 20000;
 
@@ -155,15 +134,9 @@ export function buildPayload(fields) {
 }
 
 /**
- * THE DETERMINISTIC FALLBACK, and the second opinion every model answer is
- * checked against for coverage (see validate() below).
- *
- * Pure and keyword-based on purpose: no network, no model, so it is always
- * available and always the same answer for the same input. ALWAYS_CONTROLLED_
- * FIELDS are never asked about — they are pinned GXP_CANDIDATE by
- * partitionForBaseline() regardless of what reaches this function — but are
- * handled here too so a caller that passes one gets a sensible answer rather
- * than the generic default.
+ * Deterministic, keyword-based fallback. validate() also uses it to fill gaps
+ * in model output. partitionForBaseline() pins ALWAYS_CONTROLLED_FIELDS to
+ * GXP_CANDIDATE before classification, but handle them here too for direct callers.
  */
 const GXP_NAME_HINTS =
   /accept(ance)?[\s-]?criteri|qualit|valid(at)?|verif|complian|regulat|risk|deviat|\bcapa\b|release|audit|safety|clinical|batch|\blot\b|specification|protocol|electronic record|signature|due ?date|priority|security|description|approv/i;
@@ -186,25 +159,18 @@ export function heuristicClassify(fields) {
     if (NON_GXP_NAME_HINTS.test(name)) {
       return { fieldId: id, decision: CLASSIFICATION.NON_GXP, rationale: 'Looks like planning metadata' };
     }
-    // Unrecognised defaults to GXP_CANDIDATE, deliberately the opposite of
-    // materiality.js's DEFAULT_LADDER default. That module is ranking ALREADY-
-    // TRACKED fields for how loudly to alert on a change, where over-alerting
-    // gets an app muted. This one is deciding what enters a compliance baseline
-    // in the first place, where the failure that matters is a controlled field
-    // silently left out — see ground rule 4 in SYSTEM_PROMPT above.
+    // Default unknown fields to GXP_CANDIDATE to avoid excluding controlled content.
+    // materiality.js ranks already tracked changes and defaults lower to reduce
+    // notifications. This classifier decides what enters the baseline, so it uses
+    // the more conservative default. See SYSTEM_PROMPT rule 4.
     return { fieldId: id, decision: CLASSIFICATION.GXP, rationale: 'Unrecognised — defaulted to controlled' };
   });
 }
 
 /**
- * Enforce the schema AND enforce coverage.
- *
- * THE COVERAGE CHECK IS THE POINT, same shape as lib/report.js's citation
- * check. A model that classifies 40 of the 42 fields it was sent is not a
- * degraded response — it is a partial one, and a reviewer must never see a
- * two-bucket screen that silently has no row at all for a field Jira actually
- * has. Every id not returned, or returned against an id we never sent, is
- * filled in from the pure heuristic so the two lists always sum to the input.
+ * Validate both schema and field coverage. Fill missing or unknown model IDs
+ * from the heuristic so every input field appears in exactly one output list.
+ * A model response with 40 of 42 fields must not hide the other two from review.
  */
 export function validate(parsed, fields) {
   if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.classifications)) return null;
@@ -238,12 +204,9 @@ function degraded(fields, model, reason) {
 }
 
 /**
- * One completion's worth of the work: send a single chunk, validate it, and
- * NEVER THROW — every failure path returns the chunk's heuristic
- * classification with `degraded: true`, exactly as the AI report degrades.
- * Pulled out of classifyFields() so a timeout or a bad response on one chunk
- * is contained to that chunk instead of losing the whole batch's real
- * classifications.
+ * Classify and validate one chunk. Every failure returns its heuristic result
+ * with degraded: true. Isolating chunks prevents a timeout or invalid response
+ * from discarding successful classifications for the rest of the batch.
  */
 async function classifyChunk(payload, model, maxCompletionTokens) {
   const request = {
@@ -260,10 +223,9 @@ async function classifyChunk(payload, model, maxCompletionTokens) {
 
   let response;
   try {
-    // IMPORTED LAZILY — see lib/report.js's identical comment. @forge/llm
-    // throws "Forge runtime not found." at module load anywhere outside a
-    // deployed app, which would make this module (and admin.js, which imports
-    // it) unloadable by test/smoke.mjs and unusable when AI is unprovisioned.
+    // Import @forge/llm lazily. It throws "Forge runtime not found." at module load
+    // outside deployed Forge, which would otherwise break smoke tests and sites
+    // where AI is not provisioned. lib/report.js uses the same approach.
     const { chat } = await import('@forge/llm');
 
     let timerId;
@@ -305,28 +267,16 @@ async function classifyChunk(payload, model, maxCompletionTokens) {
 }
 
 /**
- * Classify a batch of fields.
+ * Classify a batch of fields without throwing.
  *
- * @param fields   candidate fields, either shape buildPayload() accepts
- * @param model    e.g. project config's ai.models.light — a full batch of short
- *                 field descriptors is exactly the low-stakes, high-volume case
- *                 lib/report.js's own routing reserves the light model for
- * @param aiEnabled  the project's config.ai.enabled. Checked here, not left to
- *                    the caller, so a project that has turned AI off gets the
- *                    same heuristic path as one where the model happened to be
- *                    unavailable — one behaviour, two reasons.
+ * @param fields Candidate fields in either shape accepted by buildPayload().
+ * @param model The light model from project configuration for short descriptors.
+ * @param aiEnabled The project's config.ai.enabled. Disabled AI uses the same
+ *                  heuristic fallback as an unavailable model.
  *
- * CHUNKED AND PARALLEL. The batch is split into CHUNK_SIZE-field pieces and
- * every piece is requested at once — total wall time is bounded by the
- * slowest chunk, not their sum, and each chunk is small enough that the
- * slowest chunk is rarely close to REQUEST_TIMEOUT_MS. A chunk that still
- * times out degrades on its own; every other chunk keeps its real
- * classification, so one bad chunk costs a few weaker suggestions, never the
- * whole screen.
- *
- * NEVER THROWS. Every failure path returns a heuristic classification for the
- * fields it covers; the caller (resolvers/admin.js) decides how to say so on
- * screen, exactly as panel.js does for the AI report.
+ * Request CHUNK_SIZE-field pieces concurrently. Each piece has its own timeout
+ * and fallback, so one failure leaves the other model classifications intact.
+ * The resolver decides how to disclose degraded results in the UI.
  */
 export async function classifyFields({ fields, model, aiEnabled = true, maxCompletionTokens = 4096 }) {
   const payload = buildPayload(fields);
@@ -356,22 +306,15 @@ export async function classifyFields({ fields, model, aiEnabled = true, maxCompl
 }
 
 /**
- * THE ONLY PLACE A CLASSIFICATION BECOMES A WRITE-SHAPED DECISION — pure, so it
- * is testable without a database, and the last line of defence for the two
- * rules the UI is already supposed to enforce:
+ * Convert reviewed classifications into write decisions without I/O.
  *
- *   1. ALWAYS_CONTROLLED_FIELDS ARE PINNED. Whatever decision reached this
- *      function for summary/description/issuelinks/subtasks, they come out
- *      tracked. The admin console does not render a move control for them, but
- *      a resolver that trusted the payload to also honour that would be one
- *      hand-crafted request away from excluding the reviewed record itself.
- *   2. EVERY FIELD IS RULED ON EXACTLY ONCE. A duplicate fieldId in the
- *      reviewer's payload (a double click, a stale re-render) keeps its first
- *      occurrence and drops the rest, rather than writing the same field twice
- *      or letting a later duplicate silently overturn an earlier decision.
+ * Always track ALWAYS_CONTROLLED_FIELDS, including summary, description,
+ * issuelinks and subtasks, even if an edited request tries to exclude them.
+ * Keep only the first occurrence of each fieldId so a duplicate cannot write
+ * twice or replace an earlier decision.
  *
- * `fieldsById` supplies the metadata (name/kind/schema) upsertControlledField
- * needs — classifications carry only the id, decision and rationale.
+ * fieldsById supplies the name, kind and schema required by
+ * upsertControlledField. Classifications contain only IDs, decisions and rationales.
  */
 export function partitionForBaseline(classifications, fieldsById) {
   const alwaysIds = new Set(ALWAYS_CONTROLLED_FIELDS.map((f) => f.field_id));
@@ -397,9 +340,8 @@ export function partitionForBaseline(classifications, fieldsById) {
     else excluded.push(row);
   }
 
-  // Pinned fields the reviewer's payload never mentioned at all — should not
-  // happen, since the screen always renders them in Bucket A, but a baseline
-  // commit is exactly the place to not take that on faith.
+  // Include pinned fields even if an edited request omits them. The UI's
+  // Bucket A rendering does not establish that the payload is complete.
   for (const always of ALWAYS_CONTROLLED_FIELDS) {
     if (!seen.has(always.field_id)) {
       tracked.push({
@@ -416,14 +358,11 @@ export function partitionForBaseline(classifications, fieldsById) {
 }
 
 /**
- * AUDIT TRAIL PAYLOAD GENERATION.
+ * Build audit metadata for a GxP baseline commit.
  *
- * Verifies and generates the required compliance metadata for a GxP baseline commit.
- * The payload must capture both the final categorisation (tracked vs excluded)
- * and the affirmative compliance flags (`aiAssisted`, `reviewedByHuman`, `timestamp`).
- *
- * Exported as a pure function to guarantee testability of the payload schema
- * without mocking the database ledger.
+ * Record final tracked/excluded categories and the aiAssisted, reviewedByHuman
+ * and timestamp flags. This pure function lets tests check the payload schema
+ * without a database ledger.
  */
 export function buildBaselineAuditPayload({ projectId, issueTypeId, tracked, excluded, now }) {
   if (!Number.isFinite(projectId)) throw new Error('Missing projectId');

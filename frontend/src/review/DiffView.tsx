@@ -49,22 +49,14 @@ function renderFormattedText(text: string, field?: DiffField): ReactNode {
 }
 
 /**
- * The diff.
+ * Show work items and structural changes on the left, and the selected
+ * work item's field changes on the right. Each field pairs its signed and
+ * current values.
  *
- * A merge view. On the left, the work items this review covers: the parent,
- * the structure (work items added, removed or moved), then each drifted child.
- * On the right, every change on the one picked there, one field under another:
- * its name on top, the signed value on the left, the value now on the right.
- *
- * While deciding, a bar sits between the two values with an arrow at each
- * end, each pointing away from the value it keeps: → carries the signed value
- * across (reject), ← carries the new one across (approve). Hovering an arrow
- * lights the value that would win. Once chosen, the pair folds into one box
- * holding the final value, so a reviewer can walk the work items afterwards
- * and read exactly what the record will say.
- *
- * Nothing is rendered as an empty value that is really a missing one. A field
- * whose contents were never retained says so.
+ * The right arrow keeps the signed value and rejects the change. The left
+ * arrow keeps the new value and approves it. Hover highlights the value to
+ * keep. After a choice, show the final value in a single box.
+ * Mark unretained values as unavailable rather than empty.
  */
 
 /**
@@ -305,7 +297,7 @@ function History({ field, baselineAt }: { field: DiffField; baselineAt?: number 
     </details>
   );
 }
-/** The latest edit — the backend's own figure first, the trail's last step otherwise. */
+/** Use backend metadata for the latest edit, falling back to the last history step. */
 function lastEdit(field: DiffField): { at: number | null; by: string | null } | null {
   const trail = (field.attribution ?? []).filter(step => !step.detected);
   const tail = trail[trail.length - 1];
@@ -320,7 +312,7 @@ export function headline(field: DiffField): string {
   if (field.scopeChange === 'ADDED') return field.retained === false ? 'Tracking added; value not retained' : 'Tracking added; first signed value shown';
   if (field.scopeChange === 'REMOVED') return 'Tracking ended after this version';
   if (field.scopeChange?.startsWith('NODE_')) return field.summary ?? 'Tree structure changed';
-  if (field.retained === false) return 'Changed — approved value was not kept';
+  if (field.retained === false) return 'Changed. The approved value was not kept';
   if (field.kind === 'multi' || field.kind === 'links' || field.kind === 'attachments') {
     const added = (field.added ?? []).length;
     const removed = (field.removed ?? []).length;
@@ -337,7 +329,7 @@ export function headline(field: DiffField): string {
 }
 
 /**
- * "1 paragraph edited, 1 added" — what kind of edit a rich-text field took,
+ * Summarize rich-text edits, such as "1 paragraph edited, 1 added",
  * counted from the same blocks the body draws. Table rows are counted as rows,
  * because "3 paragraphs added" for a new table is true and misleading.
  */
@@ -533,19 +525,11 @@ function Unchanged({ count }: {count:number}) {
   return <div className="va-block va-block-equal va-subtlest">{count} unchanged {count === 1 ? 'paragraph' : 'paragraphs'}</div>;
 }
 /**
- * HOW IT GOT HERE — inline, under every change.
- *
- * This is the difference between a diff tool and a traceability tool. "Priority
- * went from High to Highest" is a diff. "Raised by Automation for Jira, lowered
- * by Priya, raised again by Sam, nine days after approval" is something a
- * reviewer can act on — and it is only knowable by joining the changelog to the
- * value comparison, which is what the backend does.
- *
- * Each step prints Jira's own from → to for that edit. Rich text is the
- * exception: Jira's history holds a flattened copy of the whole document, which
- * is noise, so those steps say "edited" and the block diff above carries the
- * net change. A change VAtlassian noticed without a matching Jira history entry
- * says so rather than inventing a before and after.
+ * Show Jira changelog attribution beneath each change, including each edit's
+ * before and after values. For rich text, say "edited" because Jira's flattened
+ * history cannot show useful intermediate diffs. The block diff shows the net
+ * change. Mark changes with no matching Jira history entry as detected rather
+ * than inventing intermediate values.
  */
 function Attribution({ field, baselineAt }: {field:DiffField; baselineAt?: number | null}) {
   const trail = field.attribution ?? [];
@@ -557,7 +541,7 @@ function Attribution({ field, baselineAt }: {field:DiffField; baselineAt?: numbe
             ? 'Detailed change history for descendant issues is not included in this root review.'
             : field.attributionStatus === 'UNAVAILABLE'
               ? 'Jira change history could not be loaded for this review. The value comparison remains available, but who and when is unknown.'
-              : 'Jira did not record who made this change — it may have been an import, a bulk edit, or a project type that does not keep field history.'}
+              : 'Jira did not record who made this change. It may have been an import, a bulk edit, or a project type that does not keep field history.'}
         </span>
       </div>
     );
@@ -623,16 +607,10 @@ function describeLink(l: DiffItem, field?: DiffField) {
 }
 
 /**
- * One value, resolved for reading.
- *
- * Returns the display name and — only when the two genuinely differ — the
- * stored identifier behind it, so the caller can show both. `valueLabels` is
- * built by the backend from the raw values on both sides of the comparison,
- * which is the only place a name survives normalisation.
- *
- * An identifier with no known name renders as itself. That is the honest
- * outcome: an invented label would be worse than a bare id, because the reader
- * could not tell it was invented.
+ * Resolve a value's display name from backend valueLabels. Include its stored
+ * identifier only when it differs and is safe to reference. valueLabels comes
+ * from raw values before normalisation removes names. If no name is known,
+ * show the raw value rather than inventing a label.
  */
 function display(field: DiffField, v: unknown): { text: string; id?: string } {
   if (v === null || v === undefined) return { text: 'Empty' };
@@ -656,16 +634,10 @@ function display(field: DiffField, v: unknown): { text: string; id?: string } {
 }
 
 /**
- * Whether an identifier is one a person can actually use as a reference.
- *
- * A Jira entity id — priority 10000, status 3, an option id — is a real
- * reference: it is what the signed baseline stores and what an auditor would
- * quote. An Atlassian account id is not. It identifies a *person*, means
- * nothing to the reader, and printing it beside their name is a disclosure with
- * no corresponding benefit — the rule ui/format.ts exists to enforce.
- *
- * Numeric-only, and short. That admits the entity ids and excludes account ids
- * in both their shapes ("5b10a2844c20165700ede21g" and "712020:8a3f11c2").
+ * Permit short numeric Jira entity ids, such as priority, status and option
+ * ids, because they identify values in the signed baseline. Exclude Atlassian
+ * account ids to avoid disclosing personal identifiers. The numeric-only,
+ * 12-character limit excludes both account id formats.
  */
 function referenceable(id: string): boolean {
   return /^[0-9]{1,12}$/.test(id);

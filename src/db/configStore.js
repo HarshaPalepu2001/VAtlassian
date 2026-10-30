@@ -68,19 +68,13 @@ export async function setConfigIfCurrent(key, value, updatedBy, now, revision) {
 }
 
 /**
- * Per-project settings, with site defaults underneath.
+ * Merge site defaults with per-project settings. An unconfigured project
+ * behaves like one explicitly configured with the defaults.
  *
- * Merged rather than inherited-by-reference so that a project which has never
- * been configured behaves identically to one configured with the defaults —
- * there is no "unset" state that behaves differently from an explicit choice.
- *
- * TWO QUERIES MERGED INTO ONE. The original fetched 'site' and
- * 'project:<id>' with two separate round trips; this fetches both rows in a
- * single WHERE cfg_key IN (?, ?) statement and splits them in JS. For a panel
- * load that calls projectConfig() once (and snapshot() calls it again via
- * panelAccess), the memo on getConfig catches the individual keys anyway —
- * but issuing one query is strictly better than two, and makes the savings
- * visible even before the memo warms.
+ * Read 'site' and 'project:<id>' in one WHERE cfg_key IN (?, ?) query and split
+ * the rows in JavaScript. Previously these took two round trips. getConfig
+ * memoizes individual keys, but this combined read also saves a query before
+ * the cache has entries.
  */
 export async function projectConfig(projectId) {
   return memo(`projectConfig:${projectId}`, async () => {
@@ -171,7 +165,7 @@ function deepMerge(base, over) {
  * Is this exact edge gated?
  *
  * `(from_status_id = ? OR from_status_id = '*')` with `ORDER BY from_status_id
- * DESC` — and the ordering is the subtle part: '*' sorts below any real status
+ * DESC`. The ordering matters because '*' sorts below any real status
  * id, so an exact row always wins over the wildcard. That is what lets an admin
  * write "gate everything out of Review" as one row and then override one
  * specific edge without deleting it.
@@ -182,12 +176,12 @@ function deepMerge(base, over) {
  * notices until an unreviewed item walks straight through a transition that was
  * added last month.
  *
- * ISSUE TYPE TAKES THE WILDCARD TOO, and it is not optional. The admin console
- * saves a gate as `issue_type_id = '*'` — a project's review status means the
+ * Match wildcard issue types too. The admin console
+ * saves a gate as `issue_type_id = '*'`. A project's review status means the
  * same thing for a Story as for a Bug, and nobody wants to configure the gate
  * once per issue type. Matching that column exactly would mean the console can
  * only ever write rows this query cannot find, so no work item would ever be
- * baselined and NOTHING WOULD LOOK BROKEN: the trigger would report NOT_A_GATE,
+ * baselined, with no visible error: the trigger would report NOT_A_GATE,
  * which is the ordinary case for most transitions and is not even logged.
  */
 /**
@@ -199,13 +193,13 @@ function deepMerge(base, over) {
 function decodeControlledTransition(r) {
   return {
     ct_id: fromBinaryColumn(r.ct_id),
-    // THE COLUMNS THE ROW MATCHED ON, not the ones that were asked for.
+    // Return the columns the row matched, which can differ from the input.
     //
     // The WHERE above accepts '*' in three places, so a returned row may have
     // matched this edge exactly or by wildcard, and the caller cannot tell
     // them apart from the arguments it passed in. That distinction is not
-    // used to decide WHETHER an action is offered — Jira's own workflow
-    // decides that — but it is needed to describe one honestly: "Sign to
+    // used to decide whether an action is offered, which Jira's workflow
+    // decides. It is needed to describe the action: "Sign to
     // close this as Done, available from any status" is a different promise
     // from "Sign to move to Selected for Development", and a reviewer who is
     // shown the second when the rule is really the first has been misled
@@ -230,10 +224,10 @@ function decodeControlledTransition(r) {
 }
 
 /**
- * IS THIS EXACT JIRA TRANSITION GATED?
+ * Check whether this exact Jira transition is controlled.
  *
  * `transitionId` is not one more optional narrowing column alongside the
- * project/type/status wildcards above — it is the identity of the edge.
+ * project/type/status wildcards above because it identifies the edge.
  * Two different workflow transitions ("Approve" and "Approve (fast-track)",
  * say) can both go from status 3 to status 5; matching on status pair alone
  * cannot tell them apart; and a rule saved against one of them must never be
@@ -288,14 +282,14 @@ export async function requireAuthFor(scope) {
   return gated;
 }
 
-// A recall's destination used to be looked up here — "whichever gate a project
-// admin has configured right now" — via a function once named
+// A recall's destination used to be looked up here using the current project gate configuration
+// via a function once named
 // recallTargetStatus(). That let an edit to today's configuration silently
 // redirect a recall that a baseline signed weeks ago, with no way to tell
 // afterwards which rule actually sent an item back. Recall now takes its
 // target exclusively from the latest ACTIVE baseline's own recorded review
 // status (lib/baselinePolicy.js's `reviewStatusId`, sourced from
-// va_baseline.from_status_id) — never from this table. See lib/restore/recall.js.
+// va_baseline.from_status_id), never from this table. See lib/restore/recall.js.
 
 /**
  * Every controlled-transition scope the review page may need to surface.
@@ -313,7 +307,7 @@ export async function gatedReviewStatuses() {
   );
   // The role comes back on the triple rather than being looked up separately,
   // because one status can be the source of several gated edges with DIFFERENT
-  // required roles — "out of Review to Done needs APPROVER, out of Review back
+  // required roles, such as "out of Review to Done needs APPROVER, out of Review back
   // to In Progress needs REVIEWER" is an ordinary configuration. Collapsing
   // them to one role per status would either hide items from somebody who can
   // decide them or offer items to somebody who cannot.
@@ -392,13 +386,13 @@ export async function upsertGatedTransition(row) {
  *
  * A gate naming a role nobody holds denies every transition with
  * NO_ELIGIBLE_REVIEWER, and the admin who configured it has no way to see that
- * from the gate screen — the rule looks perfectly well formed. This is what
+ * from the gate screen. The rule appears well formed. This is what
  * lets the screen say "0 people hold this" at the moment the choice is made,
  * rather than leaving it to be discovered by a reviewer who cannot move a
  * ticket.
  *
- * Counts site-wide grants (project_id IS NULL) too, because those genuinely do
- * authorise here — the same predicate lib/eligibility.js uses.
+ * Counts site-wide grants (project_id IS NULL) too, because they
+ * authorize here under the same predicate lib/eligibility.js uses.
  */
 export async function roleHolderCounts(projectId) {
   const rows = await throwing(
@@ -424,7 +418,7 @@ export async function roleHolderCounts(projectId) {
  * type only.
  *
  * withAlwaysControlled() adds them if an admin has not, and adds them with
- * `store_values: false` — an app must not start retaining the contents of a
+ * `store_values: false`. The app must not start retaining the contents of a
  * field because of a default. If the admin wants description diffs, they turn
  * retention on for description explicitly, on a screen that says what that
  * means.
@@ -467,18 +461,13 @@ export async function deleteControlledField({ projectId, issueTypeId, fieldId })
 }
 
 /**
- * EVERY declared row for this scope, whatever its state — including EXCLUDED.
+ * Read all declared field rows for this scope, including EXCLUDED rows.
  *
- * controlledFields() answers "what is tracked" and therefore filters to ACTIVE.
- * That is the right answer for capture, drift and the panel, and the WRONG
- * answer for anything deciding what to WRITE, because an EXCLUDED row is
- * invisible to it. The admin screen fed controlledFields() into candidateFields
- * as the override map, so a field an admin had deliberately excluded came back
- * in the "available to track" list on the very next render — the exclusion
- * looked like it had not saved.
- *
- * It is also what makes seeding safe. A seed that cannot see EXCLUDED rows
- * would resurrect every field an admin had turned off, every hour, forever.
+ * controlledFields() returns ACTIVE rows for capture, drift and panel reads.
+ * Writers and the admin candidateFields override map also need EXCLUDED rows.
+ * Previously, an excluded field reappeared as available on the next render
+ * because that map used controlledFields(). Seeding also needs these rows to
+ * avoid re-enabling fields an administrator excluded.
  */
 export async function declaredFieldRows({ projectId, issueTypeId }) {
   const rows = await throwing(
@@ -507,23 +496,14 @@ export async function declaredFieldRows({ projectId, issueTypeId }) {
 }
 
 /**
- * TRACK A SET OF FIELDS, IDEMPOTENTLY.
+ * Insert ACTIVE rows for fields without an existing row and return the count.
+ * Keep existing rows unchanged, including EXCLUDED rows and administrator-set
+ * materiality or retention. Rerunning the seed adds no duplicate rows.
  *
- * The write half of track-by-default. Inserts one ACTIVE row per field that has
- * no row yet, in chunks, and returns how many it added.
- *
- * A FIELD THAT ALREADY HAS A ROW IS NEVER TOUCHED. Not updated, not replaced —
- * skipped. That single rule is what lets this run on a schedule without
- * fighting the administrator: an EXCLUDED row stays excluded, a row whose
- * materiality or retention was tuned by hand keeps its tuning, and re-running
- * the seed on an already-seeded project inserts nothing.
- *
- * Chunked because Forge SQL takes one statement per call with no transaction
- * around it. A tenant with 300 custom fields is a 300-row insert; sending it as
- * one statement risks the payload limit, and sending it as 300 statements takes
- * long enough that the caller times out. Forty at a time is one statement per
- * chunk and eight chunks for a big tenant. A chunk that fails leaves the chunks
- * before it in place, which is correct — the next run inserts the rest.
+ * Forge SQL permits one statement per call without a surrounding transaction.
+ * A 300-field insert risks the payload limit as one statement, while 300 calls
+ * can time out. Batches of 40 need eight statements for 300 fields. Completed
+ * batches remain if a later batch fails; a retry inserts the remaining fields.
  */
 export async function seedControlledFields({ projectId, issueTypeId, fields, accountId, now }) {
   if (!Array.isArray(fields) || fields.length === 0) return { inserted: 0 };
@@ -577,21 +557,14 @@ export async function countControlledFields({ projectId }) {
 }
 
 /**
- * UPSERT, AND IT HAD TO EARN THE NAME.
+ * Update an existing field row by looking up its cf_id before REPLACE INTO.
+ * The primary key is cf_id; no unique key covers
+ * (project_id, issue_type_id, field_id). Previously, a new cf_id always inserted
+ * a row. Exclude, Track, Exclude could leave three rows, making the first-wins
+ * Map in controlledFields() depend on query order.
  *
- * va_controlled_field's primary key is cf_id, and nothing else about it is
- * unique — there is no key on (project_id, issue_type_id, field_id). So a
- * REPLACE INTO with a freshly minted cf_id collides with nothing and INSERTS.
- * Every caller that did not already hold a cf_id was therefore appending a row
- * rather than updating one: Exclude, then Track, then Exclude again left three
- * rows for the same field, and controlledFields()'s first-wins Map picked
- * whichever the ORDER BY happened to surface. A field's tracked state depended
- * on row order.
- *
- * Looking the id up first is the fix that does not need a schema change. A
- * unique index would be better and cannot be added safely while duplicate rows
- * from the old behaviour are still in the table; this collapses them instead —
- * the lookup takes the newest, and the REPLACE overwrites it in place.
+ * Use the newest matching row and remove older duplicates. A unique index
+ * would need duplicate cleanup before it could be added safely.
  */
 export async function upsertControlledField(row) {
   let id = row.cf_id ?? null;

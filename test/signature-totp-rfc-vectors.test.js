@@ -6,21 +6,19 @@ import {
 } from '../src/lib/totp.js';
 
 /**
- * Does our 6-digit code equal the one Microsoft Authenticator is showing?
+ * Compare six-digit codes with published authenticator test vectors.
  *
- * That question cannot be answered by testing our own code against our own
- * code — generateCode() and verifyCode() agreeing with each other proves only
- * that they are consistently wrong together. The only way to know is to check
- * against the published constants in RFC 4226 / RFC 6238, which is what every
- * authenticator app implements. If these vectors pass, an authenticator that
- * scanned our QR code computes the same digits we do, by construction.
+ * Agreement between generateCode() and verifyCode() cannot prove correctness
+ * because both could share a defect. RFC 4226 and RFC 6238 provide published
+ * constants to compare against. An authenticator using those algorithms
+ * and the seed from our QR code must compute the same digits.
  *
- * The seed is the RFC's own: the ASCII string "12345678901234567890".
+ * The seed is the RFC's ASCII string "12345678901234567890".
  */
 const RFC_SEED = Buffer.from('12345678901234567890', 'ascii');
 
 test('HOTP matches every RFC 4226 Appendix D test vector', () => {
-  // RFC 4226, Appendix D, "HOTP Algorithm: Test Values" — counters 0..9.
+  // RFC 4226, Appendix D, "HOTP Algorithm: Test Values", counters 0..9.
   const expected = [
     '755224', '287082', '359152', '969429', '338314',
     '254676', '287922', '162583', '399871', '520489'
@@ -48,7 +46,7 @@ test('TOTP matches the RFC 6238 Appendix B test vectors for SHA-1', () => {
   }
 });
 
-test('base32 encoding matches RFC 4648 — this is what the QR code carries', () => {
+test('the QR code uses RFC 4648 base32 encoding', () => {
   // If base32Encode were wrong, the authenticator would store a DIFFERENT
   // secret from the one we hold, and every code would look "invalid" forever
   // with no other symptom. Node's own base64 is the independent check here:

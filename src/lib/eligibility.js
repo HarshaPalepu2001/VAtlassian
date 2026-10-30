@@ -1,24 +1,15 @@
 /**
- * REVIEWER ELIGIBILITY.
+ * Define reviewer eligibility through one predicate over va_eligibility.
  *
- * ONE PREDICATE, ONE TABLE. Every authority question in this app —
- * "may this person decide?", "does anybody hold this role?", "who should this
- * item queue to?" — is this predicate against `va_eligibility`. Authority
- * expressed in two places is how a customer ends up with a person who may
- * approve one thing and not the near-identical thing beside it, a distinction
- * nobody asked for and nobody can explain.
+ * Use the same authority check for decision permission, role membership and
+ * worklist routing. resolvers/panel.js checks it before recording a decision;
+ * gate.js checks it before consuming one.
  *
- * A PROJECT-SCOPED GRANT NEVER WIDENS. Holding a role on project 10001 says
- * nothing about 10002. Only an explicit site-wide grant (project_id IS NULL)
- * crosses projects, which is why the predicate is
- * `project_id = ? OR project_id IS NULL` and never a fallback that treats an
- * absent match as permission.
+ * A project-scoped grant authorizes only its named project. Only an explicit
+ * site-wide grant, project_id IS NULL, applies across projects. The predicate
+ * is project_id = ? OR project_id IS NULL; a missing match never grants access.
  *
- * PURE, AND EXPRESSED ONCE. The predicate exists here as SQL so the checking
- * sites — resolvers/panel.js before recording a decision, and gate.js before
- * consuming one — cannot drift apart. Two spellings of "is this person
- * authorised" would eventually disagree, and the disagreement would show up as
- * a decision that could be created but never used.
+ * Keep the SQL predicate here so signing and consumption use identical rules.
  */
 
 /**
@@ -52,8 +43,8 @@ export function rowAuthorises(row, { projectId, issueTypeId, role, activeState =
   if (String(row.role) !== String(role)) return false;
   // '*' is a grant across every issue type; anything else must match exactly.
   if (String(row.issue_type_id) !== '*' && String(row.issue_type_id) !== String(issueTypeId)) return false;
-  // NULL project is a site-wide grant. Anything else must match exactly —
-  // a project-scoped grant never widens to another project.
+  // A null project means an explicit site-wide grant. Other grants match only
+  // the named project.
   if (row.project_id == null) return true;
   return String(row.project_id) === String(projectId);
 }

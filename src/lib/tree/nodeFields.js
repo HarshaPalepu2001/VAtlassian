@@ -1,18 +1,12 @@
 import { RULE_SOURCE } from '../evidence/versionEvidence.js';
 
 /**
- * EVERY NODE IS TRACKED WITH THE ROOT'S FIELDS.
+ * Track every node with the root's Controlled Fields, including attachments.
+ * This rule was decided on 2026-09-25, replacing per-issue-type tracking.
+ * Under the earlier rule, children of an unconfigured type tracked no fields.
  *
- * Decided 2026-09-25, replacing the per-issue-type rule of the 24th. The
- * approval being made is the root's, so the root's Controlled Fields page rows
- * are what every node it covers is held to: a Task under an Epic tracks the
- * Epic's fields, attachments included, whether or not anyone ever configured
- * Task. Under the old rule it tracked only its own issue type's rows — which,
- * for a type nobody configured, were none — so a file added to VAT-14 after
- * its parent's approval was not drift at all.
- *
- * `scopeKey`/`nodeScope` stay: they still name an item's own scope, which is
- * what an item governed by no tree tracks (fieldsForItem below).
+ * scopeKey and nodeScope still identify an item's own scope for single items
+ * not governed by a tree. See fieldsForItem.
  */
 export const scopeKey = (projectId, issueTypeId) => `${Number(projectId)}:${String(issueTypeId)}`;
 
@@ -24,9 +18,8 @@ export function nodeScope(node) {
 }
 
 /**
- * Read a tree with the fields its nodes track — the root's, for every node —
- * in one read. `fieldsFor(node)` is kept as the interface capture, the
- * collector, the panel and restore already share.
+ * Read a tree once with the root's fields for every node. Keep fieldsFor(node)
+ * as the shared interface for capture, collection, panel reads and restores.
  */
 export async function readTreeWithNodeFields({ readStableTree, readTree, rootIssueKey, rootFields, extraFieldIds = [] }) {
   const fieldIds = [...new Set([...rootFields.map(f => f.field_id), ...extraFieldIds, 'project', 'issuetype'])];
@@ -35,22 +28,14 @@ export async function readTreeWithNodeFields({ readStableTree, readTree, rootIss
 }
 
 /**
- * THE FIELDS ONE WORK ITEM TRACKS, on every single-item path: drift, the panel,
- * a decision's evidence hash, a restore.
+ * Resolve tracked fields for single-item drift, panel reads, evidence hashes
+ * and restores. Items covered by other approved roots use the most recently
+ * approved root's fields, even if they have their own baseline. Roots with no
+ * governing ancestor and uncovered items use their own fields.
  *
- * The same rule as a tree read, seen from the child: an item covered by an
- * approved tree it is not the root of tracks that root's fields. Reading only
- * the capture link (`captured_by_baseline_id`) would not do — a drift decision
- * on the child re-baselines it without one, and the child would quietly fall
- * back to its own issue type's fields on its next approval.
- *
- *   · Covered by one or more other roots: the most recently approved root's
- *     fields, whether or not the item also has a baseline of its own.
- *   · A root with no other tree above it: its own fields. It has its own approval.
- *   · Covered by none: its own issue type's fields, as always.
- *
- * A root row with no scope (read before its columns existed) falls back to the
- * item's own fields rather than guessing.
+ * Do not rely only on captured_by_baseline_id. A child's drift decision
+ * re-baselines it without that link but does not change its governing scope.
+ * If an older root lacks scope columns, fall back to the item's own fields.
  */
 export async function scopeForItem({ issueId, projectId, issueTypeId }, deps) {
   const roots = await deps.activeRootsForNode(Number(issueId));

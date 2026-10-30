@@ -1,36 +1,20 @@
 /**
- * GATE DRIFT — comparing what we believe is controlled against what Jira is
- * actually enforcing.
+ * Compare configured controls with Jira's workflow validators.
  *
- * THE HOLE THIS EXISTS TO CLOSE. src/gate.js is an operational system check
- * under 21 CFR 11.10(f): it refuses a transition without a valid signature, and
- * it fails closed on every error path. But it only runs if an administrator has
- * attached the va-gate validator to the transition in Jira. Detach it and
- * nothing of ours executes — Jira never calls us, so we cannot refuse, cannot
- * log, and cannot know. Meanwhile va_controlled_transition still says the edge
- * is controlled and the admin console still renders it as configured. The
- * transition then succeeds unsigned, indefinitely, and every surface we own
- * reports that it did not.
+ * src/gate.js enforces signatures and drift holds only while Jira calls it.
+ * If an administrator detaches va-gate, transitions can succeed unsigned while
+ * va_controlled_transition and the admin console still describe them as
+ * controlled. The removed validator cannot detect or log its own absence.
+ * This module compares workflow data; jobs/gatecheck.js schedules the checks.
  *
- * That is the one failure mode in this app that produces a SILENT PERMIT, and
- * it is unreachable by any amount of fail-closed design at the gate, because
- * the gate is what was removed. Detection is the only available control. This
- * module is the comparison; jobs/gatecheck.js runs it on a schedule.
+ * The checks provide dated evidence for workflow configuration review and
+ * change control under 21 CFR 11.10(f), 11.10(a) and 11.10(k)(2). They supplement
+ * the customer's validated workflow procedures. Jira's workflow history expires
+ * after 60 days, so the app retains its own findings.
  *
- * WHY THAT IS STILL WORTH SHIPPING. Part 11 has never required controls to be
- * un-removable — 11.10(f) requires them to be in place, 11.10(a) requires the
- * system to be validated, and 11.10(k)(2) requires change control over the
- * configuration. A customer can satisfy that procedurally by putting the Jira
- * workflow inside their validated state. What they cannot easily do is EVIDENCE
- * it: at audit they are asserting from memory that nobody detached anything in
- * the last eighteen months, and Jira itself cannot help, because its workflow
- * history expires after 60 days. A dated, continuous record from us converts a
- * procedural burden they must defend into a detective control we supply.
- *
- * PURE ON PURPOSE. Everything here is a function of (rows, workflow), plus the
- * pair being judged when a pair has baselines but no rows left. No Jira
- * client, no database, no clock. The job does the I/O; this does the judgement,
- * so the judgement can be tested exhaustively without either.
+ * All functions are pure. Inputs are controlled-transition rows, workflow data,
+ * and the project/issue-type pair when baselines exist without remaining rows.
+ * The scheduled job owns Jira requests and persistence.
  */
 
 export const FINDING = {
@@ -38,15 +22,17 @@ export const FINDING = {
    *  Transitions across this edge are succeeding unsigned, right now. */
   GATE_ABSENT: 'GATE_ABSENT',
 
-  /** va-gate is attached but switched off. Identical effect to absent, but a
-   *  different admin conversation — someone disabled it deliberately. */
+  /**
+ * va-gate is attached but disabled. Report separately from an absent gate
+ * so the administrator can identify how enforcement was removed.
+ */
   GATE_DISABLED: 'GATE_DISABLED',
 
-  /** A transition into a controlled status that no ACTIVE row covers — a
-   *  second door into a status we are policing, crossed without a signature
-   *  whether or not it carries va-gate. Often legitimate (the admin chose to
-   *  control one edge only), so it is reported as a warning to be reviewed,
-   *  not as a failure. */
+  /**
+ * A transition reaches a controlled status without an ACTIVE row requiring
+ * a signature. Report a warning, not a failure: the administrator may have
+ * intentionally controlled only one incoming transition, even with va-gate on both.
+ */
   GATE_BYPASS_PATH: 'GATE_BYPASS_PATH',
 
   /** An ACTIVE row naming an edge the workflow no longer has. Nothing crosses
@@ -60,10 +46,11 @@ export const FINDING = {
    *  can change status across this one right now. */
   HOLD_ABSENT: 'HOLD_ABSENT',
 
-  /** va-gate's configuration names a different transition from the one it is
-   *  attached to — typically a transition copied in the workflow editor. The
-   *  validator trusts that saved id to tell sibling transitions apart, so it
-   *  could treat this transition as the one the id names. */
+  /**
+ * va-gate names a different transition from the one carrying it, commonly
+ * after copying a transition in the workflow editor. The saved ID can make the
+ * validator mistake this transition for its sibling.
+ */
   GATE_CONFIG_MISMATCH: 'GATE_CONFIG_MISMATCH',
 
   /** va-gate on a transition that shares its start and destination with a
@@ -94,19 +81,15 @@ const SEVERITY_OF = {
 export const ANY_STATUS = '*';
 
 /**
- * Is this validator OUR gate?
+ * Identify this app's gate validator.
  *
- * Both expression-based and function-based Forge validators report under the
- * ruleKey `forge:expression-validator` — confirmed against a live instance on
- * 2026-08-31, where va-gate is declared with `function: gate` and still
- * appears under that key. Do not narrow this to a "function validator" rule
- * key on the assumption that one exists; it does not, and narrowing it would
- * make this module blind to precisely the rule it is looking for.
+ * Both expression- and function-based Forge validators use ruleKey
+ * forge:expression-validator. A live check on 2026-08-31 confirmed that key for
+ * va-gate declared with function: gate. Do not assume a separate function key.
  *
- * Identity comes from the ARI in `parameters.key`, which has the shape
- * `ari:cloud:ecosystem::extension/{appId}/{environmentId}/static/{moduleKey}`.
- * We match on appId AND moduleKey and deliberately ignore environmentId, so a
- * finding is not raised against a staging deployment of ourselves.
+ * Match appId and moduleKey in parameters.key's ARI:
+ * ari:cloud:ecosystem::extension/{appId}/{environmentId}/static/{moduleKey}.
+ * Ignore environmentId so staging deployments of this app are recognized.
  */
 export function isOurGate(validator, { appId, moduleKey = 'va-gate' } = {}) {
   if (!validator || typeof validator.ruleKey !== 'string') return false;
@@ -124,22 +107,14 @@ export function isDisabled(validator) {
 }
 
 /**
- * Could this transition realise this controlled edge?
+ * Check whether a transition can implement a controlled row.
  *
- * Three things make a transition relevant to a controlled row:
- *   - it lands on the controlled target status;
- *   - it is not INITIAL — issue creation has no from-status, so a controlled
- *     edge never describes it;
- *   - and it can start where the row says, which is true when the row uses the
- *     ANY_STATUS wildcard, when a link starts at the named status, or when the
- *     transition is GLOBAL.
+ * It must reach the target status, not be INITIAL and be able to start at the
+ * row's origin. ANY_STATUS accepts any origin; linked transitions must name it;
+ * GLOBAL transitions can start at every status in the workflow.
  *
- * GLOBAL IS THE ONE THAT MATTERS. A global transition can be taken from any
- * status in the workflow, so it can always reach the controlled target from the
- * controlled origin. It therefore requires a gate whatever the row's
- * from-status says. A comparison that only walked `links` would declare a
- * workflow clean while an ungated global transition sat there offering a route
- * into the signed status from anywhere — the exact bypass this is meant to find.
+ * Check GLOBAL transitions even without links. Otherwise an ungated global
+ * transition could bypass the controlled route into the signed status.
  */
 export function transitionCovers(transition, row) {
   if (!transition || transition.type === 'INITIAL') return false;
@@ -156,30 +131,17 @@ function ctKey(row) {
 }
 
 /**
- * Compare one project + issue type's controlled rows against the workflow Jira
- * actually serves for that pair.
+ * Compare ACTIVE controlled rows for one project/issue-type pair with its
+ * expanded bulk-get workflow. Return findings with stable keys for deduplication.
  *
- * `rows` must already be filtered to ACTIVE and to this pair. `workflow` is a
- * workflow from the bulk-get response, with transitions expanded. Returns a
- * flat list of findings, each carrying a stable `key` so repeat runs update an
- * existing finding rather than piling up duplicates.
+ * Check every non-initial transition for va-gate, including transitions without
+ * a controlled row: drift holds still require the validator on those routes.
  *
- * Every non-initial transition is judged, not only the ones a row covers:
- * va-gate is attached to all of them, because besides asking for a signature
- * where a row says so, it is what holds a drifted work item still.
- *
- * A PAIR WITH NO ROWS IS STILL JUDGED WHEN IT HAS BASELINES. Deleting every
- * controlled transition for a project and issue type does not release the
- * baselined work items there: they are still held on drift, and the only thing
- * holding them is va-gate. That is exactly the moment a check driven by rows
- * alone would stop looking. So `scope` ({ project_id, issue_type_id }, an entry
- * from gatecheck's pairsToCheck is fine) names the pair when `rows` is empty,
- * and then every non-initial transition without an enabled va-gate is a
- * HOLD_ABSENT against that pair. Nothing is controlled, so there is no
- * GATE_ABSENT and no GATE_BYPASS_PATH to raise. The key a HOLD_ABSENT carries
- * does not depend on the rows, so a finding open before the rows were deleted
- * stays the same finding afterwards, first_seen_at and all. With no rows and no
- * scope there is no pair to attribute a finding to, and nothing is returned.
+ * If all controlled rows were deleted but baselines remain, scope names the
+ * pair to keep checking. Emit HOLD_ABSENT for missing or disabled validators,
+ * not GATE_ABSENT or GATE_BYPASS_PATH. HOLD_ABSENT keys are independent of rows,
+ * so an existing finding retains its first_seen_at after row deletion. With
+ * neither rows nor scope, there is no pair to attribute and no findings return.
  */
 export function diffWorkflow({ rows = [], workflow, appId, moduleKey = 'va-gate', scope = null }) {
   const findings = [];
@@ -205,10 +167,8 @@ export function diffWorkflow({ rows = [], workflow, appId, moduleKey = 'va-gate'
     const relevant = transitions.filter((t) => transitionCovers(t, row));
 
     if (relevant.length === 0) {
-      // The row names an edge this workflow does not have. Not a silent
-      // permit — there is no transition to permit anything — but the row is
-      // describing a workflow that has moved on, and the admin console is
-      // showing a control over an edge that cannot be taken.
+      // The configured edge no longer exists in the workflow. It cannot permit a
+      // transition, but the admin console still needs to report the obsolete control.
       findings.push(make(FINDING.GATE_ORPHANED, row, {
         workflowId,
         transitionId: null,
@@ -309,7 +269,7 @@ function savedIdFindings(workflow, pair, { appId, moduleKey }) {
       findings.push(make(FINDING.GATE_CONFIG_MISMATCH, pair, {
         workflowId: workflow.id,
         transitionId: transition.id,
-        detail: `The VAtlassian validator on "${transition.name}" in "${workflow.name}" was set up for transition ${wrong}, not ${transition.id} — usually because the transition was copied. Open the validator on this transition and save it again.`
+        detail: `The VAtlassian validator on "${transition.name}" in "${workflow.name}" was set up for transition ${wrong}, not ${transition.id}, usually because the transition was copied. Open the validator on this transition and save it again.`
       }));
       continue;
     }
@@ -372,11 +332,11 @@ function make(type, row, { workflowId, transitionId, detail }) {
   };
 }
 
-/** Group ACTIVE controlled transitions into the (project, issue type) pairs the
- *  bulk-get endpoint is queried by. One pair per call: a call carrying several
- *  pairs returns a set of workflows with nothing mapping them back to the pair
- *  that produced each one — verified against a live instance, where four issue
- *  types collapsed into a single unattributed workflow. */
+/**
+ * Group ACTIVE rows by project and issue type for bulk-get requests. Read one
+ * pair per call because responses do not map workflows back to input pairs.
+ * A live check returned one unattributed workflow for four issue types.
+ */
 export function groupByPair(rows) {
   const groups = new Map();
   for (const row of rows) {

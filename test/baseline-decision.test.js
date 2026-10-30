@@ -37,7 +37,7 @@ test('a decision already in flight is refused, so two reviewers cannot race', ()
   }
 });
 
-// Device authentication — Face ID / Touch ID / Windows Hello, falling back to
+// Device authentication uses Face ID / Touch ID / Windows Hello, falling back to
 // the machine PIN or password. The verdict is produced in the browser and
 // verified in the resolver; canDecide only sees whether it came back true.
 test('a required device authentication that did not succeed is refused', () => {
@@ -70,7 +70,7 @@ test('an item that was never approved has nothing to decide about', () => {
 
 test('STALE EVIDENCE: a decision taken against a version that has since changed is refused', () => {
   // A reviewer reads a diff, somebody edits the item, the reviewer clicks
-  // Approve — approving a version they never saw.
+  // Approve and signs a version they never saw.
   const result = decide({
     decision: DECISION.APPROVE,
     diff: diff({ evidenceHash: 'hash-2' }),
@@ -94,7 +94,7 @@ test('approve RATIFIES the drift: a new baseline is cut from the current state',
   assert.equal(result.appliesTransition, true);
 });
 
-test('approving a cosmetic-only diff is allowed — it clears the queue', () => {
+test('approving a cosmetic-only diff clears the queue', () => {
   const result = decide({ decision: DECISION.APPROVE, diff: diff({ materialFieldCount: 0 }) });
   assert.equal(result.allow, true);
 });

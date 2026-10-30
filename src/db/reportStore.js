@@ -2,13 +2,13 @@ import { executeQuery, toBinaryParam, fromBinaryColumn, limitClause, affectedRow
 import { throwing } from './store.js';
 
 /**
- * va_ai_report — the AI report cache.
+ * va_ai_report stores the AI report cache.
  *
- * KEYED BY EVIDENCE, NOT BY TIME. `report_hash` is
+ * Key the cache by evidence rather than time. `report_hash` is
  * sha256(baseline_id ‖ sorted drift ids ‖ model), so a report is generated
  * exactly once per distinct set of evidence and never regenerated while that
  * evidence is unchanged. There is no TTL, because time is not what makes a
- * report stale — one more edit produces a different hash and a new report, and
+ * report stale. Another edit produces a different hash and a new report, and
  * no edits produce a cache hit forever, which is exactly right for an item
  * sitting in a queue for a week.
  *

@@ -2,35 +2,22 @@ import { executeQuery } from './db.js';
 import { ELIGIBILITY_PREDICATE, eligibilityParams } from './eligibility.js';
 
 /**
- * Who may approve, and who is on the hook for a particular work item.
+ * Determine decision authority and worklist assignment separately.
  *
- * TWO DIFFERENT QUESTIONS, and conflating them is a mistake worth naming:
+ * Eligibility checks whether a person may decide on an item. Every decision
+ * uses lib/eligibility.js's predicate against va_eligibility.
  *
- *   ELIGIBILITY — "is this person authorised to decide on this item?" This is
- *   an authority check and it gates every decision. It is answered by
- *   lib/eligibility.js's predicate against va_eligibility.
- *
- *   ASSIGNMENT — "whose queue does this item appear in?" This is routing. It
- *   picks ONE person so the item has an owner, and being that person is neither
- *   necessary nor sufficient for eligibility. An item assigned to a reviewer on
- *   leave must still be decidable by their colleague.
- *
- * Getting this backwards produces the two classic failures: a queue nobody owns
- * because assignment was derived from eligibility and matched six people, or an
- * item only its assigned reviewer can act on because eligibility was derived
- * from assignment.
+ * Assignment selects one worklist owner. It neither grants nor limits signing
+ * authority: another eligible colleague may act while the owner is on leave.
+ * Deriving authority from assignment would incorrectly block that colleague;
+ * deriving a single owner from all eligible people could leave ownership unclear.
  */
 
 const ACTIVE = 'ACTIVE';
 
 /**
- * va_eligibility IS THE ONLY SOURCE OF REVIEWER AUTHORITY.
- *
- * There is deliberately no second table and no probe into another app's schema.
- * Two places to grant authority is how a customer ends up with someone who may
- * approve one thing and not the near-identical thing beside it — and inside a
- * ~10s validator budget, a speculative query against a table that is not there
- * is a round trip spent to learn nothing.
+ * Read reviewer authority only from va_eligibility. Do not add another grant
+ * table or probe another app's schema within the validator's time budget.
  */
 async function baselineEligibility(scope) {
   const result = await executeQuery(
@@ -55,17 +42,9 @@ export async function isEligible({ accountId, projectId, issueTypeId, role }) {
 }
 
 /**
- * Does ANYBODY hold this role for this issue type?
- *
- * Asked only on the deny path, and only to choose which refusal to show. "You
- * need to approve this" and "nobody alive can approve this" send a person to
- * opposite places, and collapsing them produces a deny loop with no exit — the
- * reviewer is told to go and approve, cannot, and tries again forever.
- *
- * The lookup is on the DENY path deliberately, never beside the main config
- * read: it is a serial round trip inside a ~10s validator budget, it is needed
- * only to pick a sentence, and running it eagerly would bill it to every gated
- * transition including the allow path — already the longest one.
+ * Check whether anybody holds the required role for this issue type.
+ * Call only after denying authority to choose a useful refusal. Keep this
+ * extra query off the validator's allow path.
  */
 export async function anyReviewerHolds({ issueTypeId, role }) {
   const own = await executeQuery(
@@ -78,18 +57,9 @@ export async function anyReviewerHolds({ issueTypeId, role }) {
 }
 
 /**
- * Every ACTIVE grant this one account holds, across every project.
- *
- * THE REVIEW PAGE'S FIRST QUERY, and the one that decides its shape. The page
- * has to answer "what is waiting on me anywhere", which is the opposite
- * direction from every other lookup in this file: those start from a work item
- * and ask whether a person is authorised; this starts from the person and asks
- * which work items could possibly qualify.
- *
- * Returned as raw rows rather than a boolean because the caller feeds them to
- * rowAuthorises() — the in-memory twin of ELIGIBILITY_PREDICATE — once per
- * candidate issue. Re-deriving authority in a second spelling for the sake of
- * the queue is exactly what lib/eligibility.js's header forbids.
+ * Read all active grants for one account across projects to populate its
+ * worklist. Return rows for rowAuthorises, the in-memory equivalent of
+ * ELIGIBILITY_PREDICATE, rather than implementing another authority rule.
  */
 export async function grantsFor(accountId) {
   if (!accountId) return [];
@@ -128,24 +98,11 @@ export async function eligibleReviewers({ projectId, issueTypeId, role }) {
 }
 
 /**
- * Pick the ONE reviewer whose queue this item goes into.
- *
- * ROUTING, NOT AUTHORITY. The order below is a deliberate preference list, and
- * each step exists because the one before it can legitimately produce nobody:
- *
- *   1. The person who approved it. They have the context, they made the call,
- *      and they are the natural person to ask whether their approval still
- *      stands. This is the answer in the overwhelming majority of cases.
- *   2. A dedicated reviewer field, if the project has one. Some teams route
- *      review separately from whoever happened to click the button.
- *   3. Any eligible reviewer, deterministically chosen. Not random: the same
- *      item must land in the same person's queue every time it is recomputed,
- *      or a reconcile pass would silently move work between people.
- *
- * NEVER falls back to the assignee. The assignee is usually the person who made
- * the changes, and asking somebody to review their own edits is not a review.
- * An item with no eligible reviewer stays unassigned and shows up in the admin
- * console as a configuration gap — which is what it is.
+ * Choose one worklist owner without granting signing authority.
+ * Prefer the previous approver, then the configured reviewer field, then a
+ * deterministically selected eligible reviewer. Do not fall back to the
+ * assignee, who may have made the edits. Leave items without eligible
+ * reviewers unassigned and report a configuration gap in the admin console.
  */
 export async function assignReviewer({ baseline, issueFields, projectId, issueTypeId, role, reviewerFieldId = null }) {
   const candidates = await eligibleReviewers({ projectId, issueTypeId, role });
@@ -170,9 +127,8 @@ export async function assignReviewer({ baseline, issueFields, projectId, issueTy
     }
   }
 
-  // Deterministic: sorted, first. Stable across recomputation, which matters
-  // more than fairness here — an item that moves between queues every time the
-  // reconcile job runs is worse than one that always lands on the same desk.
+  // Sort and choose the first reviewer so reconciliation keeps the item in
+  // the same queue.
   const sorted = [...candidates].sort((a, b) => a.accountId.localeCompare(b.accountId));
   return { accountId: sorted[0].accountId, displayName: sorted[0].displayName, reason: 'FIRST_ELIGIBLE' };
 }

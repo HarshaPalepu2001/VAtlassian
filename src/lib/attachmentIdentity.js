@@ -1,37 +1,23 @@
 import { identityRecords, vaultedAttachmentMedia } from '../db/vaultStore.js';
 
 /**
- * WHICH APPROVED FILE IS THIS?
+ * Map restored attachments to their approved identities.
  *
- * Attachments are compared by Jira id (content.js normaliseAttachments), and
- * that is exact for every file a person attaches: Jira never changes one in
- * place. It stops being enough the moment a rejection puts a removed file
- * back. Jira has no way to restore an attachment under its old id; the app can
- * only upload the vaulted bytes again, and the copy gets a NEW id. Compared by
- * id alone, a correctly restored item would read as drifted for ever.
+ * Jira never changes an attachment in place, so its ID identifies the original
+ * file. Re-uploading vaulted bytes creates a new ID. After verifying the
+ * upload's SHA-256 against the vault, restore records the new-to-original
+ * mapping in va_attachment_alias. Comparison reads use the original ID; jiraId
+ * retains the live ID for downloads and deletes. Tree restore uses the same
+ * approach for recreated work items.
  *
- * So a restore records, after checking the uploaded bytes against the vault's
- * SHA-256, that the new id STANDS FOR the original (va_attachment_alias, written
- * only by the app). Every read of an issue that feeds a comparison passes its
- * attachments through here first, and a restored copy is read under the id of
- * the file that was approved. `jiraId` keeps the real id for anything that has
- * to act on the file in Jira (download, delete).
+ * ADF inline images reference media IDs rather than Jira attachment IDs. A
+ * 2026-09-24 probe of VAT-3 found attachment 12085 represented only by media ID
+ * 5786f451-…, with no filename or Jira ID. Restore records media aliases too,
+ * so ADF comparisons map restored pointers back to their approved IDs. The
+ * ledger records the replacement while Jira keeps the live pointer.
  *
- * This is the attachment counterpart of the tree restore's recorded
- * replacements for recreated work items.
- *
- * RICH TEXT POINTS AT THE SAME FILE BY A SECOND ID. A description with an
- * inline image holds the file's MEDIA id (Atlassian's file store), not its
- * Jira id: on VAT-3 `12085` appears in the description only as `5786f451-…`,
- * with no filename and no Jira id (probed 2026-09-24). A restored copy gets a
- * new media id too, so the alias also records media id -> original media id,
- * and every ADF value is read with its pointers mapped back. The approved
- * description then reads byte for byte as signed; only the pointer Jira holds
- * differs, and the ledger says which.
- *
- * AN UNREADABLE ALIAS TABLE FAILS TOWARDS DRIFT. Without it a restored copy is
- * read under its own new id, which differs from the baseline: the item shows a
- * change it does not have, and nothing that changed is ever hidden.
+ * If the alias table cannot be read, comparison uses the new ID and reports
+ * drift. This may report a restored file as changed, but cannot hide a change.
  */
 
 /** Only what a comparison or a restore needs; the URLs Jira adds are dropped. */
@@ -115,15 +101,14 @@ export function liveCopyMedia(record, liveJiraIds = null) {
 }
 
 /**
- * Media ids that `fields` (as Jira holds them, NOT canonicalised) show but whose
- * file is no longer on the work item — so the image renders broken — limited to
- * the files this app knows: restored copies, and the originals they stand for.
- * A pointer to anything else (an image from another item, a file never
- * restored) is not judged here; the digest comparison already covers it.
+ * Find media pointers to known files that are no longer on the work item.
+ * fields contains Jira's live pointers, before canonicalisation. Check only
+ * restored files and their originals; ordinary digest comparison covers other
+ * pointers, including images from another item.
  *
- * This is what a digest cannot see. Canonicalisation maps a copy's pointer back
- * to the original's, so "points at the deleted original" and "points at its
- * live copy" have the same digest; only one of them shows the image. Pure.
+ * Canonicalisation gives the deleted original and its restored copy the same
+ * digest. This separate check detects when the live pointer still references
+ * the missing file and therefore renders a broken image. This function is pure.
  */
 export function danglingMediaPointers(fields, record, liveJiraIds) {
   if (!record?.media?.size || !liveJiraIds) return [];
@@ -255,10 +240,9 @@ export async function canonicaliseIssue(issue, options = {}) {
 }
 
 /**
- * The files a baseline recorded, from its retained values and the fields it
- * tracks: [{ id, jiraId, filename }], or null when no tracked field holds
- * attachments. What the vault must copy is exactly this — the set that was
- * signed, not whatever is on the issue when the vault job runs.
+ * Read the files recorded by a baseline from retained values and tracked
+ * fields. Return [{ id, jiraId, filename }], or null when no tracked field holds
+ * attachments. The vault copies this signed set, never the issue's later files.
  */
 export function recordedAttachments(values, fields) {
   const ids = (fields ?? []).filter(f => f.field_kind === 'ATTACHMENTS').map(f => f.field_id);

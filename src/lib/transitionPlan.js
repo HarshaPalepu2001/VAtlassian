@@ -1,27 +1,15 @@
 /**
- * Choosing a transition and preparing its screen — the decisions, with none of
- * the I/O.
+ * Choose a transition and prepare required screen fields without I/O.
  *
- * SEPARATE FROM transitions.js FOR THE SAME REASON restore/outcome.js is
- * separate from restore/executor.js: that file imports @forge/api and is
- * therefore unreachable from a test outside the Forge runtime. "Which
- * transitions may a reviewer take out of review" and "what will we put on the
- * screen" are rules, and rules belong somewhere a test can reach them.
+ * transitions.js imports @forge/api, which cannot load in tests outside Forge.
+ * Keep the transition-selection and field-preparation rules here so tests can
+ * exercise them independently, as restore/outcome.js does for restore/executor.js.
  */
 
 /**
- * ONLY the transitions that leave a review status.
- *
- * The filter the customer asked for by name, and it is deliberately expressed
- * as "the item is currently in a review status, so every transition from here
- * is an outbound review transition" rather than as a stored list of edges.
- * Storing edges goes stale the moment somebody adds a transition to the
- * workflow — and a governance app that silently stops covering a new route out
- * of review is worse than one that never claimed to.
- *
- * When the item is NOT in a review status there is nothing to offer, and saying
- * so plainly beats showing a reviewer a list of transitions that have nothing
- * to do with the approval they are giving.
+ * Offer outbound transitions only while the item is in a configured review
+ * status. Use Jira's current transitions instead of storing edges that could
+ * become stale after workflow edits.
  */
 export function outboundFromReview({ transitions, currentStatusId, reviewStatusIds }) {
   const reviewIds = (reviewStatusIds ?? []).map(String);
@@ -41,14 +29,9 @@ export function outboundFromReview({ transitions, currentStatusId, reviewStatusI
 }
 
 /**
- * Which fields a transition insists on, and which of those we can fill from the
- * approved baseline.
- *
- * "WHATEVER IS REQUIRED IS PROVIDED" HAS A LIMIT, AND THE LIMIT IS HONESTY. A
- * required field is filled ONLY from a value that was part of the approved
- * baseline. Inventing one to satisfy a screen would write data nobody approved
- * into the work item as a side effect of approving something else. Anything we
- * cannot fill is handed back for the reviewer to supply in the dialog.
+ * Fill required transition fields only from approved baseline values.
+ * Return fields without approved values for the reviewer to supply. Never
+ * invent content to satisfy the transition screen.
  */
 export function requiredFieldPlan({ transition, baselineValues = {}, currentFields = {} }) {
   const required = Object.entries(transition?.fields ?? {})
@@ -117,12 +100,8 @@ function shapeForScreen(value, meta) {
 }
 
 /**
- * Choose the transition to apply.
- *
- * One available transition is applied automatically — asking a reviewer to pick
- * from a list of one is noise. Several, and the reviewer picks, because
- * Baseline has no business deciding whether an approved item goes to Ready for
- * Dev or straight to Done.
+ * Select the only available transition automatically. With multiple
+ * transitions, require the reviewer to choose the destination.
  */
 export function chooseTransition({ transitions, requestedId }) {
   const list = transitions ?? [];
@@ -135,12 +114,8 @@ export function chooseTransition({ transitions, requestedId }) {
 }
 
 /**
- * A guess at which statuses mean "in review", for the setup screen only.
- *
- * NEVER USED AT RUNTIME — the gate reads the administrator's explicit
- * configuration and nothing else. Offering a good guess is the difference
- * between a five-minute setup and an abandoned one; acting on a guess would
- * mean an app that gates transitions nobody asked it to.
+ * Suggest review statuses for setup only. Runtime gating uses the
+ * administrator's explicit configuration.
  */
 export function suggestReviewStatuses(statuses) {
   const pattern = /\b(review|approval|approve|qa|sign[- ]?off|verification|verify)\b/i;

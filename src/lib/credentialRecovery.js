@@ -1,39 +1,24 @@
 /**
- * CREDENTIAL RECOVERY — who is allowed to replace a second factor, and when.
+ * Decide who may replace a second factor and when.
  *
- * WHAT WAS ACTUALLY WRONG. db/migrations.js has carried va_credential_reset_grant
- * since v011, lib/ledger.js has carried CREDENTIAL_RESET_GRANT_ISSUED and
- * _REDEEMED, and resolvers/admin.js renders both in the ledger view. Nothing
- * ever wrote a row to that table and nothing ever read one. The admin-mediated
- * recovery control was documented in three places and implemented in none.
+ * The recovery table va_credential_reset_grant and ledger events existed since
+ * v011 but had no readers or writers. The enrol handler guarded only LOCKED,
+ * so a live Atlassian session could replace an ACTIVE credential and sign with
+ * a new authenticator. That bypassed the second identification component and
+ * the administrator's role in replacement under 21 CFR 11.200(a)(1),
+ * 11.200(a)(3) and 11.300(c).
  *
- * Meanwhile resolvers/totp.js's enrol handler guarded only LOCKED. An ACTIVE
- * credential was deleted and replaced without ceremony, which means anyone
- * holding a live Atlassian session could enrol their OWN authenticator over the
- * signer's and then sign as them. That collapses the two identification
- * components of 21 CFR 11.200(a)(1) into one — the session — and defeats
- * 11.200(a)(3), which requires that using someone else's signature take the
- * collaboration of two or more people. One person with one stolen session was
- * enough.
+ * An owner may enrol without a grant only while they have no working
+ * credential. Replacing ACTIVE or LOCKED credentials requires an unused,
+ * unexpired administrator-issued grant. The administrator authorizes the
+ * replacement without seeing or setting the secret; the owner scans the QR code.
  *
- * THE RULE THIS FILE ENCODES. A person may enrol themselves freely only while
- * they have no working credential. Once a credential is ACTIVE — or LOCKED,
- * which is the state an attacker would rather be in than out of — replacing it
- * requires a grant that an administrator issued, that has not expired, and that
- * nobody has used yet. The administrator never sees or sets the secret; they
- * issue a permission slip, and the owner redeems it by scanning a QR code only
- * they ever see. That is the collaboration 11.200(a)(3) asks for, and it is
- * also 11.300(c)'s "suitably rigorous controls" for issuing a replacement.
+ * A PENDING_CONFIRM secret expires after ENROLMENT_TTL_MS. A QR code may have
+ * been copied before confirmation, so it must not remain usable indefinitely.
+ * Starting a fresh enrolment rotates the secret and invalidates earlier copies.
  *
- * ENROLMENT EXPIRES. A PENDING_CONFIRM credential is a secret that has been
- * displayed as a QR code and never proven. Left open forever it is a standing
- * offer: a screenshot in a chat log, a photo of a monitor, a shoulder-surfed
- * screen, redeemable months later by whoever kept it. We cannot un-display a QR
- * code, so the control is the window — the secret is only worth something for
- * ENROLMENT_TTL_MS, and any fresh enrolment rotates it, which kills every
- * earlier copy at once.
- *
- * PURE. Decisions here, I/O in resolvers/totp.js and resolvers/admin.js.
+ * This module contains pure decisions. resolvers/totp.js and resolvers/admin.js
+ * perform the I/O.
  */
 import { CREDENTIAL_STATE } from './totp.js';
 
@@ -42,10 +27,11 @@ import { CREDENTIAL_STATE } from './totp.js';
  *  leaked screenshot is worthless by the time it is found. */
 export const ENROLMENT_TTL_MS = 15 * 60 * 1000;
 
-/** How long an administrator's reset grant stays open. Deliberately longer
- *  than the enrolment window — the admin issues it, then has to tell the person,
- *  who may be on another shift — but still bounded, because an unexpiring
- *  permission slip is just a weaker password. */
+/**
+ * Lifetime of an administrator-issued reset grant. Allow more time than the
+ * enrolment window so the owner can redeem it on a later shift, but still
+ * require expiry for unused grants.
+ */
 export const GRANT_TTL_MS = 24 * 60 * 60 * 1000;
 
 export const ENROL_DECISION = {
@@ -67,9 +53,8 @@ export const ENROL_DECISION = {
 export function enrolmentExpired(credential, now = Date.now()) {
   if (!credential) return false;
   if (credential.state !== CREDENTIAL_STATE.PENDING_CONFIRM) return false;
-  // `Number(null)` is 0, not NaN, so an unset enrolled_at would read as the
-  // epoch and expire every such row instantly — locking the owner out of their
-  // own setup with no way back. Absence must mean "unknown, do not expire".
+  // Number(null) is 0, so an unset enrolled_at would look like epoch time and
+  // expire a new setup. Treat absence as unknown and leave it unexpired.
   if (credential.enrolled_at == null) return false;
   const enrolledAt = Number(credential.enrolled_at);
   if (!Number.isFinite(enrolledAt)) return false;
@@ -110,10 +95,8 @@ export function enrolmentDecision({ credential, grant, now = Date.now() }) {
     };
   }
 
-  // ACTIVE and LOCKED are treated identically on purpose. It is tempting to be
-  // lenient with ACTIVE — the person is "just re-enrolling" — but ACTIVE is
-  // precisely the case where a working second factor exists and replacing it
-  // silently hands someone else the ability to sign.
+  // Both ACTIVE and LOCKED require recovery authorization. Replacing an ACTIVE
+  // credential also replaces a working second factor and cannot be self-authorized.
   if (grantUsable(grant, now)) {
     return { allow: true, decision: ENROL_DECISION.REDEEM_GRANT, consumesGrant: true };
   }
@@ -127,7 +110,7 @@ export function enrolmentDecision({ credential, grant, now = Date.now() }) {
     // of message that generates a ticket instead of resolving one.
     error: state === CREDENTIAL_STATE.LOCKED
       ? 'Your authenticator is locked after too many incorrect codes. Ask an administrator to issue a reset before setting it up again.'
-      : 'You already have an authenticator set up. Replacing it needs an administrator to issue a reset first — this protects your signature from being re-registered by someone else.'
+      : 'You already have an authenticator set up. Replacing it needs an administrator to issue a reset first. This prevents someone else from re-registering your signature.'
   };
 }
 

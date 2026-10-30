@@ -70,7 +70,7 @@ Reduced-motion users receive the same state change without animation.
 
 ### Save action and authentication
 
-The diff view shows a summary such as “3 approve · 2 reject · 0 undecided” and
+The diff view shows a summary such as "3 approve · 2 reject · 0 undecided" and
 an **Save changes** button. Save changes is disabled while any eligible field
 is undecided, while evidence is loading, while evidence has failed, or while
 the current reviewer is not eligible.
@@ -85,7 +85,7 @@ Clicking Save changes does not write Jira or record an approval. It opens the
 same authentication panel used for the latest-baseline ceremony. The panel
 shows:
 
-- the mixed meaning, for example “Save selected drift decisions”;
+- the mixed meaning, for example "Save selected drift decisions";
 - the exact approve/reject counts;
 - the fields in each set;
 - the evidence identifier/hash being signed;
@@ -218,7 +218,7 @@ state. Any failed restore verification prevents v3 from being published.
   appropriate, with fresh read-back evidence and retry guidance.
 - If baseline publication fails after an authenticated approval, the durable
   approval and operational state must explain that publication is incomplete;
-  the UI must not show “changes saved” as a clean result.
+  the UI must not show "changes saved" as a clean result.
 
 ## Testing and acceptance
 

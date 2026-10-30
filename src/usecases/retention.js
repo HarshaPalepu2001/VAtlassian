@@ -47,7 +47,7 @@ export async function setRetentionPolicy(req, overrides) {
     return {
       success: false,
       requiresAcknowledgement: true,
-      error: `${parsed} days is below the ${RETENTION_FLOOR_DAYS}-day floor. GxP predicate rules are measured in years — 21 CFR 211.180, 820.180 and 312.62 all run to multiple years — so a period this short is usually an operational number entered into a legal field. Re-submit with acknowledgement if this is genuinely your predicate rule's retention period.`
+      error: `${parsed} days is below the ${RETENTION_FLOOR_DAYS}-day floor. GxP predicate rules, including 21 CFR 211.180, 820.180 and 312.62, use periods measured in years. Check that this value is the required retention period rather than an operational interval. Re-submit with acknowledgement if it matches your predicate rule.`
     };
   }
   const now = Date.now();

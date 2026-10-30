@@ -25,35 +25,28 @@ export { DETECTED_VIA };
 export { discoverActiveRootsByAncestor, affectedTreeRoots, collectTree, collectAffectedTrees, ownFlatBaseline } from './treeCollect.js';
 
 /**
- * The drift collector.
+ * Collect drift through the same function for events and scheduled sweeps.
  *
- * ONE CODE PATH FOR THE EVENT AND THE SWEEP, and it is the reason drift
- * detection is trustworthy: whatever the reconcile job would conclude, the
- * trigger concludes too, because they are the same function. Two
- * implementations of "has this changed" would eventually disagree, and the
- * disagreement would look like flapping drift that nobody could reproduce.
+ * Re-read the issue and compare hashes. Event delivery only triggers the read;
+ * its changelog does not supply field values. Changelog content varies by field
+ * and may be absent, including reportedly in team-managed projects. Fresh hash
+ * comparisons make repeated deliveries idempotent.
  *
- * THE PAYLOAD IS A WAKE-UP ONLY. Nothing here trusts the event's changelog for
- * VALUES — it varies by field, is sometimes absent, and is reportedly absent
- * entirely in team-managed projects. The issue is re-read and hashes are
- * compared, which makes this idempotent under redelivery. The changelog is
- * consulted afterwards, for ATTRIBUTION, which is the one thing it is exact
- * about.
+ * Read the changelog afterwards to attribute who changed the issue and when.
  */
 
 /**
- * Examine one work item and record whatever changed.
+ * Examine one work item and record changes.
  *
  * @param issueId
  * @param issueKey
  * @param detectedVia
- * @param actorAccountId  from the event, when there is one. Used only as a
- *                        fallback where the changelog cannot attribute a field.
+ * @param actorAccountId Event actor, used only when the changelog cannot attribute
+ *                       a field.
  * @param now
  *
- * NEVER THROWS. A trigger that throws is retried by the platform, and a
- * permanently failing item would be retried forever. Errors are logged and
- * reported in the return value so the caller can count them.
+ * Log errors and return them rather than throw. Throwing would make the platform
+ * redeliver a permanently failing trigger indefinitely.
  */
 export async function collect({ issueId, issueKey, detectedVia = DETECTED_VIA.EVENT, actorAccountId = null,
   eventId = null, eventAt = null, now = Date.now() }) {
@@ -75,15 +68,14 @@ async function run({ issueId, issueKey, detectedVia, actorAccountId, eventId, ev
     return { outcome: OUTCOME.NO_BASELINE };
   }
 
-  // A decision or restore is in flight. observe() would return BUSY anyway, but
-  // returning here avoids reading the issue at all — and during a restore that
+  // A decision or restore is in progress. Return before reading Jira to avoid
+  // unnecessary requests and partial restore reads. observe() also returns BUSY.
   if ((review.state === REVIEW_STATE.DECIDING || review.state === REVIEW_STATE.RESTORING) && !isStaleLock(review, now)) {
     return { outcome: OUTCOME.BUSY };
   }
 
-  // The issue AND its edit screen. The screen is the scope basis — capture.js
-  // took this baseline over the screen-scoped set, so measuring drift over a
-  // wider one compares the approved state against fields it never recorded.
+  // Read the issue and edit screen. Compare the same screen-scoped fields used
+  // by capture.js, not a wider set absent from the baseline.
   const lookupKey = issueKey ?? review.issue_key;
   let issue = await readIssue(lookupKey);
   if (!issue) return { outcome: 'UNREADABLE' };
@@ -92,49 +84,37 @@ async function run({ issueId, issueKey, detectedVia, actorAccountId, eventId, ev
   const projectId = Number(issue.fields.project.id);
   const issueTypeId = String(issue.fields.issuetype.id);
 
-  // readJiraFields() is gone from this path deliberately. It was fetched only to
-  // be expanded into "every field Jira has" — a full field-catalogue read on
-  // every issue update, to produce a tracked set nobody asked for.
+  // Do not fetch the whole Jira field catalogue on every update. That earlier
+  // read incorrectly treated every available field as configured for tracking.
   const [declared, config, baseline] = await Promise.all([
-    // A child of an approved tree is measured over its root's fields — the
-    // ones its baseline was captured with (lib/tree/nodeFields.js).
+    // Compare a child with its tree root's fields, as at capture time.
+    // See lib/tree/nodeFields.js.
     fieldsForItem({ issueId, projectId, issueTypeId }, { activeRootsForNode, controlledFields }),
     projectConfig(projectId),
     activeBaseline(issueId)
   ]);
 
-  // A TREE BASELINE IS MEASURED AS A TREE. Its digests live on the root node
-  // and the row's field_digests is '{}', which observe() below would read as
-  // "every field drifted". Callers that cannot tell the two apart (the
-  // transition trigger) are routed here rather than trusted to choose.
+  // Route tree baselines to tree comparison. Their root nodes hold the digests;
+  // field_digests on the baseline row is '{}', which observe() would report as drift.
   if (baseline?.tree_hash) {
     return collectTree({ rootIssueId: issueId, rootIssueKey: key, detectedVia, actorAccountId,
       eventId, eventAt, now });
   }
 
-  // ONE DEFINITION OF SCOPE, shared with capture.js and resolvers/panel.js.
-  // These three used to hold three copies of this filter, which is how the set
-  // a reviewer's signature covered and the set drift was measured over came to
-  // disagree. See scopeFromIssue() for why an unknown scope widens rather than
-  // narrows.
+  // Share scopeFromIssue() with capture.js and resolvers/panel.js so signing and
+  // drift compare the same field set. Unknown scope widens instead of narrowing.
   const { fields } = scopeFromIssue({
     declared, issueFields: issue.fields
   });
 
-  // Moved to another project or issue type: recorded once, then this item
-  // follows the destination's configuration — which is what `declared` above
-  // already is, since it was read for the issue's current scope.
+  // After recording a project/type move once, use the destination configuration.
+  // declared already contains that current scope.
   await recordScopeMove({ issueId, review, projectId, issueTypeId, actorAccountId,
     destinationFieldCount: fields.length });
 
-  // DRIFT IS MEASURED OVER THE DECLARED SET, NOT OVER EVERY FIELD JIRA HAS.
-  //
-  // This built its field list from the whole Jira field catalogue, so a sweep
-  // over ONE work item inserted 306 drift rows and took 142 seconds — most of
-  // which was iterating the 280 unchanging custom fields to verify that
-  // baseline[null] === issue[null].
-  //
-  // The declared set is now the only authority.
+  // Measure only declared fields. The earlier catalogue-wide scan inserted
+  // 306 drift rows for one item and took 142 seconds, mostly comparing unchanged
+  // null custom fields.
   
   if (!config.enabled) return { outcome: 'DISABLED' };
 
@@ -175,8 +155,8 @@ async function run({ issueId, issueKey, detectedVia, actorAccountId, eventId, ev
       return { outcome: result.outcome };
 
     case OUTCOME.NO_CHANGE:
-      // The overwhelmingly common case — an event fired for a comment, a
-      // worklog, a sprint move. Touch the timestamp and stop.
+      // For events that leave controlled content unchanged, including comments,
+      // worklogs and sprint moves, update the timestamp and stop.
       await touch(issueId, now);
       return { outcome: OUTCOME.NO_CHANGE };
 
@@ -217,12 +197,12 @@ export function observationFor({ changelogId, attribution, failed, truncated, de
 }
 
 /**
- * Who a drift row names as its actor. A matched history item makes the row a
- * CONFIRMED edit, and its actor is then read as the editor (observation.js), so
- * it names only the item's own author: one Jira gave without an author names
- * nobody, never the event user, who only triggered the check. An unmatched
- * change keeps the legacy fallback to the event user, which is read as the
- * trigger, not the editor.
+ * Choose the actor recorded on a drift row.
+ *
+ * A matched history item makes the edit CONFIRMED and uses only that item's
+ * author. If Jira omitted the author, record nobody; the event user triggered
+ * the check but may not have edited the field. An unmatched change retains the
+ * legacy event-user fallback, interpreted as the trigger rather than the editor.
  */
 export function actorFor({ changelogId, attribution, actorAccountId }) {
   if (changelogId) {
@@ -241,12 +221,8 @@ async function recordAll({
   const changed = result.changedFields ?? [];
   const byId = new Map(fields.map((f) => [f.field_id, f]));
 
-  // ── Attribution ──────────────────────────────────────────────────────────
-  //
-  // The changelog is read since the BASELINE, not since the last check, because
-  // a field may have been touched several times and the reviewer needs the
-  // whole sequence — "raised, lowered by automation, raised again" is a
-  // different story from "raised".
+  // Read attribution since the baseline, not the last check, so the reviewer
+  // can inspect every intervening field edit, including reversals.
   const since = baseline?.transition_at ?? review.last_checked_at ?? 0;
   // `truncated` matters as much as `failed`: Jira's changelog pages oldest
   // first, so a bounded read stops before the NEWEST edits, which are the ones
@@ -299,9 +275,8 @@ async function recordAll({
       ? MATERIALITY.COSMETIC
       : classify(fieldId, field.materiality, before, after);
 
-    // CLASSIFIED BEFORE THE DEDUPE SKIP, because this field HAS drifted whether
-    // or not a row gets written for it. The counters below are the comparison's
-    // answer; the rows are its evidence trail.
+    // Classify drift before skipping duplicate evidence rows. The comparison
+    // sets counts even when no new row is needed.
     driftedNow.push(fieldId);
     if (needsDecision(materiality)) derivedMaterialities.push(materiality);
 
@@ -336,23 +311,13 @@ async function recordAll({
     }
   }
 
-  // ── Update the queue row ─────────────────────────────────────────────────
+  // Set the queue count from driftedNow, not the number of undecided va_drift rows.
+  // Rows can be skipped by the issue/changelog/field dedupe key. Link edits can
+  // also arrive as "field":"Link" without fieldId. Counting rows left VJIRA-17
+  // at drift_count 0 despite changed content, and later sweeps repeated that error.
   //
-  // THE COUNTER IS THE COMPARISON'S ANSWER, NOT THE ROW COUNT.
-  //
-  // This read driftSummary(), which counts undecided va_drift ROWS — so any
-  // field whose row was skipped understated it. A row is skipped whenever the
-  // dedupe key (issue_id, changelog_id, field_id) already exists, and Jira does
-  // not give every change an attributable changelog entry: a link edit arrives
-  // as `"field":"Link"` with no fieldId at all. VJIRA-17 sat at drift_count 0
-  // with content that had plainly moved, and no sweep could ever fix it,
-  // because every later pass skipped the same row and recounted the same zero.
-  //
-  // `driftedNow` is what the digest comparison actually found. The rows remain
-  // the evidence — who changed what, when — but they no longer decide how much
-  // drift there is. lib/interception.js's driftedFields() is the one authority,
-  // and this makes the stored counter agree with it by construction, which is
-  // what the My approvals queue and the collector both read.
+  // Keep the rows for attribution evidence. lib/interception.js#driftedFields
+  // defines current drift for both the collector and My approvals queue.
   const queueable = driftedNow.length > 0;
 
   const nextReview = {
@@ -419,7 +384,7 @@ async function readIssue(issueKey) {
   try {
     const res = await api.asApp().requestJira(route`/rest/api/3/issue/${issueKey}?fields=*all`);
     if (!res.ok) {
-      // 404 is normal — the item was deleted between the event and this read.
+      // 404 is expected if the item was deleted after the event.
       if (res.status !== 404) console.error('collect: issue read failed', issueKey, res.status);
       return null;
     }
@@ -431,8 +396,8 @@ async function readIssue(issueKey) {
 }
 
 /**
- * The issue's edit screen. Returns null rather than throwing — scopeFromIssue()
- * falls back to the issue's own field set, which is wider and therefore safe.
+ * Read the issue's edit screen. Return null on failure so scopeFromIssue()
+ * can fall back to the wider set of fields present on the issue.
  */
 async function readEditmeta(issueKey) {
   try {

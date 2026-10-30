@@ -1,6 +1,6 @@
 export type Result = {
   success?: boolean; ok?: boolean; error?: string; message?: string; note?: string; reason?: string;
-  /** Set only when the resolver's own error carried them (an upstream 429/503, mainly) — never fabricated. */
+  /** Use only values from the resolver's error, usually an upstream 429/503. */
   status?: number; retryAfterMs?: number;
 };
 /** Thrown by assertResult. Plain `Error` for every existing catch, plus the

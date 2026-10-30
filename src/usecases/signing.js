@@ -1,19 +1,15 @@
 /**
- * SIGNING CONTEXT — resolving what may be signed from a transition screen.
+ * Resolve the signing context for the exact transition screen.
  *
- * Forge's issue-transition custom field context carries the destination
- * transition id (`issueTransition.id`). Both signing fields (va-approval-field for UI Kit, and
- * va-device-approval-field for Custom UI) previously fell back to panel:getState,
- * which returned every gated transition leaving the current status. On an issue
- * with two controlled outbound edges, the field offered a dropdown — and if an
- * edge required a biometric device check that UI Kit cannot perform, it offered
- * to sign the wrong transition with a meaning statement that belonged to that
- * other edge. Attesting to the wrong meaning is a critical compliance failure.
+ * Forge supplies issueTransition.id. Previously both signing fields,
+ * va-approval-field and va-device-approval-field, fell back to panel:getState,
+ * which returned all controlled transitions from the current status. A dropdown
+ * could then offer a different edge, including biometric approval that UI Kit
+ * could not perform, with the wrong meaning statement.
  *
- * THE TRANSITION ID IS THE DISAMBIGUATOR. Both fields now mount the same
- * Custom UI form, which resolves with surface: 'signature-field' and serves
- * every assurance level; the exact transition id narrows the candidates to
- * one before lib/journey.js's resolveActions() reads the rule.
+ * Both fields now use the Custom UI form with surface: 'signature-field' for
+ * all assurance levels. The transition ID selects one candidate before
+ * lib/journey.js resolveActions() evaluates its rule.
  */
 import api from '@forge/api';
 import { load, respond, actorFrom, fail } from './panelAccess.js';
@@ -89,11 +85,11 @@ export function createSigningUsecases(deps = {}) {
           };
         }
       }
-      // THE FIELD MUST NAME THE EXACT TRANSITION IT SITS ON. Forge's
+      // Require the exact transition ID for this field's screen. Forge's
       // issue-transition custom field context carries the destination
       // transition id (Jira's `issueTransition.id`), and this surface exists
-      // only on that screen — so unlike the panel or worklist, which weigh
-      // every offered transition, this one resolves exactly one. A field
+      // only on that screen. The panel and worklist consider every offered
+      // transition, while this field resolves exactly one. A field
       // that cannot say which transition it is for cannot be trusted to
       // narrow to the one policy the signer is actually looking at, and two
       // sibling transitions to the same destination status must never be

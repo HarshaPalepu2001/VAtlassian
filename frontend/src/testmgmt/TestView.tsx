@@ -48,7 +48,7 @@ export default function TestView({ model, onModel, coverage }: { model: TestView
       {error?.at === null && <Notice danger>{error.message}</Notice>}
       <Facts items={[
         { label: 'Parent', value: model.parent ? `${model.parent.key}${model.parent.summary ? ` · ${model.parent.summary}` : ''}`
-          : <Badge tone="danger">No parent — set the Epic before publishing</Badge> },
+          : <Badge tone="danger">No parent. Set the Epic before publishing</Badge> },
         { label: 'Runnable version', value: signed ? `v${signed.versionNo} (signed)` : <Badge tone="warning">None signed yet</Badge> }
       ]} />
 
@@ -112,7 +112,7 @@ export default function TestView({ model, onModel, coverage }: { model: TestView
             <Disclosure title="Version definition" open={v.state === 'PUBLISHED'}><FrozenDefinition content={v.content} versionNo={v.versionNo} /></Disclosure>
             {v.signatures.map(s => (
               <p key={s.stepIndex} style={{ fontSize: 12 }}>
-                {s.decision === 'REJECT' ? '✕' : '✓'} {s.label}: <strong>{s.printedName}</strong>, <When ms={s.signedAt} />{s.reason ? ` — ${s.reason}` : ''}
+                {s.decision === 'REJECT' ? '✕' : '✓'} {s.label}: <strong>{s.printedName}</strong>, <When ms={s.signedAt} />{s.reason ? `. ${s.reason}` : ''}
               </p>
             ))}
             {v.state === 'PUBLISHED' && v.nextStep && !v.canSign && <Notice>Waiting for: {v.nextStep.label} ({v.nextStep.role}).{v.signBlocked === 'AUTHOR_CANNOT_SIGN' ? ' You wrote or published this version, so someone else must sign it.' : ''}</Notice>}

@@ -4,11 +4,10 @@ import { isStepStatus } from './results.js';
 import { normaliseDataset } from './planning.js';
 
 /**
- * WHAT A TEST VERSION AND A RUN ARE, AS BYTES THAT GET SIGNED.
+ * Define the content hashed for signed test versions and runs.
  *
- * A signature binds a content hash. These functions are the only definition of
- * the content behind it, so the hash recomputed at signing time and the one
- * shown to an auditor later are computed by the same code from the same rows.
+ * Signing and later evidence reads use these functions with the same rows so
+ * they compute the same content hash.
  */
 
 export const MAX_STEPS = 200;

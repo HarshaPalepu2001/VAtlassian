@@ -12,7 +12,7 @@ export async function adminDependencies(overrides, profile = '') {
     asApp: () => api.asApp(), asUser: () => api.asUser(), route: forge.route,
     listGatedTransitions: (await import('../db/configStore.js')).listGatedTransitions,
     declaredFieldRows: (await import('../db/configStore.js')).declaredFieldRows,
-    // The live Jira workflow read and this app's own runtime identity — shared
+    // The live Jira workflow read and app runtime identity are shared
     // by the admin transition picker (adminDirectory.js#listWorkflowTransitions)
     // and the create/update revalidation in transitionsValidation.js, so both
     // read the same authoritative source rather than trusting the browser.
@@ -39,7 +39,7 @@ export async function adminDependencies(overrides, profile = '') {
       import('../lib/materiality.js'), import('../lib/aiClassification.js'), import('../jobs/prune.js')
     ]);
     modules.forEach(m => Object.assign(deps, m));
-    // Administrative changes must surface an audit failure rather than reporting success.
+    // Administrative changes must report an audit failure rather than reporting success.
     deps.tryAppend = event => deps.append(deps.auditStore, { eventId: deps.newId(), ...event });
   }
   return deps;
@@ -52,20 +52,13 @@ export async function query(deps, sql, params = []) {
 }
 
 /**
- * Two authorities, deliberately unequal.
+ * VAtlassian administrators control approvals, signatures, capture and retention.
+ * Jira administrators can manage the VAtlassian administrator roster, including
+ * recovering a stranded roster, but cannot change those controls directly.
  *
- * A VAtlassian administrator is the ordinary one: it is the authority that
- * decides what is approved, signed, captured and retained.
- *
- * A Jira administrator owns the roster only. They can appoint and remove
- * VAtlassian administrators — which they could achieve anyway by appointing
- * themselves, and which somebody must be able to do when a roster is stranded
- * — but that authority does not extend to any control. Callers opt in with
- * `allowJiraAdmin`, so the reach of the weaker authority is a visible list of
- * use cases rather than a default.
- *
- * Returns how the caller was authorized, so an action that both authorities
- * can take records which one it was.
+ * Callers must opt into Jira administrator authority with allowJiraAdmin. This
+ * keeps roster recovery limited to explicit use cases. Return the authority used
+ * so the action's audit entry can identify it.
  */
 export async function authorizeAdmin(deps, context, allowJiraAdmin = false) {
   if (!context?.accountId) throw new Error('Unauthorized. Sign in to continue.');

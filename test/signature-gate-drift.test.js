@@ -1,10 +1,9 @@
 /**
  * Gate drift detection.
  *
- * The workflow fixture below is the real shape returned by
- * POST /rest/api/3/workflows from a non-production Jira site,
- * captured 2026-08-31 — including the two GLOBAL transitions, which are the
- * part a naive comparison gets wrong.
+ * The workflow fixture is the POST /rest/api/3/workflows response from a
+ * non-production Jira site captured on 2026-08-31. It includes two GLOBAL
+ * transitions to check their classification.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -41,8 +40,11 @@ const savedOn = (validator, transitionId) => {
   return { ...validator, parameters: { ...validator.parameters, config: JSON.stringify({ ...config, transitionId }) } };
 };
 
-/** AP's workflow: To Do (10004), In Progress (3), Done (10006). The validator
- *  sits on every transition — on the two global ones only as the drift hold. */
+/**
+ * AP's workflow has To Do (10004), In Progress (3), and Done (10006).
+ * The validator is attached to every transition. On the two global
+ * transitions it enforces only the drift hold.
+ */
 function apWorkflow({ doneGate = sigGate(), signGate = sigGate(), anyGate = sigGate(), progressGate = sigGate(),
   extra = [] } = {}) {
   [doneGate, signGate, anyGate, progressGate] = [savedOn(doneGate, '2'), savedOn(signGate, '3'), savedOn(anyGate, '4'), savedOn(progressGate, '5')];

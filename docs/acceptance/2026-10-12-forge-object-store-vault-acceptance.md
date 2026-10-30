@@ -1,11 +1,11 @@
-# Acceptance Checklist: Forge Object Store Vault Verification
+# Acceptance checklist: Forge Object Store vault verification
 
 **Date:** 2026-10-12  
 **Context:** VAtlassian removed all Confluence integrations. Attachment bytes are vaulted exclusively in the Forge Object Store (`vault/sha256/<hash>`).
 
 ---
 
-## 1. Deployment and Migration Order
+## 1. Deployment and migration order
 
 - [ ] **Deploy code changes to Forge**
   - Run `forge deploy` (use `--non-interactive` if prompted).
@@ -16,7 +16,7 @@
 
 ---
 
-## 2. Vaulting and Restore Verification
+## 2. Vaulting and restore verification
 
 - [ ] **Baseline Capture with Attachment**
   - Select or create an issue in a controlled project with `capture_baseline = true`.

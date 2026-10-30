@@ -19,7 +19,7 @@ test('the content hash is computed from digests alone, so toggling retention nev
   assert.deepEqual(on.values, { summary: 'Ship the thing' });
 });
 
-test('values are stored only for fields that opted in — the compliance boundary', () => {
+test('values are stored only for fields that opted in', () => {
   const result = project(
     { summary: 'a', description: { type: 'doc', content: [] }, labels: ['x'] },
     [
@@ -82,7 +82,7 @@ test('normaliseAdf walks iteratively: exact byte-for-byte output, captured befor
   assert.equal(normaliseAdf(null), null);
 });
 
-test('normaliseAdf has no recursion depth limit — the original recursive walk overflowed around 2,000 levels', () => {
+test('normaliseAdf has no recursion depth limit after the overflow around 2,000 levels', () => {
   // One nesting level per loop iteration, not per call frame.
   const deepNest = (n) => {
     let node = { type: 'text', text: 'leaf' };
@@ -138,26 +138,23 @@ test('changedFields reports exactly the fields whose digests moved', () => {
 });
 
 /**
- * ─────────────────────────────────────────────────────────────────────────────
- * DRIFT IS A FACT ABOUT ONE WORK ITEM, NOT ABOUT THE TRACKED SET.
+ * Drift describes changes to a work item's tracked content.
  *
- * These pin the bug that put 302 phantom drift rows on BS-21 and 14 on BS-11,
- * on work items nobody had touched — and then told the reviewer "this work item
- * changed while you were reading it" when it had not.
+ * These regressions cover 302 false drift rows on BS-21 and 14 on BS-11.
+ * The items had not changed, but the reviewer saw "this work item changed
+ * while you were reading it".
  *
- * The cause was set arithmetic, not content. changedFields unioned the two key
- * sets, so a baseline captured when 302 fields were tracked, compared against a
- * projection over 4, reported the 298 missing keys as changed: `digest !== null`
- * is true for every one of them. Every field an administrator excluded, and
- * every field that left the issue type, arrived as drift on the issue.
+ * changedFields unioned the baseline and current key sets. Comparing a
+ * baseline of 302 fields with a projection of 4 reported the 298 missing
+ * keys as changed because `digest !== null` was true. Excluding a field in
+ * configuration or removing it from the issue type therefore created drift.
  *
- * observe() has always passed the in-scope field ids as a third argument.
- * changedFields accepted two and silently dropped it.
- * ─────────────────────────────────────────────────────────────────────────────
+ * observe() already passed in-scope field ids as a third argument, but
+ * changedFields accepted two arguments and ignored it.
  */
 test('a field that left the tracked set is not drift on the work item', () => {
   // The baseline covered `legacy`; the current scope does not. Nobody edited
-  // this item — the tracked set narrowed. That is a configuration change and
+  // this item. The tracked set narrowed. That is a configuration change and
   // belongs in the ledger, not on the reviewer's screen as a changed field.
   assert.deepEqual(
     changedFields({ summary: '1', legacy: '2' }, { summary: '1' }, ['summary']),
@@ -168,7 +165,7 @@ test('a field that left the tracked set is not drift on the work item', () => {
 test('a newly tracked field is not drift until a baseline covers it', () => {
   // `added` has no approved value to have drifted FROM. Counting it would mean
   // that installing an app which adds a custom field marks every approved item
-  // in the tenant as drifted — which is the failure trackedFields.js was
+  // in the tenant as drifted, the failure trackedFields.js was
   // written to avoid.
   assert.deepEqual(
     changedFields({ summary: '1' }, { summary: '1', added: '9' }, ['summary', 'added']),

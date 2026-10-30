@@ -1,12 +1,10 @@
 /**
- * Alert rendering and dedupe — 21 CFR 11.300(d)'s reporting half.
+ * Alert rendering and deduplication under 21 CFR 11.300(d).
  *
- * The rule these tests exist to hold: an alert is delivered into an ordinary
- * Jira project with ordinary permissions, so it must tell a security unit what
- * happened without disclosing anything that would help them impersonate the
- * signer. Everything else here is about not crying wolf, because an alert
- * channel that fires more than it should stops being read, and then the two
- * findings that actually matter arrive somewhere nobody is looking.
+ * Alerts go to Jira projects with ordinary permissions. They must tell the
+ * security unit what happened without disclosing information that could
+ * help someone impersonate the signer. These tests also check that duplicate
+ * or irrelevant alerts do not obscure the two reportable findings.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

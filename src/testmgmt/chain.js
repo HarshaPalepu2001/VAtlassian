@@ -3,19 +3,15 @@ import { ROLE } from '../lib/roles.js';
 import { ASSURANCE_LEVEL } from '../lib/approval/levels.js';
 
 /**
- * SIGN-OFF CHAINS — who signs a test version, and who signs a run.
+ * Enforce the configured sign-off order for test versions and runs.
  *
- * The client decides the chain (owner decision 4): an ordered list of steps,
- * each a role and the meaning the signer attests to. VAtlassian enforces it
- * with no exceptions: no admin override, no skip, no fallback signer. If nobody
- * holds a step's role, that step cannot be signed and the subject goes no
- * further.
+ * The client configures an ordered list of roles and signature meanings under
+ * owner decision 4. No administrator override, skipped step or fallback signer
+ * is allowed. If nobody holds the next role, sign-off cannot advance.
  *
- * A run pins the chain in force when it starts (its digest is stored with the
- * run), so changing the project's chain later affects new runs only.
- *
- * Assurance is ESIGNATURE (authenticator code) for every test-management
- * signature until biometric is decided (owner decision 7).
+ * Each run pins the chain's digest when it starts. Later chain changes affect
+ * new runs only. Test-management signatures use ESIGNATURE, an authenticator
+ * code, pending a biometric decision under owner decision 7.
  */
 
 export const TM_ASSURANCE = ASSURANCE_LEVEL.ESIGNATURE;

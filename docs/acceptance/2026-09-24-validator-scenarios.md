@@ -1,4 +1,4 @@
-# Validator scenario run — 2026-09-24
+# Validator scenario run. 2026-09-24
 
 The `va-gate` validator is now the whole Jira-side setup. It is attached to every
 transition, holds a baselined work item whose tracked content has drifted until

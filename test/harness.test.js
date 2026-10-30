@@ -283,7 +283,7 @@ test('an unreadable baseline is called out as a storage problem, not an edit to 
       digestSource: 'root-node-missing>baseline-row', baselineReadable: false, fields: [] } } });
   const result = await inspect({ payload: { issueKey: 'VAT-41' }, context: { accountId: 'u1' } }, deps);
   assert.equal(result.verdict, 'BASELINE_UNREADABLE');
-  assert.ok(result.remediations.some(text => /approving again will not clear it/.test(text)));
+  assert.ok(result.remediations.some(text => /Approving again will not clear it/.test(text)));
 });
 
 test('a failing live check is reported, and the verdict says it rests on the stored counter', async () => {

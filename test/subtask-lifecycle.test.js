@@ -10,14 +10,12 @@ import { planTreeCapture } from '../src/lib/tree/capturePlan.js';
 import { logicalNodeId } from '../src/lib/tree/model.js';
 
 /**
- * The whole life of a subtask inside a governed hierarchy.
+ * Subtask lifecycle in a governed hierarchy.
  *
- * A subtask is not a linked issue. A link can be detached and both work items
- * carry on; a subtask has no existence apart from its parent, so returning a
- * hierarchy to its approved shape means the subtask is either created or
- * destroyed — there is no third option. These tests walk that through end to
- * end, because every individual piece of it passed its own unit test while the
- * sequence still could not reach a clean result.
+ * A link can be detached while both issues remain. A subtask cannot exist
+ * without its parent, so restoring the approved hierarchy may require
+ * creating or deleting it. These end-to-end tests cover a sequence that
+ * could not reach a clean result even though its individual unit tests passed.
  */
 
 const controlledFields = withAlwaysControlled([
@@ -81,7 +79,7 @@ test('a subtask added after approval is a structural change, not a field change 
   assert.equal(changes[0].logicalNodeId, logicalNodeId(CHILD_ID));
 });
 
-test('rejecting deletes the added subtask outright — a subtask cannot be left detached', async () => {
+test('rejecting deletes the added subtask rather than detaching it', async () => {
   const baseline = capture(rootAlone);
   const current = capture(rootWithChild);
   const plan = planTreeRestore({ baselineTree: baseline, currentTree: current, controlledFields });
@@ -128,7 +126,7 @@ test('approving an added subtask captures it into the next baseline, with its ow
   assert.deepEqual(JSON.parse(childNode.fieldDigests),
     project(issueFields('Approved child', { parent: { id: ROOT_ID } }), controlledFields).digests);
   assert.equal(next.values[logicalNodeId(CHILD_ID)].summary, 'Approved child');
-  // And the tree hash — the thing the reviewer's signature binds to — changes
+  // The tree hash bound to the reviewer's signature changes
   // because of it, so the new subtask cannot be inside an old signature.
   assert.notEqual(next.treeHash, capture(rootAlone).treeHash);
 });

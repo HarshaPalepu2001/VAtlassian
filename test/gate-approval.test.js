@@ -206,7 +206,7 @@ test('audit failure on allow path returns denial even after CAS', async () => {
 // Two workflow transitions can share a destination status ("Approve" and
 // "Approve (fast-track)", both 1 -> 2). Matching on the status pair alone
 // cannot tell them apart, so a receipt signed for one transition id must
-// never be accepted for a request naming a different one — even though
+// never be accepted for a request naming a different one, even though
 // deps.pending here is a stub that hands back the same row regardless of
 // what it was asked for, exactly as a real query that filtered on the wrong
 // id would.

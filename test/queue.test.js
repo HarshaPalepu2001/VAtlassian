@@ -283,7 +283,7 @@ test('every pending decision is reachable across pages, in order, and none of th
   // also a live candidate for the transition search below, so if the skip set
   // were ever rebuilt from only the page that finished decisions (losing the
   // other 200 ids), this test would see transition items appear alongside
-  // them — items a validator would refuse, not actually decidable moves.
+  // them, even though the validator would refuse those transitions.
   const COUNT = 201;
   const issues = Array.from({ length: COUNT }, (_, n) => issue({ id: n + 1, transitions: [{ id: '101', name: 'Done', to: '5' }] }));
   const decisions = Array.from({ length: COUNT }, (_, n) => changed(n + 1, { last_drift_at: 1000 + n }));
@@ -304,7 +304,7 @@ test('every pending decision is reachable across pages, in order, and none of th
   assert.ok(seen.every(i => i.kind === 'CHANGES'), 'every item under decision keeps that kind on every page: none leaked through as a transition');
 });
 
-test('a decision resolved between pages does not hide the next one — a value cursor, not a row position', async () => {
+test('a value cursor preserves the next item when an earlier decision resolves between pages', async () => {
   // A row-position cursor (page 2 starts "at index 200") breaks the moment
   // the set it indexes into changes shape: removing the earliest item here
   // shifts every later one up by one slot, so slice(200, 400) on the new,
@@ -319,7 +319,7 @@ test('a decision resolved between pages does not hide the next one — a value c
   assert.equal(first.items.length, 200);
   assert.ok(first.nextPageToken, 'one decision remains');
 
-  // The earliest item — already shown on the first page — gets decided
+  // The earliest item, already shown on the first page, gets decided
   // before the next page is fetched, exactly as a reviewer acting on it
   // between the two round trips would make it disappear from the store.
   decisions.splice(0, 1);

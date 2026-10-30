@@ -3,32 +3,18 @@ import { canonicalAttachments, jiraIdOf, rewriteAdfMedia, liveCopyMedia } from '
 import { isReadableCopy, describeLocation } from '../vaultLocation.js';
 
 /**
- * PUTTING A WORK ITEM'S FILES BACK.
+ * Restore the baseline attachment list. Verify vaulted bytes against their
+ * stored SHA-256 before uploading missing files. Read uploads back and check
+ * their hashes before recording aliases in attachmentIdentity.js.
  *
- * A rejection returns the attachment list to the one the baseline recorded:
+ * Permanently delete post-approval additions only after their names, sizes
+ * and hashes are written to the audit ledger. Preflight names these files.
+ * Only baselined files belong in the vault. Upload before deleting so a
+ * refused upload cannot cost an existing file.
  *
- *   · A recorded file that is missing is RE-UPLOADED from the vault. Its vaulted
- *     bytes are checked against the SHA-256 taken when they were vaulted before
- *     anything is sent to Jira, so a copy altered in the vault is refused, not
- *     restored. Jira gives the upload a new id; once the upload is read back and
- *     its hash matches, the new id is recorded as standing for the original
- *     (lib/attachmentIdentity.js), and from then on it IS the approved file to
- *     every comparison.
- *
- *   · A file that was added is DELETED — permanently, which is why the reject
- *     dialog names it before anyone signs. Its name, size and content hash go
- *     into the audit ledger first, and the delete happens only if that write
- *     succeeded: losing the audit trail is a reason to keep a file, never a
- *     reason to destroy it quietly. Only baselined files belong in the vault.
- *
- * Additions first, then removals, so a refused upload never costs a file.
- *
- * NEVER SILENTLY PARTIAL. A file that cannot be put back — no vaulted copy, a
- * copy that fails its hash, an upload Jira refuses — is named with the reason,
- * the rest still go ahead, and the whole step then reports failure. A failure
- * of the SYSTEM (no response, 5xx, rate limit) is thrown at once instead, so a
- * queued restore retries: every step here is safe to repeat, because a file
- * already restored is found by its alias and not uploaded twice.
+ * Name per-file refusals and continue with other files, then report failure.
+ * Throw systemic failures such as missing responses, 5xx and rate limits so
+ * the queued worker retries. Aliases prevent duplicate uploads on retries.
  */
 
 export class AttachmentRestoreError extends Error {
@@ -91,7 +77,7 @@ const describeFile = a => a?.filename || `attachment ${a?.id}`;
 /**
  * @param issueKey       the work item to act on
  * @param issueId        its id (aliases are recorded against it)
- * @param sourceIssueId  whose vault holds the files — the same item, except for
+ * @param sourceIssueId  whose vault holds the files, usually the same item, except for
  *                       a work item a tree restore recreated under a new id
  * @param target         the baseline's retained attachment list
  * @param deps           I/O, see ./attachmentAdapters.js
@@ -256,20 +242,13 @@ export async function restoreAttachments({ issueKey, issueId, sourceIssueId = is
 }
 
 /**
- * RICH TEXT, POINTED AT THE FILES THAT ARE THERE.
+ * Rewrite ADF media pointers to restored copies so Jira does not reject
+ * references to deleted originals with ATTACHMENT_VALIDATION_ERROR.
+ * Leave pointers to surviving originals unchanged.
  *
- * An approved description shows its files by their ORIGINAL media ids. Where
- * a file was put back by a restore, Jira only knows the copy's media id, and
- * refuses a description that points at a file it no longer has
- * (ATTACHMENT_VALIDATION_ERROR). So each ADF value about to be written has
- * those pointers swapped for the copies' — and nothing else changed. Where the
- * original file is still on the item there is nothing to swap, and the
- * description goes back byte for byte.
- *
- * `record`: identityRecords() for this item. `liveJiraIds`: the Jira ids on the
- * item now, so that of two copies of one original — restored, deleted,
- * restored again — the one still there is shown, not the first one recorded
- * (lib/attachmentIdentity.js liveCopyMedia).
+ * record contains identityRecords for this item. liveJiraIds identifies
+ * current copies so liveCopyMedia selects the surviving copy after repeated
+ * restoration and deletion.
  */
 export function pointAtLiveFiles(fields, record, { liveJiraIds = null } = {}) {
   const forward = liveCopyMedia(record, liveJiraIds);

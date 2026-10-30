@@ -4,14 +4,9 @@ import { diffText, isWhitespaceOnly, magnitude as textMagnitude, coalesce, OP } 
 import { adfPlainText } from '../valuestore.js';
 
 /**
- * Per-field-kind diffing, and the honest answer to "could a rejection put this
- * back?".
- *
- * Every differ here returns the same shape, so the panel, the AI payload and
- * the restore planner all read one structure regardless of what kind of field
- * produced it. An unknown custom-field kind degrades to a structural
- * comparison rather than rendering nothing — a reviewer seeing LESS than the
- * record contains is the failure that matters.
+ * Compare fields by kind and report whether rejection can restore each one.
+ * All differs return the same shape for the panel, AI payload and restore
+ * planner. Unknown field kinds fall back to canonical JSON comparison.
  */
 
 export const DIFF_KIND = {
@@ -28,7 +23,7 @@ export const DIFF_KIND = {
 export const RESTORABLE = {
   /** A plain field write on PUT /issue/{key}. */
   YES: 'YES',
-  /** Needs a dedicated handler — links, sprint, parent, status. */
+  /** Needs a dedicated handler for links, sprint, parent or status. */
   SPECIAL: 'SPECIAL',
   /** Jira cannot undo it: other people's comments, their work logs. */
   NO: 'NO',
@@ -44,12 +39,8 @@ export function presentationKind(configuredKind, before, after) {
 }
 
 /**
- * Fields that a PUT can never restore, with the reason a reviewer is shown.
- *
- * NAMED HERE, AND SURFACED BEFORE THE REVIEWER CONFIRMS. The reject dialog
- * lists these under "cannot be restored" so that nobody clicks Reject and
- * discovers afterwards that two fields were quietly left drifted. An app that
- * promises to put things back has to be exact about what it cannot put back.
+ * Fields a PUT cannot restore, with reasons shown before the reviewer
+ * confirms rejection.
  */
 const IRREVERSIBLE = {
   comment: 'Comments are append-only. Baseline never deletes or rewrites what somebody wrote.',
@@ -130,11 +121,8 @@ export function diffField({ field, before, after, retained, digestChanged = true
     restorableReason: restorabilityReason(field, retained)
   };
 
-  // THE HONEST DEGRADATION. The digest said this field changed, but its
-  // contents were never retained, so there is no before to show and no value to
-  // write back. The panel renders "changed — contents not retained", which is
-  // the truthful consequence of the per-field retention boundary and is never
-  // dressed up as an empty diff.
+  // Without a retained baseline value, report the change but offer no before
+  // value or restoration. The panel must distinguish this from an empty diff.
   if (!retained) {
     return {
       ...base,
@@ -215,17 +203,15 @@ function diffScalarField(base, before, after) {
     after: after ?? null,
     ops: changed ? [{ op: OP.DELETE, text: b }, { op: OP.INSERT, text: a }] : [],
     summary: changed ? `${b || '(empty)'} → ${a || '(empty)'}` : 'unchanged',
-    // A scalar either changed or it did not; there is no partial magnitude, and
-    // pretending otherwise would let a priority change sort below a typo.
+    // Treat changed scalars as a whole change so priority edits are not ranked
+    // below text edits because they contain fewer characters.
     magnitude: changed ? 1 : 0
   };
 }
 
 /**
- * Set semantics. Labels, components, versions, multi-selects.
- *
- * Reported as added/removed rather than as a before/after pair, because that is
- * what a person did: they added a label, they did not replace a list.
+ * Compare labels, components, versions and multi-selects as sets.
+ * Report added and removed members.
  */
 function diffMultiField(base, before, after) {
   const b = toSet(before);
@@ -342,12 +328,8 @@ export function withAttachmentDetails(diff, beforeRaw, afterRaw) {
 }
 
 /**
- * The fallback for a custom-field type nobody taught this app about.
- *
- * Compares canonical JSON. Crude, correct, and never silent — a field whose
- * schema we do not recognise still reports that it changed, which is far better
- * than omitting it from the diff and letting a reviewer believe nothing
- * happened.
+ * Compare unknown custom field types as canonical JSON so unrecognized
+ * schemas still produce a change in the review.
  */
 function diffUnknownField(base, before, after) {
   const b = JSON.stringify(before ?? null);
@@ -373,9 +355,8 @@ export function restorability(field, retained) {
   if (IRREVERSIBLE[field.field_id]) return RESTORABLE.NO;
   if (!retained) return RESTORABLE.NOT_RETAINED;
   if (SPECIAL_HANDLERS[field.field_id]) return RESTORABLE.SPECIAL;
-  // `writable` is populated from editmeta at capture time. A false here means
-  // Jira would refuse a write to this field on this project's screens, which
-  // the reviewer needs to know BEFORE they press Reject, not after.
+  // writable comes from editmeta at capture. If false, tell the reviewer
+  // before rejection that Jira would refuse the field write.
   if (field.writable === false) return RESTORABLE.NO;
   return RESTORABLE.YES;
 }

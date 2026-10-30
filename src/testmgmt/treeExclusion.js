@@ -2,33 +2,24 @@ import { memo } from '../lib/cache.js';
 import { listProjects, bugIssueIdsAmong } from './store.js';
 
 /**
- * TEST-MANAGEMENT ISSUES ARE NOT PART OF THEIR PARENT'S GOVERNED TREE.
+ * Exclude test-management work from its parent's governed tree under owner
+ * decision 11, dated 2026-10-21. These issues have their own signatures and
+ * history. Including them would create node-added drift and allow parent
+ * rejection to delete them.
  *
- * Owner decision 11 (2026-10-21). A baselined Epic's tree takes in every
- * descendant, so a Test, an Execution or the automatic bug created under it
- * would be "node added" drift: the Epic would be held, and rejecting that
- * drift would delete the new issue. These issues have their own signatures
- * and history; the Epic's baseline does not cover them.
+ * When enabled, exclude mapped Test, Test Plan and Test Execution types.
+ * With any test-management configuration, enabled or disabled, exclude bugs
+ * identified by immutable tm_bug issue ids regardless of their current type.
+ * Do not rely on editable labels or properties. Skip descendants of excluded
+ * issues too.
  *
- * Excluded:
- *   - in a project with test management enabled, every issue of a mapped
- *     Test, Test Plan or Test Execution type;
- *   - in any project with a test-management configuration, enabled or not,
- *     every bug test management created, by issue id from its own tm_bug rows
- *     (never by a label or property, which any editor could set), whatever
- *     its work type is now.
- * An excluded issue's own children are not walked either.
+ * Preserve existing signed coverage. Refuse mappings for types already in a
+ * stored baseline tree. Remove a type from exclusion only when none of its
+ * issues has a parent. Bugs remain excluded while their tm_bug row exists.
+ * See usecases/testManagementAdmin.js.
  *
- * NO SIGNED BASELINE IS RE-READ UNDER A DIFFERENT RULE. Enablement refuses to
- * map a type that already has an issue inside a stored baseline tree, a type
- * leaves the exclusion only while none of its issues has a parent
- * (usecases/testManagementAdmin.js), and a test-management bug is excluded
- * from the moment it exists for as long as its tm_bug row does. So nothing
- * excluded here can have been part of what anyone signed, and nothing once
- * excluded comes back into a signed tree.
- *
- * Every tree reader the runtime builds passes this in (lib/tree/jira.js). A
- * failed read throws: the caller fails closed, as for any unreadable tree.
+ * All runtime tree readers pass this filter to lib/tree/jira.js. Read failures
+ * throw so callers fail closed.
  */
 export async function testManagementExclusion(children, deps = {}) {
   const excluded = new Set();

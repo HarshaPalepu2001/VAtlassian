@@ -7,8 +7,8 @@ import { findLinkConflicts } from '../src/lib/restore/linkConflicts.js';
 //
 // Found live on 2026-09-25: the VAT-12 ↔ VAT-15 link was removed; VAT-15's
 // drift was approved on its own (its baseline: no link) while VAT-12's still
-// held the link. Rejecting VAT-10 then re-created VAT-12's link — which also
-// put it back on VAT-15, against VAT-15's approval — and the retry restored
+// held the link. Rejecting VAT-10 then re-created VAT-12's link and also
+// restored it on VAT-15 against VAT-15's approval. The retry restored
 // VAT-15 by deleting it again. Each restore was right about its own item and
 // wrong about the other. A restore must never change a link in a way the other
 // end's approved state contradicts.

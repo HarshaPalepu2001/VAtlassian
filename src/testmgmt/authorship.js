@@ -1,27 +1,20 @@
 /**
- * AUTHORSHIP — who wrote a test version or a plan revision, so that none of
- * them signs it.
+ * Track test-version and plan-revision authors for independent review under
+ * ISO 26262-8 clause 9, ASPICE SWE.4 through SWE.6 and GxP second-person review.
+ * Authors cannot approve their own content when authorSeparation is enabled.
+ * distinctSigners separately controls whether chain signers must differ.
  *
- * Independent review of a test specification (ISO 26262-8 clause 9, ASPICE
- * SWE.4–SWE.6, a GxP "second person") means its author never approves it.
- * This is separate from the chain: `distinctSigners` is about signers among
- * themselves, the author rule is about the content.
+ * Read authorSeparation at signing time, so enabling it covers versions still
+ * awaiting sign-off. Disabled mode is for single-person trials and does not
+ * meet independent-review requirements. Always record authors and include
+ * the setting in each signature's audit entry.
  *
- * The rule is the project's switch (`authorSeparation`, Test management page),
- * read when someone signs, not when the version was published: switching it
- * on covers every version still waiting for sign-off. Off is not compliant;
- * it exists for single-person trials. Authors are recorded either way, and
- * every signature's audit entry says whether the rule was on.
+ * Include everyone who edited or published since the last signed version.
+ * Rejected or superseded unsigned versions retain their authors on the next
+ * version, even if someone else republishes.
  *
- * The authors of a version are everyone who edited the draft, or published a
- * version, since the last signed one. Content that was published and never
- * signed (rejected, superseded) carries its authors into the next version: a
- * republish by someone else does not launder who wrote it.
- *
- * A draft keeps its editors as `[{ accountId, revision }]`, the draft revision
- * each one last saved. A version stores `{ accounts, draftRevision }`, the
- * draft revision it was published from, so the next version knows where the
- * signed content ended.
+ * Draft editors use [{ accountId, revision }]. Versions store
+ * { accounts, draftRevision } to identify where the last signed content ended.
  */
 
 /**

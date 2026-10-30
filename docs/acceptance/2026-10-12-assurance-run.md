@@ -1,4 +1,4 @@
-# Assurance run — 12 cases, one per promise — 2026-10-12
+# Assurance run. 12 cases, one per promise. 2026-10-12
 
 Goal: close the "does it hold?" question with few cases. Each case proves one or more of the
 promises below, end to end, on the live tenant. Every action is recorded in the Results

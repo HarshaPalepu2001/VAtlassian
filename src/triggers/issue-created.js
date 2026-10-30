@@ -6,19 +6,14 @@ export function isDependencyBundle(value) {
 }
 
 /**
- * avi:jira:created:issue — wakes any governed tree the new issue was born
- * into.
+ * Handle avi:jira:created:issue by checking any governed tree containing the
+ * new issue. The new issue cannot be a baseline root yet because capture occurs
+ * on an approved transition. It may be a new descendant of an existing tree.
  *
- * THE NEW ISSUE IS NEVER ITSELF A ROOT HERE. A baseline is only ever captured
- * on an approved transition, and this issue was just created, so it can only
- * ever be a new descendant of a tree baselined before it existed. It is not
- * yet in any baseline's node index, which is exactly the case
- * affectedTreeRoots()'s ancestor walk exists for: it climbs the native parent
- * chain until it finds a root that is already indexed.
- *
- * Real dependencies come from triggers/runtime.js so a test can supply its
- * own affectedTreeRoots/collectTree without this module needing its own
- * (previously incomplete) default-parameter wiring.
+ * affectedTreeRoots() walks native parents to find an indexed root because the
+ * new issue itself has no baseline-node entry. Load production dependencies
+ * from triggers/runtime.js; tests can supply affectedTreeRoots/collectTree
+ * without separate, previously incomplete, default-parameter wiring.
  */
 export async function run(event, suppliedDeps = null) {
   return withRequestCache(() => runUncached(event, suppliedDeps));

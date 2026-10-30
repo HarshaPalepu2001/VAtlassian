@@ -8,12 +8,9 @@ import { Card, CodeInput, Loading, Page, Stack } from '../ui/primitives';
 import { useConfigurationUpdates } from '../lib/configurationUpdates';
 
 /**
- * Authenticator enrolment (manifest module va-totp-settings).
- *
- * A credential belongs in personal settings, not on an issue panel. The QR
- * code encodes the TOTP secret, so it is the one thing on any of these
- * screens that genuinely must not be shown to anyone but its owner — it is
- * rendered only during an active enrolment and never persisted in the page.
+ * Authenticator enrolment in personal settings, manifest module va-totp-settings.
+ * The QR code contains the TOTP secret. Show it only to its owner during active
+ * enrolment and never persist it in the page.
  */
 export default function TotpEnrollment() {
   const [loading, setLoading] = useState(true);
@@ -122,7 +119,7 @@ export default function TotpEnrollment() {
         <>
           Signing a record takes two things: being signed in to Jira, and a six-digit code from
           an authenticator app that only you hold. This page sets up the second one. The codes
-          are checked inside Jira — nothing about your credential leaves Atlassian.
+          are checked inside Jira. Nothing about your credential leaves Atlassian.
         </>
       }
     >
@@ -197,7 +194,7 @@ export default function TotpEnrollment() {
           >
             <p className="va-hint" style={{ marginBottom: '14px' }}>
               Setting up a new authenticator replaces the current one. Signatures you have
-              already given are unaffected — they are a record of a past act and are never
+              already given are unaffected. They record a past act and are never
               re-verified against a credential.
             </p>
             <ReplaceCard
@@ -215,7 +212,7 @@ export default function TotpEnrollment() {
           subtitle="No authenticator app is linked to your account."
         >
           <p className="va-hint" style={{ marginBottom: '14px' }}>
-            Until you set one up, work items requiring your signature will keep waiting — the
+            Until you set one up, work items requiring your signature will keep waiting. The
             signing screens will show you what needs signing but will not accept a signature.
           </p>
           <Button appearance="primary" onClick={startEnrolment} isDisabled={busy}>
@@ -237,10 +234,10 @@ type Recovery = {
 const RECOVERY_PAGE = 'Jira settings → Apps → VAtlassian → Credentials & recovery';
 
 /**
- * Replacing a working (or locked) authenticator takes an administrator's reset
- * grant — one person cannot re-register their own signature. So the button is
- * offered only while a grant is waiting; otherwise the card says who can issue
- * one and where, instead of offering a button the server will refuse.
+ * Replacing a working or locked authenticator requires an administrator's
+ * reset grant. A person cannot authorize their own replacement. Offer the
+ * button only while a grant is waiting. Otherwise name who can issue one
+ * and where.
  */
 function ReplaceCard({ recovery, busy, label, onStart, onRefresh }: {
   recovery: Recovery; busy: boolean; label: string;

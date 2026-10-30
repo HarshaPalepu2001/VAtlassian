@@ -1,12 +1,12 @@
-# VAtlassian Test Management First Implementation Plan
+# VAtlassian test management first implementation plan
 
 Use the checkboxes to track implementation and record evidence at each gate.
 
-**Goal:** Add complete, no-egress Jira-native test management to VAtlassian first, with auditor-grade test evidence and a stable connection for the later requirements-management module.
+**Goal.** Add complete, no-egress Jira-native test management to VAtlassian first, with auditor-grade test evidence and a stable connection for the later requirements-management module.
 
-**Architecture:** Jira issues are the visible Test, Plan, Set, Precondition, Execution and Defect records. Forge SQL stores ordered definitions, immutable versions, datasets, plan revisions, run attempts, configuration and coverage projections. Jira links connect tests to any approved coverable Jira issue; a source adapter optionally pins a VAtlassian baseline for governed coverage. Existing VAtlassian approvals, audit and vault services supply control and retained evidence.
+**Architecture.** Jira issues are the visible Test, Plan, Set, Precondition, Execution and Defect records. Forge SQL stores ordered definitions, immutable versions, datasets, plan revisions, run attempts, configuration and coverage projections. Jira links connect tests to any approved coverable Jira issue; a source adapter optionally pins a VAtlassian baseline for governed coverage. Existing VAtlassian approvals, audit and vault services supply control and retained evidence.
 
-**Tech Stack:** Current Forge Node 22 ESM app, Jira REST, `@forge/sql`, Forge queues/Object Store, React/TypeScript Custom UI, Node test runner.
+**Technology.** Current Forge Node 22 ESM app, Jira REST, `@forge/sql`, Forge queues/Object Store, React/TypeScript Custom UI, Node test runner.
 
 **Spec:** [Test management first design](../specs/2026-10-20-test-management-first-design.md). **Evidence:** [AssureX investigation](../../plans/2026-10-19-assurex-test-management-port.md).
 

@@ -6,13 +6,10 @@ import { withRequestCache } from '../lib/cache.js';
 import { retryEvent } from './retry.js';
 
 /**
- * avi:jira:deleted:issue.
- *
- * COLLECT BEFORE ARCHIVING. The deleted node's tree membership is read from
- * the baseline's own node index — archive() only ever touches this issue's
- * own va_item_state row, which affectedTreeRoots()'s indexed lookup does not
- * depend on either way, but there is no reason to race the two when running
- * the tree lookup first costs nothing.
+ * Handle avi:jira:deleted:issue by collecting affected trees before archiving
+ * the item. Read tree membership from the baseline node index. archive() only
+ * changes this item's va_item_state row, which affectedTreeRoots() does not use,
+ * but sequential execution avoids an unnecessary race.
  */
 export async function run(event, suppliedDeps = null) {
   return withRequestCache(() => runUncached(event, suppliedDeps));

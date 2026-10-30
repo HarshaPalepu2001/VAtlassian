@@ -1,18 +1,14 @@
 /**
- * The `view` entry point of sig-signature-code. What is actually STORED in this
- * field is the signature id that the signing form (frontend/src/field/ApprovalField.tsx) obtained from
- * panel:preauthorize — a 32-character hex receipt, never the code itself
- * (see the panel:preauthorize header in src/resolvers/panel.js for why).
+ * Render the issue-view receipt for sig-signature-code.
  *
- * A raw hex id is not a useful thing to show a human on the issue view, and
- * this field is deliberately NOT the record: va_signature and the audit
- * ledger are. So this renders only the fact that a signature was captured,
- * and leaves who/when/what-it-meant to the Electronic Signature panel and
- * the admin audit ledger, which can show it with its meaning attached.
+ * The stored value is the 32-character signature ID returned by panel:preauthorize,
+ * not an authenticator code. See frontend/src/field/ApprovalField.tsx and the
+ * resolver's preauthorization comment.
  *
- * Rendering the id here would also quietly turn every issue view, CSV
- * export and email notification into a place the id shows up, which is more
- * surface area than a receipt for a consumed one-time signature needs.
+ * Show that a signature was captured. The authoritative record is va_signature
+ * and the audit ledger; the Electronic Signature panel and admin ledger show
+ * the signer, timestamp and meaning. Avoid displaying the receipt ID here or
+ * spreading it into issue views, CSV exports and email notifications.
  */
 import React from 'react';
 import ForgeReconciler, { Lozenge, Text, useProductContext } from '@forge/react';

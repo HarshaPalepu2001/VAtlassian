@@ -1,32 +1,17 @@
 /**
- * SEAL — closing tamper-evident boundaries over the audit trail, and refusing
- * to prune anything without evidence it survives elsewhere.
+ * Seal verified ranges of the audit trail and evaluate pruning prerequisites.
  *
- * The reasoning is in lib/retention.js, including why 21 CFR 11.10(c) requires
- * retention and retrievability rather than deletion, and why an unconfigured
- * instance therefore retains everything forever.
+ * A segment records the boundary hashes of entries [from_seq, to_seq] and when
+ * the range was verified. This preserves dated evidence for that range, while
+ * jobs/verify.js checks the current chain. Verification runs immediately before
+ * sealing; a break aborts the seal.
  *
- * WHAT SEALING IS. A segment records that entries [from_seq, to_seq] were
- * verified intact at a moment in time, and pins the boundary hashes. That is
- * worth doing whether or not anyone ever prunes: it converts "the chain
- * verified today" into a dated, durable statement about a specific range, which
- * is what an auditor asking "was the trail intact in March" actually needs. The
- * daily chain walk (jobs/verify.js) proves the chain is whole NOW; a seal
- * proves a range was whole THEN.
+ * See lib/retention.js for the retention policy under 21 CFR 11.10(c).
+ * An unconfigured instance retains all records indefinitely.
  *
- * IT NEVER SEALS A BROKEN CHAIN. The range is verified immediately before it is
- * sealed, and a failure aborts. Sealing over a break would take the one artefact
- * that says the records are trustworthy and attach it to records that are not —
- * strictly worse than having no seal at all.
- *
- * IT NEVER PRUNES HERE. Pruning is deliberately not implemented in this job
- * even though the policy exists to permit it, because the prerequisite does
- * not: a segment may only be pruned once it has been exported and the copy's
- * hash read back, and there is no automated export target yet. The refusal is
- * evaluated and logged on every run so the reason is visible rather than
- * implicit, and so the day an export target lands, the gate is already written
- * and already tested. Until then this job's answer to "may I delete anything"
- * is a recorded no.
+ * This job does not prune. Pruning requires an export whose hash has been read
+ * back and verified, and no automated export target exists yet. Evaluate and
+ * log the refusal on each run so the missing prerequisite remains visible.
  */
 import { executeQuery, toBinaryParam, limitClause } from '../lib/db.js';
 import { verifyChain, append, EVENT } from '../lib/ledger.js';
@@ -41,13 +26,8 @@ import {
 export const SEAL_BATCH = 1000;
 
 /**
- * Entries left unsealed at the tail.
- *
- * Not a correctness requirement — the ledger is append-only and a contiguous
- * prefix is always safe to seal — but a seal is a statement about a settled
- * range, and sealing right up to the live tail means every run closes a segment
- * over entries written seconds earlier. Leaving a margin keeps segments
- * meaningful rather than a running commentary.
+ * Leave a tail margin of unsealed entries. Any contiguous append-only prefix
+ * is safe to seal, but the margin avoids sealing entries written seconds earlier.
  */
 export const TAIL_MARGIN = 50;
 
@@ -82,7 +62,9 @@ async function tailSeq() {
   return value == null ? 0 : Number(value);
 }
 
-/** Open segments, oldest first — the candidates for pruning. */
+/**
+ * Open segments ordered oldest first for pruning evaluation.
+ */
 async function sealedSegments() {
   const res = await executeQuery(
     `SELECT TO_BASE64(segment_id) AS segment_id, from_seq, to_seq, sealed_at,

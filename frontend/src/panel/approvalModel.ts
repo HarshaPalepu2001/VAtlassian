@@ -46,10 +46,9 @@ export function transitionDestination(transition: TransitionFacts): string {
 }
 
 /**
- * "Any status -> Done" for a wildcard-source rule, "In Progress -> Done" for a
- * directed one. `fromStatusName` is the issue's CURRENT status name — Jira
- * only ever offers a directed (non-wildcard) transition from the exact status
- * it is configured for, so the current status IS that transition's source.
+ * Label wildcard rules "Any status -> Done" and directed rules
+ * "In Progress -> Done". Jira offers directed transitions only from their
+ * configured source, so fromStatusName is that source.
  */
 export function transitionScopeLabel(transition: TransitionFacts, fromStatusName?: string | null): string {
   const from = transition.anyStatus ? 'Any status' : (fromStatusName || 'the current status');
@@ -62,10 +61,9 @@ export function transitionApproveLabel(transition: TransitionFacts): string {
 }
 
 /**
- * A selector option: exact scope, the server's `label`, then the rule's Jira
- * name and id. Two siblings into the same status — or a wildcard and a
- * directed edge both reaching "Done" — can never read identically, and the
- * option's `value` is always the exact transitionId.
+ * Identify each option by its scope, server label, Jira name and id.
+ * Transitions with the same destination must remain distinguishable.
+ * The option value is always the exact transitionId.
  */
 export function transitionOptionLabel(transition: TransitionFacts, fromStatusName?: string | null): string {
   const rule = [transition.name, `#${transition.transitionId}`].filter(Boolean).join(' ');
@@ -115,13 +113,10 @@ export type SelectedAction = {
 };
 
 /**
- * THE ACTION IDENTITY every piece of action-bound state is keyed to — the
- * code, the confirmation, the open challenge, and the loaded evidence.
- *
- * Drift review is one fixed action. Otherwise a single applicable transition
- * is the action; with two or more, only an explicit selection that is still
- * applicable counts. A selection that vanished or lost eligibility resolves
- * to nothing rather than to a sibling reaching the same status.
+ * Key the code, confirmation, challenge and evidence to one action.
+ * Drift review is a fixed action. A single applicable transition is selected
+ * automatically. Multiple transitions require an explicit, still-applicable
+ * selection. A removed or ineligible selection resolves to nothing.
  */
 export function resolveSelectedAction(summary: PanelSummary | null | undefined, selectedTransitionId: string): SelectedAction {
   if (!summary) return { reviewingDrift: false, eligible: [], actionKey: '' };
@@ -133,17 +128,10 @@ export function resolveSelectedAction(summary: PanelSummary | null | undefined, 
 }
 
 /**
- * How many FIELDS changed, from a node-level change list.
- *
- * `drift.changedFields` holds one entry per NODE — `diffTree` emits a single
- * FIELD_CHANGED change per node carrying its own `fields` array — while every
- * number shown beside it counts fields. Reading `.length` off it is what made
- * three edits to one work item render as "3 changes since approval · 1 changed
- * fields": two true numbers in two different units.
- *
- * Shared by the panel header and the drift breakdown so the two cannot drift
- * apart again. A node with no field list still counts as one change, because
- * something about it did change.
+ * Count fields in a node-level change list. Each drift.changedFields entry
+ * represents a node, and its fields array contains FIELD_CHANGED details.
+ * The panel header and breakdown share this count. A node with no field list
+ * counts as one change.
  */
 export function changedFieldCount(drift?: { changedFields?: { fields?: unknown[] }[] } | null): number {
   return (drift?.changedFields ?? []).reduce(

@@ -1,39 +1,24 @@
 /**
- * DEVICE TESTING — 21 CFR 11.300(e).
+ * Authenticator testing policy for 21 CFR 11.300(e).
  *
  * "Initial and periodic testing of devices, such as tokens or cards, that bear
  * or generate identification code or password information, to ensure that they
  * function properly and have not been altered in an unauthorized manner."
  *
- * WHAT THE TEST IS. The clause was written with hardware tokens in mind, and
- * the instinct is to invent a testing ceremony to match. For a software
- * authenticator that would be theatre: a correct TOTP code already proves the
- * device holds the right secret and has a clock inside the accepted window.
- * Nothing we could administer separately would prove more. So confirmation at
- * enrolment IS the initial test, and every subsequent signature IS a periodic
- * one — we were performing this control all along and simply not recording it.
+ * A correct TOTP code proves possession of the shared secret and a clock within
+ * the accepted window. Enrolment confirmation records the initial test; each
+ * later signature records another test. Requiring a separate test before
+ * signing would ask for the same code twice.
  *
- * WHY BLOCKING IS THE WRONG ENFORCEMENT, and this is worth stating because
- * everything else in this codebase fails closed. Refusing to sign until the
- * device is tested would be circular: the act of signing is the test. A gate
- * there would demand a code before accepting a code. The useful control is not
- * a barrier but a RECORD, plus one thing a record alone cannot give us —
+ * After DEVICE_CHECK_INTERVAL_MS without a successful code, the owner is asked
+ * to attest that the authenticator still works. This can reveal a replaced
+ * phone or deleted app. A copied secret can still generate a valid code;
+ * this check cannot detect that copy and does not block signatures. If a dormant credential is used, its audit
+ * entry also records how long it was inactive; that does not identify whether
+ * the user was the owner or an attacker.
  *
- * DORMANCY. A device that has not produced a code in months is untested, and
- * untested is where the risk actually lives: a phone replaced, an app deleted,
- * a secret cloned during enrolment and never used. None of that surfaces until
- * someone signs, and if the person who signs is not the owner, the first
- * evidence of the theft is the forged signature itself. So we notice the
- * silence: a credential past DEVICE_CHECK_INTERVAL_MS is due for an
- * attestation the OWNER performs, which puts the discovery in the hands of the
- * person who would notice their authenticator is gone.
- *
- * And when a long-dormant credential is finally used, that fact is recorded
- * alongside the signature. We cannot tell a returning employee from a thief —
- * but "this device had been silent for 214 days" is exactly the context an
- * investigator needs and the audit trail could not previously supply.
- *
- * PURE. Policy here; resolvers and jobs/devicecheck.js do the I/O.
+ * This module contains pure policy functions. Resolvers and
+ * jobs/devicecheck.js perform the I/O.
  */
 import { CREDENTIAL_STATE } from './totp.js';
 
@@ -48,8 +33,10 @@ export const DEVICE_CHECK_INTERVAL_MS = 90 * 24 * 60 * 60 * 1000;
 export const DORMANCY_THRESHOLD_MS = DEVICE_CHECK_INTERVAL_MS;
 
 export const DEVICE_STATE = {
-  /** Not ACTIVE — enrolment never completed, or the credential is locked.
-   *  There is no periodic obligation over a device that cannot sign. */
+  /**
+ * The credential is not ACTIVE because enrolment is incomplete or it is
+ * locked. A device that cannot sign is outside periodic checks.
+ */
   UNPROVEN: 'UNPROVEN',
   /** Proven inside the interval. */
   OK: 'OK',
@@ -59,14 +46,11 @@ export const DEVICE_STATE = {
 };
 
 /**
- * When did this credential last demonstrate that it works?
+ * Find the credential's most recent successful test.
  *
- * Falls back to `confirmed_at`, because confirmation is the initial test and a
- * credential confirmed yesterday is not overdue merely because nobody has
- * signed with it yet. Returns null when neither is known, which the caller must
- * treat as "cannot tell", never as "long overdue" — an upgrade that has not yet
- * populated these columns must not declare every credential in the instance
- * due on the day it ships.
+ * Use confirmed_at when it has not yet signed: confirmation is the initial
+ * test. Return null when neither timestamp is known. Callers must treat null
+ * as unknown, not overdue, including during upgrades before columns are populated.
  */
 export function lastProvenAt(credential) {
   if (!credential) return null;
@@ -105,12 +89,9 @@ export function deviceStatus(credential, now = Date.now()) {
 }
 
 /**
- * At the moment a code verifies, had this device been silent long enough to be
- * worth noting?
- *
- * Called on the success path, so it must be cheap and must never throw. A
- * credential with no prior proof is not dormant — it is new, which is a
- * different thing and already recorded as an enrolment.
+ * Check for dormancy when a code verifies. This success-path function must
+ * not throw. A credential without earlier proof is new, not dormant; its
+ * enrolment is already recorded.
  */
 export function dormantOnUse(credential, now = Date.now()) {
   const proven = lastProvenAt(credential);

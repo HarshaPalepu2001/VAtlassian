@@ -4,29 +4,16 @@ import { pruneSuppressions } from '../db/restoreStore.js';
 import { limitClause } from '../lib/db.js';
 
 /**
- * Retention.
+ * Delete superseded content and expired operational records.
  *
- * THE ASYMMETRY IS THE POINT, and it is worth stating in one sentence before
- * any of the code: the history of WHAT HAPPENED is evidence and is never
- * deleted; superseded CONTENTS are not evidence and are what consumes the
- * install's storage budget.
+ * This job deletes field values for baselines that are no longer current,
+ * cached AI reports with no referring decision, expired write-suppression
+ * entries and old event receipts.
  *
- * So this job deletes:
- *   - field values belonging to baselines that are no longer current,
- *   - cached AI reports that no decision refers to,
- *   - expired write-suppression entries and old event receipts.
- *
- * And never deletes:
- *   - va_baseline rows, their digests or their fidelity grades,
- *   - va_drift rows,
- *   - va_decision rows,
- *   - va_restore reports,
- *   - anything in va_audit.
- *
- * An app that stored only hashes would never face this trade. Baseline stores
- * values, so it does — and the answer is that a customer can always prove what
- * was approved, who changed it and who ruled on it, even after the copy of the
- * old description is gone.
+ * It retains va_baseline rows, digests and fidelity grades, all va_drift and
+ * va_decision rows, va_restore reports and everything in va_audit. Those rows
+ * retain evidence of approval, changes and decisions after old raw content
+ * has been removed; they do not preserve the removed description itself.
  */
 
 /** How many superseded baseline versions keep their values. */

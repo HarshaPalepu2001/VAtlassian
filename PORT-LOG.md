@@ -1,4 +1,4 @@
-# VAtlassian ALM Port Log
+# VAtlassian ALM port log
 
 This file maps merged files to their source paths.
 

@@ -1,8 +1,8 @@
 # Signature and baseline functional hardening
 
-**Goal:** Make configured transitions, signed snapshots, drift review and verified restoration behave consistently across Jira, the issue panel and My approvals.
+**Goal.** Make configured transitions, signed snapshots, drift review and verified restoration behave consistently across Jira, the issue panel and My approvals.
 
-**Architecture:** Keep the existing approval writer, validator, baseline store and shared drift collector. A signature binds the reviewed content and selected policy. Publish a baseline only after all retained values are durable; preserve unresolved review state on failures. Jira workflow validation remains the enforcement boundary.
+**Architecture.** Keep the existing approval writer, validator, baseline store and shared drift collector. A signature binds the reviewed content and selected policy. Publish a baseline only after all retained values are durable; preserve unresolved review state on failures. Jira workflow validation remains the enforcement boundary.
 
 **Scope:** Changes stay in VAtlassian. The original Signature and Baseline repositories are read-only references. Preserve existing working changes. No automatic production deployment or workflow changes.
 

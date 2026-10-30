@@ -616,7 +616,7 @@ test('signed drift approval reaches baseline capture through the panel challenge
 test('a submit with no challenge is refused before any code is spent or anything recorded', async () => {
   // A challenge fixes the meaning shown, the candidate content and the exact
   // edge, once. Without one, a direct call chose its own transition and could
-  // leave out the evidence hash — approving content the signer never saw.
+  // omit the evidence hash and approve content the signer never saw.
   const f = fixture();
   let spent = false;
   f.deps.totpDeps.consume = async () => { spent = true; return true; };

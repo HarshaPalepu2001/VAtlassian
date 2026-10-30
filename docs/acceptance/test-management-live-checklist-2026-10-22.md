@@ -1,4 +1,4 @@
-# Test management — live test checklist, 2026-10-22
+# Test management. live test checklist, 2026-10-22
 
 Site: mgtechdemo, project VAT (company-managed). Development environment.
 Local implementation verified 2026-10-22 against the [design](../superpowers/specs/2026-10-20-test-management-first-design.md), owner decisions 1–13.
@@ -69,7 +69,7 @@ Deferred: CI/JUnit upload, import/migration, AI, the ten-report center and the s
 | 24 | After 11, open `/rest/api/3/issue/<bug key>/properties/va-tm-bug` in the browser | The property names the run. If the create was refused instead, the run shows "Bug needs repair" with the Jira status. |
 | 25 | With Tests under the Epic, try to switch test management off for VAT | Refused: the Tests sit under a parent. |
 
-## Additional manual-scope journeys (all Not run on the tenant)
+## Additional manual-scope journeys (all not run on the tenant)
 
 | # | Journey | Expected |
 |---|---|---|
@@ -95,7 +95,7 @@ Deferred: CI/JUnit upload, import/migration, AI, the ten-report center and the s
 | 45 | Repair a failed-run defect using a Story, reused Bug, wrong parent or baselined member | Refused. Correct Bug needs verified run proof, exclusive claim, links and durable repair audit. |
 | 46 | Newer Rejected/Not executed result, hidden source, incomplete reads, unresolved Bug or unconnected later pass | Coverage stays unconfirmed/unverified; no older-pass fallback or complete export. |
 
-## Native Jira link journeys (all Not run on the tenant)
+## Native Jira link journeys (all not run on the tenant)
 
 | # | Journey | Expected |
 |---|---|---|

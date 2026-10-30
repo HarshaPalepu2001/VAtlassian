@@ -1,23 +1,11 @@
 import { excludesLink, hydrateLinkPolicyIssue } from '../linkPolicy.js';
 
 /**
- * AN ISSUE LINK IS ONE OBJECT WITH TWO OWNERS.
- *
- * Jira stores a link once; each end lists it by naming the other. So a restore
- * that re-creates or deletes a link on one work item changes the other one too
- * — and if the other item is itself approved, that change can contradict what
- * its reviewer signed.
- *
- * Found live on 2026-09-25: VAT-15's drift (link to VAT-12 removed) was
- * approved on VAT-15 alone, while VAT-12's approved state still held the link.
- * Rejecting on VAT-10 re-created VAT-12's link, which put it back on VAT-15;
- * the retry restored VAT-15 by deleting it again. Each restore was correct
- * about its own item and wrong about the other, and they undid each other.
- *
- * The rule: a restore changes a link only when the other end's approved state
- * agrees with the result. Otherwise the link is left exactly as it is and the
- * step says why, naming the other item — a decision is needed where both are
- * covered, not a restore that flips the link back and forth.
+ * Jira stores one link shared by both ends. Restoring it on one work item
+ * changes the other too. Change a link only if the other end's approved state
+ * permits the result. Otherwise leave it unchanged and explain the conflict,
+ * naming the other work item. This prevents restores undoing one another.
+ * See the 2026-09-25 regression involving VAT-10, VAT-12 and VAT-15.
  */
 
 const typeOf = link => String(link?.type?.id ?? link?.type?.name ?? '');
@@ -48,13 +36,9 @@ export function keyAtOtherEnd(link, selfIssueId) {
 }
 
 /**
- * Which of a restore's link changes the other end's approved state forbids.
- *
- * `approvedLinksOf(issueId)` returns the other item's approved link list, or
- * null when that item has no approved state for links (not governed, or not
- * tracking them) — in which case there is nobody to contradict. It may throw
- * when the item IS governed but its approved links cannot be read; that is
- * left to propagate, because guessing would be the failure this prevents.
+ * Find link changes forbidden by the other end's approved state.
+ * approvedLinksOf(issueId) returns null if that item has no governed link
+ * state. Propagate read failures for governed items rather than guessing.
  */
 export async function findLinkConflicts({ selfIssueId, selfIssue = null, additions = [], removals = [], approvedLinksOf, readIssue }) {
   if (typeof approvedLinksOf !== 'function') return [];
@@ -84,7 +68,7 @@ export async function findLinkConflicts({ selfIssueId, selfIssue = null, additio
   return conflicts;
 }
 
-/** One sentence per conflict, naming the other item — what the reviewer reads. */
+/** Describe each conflict for the reviewer and name the other work item. */
 export function describeLinkConflicts(conflicts) {
   return conflicts.map(c => c.change === 'add'
     ? `Left the link to ${c.otherIssueKey} removed: ${c.otherIssueKey}'s approved state does not have it.`

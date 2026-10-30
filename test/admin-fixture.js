@@ -11,7 +11,7 @@ import * as exportRecord from '../src/lib/exportRecord.js';
 export const request = (payload = {}, accountId = 'admin') => ({ context: { accountId }, payload });
 
 // The app identity and matching va-gate validator a fixture-default live
-// workflow read reports as attached — see gateDrift.js#isOurGate. Tests that
+// workflow read reports as attached. See gateDrift.js#isOurGate. Tests that
 // need a different transition shape pass their own `readWorkflowForPair`.
 export const FIXTURE_APP_ID = 'fixture-app';
 export const fixtureGateValidator = (extra = {}) => ({
@@ -29,7 +29,7 @@ export function fixture(options = {}) {
     limitClause: n => { if (!Number.isSafeInteger(n)) throw Error('Invalid limit'); return String(n); },
     runtimeAppId: () => FIXTURE_APP_ID,
     // Default: a live workflow whose one transition matches the shared
-    // controlled-transition test fixture (`edge` in admin-configuration.test.js —
+    // controlled-transition test fixture (`edge` in admin-configuration.test.js,
     // transitionId '100', GLOBAL, to status '2') with our validator attached
     // and enabled. Tests proving the refusal paths override this per call.
     readWorkflowForPair: options.readWorkflowForPair ?? (async () => ({
@@ -45,7 +45,7 @@ export function fixture(options = {}) {
         if (options.authError) return { result: false };
         return { result: true, data: options.unauthorized ? [] : [{ account_id: params[0] }] };
       }
-      // An eligible holder must exist for a role to be required of anyone —
+      // An eligible holder must exist before a role can be required.
       // see transitionsValidation.js#verifyControlledTransition. Defaulted to
       // present so tests that are not exercising this rule do not each have to
       // stub it; `options.ineligible` and any `options.query` override it.

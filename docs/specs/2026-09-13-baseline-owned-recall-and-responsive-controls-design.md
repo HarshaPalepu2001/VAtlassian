@@ -216,7 +216,7 @@ Every viewer sees:
   not create a baseline; and
 - active drift/restoration state.
 
-An eligible role holder additionally sees every currently applicable action
+An eligible role holder also sees every currently applicable action
 without opening a disclosure:
 
 - a transition selector when two or more controlled transitions are available;
@@ -232,7 +232,7 @@ No evidence or confirmation entered for the old selection carries to the new
 selection.
 
 Ineligible viewers see the same control summary and the role that is required,
-but no enabled decision control. Administrators additionally see configuration
+but no enabled decision control. Administrators also see configuration
 and recall incidents. Configuration warnings are not broadcast to ordinary
 users as operational tasks.
 

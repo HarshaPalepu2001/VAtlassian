@@ -3,7 +3,7 @@ import { throwing, isDuplicateKey } from './store.js';
 import { REVIEW_STATE, LOCK_TTL_MS, RESTORE_LEASE_MS } from '../lib/interception.js';
 
 /**
- * va_item_state — one row per work item. THIS IS THE REVIEWER QUEUE.
+ * va_item_state holds one row per work item and supplies the reviewer queue.
  *
  * Every mutation here is a compare-and-swap on `version`, because Forge SQL has
  * no transactions and two triggers firing for the same item concurrently is the
@@ -92,7 +92,7 @@ export async function upsertBaselined({
 /**
  * Apply an observation's result. Compare-and-swap on `version`.
  *
- * @returns { updated: boolean } — false means another writer got there first
+ * @returns { updated: boolean } false means another writer got there first
  *          and the caller should re-read and decide again. Never treat false as
  *          an error: it is the mechanism working.
  */
@@ -123,13 +123,10 @@ export async function applyObservation({ issueId, expectedVersion, review, count
 }
 
 /**
- * Touch only the last-checked timestamp.
- *
- * The NO_CHANGE path, which is the overwhelmingly common one — most
- * avi:jira:updated:issue events are comments, worklogs and sprint moves. It
- * deliberately does NOT bump `version`: this write carries no information any
- * concurrent writer could conflict with, and bumping the CAS token would make
- * a housekeeping update able to defeat a real one.
+ * Update the last-checked timestamp for NO_CHANGE events. Most
+ * avi:jira:updated:issue events concern comments, worklogs or sprint moves.
+ * Do not increment `version`: this update has no content for concurrent writers
+ * to conflict with, and changing the CAS token could reject a substantive write.
  */
 export async function touch(issueId, now, lastChangelogId = undefined) {
   if (lastChangelogId === undefined) {
@@ -148,8 +145,7 @@ export async function touch(issueId, now, lastChangelogId = undefined) {
  * This is the lock. DECIDING and RESTORING both mean "an operation is in
  * flight"; observe() returns BUSY for either, so the drift collector will not
  * record a restore's own writes as new drift. The CAS is what makes it a lock
- * rather than a flag — two reviewers clicking Reject at the same moment, one
- * wins.
+ * effective: if two reviewers click Reject at once, only one wins.
  */
 export async function acquire({ issueId, expectedVersion, state, allowedStates = null, now = Date.now(),
   staleOlderThan = LOCK_TTL_MS, restoreLeaseMs = RESTORE_LEASE_MS }) {
@@ -171,7 +167,7 @@ export async function acquire({ issueId, expectedVersion, state, allowedStates =
 /**
  * An operation lock past its lease (lib/interception.js lockLeaseMs): a
  * DECIDING row after a minute, a RESTORING row only after the restore lease.
- * Binds two cutoffs, in that order — see staleCutoffs().
+ * Bind the two cutoffs in that order. See staleCutoffs().
  */
 const STALE_LOCK = `((state = 'DECIDING' AND (last_checked_at IS NULL OR last_checked_at <= ?))
   OR (state = 'RESTORING' AND (last_checked_at IS NULL OR last_checked_at <= ?)))`;
@@ -223,34 +219,22 @@ export async function release({ issueId, state, now, counters }) {
 }
 
 /**
- * A reviewer's worklist, across every project they hold authority in.
- *
- * ONE INDEXED READ. This is the query the whole product is judged on: if
- * "what do I have to review?" needs JQL and then an issue fetch per row, the
- * page is slow at exactly the scale where it matters. idx_review_reviewer is
- * (reviewer_account_id, state, last_drift_at), and issue_key and summary are
- * denormalised onto this table so nothing else has to be read to render a row.
+ * Read the reviewer's worklist across authorized projects in one indexed query.
+ * idx_review_reviewer covers (reviewer_account_id, state, last_drift_at).
+ * Denormalized issue_key and summary let the caller render each row without
+ * JQL or separate Jira issue reads.
  */
 /**
- * EVERY DRIFTED ITEM IN THESE PROJECTS, whoever it was assigned to.
+ * Return drifted items in these projects regardless of assignment.
  *
- * THE GAP THIS CLOSES. The review page found its items with a JQL search over
- * gated review STATUSES — which can only ever surface work that is still
- * sitting in review. But drift is by definition something that happens AFTER
- * approval, once the item has moved on to In Progress, Done, or wherever the
- * team took it. Those rows sit here in va_item_state with state DRIFTED and are in
- * no review status at all, so the search could not see them. The one thing this
- * app exists to catch was the one thing its worklist could not show.
+ * A JQL search over controlled review statuses misses drift after approval,
+ * when an issue has moved to In Progress, Done or another status. These items
+ * remain in va_item_state with state DRIFTED and still require a decision.
  *
- * BY PROJECT, NOT BY ASSIGNED REVIEWER, and that is the other half. Its sibling
- * queueForReviewer() filters on reviewer_account_id — who the item was routed
- * to. Authority here is held by ROLE: anybody holding the required role on that
- * project and issue type may rule on it, and routing is a convenience on top of
- * that. Filtering by assignment meant a reviewer holding the role saw nothing
- * unless the item had also been pointed at them personally.
- *
- * The caller filters the rows by role — project_id and issue_type_id are
- * returned for exactly that, so the check costs no extra reads.
+ * queueForReviewer() filters by reviewer_account_id, but authority belongs to
+ * any holder of the required role for the project and issue type. Assignment
+ * only routes work. Return project_id and issue_type_id so the caller can
+ * check role authority without extra reads.
  */
 export async function driftedInProjects(projectIds, {
   states = [REVIEW_STATE.DRIFTED, REVIEW_STATE.ERROR], limit = 200
@@ -269,10 +253,10 @@ export async function driftedInProjects(projectIds, {
 }
 
 /**
- * EVERY ITEM WAITING ON A DECISION in the projects a reviewer's grants cover:
+ * Every item waiting on a decision in the projects a reviewer's grants cover:
  * changed since approval (DRIFTED), or a decision or restore that did not
- * finish (ERROR). Scoped by the reviewer's GRANTS, not by which transitions
- * are controlled today — an item signed under a rule since removed is still
+ * finish (ERROR). Scoped by the reviewer's grants, not by which transitions
+ * are controlled today. An item signed under a rule since removed is still
  * held by Jira until someone decides it. `siteWide` for a grant with no
  * project. Oldest first, so a cut at `limit` drops the newest, not the most
  * overdue. The caller checks the role each item's baseline froze.
@@ -310,8 +294,8 @@ export async function queueForReviewer(accountId, { states = [REVIEW_STATE.DRIFT
 /**
  * Review rows for a set of work items, in one read.
  *
- * The review page starts from JQL — "what is sitting in a gated status that I
- * can act on" — and then needs whatever Baseline knows about each result. The
+ * The review page starts with JQL for actionable work in a controlled status,
+ * then loads Baseline's state for each result. The
  * alternative is a query per row, which at forty items across nine projects is
  * forty round trips to decorate a list.
  *
@@ -384,7 +368,7 @@ export async function staleDrift(olderThanMs, limit = 200) {
  * Record that a work item now lives in another project or issue type.
  *
  * Conditional on the scope it was last seen in, so when several collectors
- * notice the same move at once exactly one of them wins — and only the winner
+ * notice the same move at once exactly one wins. Only that winner
  * writes the audit entry (lib/scopeMove.js).
  */
 export async function moveScope({ issueId, fromProjectId, fromIssueTypeId, toProjectId, toIssueTypeId }) {
@@ -419,13 +403,12 @@ function truncate(s, max) {
 }
 
 /**
- * Governed tree ROOTS due for a sweep — one row per tree, not per descendant.
+ * Return tree roots due for a sweep, with one row per tree.
  *
- * The join through va_baseline_node restricts va_item_state (which holds one
- * row per work item ever observed) down to items that are the root of an
- * ACTIVE — captured, verified, published — baseline. A descendant's own
- * va_item_state row, if it has one at all, is never a sweep target: its tree
- * is examined as a whole, from its root, by the aggregate collector.
+ * The va_baseline_node join restricts va_item_state to roots of ACTIVE baselines
+ * that have been captured, verified and published. The aggregate collector
+ * checks each tree from its root, so descendant item-state rows are not
+ * separate sweep targets.
  */
 export async function dueTreeRoots(limit = 50, now = Date.now(), staleOlderThan = LOCK_TTL_MS) {
   const rows = await throwing(

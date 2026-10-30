@@ -22,24 +22,14 @@ import { DETECTED_VIA } from './detectedVia.js';
 import { recordScopeMove } from './scopeMove.js';
 
 /**
- * Aggregate tree drift.
- *
- * A node event (create/update/delete) firing on ANY issue inside a governed
- * tree wakes the WHOLE tree's collector, never just the node that fired.
- * Measuring the touched node in isolation cannot see a removed sibling or a
- * newly attached child, and a second, root-only reading of the same event
- * would produce a second, independently-arrived-at verdict about the same
- * tree — which is exactly the kind of disagreement one aggregate diff exists
- * to make impossible.
+ * Re-read the whole governed tree when any node is created, updated or
+ * deleted. A node-only comparison can miss removed siblings or newly attached
+ * children. Use one aggregate result for the tree.
  */
 
 /**
- * Walk the native Jira parent chain until an already-indexed active governed
- * root is found.
- *
- * Used only when the node itself is not yet in any baseline's node index —
- * i.e. it was created after its tree was captured, so no baseline row names
- * it yet.
+ * Find an active governed root through the Jira parent chain when a new
+ * node has not yet been recorded in any baseline's node index.
  */
 export async function discoverActiveRootsByAncestor({ issueId, issueKey, parentIssueId }) {
   let currentId = parentIssueId;
@@ -62,16 +52,9 @@ export async function discoverActiveRootsByAncestor({ issueId, issueKey, parentI
 }
 
 /**
- * Every active governed root a node event could affect.
- *
- * INDEXED FIRST: a node already captured in some baseline's node index
- * answers from that index alone — this covers updates and deletions of
- * anything the baseline already knows about, including the root itself.
- *
- * ANCESTOR WALK SECOND, and only when the index came back empty. That is the
- * signature of a node created after its tree was baselined: the current
- * native parent chain is the only way left to find which governed root (if
- * any) it now belongs under.
+ * Look up captured nodes in the active-root index first. If no index entry
+ * exists, walk the current native parent chain to locate the governing root
+ * for a node created after capture.
  */
 export async function affectedTreeRoots({ issueId, issueKey, parentIssueId }) {
   const indexed = await activeRootsForNode(Number(issueId));
@@ -92,18 +75,10 @@ function eventIdentity(event) {
 }
 
 /**
- * Recompute one governed tree end to end and replace its drift set.
- *
- * THE PAYLOAD IS A WAKE-UP ONLY, exactly like collect() in lib/collect.js:
- * the tree is re-read in full and diffed against the signed baseline, never
- * trusted from the event that woke it. That is what makes repeated and
- * out-of-order child events converge on the same result instead of racing to
- * append conflicting readings.
- *
- * NO BASELINE, NOTHING WRITTEN. A root that was never captured, or whose
- * capture never reached ACTIVE, has nothing to compare against — recording
- * "drift" against a baseline that does not exist would be inventing
- * evidence, not reporting it.
+ * Re-read the complete tree and replace its drift set against the active
+ * signed baseline. Events trigger this read but supply no trusted content.
+ * Repeated and out-of-order events therefore converge on the same result.
+ * Write nothing if the root has no ACTIVE baseline.
  */
 export async function collectTree({ rootIssueId, rootIssueKey, detectedVia = DETECTED_VIA.EVENT,
   actorAccountId = null, eventId = null, eventAt = null, now = Date.now(), scopeFollowed = false }) {
@@ -132,10 +107,8 @@ export async function collectTree({ rootIssueId, rootIssueKey, detectedVia = DET
     return { outcome: 'ERROR', error: e.message };
   }
 
-  // MOVED TO ANOTHER PROJECT OR ISSUE TYPE. The item now follows the
-  // destination's configuration (lib/scopeMove.js). The tree was just read with
-  // the OLD scope's fields, so once the move is recorded, measure again under
-  // the new scope. Once only: scopeFollowed stops a second hop.
+  // After a scope move, re-read using the destination's configuration.
+  // The current tree used the old scope. scopeFollowed permits only one retry.
   const rootNow = currentTree.nodes.find(node => String(node.id) === String(rootIssueId));
   const toProjectId = Number(rootNow?.fields?.project?.id);
   const toIssueTypeId = rootNow?.fields?.issuetype?.id == null ? null : String(rootNow.fields.issuetype.id);
@@ -156,14 +129,10 @@ export async function collectTree({ rootIssueId, rootIssueKey, detectedVia = DET
   const measured = diffTree({ baselineTree, currentTree: plannedCurrentTree, controlledFields: cFields,
     scopeFor: fieldsFor }).changes;
 
-  // A CHILD'S CONTENT IS THE CHILD'S DRIFT, NOT ITS PARENT'S. A child that
-  // carries its own latest baseline is held and decided in the child
-  // (lib/collect.js, the validator, its own panel), so a change to its fields
-  // is not parent drift. Otherwise the child's own approved change would leave
-  // the parent drifted, forever, against the child content it once captured.
-  // The parent keeps its own fields and its structure: nodes added, removed or
-  // moved. A child with no baseline of its own (a tree captured before child
-  // baselines existed) is measured against the parent's node, as before.
+  // Children with their own latest baseline have their content measured and
+  // decided independently. Parent drift includes its own fields and structural
+  // changes. Compare older children without their own baseline against the
+  // parent's stored node.
   const rootLogicalNodeId = logicalNodeId(rootIssueId);
   const owned = measured.some(c => c.kind === 'FIELD_CHANGED' && c.logicalNodeId !== rootLogicalNodeId)
     ? await ownedChildBaselines({ parentBaseline: await activeBaseline(Number(rootIssueId)), baselineTree, activeBaselines })
@@ -197,10 +166,8 @@ export async function collectTree({ rootIssueId, rootIssueKey, detectedVia = DET
     };
   });
 
-  // THE SAME DRIFT, READ AGAIN. The hourly sweep re-reads every drifted tree;
-  // when what it finds is exactly what is already recorded and still awaiting a
-  // decision, nothing happened. Recording it again reset "waiting since" to now,
-  // wrote a ledger row per tree per hour, and voided pending approvals.
+  // If the drift set is unchanged and awaiting a decision, preserve its waiting
+  // time, ledger history and pending approvals instead of recording it again.
   if (review.state === REVIEW_STATE.DRIFTED
       && sameDrift(await readTreeDrift(review.baseline_id).catch(() => null), driftRows)) {
     await touch(rootIssueId, now);
@@ -215,11 +182,8 @@ export async function collectTree({ rootIssueId, rootIssueKey, detectedVia = DET
   const reviewChangeCount = changes.reduce((count, change) => count
     + (change.kind === 'FIELD_CHANGED' ? Math.max(1, change.fields?.length ?? 0) : 1), 0);
 
-  // REPLACE, NEVER APPEND. The whole tree was just re-diffed against the
-  // signed baseline, so this call's rows ARE the tree's current drift set.
-  // Writing anything less than the full replacement would leave a stale row
-  // from an already-fixed node sitting next to fresh ones from a moved one —
-  // exactly the double interpretation this collector exists to prevent.
+  // Replace the entire recorded drift set with this full comparison.
+  // Appending would leave stale rows for changes that no longer exist.
   await replaceTreeDrift(review.baseline_id, driftRows);
 
   // The tree drift table is the detailed evidence; va_item_state is the
@@ -287,10 +251,8 @@ export async function collectAffectedTrees(event, deps = { affectedTreeRoots, co
     eventAt: eventTime(event),
     now: Date.now()
   })));
-  // THE ISSUE ITSELF, WHEN IT HAS A SINGLE-ISSUE BASELINE OF ITS OWN. A child
-  // baselined by its parent's capture carries exactly that, and the tree
-  // collectors above measure only parents: its own content is its own drift,
-  // measured by the single-issue collector like any flat baseline.
+  // Use the single-issue collector for this item's own flat baseline,
+  // including child baselines written by parent captures.
   const own = deps.collect && deps.ownFlatBaseline && identity.issueId != null
     && await deps.ownFlatBaseline(Number(identity.issueId))
     ? deps.collect({ issueId: Number(identity.issueId), issueKey: identity.issueKey,

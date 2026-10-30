@@ -27,4 +27,4 @@ for (const linkType of PLAN.linkTypes) {
   });
 }
 
-log(`\n${APPLY ? 'Done.' : 'Dry run complete — nothing was changed.'} Ledger: ${stateFile}`);
+log(`\n${APPLY ? 'Done.' : 'Dry run complete. Nothing was changed.'} Ledger: ${stateFile}`);

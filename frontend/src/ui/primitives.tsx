@@ -1,14 +1,7 @@
 /**
- * Shared presentation components.
- *
- * These carry no product logic — no invokes, no resolver types. Their job is
- * to be the single answer to "what does a person look like on screen", "what
- * does a table look like", so that the admin console and the signing panel
- * cannot drift into looking like two different apps.
- *
- * Styling lives in tokens.css, addressed by class name, rather than in inline
- * style objects. Inline styles were how the previous version of these screens
- * ended up with four slightly different greys and three border radii.
+ * Shared presentation components for the admin console and signing panel.
+ * They contain no product logic, resolver calls or resolver types.
+ * Class names refer to the shared styles in tokens.css.
  */
 
 import type { ReactNode } from 'react';
@@ -140,15 +133,9 @@ export function Name({ value, noun }: { value: string | null | undefined; noun: 
 }
 
 /**
- * A click-through reference to a work item or a project, everywhere either is
- * named on screen. Both open the record in Jira itself rather than leave the
- * reader to go search for it — this app already knows exactly where it is.
- *
- * `router.open` rather than a plain anchor's default navigation: this runs
- * inside a Custom UI iframe, and a real page load would navigate the iframe
- * itself instead of the Jira tab around it. The `href` stays a real Jira URL
- * (so the browser's own "open in new tab", "copy link" etc. still work); only
- * the default left-click is intercepted.
+ * Open a work item or project in Jira using router.open. A normal left-click
+ * would navigate this Custom UI iframe instead of the containing Jira tab.
+ * Keep a real href for the browser's open-in-new-tab and copy-link actions.
  */
 function ForgeLink({ href, children }: { href: string; children: ReactNode }) {
   return (
@@ -180,7 +167,7 @@ export function IssueLink({ issueKey, summary }: { issueKey: string; summary?: s
 }
 
 /** `projectKey` is optional because some rows resolve a project's name but
- *  never its key (see admin.js) — those render as plain text, not a dead link. */
+ *  never its key. See admin.js. Render these as plain text without a link. */
 export function ProjectLink({ projectKey, name }: { projectKey?: string | null; name: string | null | undefined }) {
   const resolved = nameOr(name, 'project');
   if (resolved.unknown) return <span className="va-unknown">{resolved.text}</span>;
@@ -326,12 +313,9 @@ export function Select({
 }
 
 /**
- * The 6-digit authenticator code box.
- *
- * Non-digits are stripped on the way in rather than rejected on submit: an
- * authenticator app displays "123 456" and people copy the space with it,
- * and a failed verification here is not free — it counts toward the lockout
- * in src/lib/totp.js.
+ * The 6-digit authenticator code input. Strip non-digits so copied codes
+ * such as "123 456" work. Failed verification counts toward the lockout in
+ * src/lib/totp.js.
  */
 export function CodeInput({
   value,
@@ -369,11 +353,9 @@ export function CodeInput({
 }
 
 /**
- * The affirmation the signer must make before the code box does anything.
- *
- * The checkbox is the intent. Typing six digits proves who you are; ticking
- * this says what you mean by it, which is the half 21 CFR 11.50(a)(4) is
- * about and the half a bare code box leaves out.
+ * Require the signer's affirmation before enabling the code input.
+ * The code verifies identity. The checkbox records the intended meaning
+ * of the signature for 21 CFR 11.50(a)(4).
  */
 export function Affirmation({
   checked,

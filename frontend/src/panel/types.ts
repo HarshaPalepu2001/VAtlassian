@@ -1,8 +1,7 @@
 import type { AssuranceLevel } from '../lib/assurance';
 import type { DiffField, ReviewGroup } from '../review/types';
 
-/** One controlled, gated transition described the same way for every viewer —
- *  eligible or not. `canApprove` is the only field that varies by viewer;
+/** One controlled, gated transition described for every viewer. `canApprove` is the only field that varies by viewer;
  *  everything else describes the rule itself. See panelSummary.js. */
 export type PanelTransition = {
   transitionId: string;
@@ -65,8 +64,7 @@ export type PanelRestore = {
   lastError?: string | null;
 };
 
-/** The compact read from `panel:getSummary` — everything the panel needs to
- *  paint immediately. Never carries recursive tree detail, retained values,
+/** The compact `panel:getSummary` response for the initial panel display. Never carries recursive tree detail, retained values,
  *  changelog attribution, or full field-level diffs; those load lazily
  *  through `panel:getEvidence` (see usePanelEvidence.ts). */
 export type PanelSummary = {
@@ -98,8 +96,8 @@ export type PanelSummary = {
   adminIncidentCount?: number;
   adminIncidentUnavailable?: boolean;
   error?: string;
-  /** The review row's own version counter, bumped on every re-observation —
-   *  independent of baseline.version. Passed to usePanelEvidence so it can key
+  /** The review row's version counter increments on every re-observation,
+   *  independently of baseline.version. Passed to usePanelEvidence so it can key
    *  its cache on the current-record evidence itself, not only the baseline. */
   evidenceVersion?: number | null;
 };
@@ -114,7 +112,7 @@ export type AttachmentRejection = { deleteFiles: RejectedFile[]; restoreFiles: R
 
 /** The heavy, authoritative current-record read from `panel:getEvidence`. Rejected server-side
  *  as STALE_EVIDENCE when the caller's expected baseline id/version no longer
- *  matches the latest active baseline — see usePanelEvidence.ts. */
+ *  matches the latest active baseline. See usePanelEvidence.ts. */
 export type PanelEvidence = {
   baselineId: string | null;
   baselineVersion: number;

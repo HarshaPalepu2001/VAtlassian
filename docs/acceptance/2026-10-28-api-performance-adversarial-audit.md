@@ -1,4 +1,4 @@
-# API performance checklist adversarial audit — 28 October 2026
+# API performance checklist adversarial audit. 28 October 2026
 
 The updated checklist was treated as a set of claims to falsify. **Two API checkmarks remain justified within a narrow local scope: compact summary JSON and bounded backend exponential retries. Pagination is incomplete even within the approval queue. Client retry guidance and a resolver compatibility/versioning policy are open gaps.** No live API performance pass is established.
 

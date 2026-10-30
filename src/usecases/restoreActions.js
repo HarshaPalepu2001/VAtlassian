@@ -85,7 +85,7 @@ export async function queueRestore({ prepared, actor, approval, mixed = null, st
 
 
 /**
- * DOES THIS REJECT RESTORE A SUBTREE? A tree baseline does, and so does a
+ * Check whether rejection restores a subtree. A tree baseline does, as does a
  * child baseline written by its parent's capture: it has no tree_hash of its
  * own, but its review, its signature and its restore all cover the slice of
  * the parent's signed tree under it (lib/tree/scopedBaseline.js). Treating it
@@ -183,7 +183,7 @@ export async function performRestore({ prepared, actor, approval }) {
         skipped: executed.remaining,
         irreversible: 0
       };
-      // Name each refusal in its own words — a link kept because the other end
+      // Explain each refusal. A link kept because the other end
       // approved otherwise is not "Jira accepted but something overrode it".
       unmatched = explainRefusals(verified?.unmatched ?? [], executed.refused);
       detail = [{ attempted: executed.attempted, completed: executed.completed,

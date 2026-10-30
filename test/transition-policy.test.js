@@ -3,17 +3,18 @@ import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 
 /**
- * EXACT-TRANSITION BINDING, AGAINST THE REAL QUERIES.
+ * Exact-transition binding against the SQL queries.
  *
- * Two different Jira workflow transitions can both go from status 3 to status
- * 5 ("Approve" and "Approve (fast-track)", say). Before this, gatedTransition()
- * and pendingApprovalFor() matched on project/issueType/fromStatus/toStatus
- * only, so the two transitions collided: whichever row or receipt matched the
- * status pair was usable by either transition id. This exercises the real SQL
- * text in db/configStore.js and db/approvalStore.js — only the Forge SQL
- * transport (lib/db.js) is replaced, with a tiny in-memory table that
- * understands the same WHERE semantics (wildcard columns, exact transition id,
- * ORDER BY / LIMIT 1) the real statements rely on.
+ * Two Jira transitions can both move status 3 to status 5, for example
+ * "Approve" and "Approve (fast-track)". gatedTransition() and
+ * pendingApprovalFor() previously matched project/issueType/fromStatus/
+ * toStatus alone, so either transition could use a row or receipt for the
+ * other.
+ *
+ * These tests exercise the SQL in db/configStore.js and db/approvalStore.js.
+ * They replace only the Forge SQL transport, lib/db.js, with an in-memory
+ * table supporting the same wildcard columns, exact transition id, and
+ * ORDER BY / LIMIT 1 semantics.
  */
 
 function sortDesc(rows, keys) {

@@ -1,5 +1,5 @@
 /**
- * RUN SIGN-OFF — the configured chain, with no exceptions (owner decision 4).
+ * Run sign-off follows the configured chain without exceptions (owner decision 4).
  *
  * Step 0 ("Executed by" by default) freezes the results: the run moves
  * IN_PROGRESS → SIGNING by a compare-and-swap on the revision the signer was

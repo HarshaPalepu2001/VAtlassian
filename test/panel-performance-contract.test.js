@@ -3,14 +3,13 @@ import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 
 /**
- * THE BOUNDARY panel:getSummary MUST NEVER CROSS.
+ * panel:getSummary must avoid the heavy read path.
  *
- * panelSummary.js exists so the panel can paint before the heavy read
- * finishes. Every module below is "poisoned" — replaced with a stub that
- * throws the moment any of its exports is called — so that if a future change
- * wires the summary path into the recursive tree, the changelog, retained
- * baseline values, or editmeta, this test fails immediately rather than
- * quietly regressing panel:getSummary's latency back to panel:getState's.
+ * panelSummary.js lets the panel render before the heavy read finishes.
+ * The fixtures replace each listed module with exports that throw when
+ * called. A summary request that reads the recursive tree, changelog,
+ * retained baseline values, or editmeta therefore fails this test. This
+ * prevents summary latency from returning to panel:getState's read path.
  */
 
 function poison(names) {
@@ -313,7 +312,7 @@ test('an unavailable admin incident read preserves the summary with an explicit 
 // `decidesDrift` short-circuited on `va_item_state.drift_count`, so when the
 // stored counter said 0 while the live re-diff the panel was rendering said 1,
 // isEligible() was never called at all. The role in that sentence had never
-// been checked — it was a fallback string.
+// been checked. The role name was a fallback string.
 //
 // The summary now reports eligibility on its own, so the client can pair it
 // with whichever count it is actually displaying, and a viewer is never told a
@@ -392,8 +391,7 @@ test('recorded drift the viewer is eligible for still decides, exactly as before
 // settles, and on VJIRA-17 the two disagreed permanently: va_item_state said 0
 // while the live comparison said one field had moved. Drift IS "the content no
 // longer matches the digests the signature covers", so the summary computes it
-// the same way the collector does — lib/interception.js's driftedFields() is
-// the single implementation both call.
+// the same way the collector does. Both call lib/interception.js's driftedFields().
 
 const signedBaseline = (approvedSummary) => async () => ({
   baseline_id: Buffer.alloc(16, 1), version: 3, transition_id: '31',
@@ -482,7 +480,7 @@ test('the summary carries the content hash, so the panel can key its diff on the
 // digests live on the tree's nodes (va_baseline_node) and the va_baseline row
 // carries field_digests '{}' (lib/capture.js). Comparing against that empty
 // map "failed towards drift" on every read, so the panel said "Changes since
-// approval need a decision" forever — even straight after a verified restore.
+// approval need a decision" on every read, even after a verified restore.
 const treeBaseline = () => ({
   baseline_id: Buffer.alloc(16, 2), version: 2, transition_id: '31',
   from_status_id: '100', to_status_id: '200', approved_by: 'reviewer-1',

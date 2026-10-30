@@ -55,7 +55,7 @@ test('a change to a field only the child tracks is found with per-node scope', (
 // Decided 2026-09-25, replacing the per-issue-type rule of the 24th: the
 // approval being made is the root's, so the root's Controlled Fields are what
 // every node it covers is held to. A Task under an Epic tracks the Epic's
-// fields — attachments included — whether or not anyone configured Task.
+// fields, including attachments, whether or not Task has been configured.
 
 test('a child of another issue type is read and tracked with the root\'s fields', async () => {
   const reads = [];

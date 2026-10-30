@@ -9,91 +9,35 @@ import { tryAppend } from '../db/store.js';
 import { EVENT } from './ledger.js';
 
 /**
- * TRACK EVERY FIELD UNLESS SOMEBODY SAID NOT TO.
+ * Track candidate Jira fields unless an administrator excluded them.
+ * content.js IGNORED_FIELDS excludes volatile fields that change without edits.
  *
- * ─── WHY THIS FILE EXISTS ────────────────────────────────────────────────────
+ * Persist the tracked set in va_controlled_field. The validator uses one indexed
+ * read within its roughly ten-second budget. Resolving Jira's catalogue at
+ * runtime would change baseline comparisons when apps add fields, without a
+ * reviewer ever approving that field set.
  *
- * This app has swung between two definitions of "tracked field" and shipped
- * both of them broken.
- *
- * The FIRST definition was "everything Jira has". It produced a 306-field
- * baseline for BS-11 and a reconcile pass that reported drift on `lastViewed`,
- * `workratio` and `statuscategorychangedate` — fields that move when nobody has
- * touched the work item. One sweep took 142 seconds. That was rightly killed.
- *
- * The SECOND definition, put in to fix it, was "only rows an administrator
- * declared". va_controlled_field was empty on every project, so the honest
- * answer to "what is tracked" became NOTHING: the panel told a reviewer
- * "Baseline will record the 0 tracked fields", computed the evidence hash their
- * signature binds to over an empty set, and the review gate protected nothing
- * on a project whose administrator had configured a gate and reasonably assumed
- * it was working. Zero is a worse default than 306, because 306 was noisy and
- * zero is silently empty.
- *
- * NEITHER DEFAULT WAS THE PRODUCT DECISION. The decision is: baseline every
- * field, minus a short list deliberately left out because tracking it would
- * report drift nobody caused. That list is content.js's IGNORED_FIELDS, and it
- * is the thing that makes track-by-default safe now and unsafe before — the
- * first definition had ten entries in it and none of the volatile ones.
- *
- * ─── WHY IT IS MATERIALISED RATHER THAN COMPUTED ─────────────────────────────
- *
- * "Every candidate field" could be computed on the fly from Jira's /field
- * catalogue. It is not, for three reasons, and the third is the one that
- * matters.
- *
- *   1. The gate runs on a ~10s validator budget and asks what is tracked. A
- *      REST round trip inside that budget is a risk with no upside.
- *   2. configStore.controlledFields() stays a single indexed read, and stays
- *      the ONLY authority on what is tracked. Nothing gains a second opinion.
- *   3. A baseline's hash is computed over a field set. If that set were derived
- *      live from Jira's catalogue, installing an unrelated app that adds a
- *      custom field would silently change what every existing baseline is
- *      compared against — every approved item in the tenant would drift, and
- *      the evidence would say a reviewer had signed something they had not.
- *      Writing rows down makes the tracked set a recorded decision with an
- *      author and a timestamp, which is what the ledger needs it to be.
- *
- * So new fields are adopted by an explicit act — on gate save, on the admin's
- * Sync button, or one at a time from the field search — and never on a
- * schedule or by surprise mid-baseline.
+ * Adopt fields through gate save, the administrator's Sync action or field
+ * search. Record the author and time in the ledger. Do not change the tracked
+ * set on a schedule or during comparison with an existing baseline.
  */
 
 /**
- * The endpoint caps maxResults at 200. MAX_PAGES is a hard stop, in the spirit
- * of fetchChangelog's: a paginated read inside a resolver that cannot state its
- * own worst case is a timeout waiting to happen.
+ * Bound pagination inside the resolver's time limit. The endpoint caps
+ * maxResults at 200.
  */
 const PAGE_SIZE = 100;
 const MAX_PAGES = 20;
 
 /**
- * One issue type's fields, paged.
+ * Read one issue type's fields from
+ * GET /rest/api/3/issue/createmeta/{projectIdOrKey}/issuetypes/{issueTypeId}.
+ * The response uses fields, with results as its alias, and total for pagination.
+ * It has no documented values or isLast. Keep values only as a fallback for
+ * additional response properties.
  *
- * ─── THE RESPONSE SHAPE, WHICH THIS READ GOT WRONG ───────────────────────────
- *
- * GET /rest/api/3/issue/createmeta/{projectIdOrKey}/issuetypes/{issueTypeId}
- * returns `PageOfCreateMetaIssueTypeWithField`. Its complete property set is:
- *
- *     fields, maxResults, results, startAt, total
- *
- * There is NO `values` and NO `isLast`. This function read `body.values` and
- * terminated on `body.isLast ?? true`, so on every call it collected nothing
- * and stopped after one page — readScopeFields returned [] on every tenant,
- * always, and fast enough that it never looked like a failure.
- *
- * The damage was not "no fields". It was that [] is indistinguishable from a
- * genuinely empty scope, so every caller SILENTLY NARROWED: capture, the panel
- * and the collector each fell back to the four ALWAYS_CONTROLLED_FIELDS while
- * the drift path compared against baselines taken over 302. That mismatch is
- * what put phantom drift on untouched work items.
- *
- * `values` is kept as a last resort only because the schema is declared
- * `additionalProperties: true`; `fields` is the documented name and `results`
- * its documented alias.
- *
- * @returns true if Jira answered, false if it did not — the caller must be able
- *          to tell "no fields" from "could not ask".
+ * @returns true if Jira answered, false if the read failed. Distinguish an empty
+ * scope from a failed request so callers do not narrow the tracked set.
  */
 async function readIssueTypeFields(projectId, issueTypeId, sink) {
   let startAt = 0;
@@ -118,9 +62,8 @@ async function readIssueTypeFields(projectId, issueTypeId, sink) {
       if (id && !sink.has(id)) sink.set(id, { ...f, id });
     }
 
-    // Termination is driven by `total`, because `isLast` does not exist on this
-    // response. An empty page ends it too — that is the belt for a `total` Jira
-    // declines to send.
+    // Use total because this response has no isLast. Also stop on an empty page
+    // to avoid a loop if metadata changes during pagination.
     if (batch.length === 0) break;
     startAt += batch.length;
     const total = Number(body.total);
@@ -131,12 +74,10 @@ async function readIssueTypeFields(projectId, issueTypeId, sink) {
 }
 
 /**
- * Screen fields join the scope only with their catalogue entry. The entry
- * carries the `schema` that decides a field's kind, and a sync never rewrites
- * an existing row — a field adopted without it would keep the wrong kind for
- * good. No catalogue, no adoption; the next sync tries again.
- *
- * @returns the number of fields added to `sink`.
+ * Require catalogue metadata before adopting screen fields. Its schema
+ * determines the kind, and later syncs never rewrite existing rows.
+ * If the catalogue is unavailable, adopt nothing and retry at the next sync.
+ * @returns the number of fields added to sink
  */
 export function adoptScreenFields({ screenFields, catalogue, sink }) {
   const catalogueById = new Map((catalogue ?? []).map((field) => [String(field.id), field]));
@@ -151,20 +92,16 @@ export function adoptScreenFields({ screenFields, catalogue, sink }) {
 }
 
 /**
- * Screens read per request, for the same reason as MAX_PAGES: an admin request
- * has a time limit, and each screen costs one tabs read plus one read per tab.
- * A project with more screens is read in batches — the Fields page's Sync asks
- * for the next batch until none is left, and every batch's fields are adopted
- * (persisted) as it goes, so no state is held between requests.
+ * Bound screen reads per resolver request. Each screen requires a tabs read
+ * and a read per tab. Sync requests subsequent batches and persists each
+ * batch's adopted fields without keeping state between requests.
  */
 export const SCREEN_BATCH = 60;
 
 /**
- * One batch of a project's screens. Ids are sorted so that consecutive offsets
- * cover every screen exactly once while the configuration stands still; a
- * screen added between batches is picked up by the next Sync.
- *
- * @returns { ids, total, nextOffset } — nextOffset is null after the last batch.
+ * Read sorted screen ids in batches. Stable configuration gives consecutive
+ * offsets complete coverage. The next Sync picks up screens added mid-read.
+ * @returns { ids, total, nextOffset }, with null nextOffset after the last batch
  */
 export function screenBatch(screenIds, offset = 0, size = SCREEN_BATCH) {
   const all = [...new Set([...screenIds].map(String))].sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
@@ -292,15 +229,9 @@ async function readProjectScreenFields(projectId, issueTypeIds, sink, { offset =
 }
 
 /**
- * Jira's field catalogue for a project scope.
- *
- * Returns [] on failure rather than throwing: a SYNC that cannot read the
- * catalogue must do nothing and try again, never conclude that the tenant has
- * no fields and treat that as an answer.
- *
- * FOR SCOPING A COMPARISON, USE scopeFromIssue() BELOW, NOT THIS. [] here is
- * ambiguous by design, and reading it as "this issue has no fields" is the
- * mistake that narrowed three separate call sites to four hardcoded ids.
+ * Read the project's field catalogue. Return [] on failure so Sync adopts
+ * nothing and retries later. This result cannot distinguish a failed read
+ * from an empty catalogue. Use scopeFromIssue for comparisons instead.
  */
 export async function readScopeFields(projectId, issueTypeId) {
   return (await readScopeFieldsBatch(projectId, issueTypeId)).fields;
@@ -342,43 +273,13 @@ export async function readScopeFieldsBatch(projectId, issueTypeId, { screenOffse
 }
 
 /**
- * WHICH DECLARED FIELDS ARE IN SCOPE FOR ONE WORK ITEM — the single definition,
- * so capture, the panel and the collector cannot disagree about it.
+ * Resolve declared fields for capture, panel reads and collection from the
+ * issue's existing fields response. Callers read fields=*all, including null
+ * values. This pure function avoids network-dependent evidence hashes.
  *
- * ─── SCOPED FROM THE ISSUE, NOT FROM A SECOND REST CALL ──────────────────────
- *
- * The scope is `Object.keys(issue.fields)`. Every path that needs it —
- * capture.js, collect.js and both hash sites in resolvers/panel.js — already
- * reads the issue with `?fields=*all`, so the answer is free, and Jira returns
- * applicable fields including the ones sitting at null.
- *
- * IT IS A PURE FUNCTION ON PURPOSE, AND THAT IS THE FIX. The previous version
- * asked createmeta over the network. That made the evidence hash depend on a
- * live REST call, so the SAME work item could hash differently between the
- * panel rendering it and the resolver re-deriving it seconds later — a call
- * that succeeded once and failed once is all it took. The reviewer was then
- * told "this work item changed while you were reading it" about an item that
- * had not changed, and their decision was refused.
- *
- * A hash that a reviewer's signature binds to cannot depend on whether a
- * network call happened to succeed. Derived from the issue read that both sides
- * already perform, the two computations agree by construction.
- *
- * ─── WHY IT WAS THREE COPIES BEFORE ──────────────────────────────────────────
- *
- * capture.js, resolvers/panel.js and collect.js each held the same six lines,
- * each falling back to the same four literal field ids. Three copies of a rule
- * is three chances to disagree, and they did: panel:getState hashed one set and
- * authoriseFirstApproval hashed another, so EVERY first approval was refused as
- * STALE_EVIDENCE.
- *
- * ─── AND WHY AN UNKNOWN SCOPE WIDENS RATHER THAN NARROWS ─────────────────────
- *
- * If the issue read produced no fields at all, the honest answer is "unknown",
- * and the safe handling of unknown is to keep the DECLARED set — never to
- * substitute a guess. Narrowing on failure is what invented drift: a set that
- * is too WIDE reports nothing false now that changedFields() compares only
- * fields the baseline carries, while a set that is too NARROW still lies.
+ * If no fields were returned, keep the declared set rather than narrowing it.
+ * changedFields compares only fields present in the baseline, so a wider set
+ * does not invent drift.
  */
 export const SCOPE_BASIS = {
   /** The issue's edit screen. What a person means by "the fields on this issue". */
@@ -391,43 +292,24 @@ export const SCOPE_BASIS = {
 
 export function scopeFromIssue({ declared, issueFields, editmetaFields = null }) {
   const rows = declared ?? [];
-  // ALWAYS_CONTROLLED_FIELDS, not four literals. These are the fields the
-  // reviewed record is actually made of, and they are force-included at every
-  // tier — `subtasks` in particular is not editable and so never appears in
-  // editmeta, and dropping it would quietly stop protecting it.
+  // Include ALWAYS_CONTROLLED_FIELDS at every tier. subtasks is read-only
+  // and absent from editmeta, but still requires protection.
   const always = new Set(ALWAYS_CONTROLLED_FIELDS.map((f) => f.field_id));
   const pick = (allowed, basis) => ({
     fields: rows.filter((f) => allowed.has(f.field_id) || always.has(f.field_id)),
     basis
   });
 
-  // ── HARDCODED TO DECLARED FIELDS ──────────────────────────────────────────
-  //
-  // As requested by the user, we bypass issue scoping (which is often flawed
-  // due to missing editmeta permissions or fields not being on the screen)
-  // and we do NOT fallback to the raw issue fields (which introduces hundreds
-  // of empty custom fields).
-  //
-  // We simply track exactly the fields that are declared as active in the
-  // config (i.e. not excluded in the Fields & Retention page).
+  // Use all administrator-declared fields regardless of issue screen or type,
+  // as requested by the user. Ignore the older scoping logic.
   return { fields: rows, basis: SCOPE_BASIS.DECLARED };
 }
 
 /**
- * WHICH FIELDS THIS SCOPE SHOULD START TRACKING — the whole decision, as a pure
- * function, so it can be tested without a database or a Jira tenant.
- *
- * A field is adopted only if ALL of these hold:
- *   · Jira has it
- *   · it is not in IGNORED_FIELDS — content.js's list of fields that report
- *     drift nobody caused, which is what makes track-by-default safe
- *   · this scope has NO row for it, in any state
- *
- * THE LAST CLAUSE IS THE LOAD-BEARING ONE. `declared` must be every row
- * including EXCLUDED, not just the ACTIVE ones. Given only the ACTIVE rows this
- * function would propose re-adopting every field an administrator had
- * deliberately turned off, and every sync would undo their decision, with an
- * audit entry each time claiming the system had widened the tracked set.
+ * Select fields to adopt without I/O. A candidate must exist in Jira, be
+ * outside IGNORED_FIELDS and have no declared row in any state.
+ * Pass all declared rows, including EXCLUDED, so sync cannot undo an
+ * administrator's exclusions.
  */
 export function fieldsToAdopt(jiraFields, declared) {
   const known = new Set((declared ?? []).map((f) => f.field_id));
@@ -443,8 +325,7 @@ export function fieldsToAdopt(jiraFields, declared) {
  * Bring one project/issue-type scope up to "everything is tracked".
  *
  * Writes an ACTIVE row for every candidate field that has no row at all, and
- * leaves every existing row exactly as it is — so this is safe to call on a
- * schedule, and an administrator's exclusions survive it.
+ * preserves every existing row, including administrator exclusions.
  *
  * @returns { ok, added, tracked, excluded, skipped }
  */
@@ -476,10 +357,8 @@ export async function syncTrackedFields({
   const tracked = await countControlledFields({ projectId: pid });
 
   if (added > 0) {
-    // AUDITED, because this changes what a signature will mean. A baseline
-    // captured after this sync covers fields the previous one did not, so the
-    // ledger has to be able to say when the tracked set widened and who caused
-    // it — including when "who" is the hourly backfill.
+    // Audit tracked-set changes so later baseline coverage can be attributed
+    // to an administrator or the hourly backfill.
     await tryAppend({
       actorAccountId: accountId ?? 'system',
       eventType: EVENT.CONFIG_CHANGED,

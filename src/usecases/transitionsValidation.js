@@ -3,21 +3,14 @@ import { ANY_STATUS, isOurGate, isDisabled } from '../lib/gateDrift.js';
 import { MODULE_KEY } from '../lib/workflowSource.js';
 
 /**
- * Does this live transition still run EXACTLY the edge the input claims?
+ * Check that the live transition matches the exact edge claimed by the input.
  *
- * Deliberately stricter than gateDrift.js#transitionCovers, which asks a
- * different question — "does some wildcard controlled row still cover this
- * transition" — and answers yes for ANY transition into the target status
- * once a row's from-status is the wildcard, by design (a wildcard row is
- * meant to catch new transitions gatecheck should flag as bypass paths).
- *
- * Here the wildcard means something narrower and exact: adminDirectory.js's
- * picker only ever emits `fromStatusId: '*'` for a transition Jira itself
- * reports as GLOBAL (see listWorkflowTransitions). So an input claiming '*'
- * must still find that SAME transition GLOBAL, not merely reachable from
- * this destination by some other route — and an input naming a concrete
- * status must still find it among that transition's own links, never a
- * GLOBAL transition standing in for it.
+ * gateDrift.js transitionCovers uses broader wildcard semantics: a wildcard
+ * source can cover any transition into the target status, including new bypass
+ * routes that gatecheck must flag. The admin picker uses fromStatusId: '*' only
+ * for transitions Jira reports as GLOBAL. Require the same transition to remain
+ * GLOBAL for wildcard input. For concrete source input, require a matching link
+ * on that transition and refuse a GLOBAL transition as a substitute.
  */
 function matchesLiveTransition(t, { fromStatusId, toStatusId }) {
   if (!t || t.type === 'INITIAL') return false;
@@ -29,10 +22,10 @@ function matchesLiveTransition(t, { fromStatusId, toStatusId }) {
 
 export function transitionInput(payload = {}) {
   const { projectId, issueTypeId, fromStatusId, toStatusId, requiredRole, meaning } = payload;
-  // An exact live transition is read from ONE project + ONE issue type pair
+  // An exact live transition is read from one project and issue type pair
   // (workflowSource.js#readWorkflowForPair takes no wildcard). A wildcard
-  // issue type is still a real, supported scope for OTHER tables — see
-  // db/configStore.js's "ISSUE TYPE TAKES THE WILDCARD TOO" — but a controlled
+  // issue type is still a real, supported scope for other tables in
+  // db/configStore.js, but a controlled
   // transition can no longer be saved against one, because there would be no
   // single live workflow left to verify it against.
   if (!/^\d+$/.test(String(projectId ?? '')) || Number(projectId) <= 0 ||
@@ -58,7 +51,7 @@ export function transitionInput(payload = {}) {
   if (rejectToStatusId !== null && !/^\d+$/.test(String(rejectToStatusId))) throw new Error('Invalid rejection status id.');
   // The exact Jira transition, not a guess at one. Two workflow transitions can
   // share a destination status, and a rule saved without picking the precise
-  // one cannot be enforced without risking a sibling edge borrowing it — see
+  // one cannot be enforced without risking a a sibling edge matching it. See
   // gatedTransition() in db/configStore.js.
   if (!/^\d+$/.test(String(payload.transitionId ?? ''))) throw new Error('An exact Jira transition is required.');
   const transitionId = String(payload.transitionId);
@@ -85,23 +78,18 @@ export async function requireRoleHolder(deps, { role, issueTypeId, projectId }) 
 }
 
 /**
- * Revalidate a controlled transition against Jira's live workflow at save
- * time, rather than trusting whatever the admin picker read earlier.
+ * Re-read the exact project/type workflow when saving a controlled transition.
+ * Client-supplied transition and status IDs are not authoritative. Require the
+ * claimed transition ID and source/destination edge, plus an enabled va-gate
+ * validator for this app's runtime identity.
  *
- * No client-supplied transition, destination, or source status is
- * authoritative — see the plan's global constraints. This re-reads the exact
- * pair, finds the transition the input claims by id, and refuses unless that
- * transition still runs the exact from/to edge the input claims AND still
- * carries an enabled va-gate validator for this app's own identity. It also
- * refuses a role nobody currently holds, and a second ACTIVE row already
- * claiming the identical exact edge — both silent-configuration-gap failure
- * modes with no gatecheck signature to catch them later (see
- * adminAlerts.js#listGateFindings's MISSING_TRANSITION_ID finding for the
- * sibling gap this closes at write time instead of after the fact).
+ * Also refuse a role with no current holder or an ACTIVE row already claiming
+ * the same edge. These configuration failures would not produce a gatecheck
+ * finding later. See adminAlerts.js listGateFindings and MISSING_TRANSITION_ID
+ * for the related gap caught here at write time.
  *
- * `deps` carries `readWorkflowForPair`, `runtimeAppId`, and `executeQuery` —
- * the same contracts every other admin usecase in this file's directory
- * already receives through adminRuntime.js#adminDependencies.
+ * Use readWorkflowForPair, runtimeAppId and executeQuery from the dependencies
+ * supplied by adminRuntime.js adminDependencies.
  */
 export async function verifyControlledTransition(input, deps, { excludeCtId = null } = {}) {
   const workflow = await deps.readWorkflowForPair({ projectId: input.projectId, issueTypeId: input.issueTypeId });

@@ -448,7 +448,7 @@ test('My approvals groups the work into changes, restores and transitions, most 
  assert.match(text(),/Restores to finish\s*2/);
  assert.match(text(),/A linked work item's approval is being recorded here/);
  assert.match(text(),/The last decision on this work item did not finish/);
- assert.match(text(),/Approved — retry the move/);
+ assert.match(text(),/Approved\. Retry the move/);
  assert.match(text(),/Only the reviewer who rejected can retry it\. You can approve or reject the changes again\./);
  const retries=[...container.querySelectorAll('button')].filter(b=>b.textContent==='Retry restore');
  assert.equal(retries.length,1,'Retry only on the restore this reviewer rejected');
@@ -1016,7 +1016,7 @@ test('a failed restore is recorded with Retry, and what did not match stays behi
  assert.ok(clickButton('Retry restore'));
  const details=line.querySelector('details');
  assert.equal(details.open,false,'details are there on request, not in the way');
- assert.match(details.textContent,/Due date on T-2 — Jira kept 2026-10-28/);
+ assert.match(details.textContent,/Due date on T-2\. Jira kept 2026-10-28/);
  assert.doesNotMatch(text(),/Restoration results/);
 });
 

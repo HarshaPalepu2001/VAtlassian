@@ -338,8 +338,8 @@ test('issuelinks drift carries link type and linked issue summary labels instead
 // ─── Tables stay tables ──────────────────────────────────────────────────────
 //
 // A table added, removed or edited after approval used to flatten into one
-// block per CELL, so a reviewer saw a column of green lines — "Planet",
-// "Diameter (km)", "Type", "Jupiter", … — with no way to tell which value sat
+// block per cell. Reviewers saw green lines such as "Planet",
+// "Diameter (km)", "Type", and "Jupiter" with no way to tell which value sat
 // in which column. The row is the block, and it carries its cells.
 
 const cell = (text, header = false) => ({
@@ -356,7 +356,7 @@ test('a table flattens to one block per row, carrying its cells', () => {
     table(trow(['Planet', 'Type'], true), trow(['Jupiter', 'Gas Giant']))
   ));
 
-  assert.equal(blocks.length, 3, 'one paragraph plus two rows — not one block per cell');
+  assert.equal(blocks.length, 3, 'one paragraph and two row blocks');
   assert.equal(blocks[1].type, 'tableRow');
   assert.deepEqual(blocks[1].cells.map((c) => c.text), ['Planet', 'Type']);
   assert.deepEqual(blocks[1].cells.map((c) => c.header), [true, true]);

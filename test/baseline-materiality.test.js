@@ -35,7 +35,7 @@ test("an admin's explicit setting overrides the ladder", () => {
 
 test('priority RISING after approval stays critical; falling is demoted', () => {
   // Jira priority ids sort with 1 as the highest, so a numerically LOWER id is
-  // an increase in urgency — the counter-intuitive detail worth a test.
+  // an increase in urgency. Check the direction of that comparison.
   const raised = classify('priority', null, { id: '3' }, { id: '1' });
   const lowered = classify('priority', null, { id: '1' }, { id: '3' });
   assert.equal(raised, MATERIALITY.CRITICAL);
@@ -56,7 +56,7 @@ test('an estimate that shrank is demoted; one that grew is not', () => {
   assert.equal(shrank, MATERIALITY.MINOR);
 });
 
-test('direction rules only ever DEMOTE — never above what an admin configured', () => {
+test('direction rules cannot raise materiality above the configured level', () => {
   // A rule that could promote past an explicit setting would make the
   // configuration screen a lie.
   const configured = classify('priority', MATERIALITY.MINOR, { id: '3' }, { id: '1' });

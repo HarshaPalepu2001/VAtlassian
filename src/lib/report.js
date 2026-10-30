@@ -4,27 +4,18 @@ import { ruleBasedSummary } from './diff/index.js';
 import { adfPlainText } from './valuestore.js';
 
 /**
- * The AI report.
+ * Explain and rank an already computed diff with Forge LLMs.
  *
- * THE ONE RULE THIS MODULE IS BUILT AROUND: the model never sees the raw issue
- * and is never asked to detect changes. The diff engine has already determined,
- * deterministically, what changed — that is not a job to hand to a language
- * model, because a missed change is a compliance failure and an invented one is
- * worse. The model is given a closed, structured payload and asked only to
- * EXPLAIN AND RANK it.
+ * The model receives a structured payload, never the raw issue. The
+ * deterministic diff engine decides what changed; the model only explains it.
  *
- * Everything else here follows from that:
- *   - Structured output is FORCED with a single tool and `tool_choice`, not
- *     requested in a prompt. The model fills the schema or it fails.
- *   - Every citation it emits is validated against the drift ids actually sent.
- *     Unknown ids are stripped and the group is flagged, so a fabricated
- *     citation cannot become a chip a reviewer clicks.
- *   - When the model is unavailable, the panel still renders the full
- *     deterministic diff with a rule-based summary. The AI is the fastest path
- *     to understanding, never the only one.
+ * A single tool and tool_choice enforce the output schema. Validate citations
+ * against the supplied drift IDs, strip unknown IDs and flag their groups.
+ * If the model is unavailable, keep the complete deterministic diff and a
+ * rule-based summary visible in the panel.
  *
- * Runs only from resolvers and jobs, NEVER from gate.js — the validator has
- * about ten seconds and an LLM call has no business inside it.
+ * Call only from resolvers and jobs, never gate.js. The validator's roughly
+ * ten-second budget cannot accommodate an LLM call.
  */
 
 /** Models that reject `temperature` and `top_p`; sending either is a 400. */
@@ -39,14 +30,8 @@ const NO_SAMPLING_PARAMS = new Set([
 const VALUE_BUDGET = 4000;
 
 /**
- * Pick a model for the weight of the evidence.
- *
- * Haiku for the long tail of small changes, which is most of them; Sonnet by
- * default; Opus when the decision is actually hard — a critical field moved,
- * the change is wide, or scope moved. Routing is not a cost optimisation
- * dressed up as a feature: sending a two-label change to Opus makes the panel
- * slower for no better answer, and a reviewer who waits four seconds for
- * "two labels were added" stops opening the panel.
+ * Use the light model for up to three minor changes, the deep model for
+ * critical changes or more than ten material fields, and standard otherwise.
  */
 export function chooseModel(diff, models) {
   const material = diff.materialFieldCount;
@@ -56,14 +41,8 @@ export function chooseModel(diff, models) {
 }
 
 /**
- * The tool the model must call. This IS the output schema.
- *
- * `driftIds` on every change group is the grounding hook and is described to
- * the model as mandatory. The panel turns each id into a chip that scrolls to
- * and highlights the exact hunk it came from, so a reviewer can go from "the
- * estimate more than doubled after approval" to the precise change in one
- * click. That is the difference between a summary you skim and evidence you can
- * act on.
+ * Define the required report tool schema. Each change group must cite
+ * driftIds so the panel can link claims to the exact recorded changes.
  */
 export const REPORT_TOOL = {
   type: 'function',
@@ -157,17 +136,12 @@ GROUND RULES, in order of importance:
 You must respond by calling the review_report function. Do not reply with prose.`;
 
 /**
- * Build the payload the model sees.
- *
- * A CLOSED WORLD, on purpose. Field values are truncated, drift ids are the
- * only identifiers, and nothing that is not needed to explain the change is
- * included. The smaller and more structured this is, the less room there is for
- * the model to wander.
+ * Build the model payload with truncated field values and drift identifiers.
+ * Include only evidence needed to explain the change.
  */
 export function buildPayload({ issue, baseline, diff }) {
   const changes = diff.fields
-    // Cosmetic changes are still listed so the model can say "and some
-    // formatting", but they carry no values — there is nothing to explain.
+    // List cosmetic changes without values so the report can mention formatting.
     .map((f) => ({
       driftIds: f.driftIds,
       field: f.fieldName,
@@ -232,15 +206,9 @@ function isoOrNull(ms) {
 }
 
 /**
- * Generate a report.
- *
+ * Generate a report or return a degraded deterministic report on model,
+ * network, refusal or parsing failure.
  * @returns { body, model, degraded, inputTokens, outputTokens }
- *
- * NEVER THROWS. Every failure path — no model, a network error, a refusal, an
- * unparseable tool call — returns a degraded report built from the
- * deterministic diff. A reviewer must always be able to open the panel and see
- * what changed; the model's availability is not allowed to be a dependency of
- * that.
  */
 export async function generateReport({ issue, baseline, diff, models, maxCompletionTokens = 4096 }) {
   const model = chooseModel(diff, models);
@@ -264,13 +232,8 @@ export async function generateReport({ issue, baseline, diff, models, maxComplet
 
   let response;
   try {
-    // IMPORTED LAZILY, ON PURPOSE. @forge/llm reaches into the Forge runtime at
-    // module load and throws "Forge runtime not found." anywhere else — which
-    // would make this module, and every resolver that imports it, unloadable
-    // outside a deployed app. Loading it here instead means the panel's diff
-    // still renders when the AI is unavailable or not provisioned, keeps the
-    // SDK off the resolver's cold-start path, and lets test/smoke.mjs import
-    // the whole backend.
+    // Import @forge/llm only when a report is requested. Loading it outside
+    // Forge throws, which would otherwise prevent testing the pure report logic.
     const { chat } = await import('@forge/llm');
     
     // The panel resolver has a strict 25-second limit. If the model takes longer
@@ -324,15 +287,9 @@ export async function generateReport({ issue, baseline, diff, models, maxComplet
 }
 
 /**
- * Enforce the schema, and enforce the citations.
- *
- * THE CITATION CHECK IS THE POINT. A model that cites a drift id we never sent
- * is either confused or confabulating, and either way the panel must not turn
- * that id into a clickable chip pointing at nothing. Unknown ids are stripped;
- * a group left with no evidence at all is marked `ungrounded` and the panel
- * renders it greyed out with a warning rather than hiding it — hiding it would
- * conceal that the model produced an unsupported claim, which is exactly what a
- * reviewer needs to know about the tool they are trusting.
+ * Validate the schema and citations. Strip unknown drift ids and mark groups
+ * without valid citations as ungrounded. The panel keeps unsupported claims
+ * visible with a warning so reviewers can assess the model's output.
  */
 export function validate(parsed, validIds, diff) {
   if (!parsed || typeof parsed !== 'object') return null;
@@ -383,11 +340,8 @@ export function validate(parsed, validIds, diff) {
 }
 
 /**
- * The deterministic fallback.
- *
- * Built entirely from the diff, so it is always available and always true. The
- * panel labels it plainly — a reviewer must never be unable to tell a model's
- * analysis from a template's.
+ * Build the fallback entirely from the diff. Label it so reviewers can
+ * distinguish it from model-generated analysis.
  */
 export function degraded(diff, model, reason) {
   const bySeverity = {};
@@ -403,7 +357,7 @@ export function degraded(diff, model, reason) {
       whoAndWhen: describeWho(fields),
       whatChanged: fields.map((f) => `${f.fieldName}: ${f.summary}`).join('; '),
       whyItMatters: materiality === MATERIALITY.COSMETIC
-        ? 'Formatting only — no reader would see a difference.'
+        ? 'Formatting only. The rendered text is unchanged.'
         : 'Changed after approval; review before this work item moves on.',
       risk: materiality === MATERIALITY.CRITICAL ? 'high' : materiality === MATERIALITY.MAJOR ? 'medium' : 'low',
       driftIds: fields.flatMap((f) => f.driftIds ?? []),
@@ -452,15 +406,9 @@ function titleCase(s) {
 }
 
 /**
- * Cache key: the evidence, plus the model that will interpret it.
- *
- * Takes plain drift ids rather than rows, because the caller already has them
- * flattened off the diff and reshaping them into row objects just to hash them
- * was the kind of indirection that makes a cache key hard to reason about.
- *
- * Sorted, so the order rows came back in cannot change the hash and silently
- * invalidate a perfectly good cached report. Includes the model, because the
- * same evidence read by Haiku and by Opus are two different reports.
+ * Hash the baseline, sorted drift ids and model. Sorting avoids cache misses
+ * from row order. The model is part of the key because different models can
+ * produce different reports from the same evidence.
  */
 export function reportHashFor(baseline, driftIds, model) {
   return sha256Hex(canonical({

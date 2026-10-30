@@ -12,21 +12,9 @@ function putIdentity(map, value, logicalId) {
 }
 
 /**
- * Turn the diff's verdict into something a person can act on.
- *
- * ─── WHY THIS IS NOT COSMETIC ────────────────────────────────────────────────
- *
- * The verifier used to return `changes` as `{ kind, logicalNodeId, fields }` —
- * a sha-256 logical node id and a bare field id — and nothing logged it, the
- * panel did not render it, and the harness did not expose it. So a restore
- * reported PARTIAL and NOBODY, including the people who wrote it, could say
- * which field had refused to match. A reviewer was told "partly restored" about
- * a work item that looked completely correct on screen, and the only way to
- * find out more was to read a JSON column out of the database by hand.
- *
- * A verdict a reviewer cannot act on is not a verdict. Every unmatched entry
- * now carries the Jira key it belongs to, the field's human name, the approved
- * and observed digests, and a sentence saying what that means.
+ * Report unmatched restored fields with their Jira key, display name,
+ * approved and observed digests, and an explanation. These details let the
+ * reviewer identify what a PARTIAL restore failed to put back.
  */
 function describeChange(change, { nodeKeys, fieldNames, baselineDigestsById, observedDigestsById }) {
   const issueKey = nodeKeys.get(String(change.logicalNodeId)) ?? null;
@@ -73,10 +61,8 @@ export async function verifyTreeRestore({
     liveTree = stable?.tree;
     if (!Array.isArray(liveTree?.nodes)) throw new Error('Stable tree read returned no nodes');
   } catch (error) {
-    // Deliberately pessimistic, and now deliberately explicit: an unverifiable
-    // restore reported as complete is the outcome this module exists to
-    // prevent, and "we could not read it back" is a different fact from "a
-    // field is wrong". Both have to be sayable.
+    // Distinguish an unreadable restored record from a field that does not match.
+    // Neither outcome may be reported as a complete restore.
     harnessLog('RESTORE', 'verify:readFailed', { rootIssueKey, error: error?.message }, 'ERROR');
     return { matches: false, replacements, progress: false, statusMatches: false, changes: [],
       unmatched: [{ logicalNodeId: null, issueKey: rootIssueKey, kind: 'READ_FAILED', fieldId: null,
@@ -177,10 +163,9 @@ export async function verifyTreeRestore({
 }
 
 /**
- * A field that does not match because Jira REFUSED to write it is not a field
- * "Jira accepted but something overrode". The verifier cannot tell the two
- * apart; the executor's refusals can. This names the refusal, in Jira's words,
- * for every unmatched field a refused step was meant to write.
+ * Use executor refusals to distinguish a write Jira rejected from an
+ * accepted write that later failed verification. Include Jira's refusal
+ * reason on every unmatched field that the step should have written.
  */
 export function explainRefusals(unmatched, refused) {
   const byNodeField = new Map();

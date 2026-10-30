@@ -1,18 +1,16 @@
 /**
- * A deliberately small Jira Cloud REST client for the Requirements setup scripts.
+ * Jira Cloud REST client for the Requirements setup scripts.
  *
- * CREDENTIALS. Read from `.env.requirements` at the repo root (gitignored by the
- * `.env*` rule) or from the process environment. They are never printed, never
- * written to the state file, and never placed in a URL.
+ * Read credentials from .env.requirements or process environment variables.
+ * The .env* ignore rule keeps the local file out of Git. Never print credentials,
+ * write them to state or include them in URLs.
  *
  *   JIRA_SITE=https://mgtechdemo.atlassian.net
  *   JIRA_EMAIL=<site admin's Atlassian email>
  *   JIRA_API_TOKEN=<API token from id.atlassian.com>
  *
- * READ-ONLY BY DEFAULT. A client made with `{ write: false }` refuses every
- * mutating request, except the handful of Jira endpoints that read through a
- * POST body (listed in READ_POSTS). The inspect script and every plan/dry run
- * use a read-only client, so they cannot change the site even by mistake.
+ * A client with write: false refuses mutations except read-only POST endpoints
+ * listed in READ_POSTS. Inspection, plans and dry runs use that client.
  */
 import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';

@@ -2,14 +2,12 @@ import { events } from '@forge/bridge';
 
 export type RefreshOptions = { background?: boolean };
 
-/** Jira events can lag or be absent after app writes, and another browser tab
- * may have changed things since this one last painted — so this reconciles on
- * focus and on becoming visible again, not on a fixed timer. All listeners are
- * owned by the mounted view.
- *
- * Every refresh started here is `background`: nobody asked for it, so a view
- * that already has data should update it in place and keep a failed attempt
- * to itself rather than flash an error the next attempt clears anyway. */
+/**
+ * Refresh on Jira/app events, focus and visibility changes. Jira events can
+ * lag or be absent after app writes, and other tabs may have changed data.
+ * The mounted view owns the listeners. These background refreshes update
+ * loaded data in place and preserve it if a request fails.
+ */
 export function subscribeIssueUpdates(refresh: (options: RefreshOptions) => void | Promise<void>) {
   let stopped = false;
   const subscriptions: { unsubscribe: () => void }[] = [];

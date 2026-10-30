@@ -10,14 +10,10 @@ import { recordHarnessEvent } from '../../lib/harness';
 const ROWS_SHOWN = 4;
 
 /**
- * THE BASELINE, AND WHAT HAS HAPPENED TO IT.
- *
- * One answer, in a line: does this work item still match what was signed?
- * When it does, that line and a link to the history are all there is. When it
- * does not, the same card lists the most important changes, one row each, and
- * ends on the decision: Review changes, Reject and restore, Approve changes.
- * Everything read at length opens in the review window. The card is the same
- * size however much has changed.
+ * Show whether this work item matches its signed baseline. If it matches,
+ * show the status and history link. Otherwise list the main changes and offer
+ * Review changes, Reject and restore, and Approve changes.
+ * Open detailed content in the review window to keep the card compact.
  */
 export default function BaselineSection({ summary, drift, evidence, evidenceReady, evidenceLoading, evidenceError, onRetryEvidence, onOpenReview, decision, heldNote, restore, now = Date.now() }: {
   summary: PanelSummary;

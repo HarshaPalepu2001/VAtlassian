@@ -196,7 +196,7 @@ async function defaultPrepare({ restore, baseline }) {
   return {
     issue, issueId: Number(issue.id), projectId, config, fields, fieldsFor, ruleScope,
     // The same tree the reviewer rejected against (usecases/panelAccess.js):
-    // each child that carries its own latest baseline stands as that baseline,
+    // each child uses its own latest baseline when one exists,
     // so verification checks each issue against its own record.
     baseline, baselineTree, policyFor, linkPolicy: baselineLinkPolicy(baseline), linkPolicyFor: policyFor,
     currentTree: { nodes: captured.nodes, values: captured.values },
@@ -216,12 +216,10 @@ async function defaultExecute({ restoreId, restore, prepared, plan, maxActions }
   const adapters = {
     claimRestoreAction, finishRestoreAction, recordReplacement,
     readReplacements, readRestoreActions, ...jiraAdapters,
-    // The synchronous path in usecases/restoreActions.js has always wired this;
-    // the queued worker never did, so a tree restore run through the queue —
-    // which is every tree restore, since config.restore.queue defaults on —
-    // wrote no step-level ledger entries at all. The executor now refuses to
-    // delete a work item without one, and that refusal would have been
-    // permanent here.
+    // Wire step-level auditing for queued tree restores, as the synchronous path
+    // in usecases/restoreActions.js does. The executor refuses to delete a work item
+    // without that ledger entry. Queueing is the default, so missing this callback
+    // would permanently block those deletes.
     appendLedger: async (eventType, payload) => {
       await tryAppend({ actorAccountId: restore?.actor_account_id ?? 'system',
         issueId: Number(prepared.issueId), approvalId: restore?.approval_id ?? null,
@@ -244,14 +242,12 @@ async function defaultVerify({ prepared, restoreId }) {
 }
 
 /**
- * Publishes the next baseline from the state a per-field restore just verified.
+ * Publish the next baseline after a per-field restore has been verified.
  *
- * The worker has no user session, so it reads as the app and re-reads the item:
- * the issue read in prepare() predates this restore's last writes. The tree hash
- * of that fresh read is handed to the capture as the hash it must still see —
- * the signed hash cannot be it (the reviewer signed the candidate, and the
- * rejected fields have since been restored), and this refuses the capture if
- * anything moved between the verification and the read it makes itself.
+ * Re-read asApp because the worker has no user session and prepare() ran before
+ * restore writes. Pass the fresh tree hash to capture as its expected hash;
+ * the signed candidate hash no longer describes the restored fields. Capture
+ * refuses publication if its own read differs from this verified read.
  */
 async function defaultCaptureMixed({ restore, approval, prepared, baseline }) {
   const { captureDriftBaseline, publishBaselineSideEffects } = await import('../usecases/drift.js');
@@ -360,10 +356,8 @@ export async function runRestoreWorker(eventOrBody, overrides = {}) {
     if (executed.state === 'PARTIAL' || Number(executed.remaining) > 0) {
       const previousCompleted = Number(restore.completed_steps ?? 0);
       const completed = Number(executed.completed ?? 0);
-      // A preflight refusal attempts nothing, so the no-progress guard below
-      // never fired and the batch was handed straight back to the queue — for
-      // ever, with the item pinned in RESTORING and the gate denying every
-      // transition. Nothing was tried and nothing can be: settle it.
+      // Settle a preflight refusal. With no attempted writes, the no-progress guard
+      // cannot detect it and would otherwise requeue forever in RESTORING.
       if (executed.preflightFailed === true || executed.state === 'FAILED') {
         throw new Error(executed.preflightFailed === true
           ? 'The app does not have the Jira permissions this restore needs on every affected project.'
@@ -403,11 +397,10 @@ export async function runRestoreWorker(eventOrBody, overrides = {}) {
     const restoredState = verified.matches
       ? (replacements.length ? 'COMPLETE_WITH_REPLACEMENTS' : 'COMPLETE')
       : (verified.progress ? 'PARTIAL' : 'FAILED');
-    // THE ONE DURABLE BOUNDARY OF A PER-FIELD DECISION: the next baseline is
-    // captured only now, after every rejected field has been read back at its
-    // approved value. Capturing earlier would re-approve a value the reviewer
-    // rejected. If publication fails the restore is NOT left looking complete:
-    // the rejected fields are back, but the approved ones are not yet recorded.
+    // Capture the next baseline only after read-back confirms every rejected
+    // field at its approved value. Earlier capture would approve rejected content.
+    // If publication fails, do not mark restore complete: rejected fields are back,
+    // but the newly approved values do not yet have their next baseline.
     let publication = null;
     if (mixed && restoredState !== 'PARTIAL' && restoredState !== 'FAILED') {
       if (mixed.approved.length === 0) publication = 'NOT_NEEDED';
@@ -437,29 +430,14 @@ export async function runRestoreWorker(eventOrBody, overrides = {}) {
       unmatchedCount: unmatched.length,
       unmatchedFields: unmatched.map(entry => entry.fieldName ?? entry.kind).slice(0, 20) },
     state === 'COMPLETE' || state === 'COMPLETE_WITH_REPLACEMENTS' ? 'INFO' : 'WARN');
-    // finishRestore is durable at this point — the restore's own terminal
-    // state is settled and reported below regardless of what happens next.
-    // A failure in this bookkeeping must not fall into the catch block: that
-    // would call failRestore() (a no-op against the already-terminal row,
-    // since its WHERE clause excludes COMPLETE/COMPLETE_WITH_REPLACEMENTS/
-    // FAILED) and release(issue, 'ERROR') (not a no-op — it would mark an
-    // issue that was actually restored as being in error), and it would
-    // report this call as FAILED when the restore itself did not fail.
+    // finishRestore has durably recorded the terminal restore state. Keep later
+    // bookkeeping failures out of the catch block: failRestore is a no-op for terminal
+    // rows, but release(issue, 'ERROR') would incorrectly change the restored issue.
     //
-    // ─── AND IT IS CONDITIONAL, WHICH IT WAS NOT ─────────────────────────────
-    //
-    // This block used to run whatever the verifier said. A restore the verifier
-    // had just REFUSED to confirm was therefore recorded as RESTORE_COMPLETED
-    // in the ledger, its drift was marked decided, and the item was released as
-    // BASELINED with driftCount 0 — the app asserting that a work item matched
-    // its approved baseline in the same breath as reporting that it did not.
-    // For an evidence product that is the worst class of bug there is, and it
-    // is also what made the failure so confusing to a reviewer: the panel said
-    // PARTIAL while the queue said clean, and the next drift sweep re-raised
-    // the same difference and blocked the transition all over again.
-    //
-    // The synchronous path in usecases/restoreActions.js has always gated this
-    // on `complete`. The two paths now say the same thing.
+    // Run this bookkeeping only when complete, as the synchronous path does.
+    // Previously a PARTIAL verdict could still record RESTORE_COMPLETED, decide
+    // drift and release BASELINED with a zero drift count. The next sweep then
+    // rediscovered the same differences and blocked the item again.
     const complete = state === 'COMPLETE' || state === 'COMPLETE_WITH_REPLACEMENTS';
     // lib/decision.js owns where a decided item lands. The queued worker and
     // the synchronous path in usecases/restoreActions.js both ask it, so they

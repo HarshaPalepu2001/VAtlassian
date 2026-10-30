@@ -107,7 +107,7 @@ test('logLiveDrift is silent when nothing is flagged', async () => {
 // parent lies outside the tree. So a child re-baselined on its own (a drift
 // decision on it) records parent = null, while the issue still has its parent.
 // Comparing the live parent against that null made one field drift forever, and
-// no new baseline could clear it — each one recorded null again.
+// no new baseline could clear it because each recorded null again.
 const withParent = [...declared, { field_id: 'parent', field_kind: FIELD_KIND.SCALAR, store_values: true }];
 const childFields = { ...fields, parent: { id: '44007', key: 'VAT-40' } };
 const digestsWith = issueFields => project(issueFields, scopeFromIssue({ declared: withParent, issueFields }).fields).digests;

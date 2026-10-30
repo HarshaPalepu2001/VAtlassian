@@ -23,7 +23,7 @@ test('scheduler executes every control and isolates thrown and returned failures
   assert.equal(daily[1].job,'seal');
 });
 
-// The tracked set is what an administrator chose on the Controlled fields page —
+// The tracked set is what the administrator chose on the Controlled fields page,
 // never widened on a schedule behind their back.
 test('no scheduled job adopts fields into the tracked set', async () => {
   const runner = await import('../src/jobs/runner.js');
@@ -38,7 +38,7 @@ test('no scheduled job adopts fields into the tracked set', async () => {
 
 // Forge kills a scheduled function at 55 seconds. Two unbounded sweeps ran
 // first, so on a site with many governed trees the hourly run died every hour
-// and gatecheck — the check that controlled transitions are still enforced —
+// and gatecheck, which checks that controlled transitions remain enforced,
 // never ran at all.
 test('the hourly run bounds both sweeps and runs the enforcement checks between them', async () => {
   const runner = await import('../src/jobs/runner.js');

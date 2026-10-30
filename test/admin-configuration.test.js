@@ -7,7 +7,7 @@ import { fixture, request, fixtureGateValidator } from './admin-fixture.js';
 // item type pair (workflowSource.js#readWorkflowForPair takes no wildcard),
 // so there is no longer a single workflow to re-check a wildcard scope
 // against. The wildcard remains supported everywhere ELSE this app uses
-// issue_type_id — see db/configStore.js's "ISSUE TYPE TAKES THE WILDCARD TOO".
+// issue_type_id. See db/configStore.js's "ISSUE TYPE TAKES THE WILDCARD TOO".
 const edge = { projectId: '1', issueTypeId: '2', fromStatusId: '*', toStatusId: '2', requiredRole: 'QA', meaning: 'APPROVED', transitionId: '100', requiredAssurance: 'ESIGNATURE' };
 
 test('edge creation stores assurance and the capture policy flag, and no drift switch', async () => {

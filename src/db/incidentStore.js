@@ -14,7 +14,7 @@ export async function recordIncident(issueId, accountId, eventType, now) {
 /** Read-only control alerts. Incidents are historical facts and stay visible;
  * a subsequent baseline does not prove the underlying workflow was repaired.
  *
- * Excludes RECALL_* findings (see recordRecallFinding below) on purpose — those
+ * Excludes RECALL_* findings (see recordRecallFinding below) because those
  * carry offered transition ids and Jira's own error text, which is a
  * configuration conversation for an administrator, not a fact to hand an
  * ordinary reviewer looking at one issue. Their gate visibility here stays
@@ -35,24 +35,24 @@ export async function issueControlStatus({ issueId, projectId, issueTypeId }) {
 }
 
 /**
- * ADMINISTRATOR-ONLY: a drift recall that could not be applied automatically.
+ * Administrator-only finding for a drift recall that could not be applied automatically.
  *
  * Reuses va_gate_finding rather than a parallel table. A recall stuck behind
  * an ambiguous route, a transition screen, a Jira refusal, or incomplete
  * baseline provenance is a control-health fact of exactly the shape
- * jobs/gatecheck.js already reports — "the control did not do what it claims
- * here" — dated and deduplicated, read back by the same admin health list
+ * jobs/gatecheck.js already reports. It is dated, deduplicated and read by the
+ * same admin health list
  * (usecases/adminAlerts.js's listGateFindings). It is deliberately excluded
  * from issueControlStatus() above: an ordinary reviewer needs to know a
  * recall did not happen, not which transition ids collided or what Jira's
  * error body said.
  *
- * DEDUPE KEY is the baseline id/version plus the failure type, so repeated
- * drift against the same stuck baseline advances one row's `last_seen_at` —
- * the last retry time — instead of growing a new row per attempt.
+ * The deduplication key is the baseline id/version plus the failure type, so repeated
+ * drift against the same stuck baseline advances one row's `last_seen_at` to the last retry time instead of adding a row
+ * per attempt.
  */
 /**
- * ADMINISTRATOR-ONLY BADGE COUNT — how many open control facts touch this
+ * Administrator-only count of open control findings touching this
  * issue, without the LIMIT-5 detail issueControlStatus() returns.
  *
  * The panel summary shows this as a number so an administrator knows to open

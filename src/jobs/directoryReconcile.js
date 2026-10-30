@@ -1,26 +1,18 @@
 /**
- * DIRECTORY RECONCILE — revoking signer eligibility for people who have left.
+ * Reconcile signer eligibility with Atlassian account status each day.
  *
- * manifest.yml has scheduled this daily since it was written, described as
- * "deactivated Jira users -> revoke eligibility", against three empty
- * functions. The policy is in lib/directoryReconcile.js, including the reason
- * this job is the one place in the codebase that deliberately does NOT fail
- * closed: every other control refuses an action when unsure, which is safe,
- * whereas revoking on incomplete information TAKES an action on evidence we did
- * not confirm. Missing from the directory is not the same as deactivated.
+ * The scheduled job replaces the empty functions originally registered in
+ * manifest.yml. lib/directoryReconcile.js defines the policy: revoke only on
+ * confirmed deactivation. Missing accounts and failed reads leave eligibility
+ * unchanged.
  *
- * WHAT IT DOES NOT NEED TO DO. It does not have to race anything. Revocation by
- * hand is already immediate — resolvers/panel.js checks va_eligibility live
- * before creating a signature, and gate.js re-checks it before consuming one,
- * so a revoked signer is stopped even mid-approval. This job is not the
- * enforcement; it is the part that notices a person is gone when nobody
- * remembered to tell us. Daily is the right cadence for that.
+ * Live eligibility reads already enforce manual revocation before signature
+ * creation in resolvers/panel.js and consumption in gate.js. This job finds
+ * accounts whose deactivation has not yet been reflected in va_eligibility.
  *
- * IT REVOKES ELIGIBILITY, NOT CREDENTIALS. A deactivated account cannot hold a
- * session, so its authenticator is already unusable; deleting the credential
- * would destroy the enrolment record behind signatures that person made while
- * they were employed, which is evidence 11.10(c) says to keep. Authority is
- * what gets withdrawn. The record stays.
+ * Revoke eligibility but retain credentials. A deactivated account cannot hold
+ * a session, while its enrolment record remains evidence for earlier signatures
+ * under 21 CFR 11.10(c).
  */
 import { executeQuery } from '../lib/db.js';
 import { append, EVENT } from '../lib/ledger.js';
@@ -126,9 +118,8 @@ export async function run({ directory = lookupUsers } = {}) {
   }
 
   if (unknown.length > 0) {
-    // Not revoked — see lib/directoryReconcile.js. Surfaced so an administrator
-    // can decide, because a deleted account and a truncated page look the same
-    // from here.
+    // Report without revoking. A deleted account and an incomplete page are
+    // indistinguishable here; an administrator must investigate.
     console.warn('reconcile: eligibility rows for accounts Jira did not resolve', JSON.stringify(unknown.slice(0, 20)));
   }
 

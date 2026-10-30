@@ -178,7 +178,7 @@ test('admin glance degrades controls when their incident read fails', async () =
 //
 // submit() leaves the approval row PENDING when Jira refuses the transition.
 // ApprovalControls keeps that in component state, which does not survive a
-// reload — so unless the panel reports it, the reviewer's only route to
+// reload. Unless the panel reports it, the reviewer's only route to
 // `approval:retryTransition` disappears the moment they navigate away.
 
 test('a stranded PENDING approval is reported so the retry control can be rendered', async () => {
@@ -267,13 +267,13 @@ test('when no transitions are gated, living state reports nothing needs a signat
 });
 
 /**
- * The item sits in a status no rule fires out of, and it has drifted since it
- * was signed. Authority to decide that drift belongs to the BASELINE's own
- * gate — snapshot() already resolves it from `baseline.from_status_id ->
- * baseline.to_status_id` precisely because "drift outlives review status".
- * Deriving the tier from the offered transitions alone threw that answer away,
- * so the panel counted the change, said it needed a decision, and then rendered
- * the observer card with no way to make one.
+ * A drift decision uses the baseline's gate even outside its review status.
+ *
+ * snapshot() resolves authority from `baseline.from_status_id ->
+ * baseline.to_status_id`. Deriving the assurance tier only from currently
+ * offered transitions discarded that authority. The panel counted drift and
+ * said it needed a decision, but showed the observer card with no decision
+ * control.
  */
 test('drift on a signed baseline is decidable when no transition is gated at the current status', async () => {
   const f = fixture({
@@ -296,7 +296,7 @@ test('drift on a signed baseline is decidable when no transition is gated at the
   assert.equal(state.tier, 'actor', 'so the reviewer must be able to make one');
   assert.ok(state.drift.fields?.length, 'the changed field reaches the panel');
   assert.equal(state.eligibility.eligible, true);
-  assert.deepEqual(state.transitions, [], 'no transition is offered — only the drift decision');
+  assert.deepEqual(state.transitions, [], 'only the drift decision is offered');
   assert.equal(state.approval.requiredAssurance, 'ESIGNATURE', 'signed at the baseline rule\'s level');
   assert.notEqual(state.state, 'Nothing needs a signature at this status');
 });
@@ -410,7 +410,7 @@ test('panel returns structural drift and exact destructive consequences', async 
   assert.equal(state.baseline.totalFieldCount, 48);
 });
 
-// ── panel:getEvidence — the lazy, heavy half of the split ────────────────────
+// panel:getEvidence provides the deferred heavy read.
 
 test('evidence returns the retained-value record, live diff fields, and tree rejection detail', async () => {
   const f = fixture();
@@ -770,7 +770,7 @@ test('version comparison names the work item by its key, never by its internal n
   const first = { ...await f.activeBaseline(), version: 1, baseline_id: Buffer.alloc(16, 4) };
   const latest = await f.activeBaseline();
   f.baselineByVersion = async (_issueId, version) => Number(version) === 1 ? first : latest;
-  // A saved node that carries no issue key — how a single-issue baseline is read.
+  // A single-issue baseline is read as a saved node without an issue key.
   f.readBaselineTree = async id => {
     const value = Buffer.from(id).equals(first.baseline_id) ? 'first' : 'latest';
     return { nodes: [{ logicalNodeId: rootId, issueKey: null, originalIssueId: 10, currentIssueId: 10,

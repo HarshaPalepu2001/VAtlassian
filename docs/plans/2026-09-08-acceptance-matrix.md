@@ -1,4 +1,4 @@
-# VAtlassian acceptance matrix — 2026-09-08
+# VAtlassian acceptance matrix, 2026-09-08
 
 Requirement-by-requirement status against the brief that merged Forge Signature
 and Forge Baseline into VAtlassian.
@@ -33,7 +33,7 @@ Interactive Jira acceptance remains open.
 | Works from the Jira transition screen | Met (local) / Needs live | Handled by the `avi:jira:transitioned:issue` trigger, so the entry point is irrelevant to the app. `test/baseline-trigger-retry.test.js` covers the trigger; the Jira-screen path itself needs live confirmation. |
 | Works from the issue panel | Met | `src/resolvers/panel.js` → `signature:challenge` / `signature:submit` → `src/usecases/approval.js` |
 | Works from My approvals | Met | Same resolver path; `src/usecases/queue.js` lists the items |
-| Baselines **every** field in VAtlassian field settings — 10 or 100 | Met | `scopeFromIssue()` in `src/lib/trackedFields.js` returns the full declared set and does **not** narrow to the edit screen. `test/baseline-trackedfields.test.js` |
+| Baselines **every** field in VAtlassian field settings, whether 10 or 100 | Met | `scopeFromIssue()` in `src/lib/trackedFields.js` returns the full declared set and does **not** narrow to the edit screen. `test/baseline-trackedfields.test.js` |
 | 100-field baselines do not collapse into hundreds of round trips | Met | Byte-aware batched writes and bounded chunked reads in `src/db/baselineStore.js`. `test/baseline-storage.test.js` |
 | Capture is bound to the content the approver signed | Met | Capture refuses `CONTENT_CHANGED` when the computed hash differs from the approval's. `test/baseline-capture-lifecycle.test.js` |
 | Duplicate or delayed events cannot republish an older baseline or clear drift | Met | `CAPTURING` state plus baseline-version guard in `src/lib/capture.js`. `test/baseline-capture-lifecycle.test.js` |
@@ -43,7 +43,7 @@ Interactive Jira acceptance remains open.
 | Requirement | Status | Evidence |
 |---|---|---|
 | Every baseline is a cryptographic snapshot of the tracked fields | Met | `project()`/`normaliseField()` in `src/lib/content.js`; per-field digests plus a content hash |
-| After a baseline exists, every change produces a snapshot verified against it | Met | `src/lib/collect.js` runs on `avi:jira:updated:issue`, on issue-link events, and on the reconcile sweep — one code path for all three |
+| After a baseline exists, every change produces a snapshot verified against it | Met | `src/lib/collect.js` runs on `avi:jira:updated:issue`, on issue-link events, and on the reconcile sweep, using one code path for all three |
 | A change to an **untracked** field still records an observation | Met | `src/db/observationStore.js`; `test/baseline-observation.test.js` |
 | Drift is raised only when tracked-field content actually changed | Met | `src/lib/diff/index.js` compares normalised values, not event payloads. `test/baseline-diff.test.js` |
 | Cascading-select and rich-text changes are not missed | Met | Regression fixed in `src/lib/content.js`. `test/baseline-integrity-regression.test.js` |
@@ -54,7 +54,7 @@ Interactive Jira acceptance remains open.
 | Requirement | Status | Evidence |
 |---|---|---|
 | Drift is flagged on the Jira issue screen | Met, with a placement caveat | `jira:issueContext` module `va-context` with `dynamicProperties: issue-status`; `src/resolvers/issueStatus.js` renders "Changes need review" |
-| Flag sits at the top of the issue, beside the summary | **Not possible** | Forge has no module that renders beside the summary. `jira:issueContext` renders in the right-hand details column, which is the closest supported placement. Issue **properties** can store the state and make it JQL-searchable, but a property does not render a banner anywhere — it cannot produce the requested placement on its own. |
+| Flag sits at the top of the issue, beside the summary | **Not possible** | Forge has no module that renders beside the summary. `jira:issueContext` renders in the right-hand details column, which is the closest supported placement. Issue **properties** can store the state and make it JQL-searchable, but a property does not render a banner anywhere. It cannot produce the requested placement on its own. |
 | Issue is locked once drift is observed | Met | `LOCKED`/`DRIFTED` item state; `src/gate.js` denies `RECORD_LOCKED` and `UNDECIDED_DRIFT` |
 
 ## 5. Review routing and the reviewer experience
@@ -66,7 +66,7 @@ Interactive Jira acceptance remains open.
 | Incomplete history is disclosed rather than guessed | Met | `historyTruncated` / `historyUnavailable` surfaced as a notice in `frontend/src/review/ReviewWorkspace.tsx` |
 | AI summary of the changes | Met | `src/lib/report.js` over the `llm` module (`va-llm`), Claude models |
 | Deterministic diff still renders if the AI call fails | Met | `ReviewWorkspace` fetches diff and report independently; a failed report leaves the diff intact |
-| **Active notification** that a signed ticket changed | **Gap — not implemented** | `notifications.digest` and `restore.commentOnRestore` exist in `src/db/configStore.js` but nothing reads them. Reviewers currently discover work by visiting My approvals or the issue. See "Open decision" below. |
+| **Active notification** that a signed ticket changed | **Gap. Not implemented** | `notifications.digest` and `restore.commentOnRestore` exist in `src/db/configStore.js` but nothing reads them. Reviewers currently discover work by visiting My approvals or the issue. See "Open decision" below. |
 
 ## 6. Decision outcomes
 
@@ -77,7 +77,7 @@ Interactive Jira acceptance remains open.
 | **All** tracked fields revert, not just the title | Met | `src/lib/restore/planner.js` plans every changed tracked field; `src/lib/restore/adapters.js` shapes each field kind. `test/restore-correctness.test.js`, `test/restore-adapters.test.js` |
 | Fields that are tracked but not on the edit screen still revert | Met (local) / Needs live | App-attributed writes now carry `overrideScreenSecurity`/`overrideEditableFlag`, and the planner is fed an app-scoped `editmeta` read using the same overrides so plan and write agree. `src/lib/restore/executor.js`, `src/usecases/panelAccess.js`. `test/restore-correctness.test.js` |
 | Parent and issue links revert | Met | `restoreLinks()` reconciles links by type, direction and identity, validating both complete lists before any mutation. `test/restore-correctness.test.js` |
-| Restore is confirmed by reading Jira back | Met | `src/lib/restore/verifier.js` — a field is `succeeded` only after a fresh read matches the approved digest; a field Jira omits from the read is never counted as verified |
+| Restore is confirmed by reading Jira back | Met | `src/lib/restore/verifier.js` counts a field as `succeeded` only after a fresh read matches the approved digest; a field Jira omits from the read is never counted as verified |
 | A restore cannot silently report success | Met | `tally()` derives state from verification, not from HTTP status. `test/restore-verification.test.js` |
 | Abandoned approve/reject operation locks recover instead of blocking forever | Met (local) | `DECIDING`/`RESTORING` use a 60-second lease, challenge and submit share stale-lock behavior, and reconcile sweeps stale locks. Durable `LOCKED` records still block. `src/lib/decision.js`, `src/usecases/approval.js`, `src/db/itemStateStore.js`, `test/lock-lease.test.js`, `test/approval-submit.test.js` |
 
@@ -86,7 +86,7 @@ Interactive Jira acceptance remains open.
 | Requirement | Status | Evidence |
 |---|---|---|
 | Signature binds the reviewed content and the selected policy | Met | Challenge/confirm flow with `operation_plan_hash` in `src/lib/approval/challenge.js`; `POLICY_CHANGED` on drift of meaning, role, assurance |
-| Approval is available to the validator before the transition is attempted | Met (fix) | Activation now precedes `performTransition` in `src/usecases/approval.js` — previously the transition ran first and the validator could not see the approval. `test/approval-submit.test.js` |
+| Approval is available to the validator before the transition is attempted | Met (fix) | Activation now precedes `performTransition` in `src/usecases/approval.js`. Previously the transition ran first and the validator could not see the approval. `test/approval-submit.test.js` |
 | A spent approval is never reactivated | Met | Final state re-read via `deps.byId` rather than assumed. `test/approval-submit.test.js` |
 | Assurance floor applies to approve and reject alike | Met | `effectiveAssurance()` in `src/gate.js` and `src/usecases/approval.js`. `test/approval-assurance.test.js` |
 | TOTP e-signature correctness | Met | `test/signature-totp-rfc-vectors.test.js`, `test/signature-totp.test.js`, `test/totp-approval.test.js` |
@@ -101,7 +101,7 @@ tenant (a nominated non-production Jira site):
 2. `overrideScreenSecurity` / `overrideEditableFlag` are accepted on both
    `PUT /rest/api/3/issue/{key}` and `GET /rest/api/3/issue/{key}/editmeta`
    for this app's permissions. The code degrades safely if `editmeta` ignores
-   them — the field is refused and reported, exactly as before this change —
+   them. The field is refused and reported, exactly as before this change,
    but the widened restore coverage is unconfirmed until a live run.
 3. Baseline capture from the Jira transition screen (as opposed to the panel).
 4. A reject-and-restore over a genuinely large tracked set, including a field

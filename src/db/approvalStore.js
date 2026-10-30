@@ -41,7 +41,7 @@ export async function invalidateApproval({ approvalId }) {
   return affectedRows(result) === 1;
 }
 /**
- * The PENDING approval recorded for this exact Jira transition — not just this
+ * The PENDING approval recorded for this exact Jira transition, including this
  * status pair. `transitionId` is required for the same reason it is required
  * on gatedTransition(): two sibling transitions can share a destination
  * status, and a receipt signed for one must never be usable to complete the
@@ -74,7 +74,7 @@ export async function pendingApprovalByToken({ issueId, fromStatusId, toStatusId
  * are two of the preconditions usecases/approval.js retryTransition enforces
  * (`row.account_id === accountId`, `row.from_status_id === issue.statusId`).
  * Reading it any wider would let the panel offer a retry the resolver is
- * certain to refuse. The to-status is deliberately left open: the caller
+ * certain to refuse. Leave the target status open because the caller
  * matches it against the transitions Jira is currently offering.
  */
 export async function pendingApprovalForActor({ issueId, accountId, fromStatusId, now = Date.now() }) {

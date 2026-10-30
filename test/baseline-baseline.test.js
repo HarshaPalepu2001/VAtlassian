@@ -19,7 +19,7 @@ function entry(at, items) {
 // ─── The window this whole module exists to close ────────────────────────────
 
 test('nothing changed after the transition: the read IS the approved state, graded EXACT', () => {
-  // The overwhelmingly common case — the trigger runs within a second or two.
+  // The trigger runs within a second or two in the common case.
   const result = rewind({
     issueFields: { summary: 'Ship it' },
     controlledFields: FIELDS,
@@ -51,8 +51,7 @@ test('an edit landing in the async gap is REWOUND, not absorbed into the approve
 });
 
 test('rewinding several changes lands on the value before the FIRST of them', () => {
-  // Taking the newest entry's `from` would land one step short — the obvious
-  // way to get this subtly wrong.
+  // Taking the newest entry's `from` would stop one step short.
   const result = rewind({
     issueFields: { priority: { id: '1' } },
     controlledFields: FIELDS,
@@ -94,7 +93,7 @@ test('attachments and links cannot be rewound, so the baseline is graded PARTIAL
     transitionAt: TRANSITION_AT
   });
   assert.equal(result.fidelity, FIDELITY.PARTIAL);
-  // Refusing to guess is the point — the current value is kept, not invented.
+  // Keep the current value when the earlier value is unknown.
   assert.deepEqual(result.rewoundFields, []);
 });
 

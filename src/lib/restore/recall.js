@@ -6,16 +6,11 @@ import { recordRecallFinding, clearRecallFindings } from '../../db/incidentStore
 import { EVENT } from '../ledger.js';
 
 /**
- * Record why an automatic recall did not happen: loud in the ledger (this
- * work item's own history) and, separately, as a deduplicated administrator
- * finding (db/incidentStore.js's recordRecallFinding) that carries the
- * diagnostic detail — offered transition ids, the screen fact, Jira's own
- * response — an ordinary reviewer does not need and an administrator does.
- *
- * Exported so collect.js can report the one failure that happens before a
- * route is even attempted: an active baseline whose provenance is incomplete,
- * which never reaches recallToReview because there is no reviewStatusId to
- * plan against.
+ * Record a failed automatic recall in the work item's ledger and as a
+ * deduplicated administrator finding. Keep offered transition ids, screen
+ * metadata and Jira's response in the administrator detail.
+ * collect.js also uses this for incomplete baseline provenance, which cannot
+ * reach recallToReview without a reviewStatusId.
  */
 export async function recordRecallFailure({
   issueId, issueKey, projectId, issueTypeId, baselineId, baselineVersion,
@@ -46,17 +41,11 @@ export async function recordRecallFailure({
 }
 
 /**
- * Put a drifted work item back in front of a reviewer.
- *
- * The route decision is lib/recall.js's; this performs it and records what
- * happened. THE TARGET IS BASELINE-OWNED: `reviewStatusId`, `baselineId`, and
- * `baselineVersion` all come from the caller's `baselinePolicy(activeBaseline)`
- * (see lib/baselinePolicy.js) — this function never reads configuration to
- * find a review status, and never falls back to one if the baseline's own
- * value is missing. See lib/recall.js for why an item that drifted while
- * already in review is left alone, why more than one Jira route to that
- * status is refused rather than guessed at, and why a workflow with no route
- * back fails loudly rather than improvising one.
+ * Execute lib/recall.js's plan and record its outcome. reviewStatusId,
+ * baselineId and baselineVersion come from baselinePolicy(activeBaseline).
+ * Do not read current configuration or fall back to a different review status.
+ * lib/recall.js handles already-in-review items, ambiguous routes and missing
+ * routes.
  */
 export async function recallToReview({
   issueId, issueKey, projectId, issueTypeId,

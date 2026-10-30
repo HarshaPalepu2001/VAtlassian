@@ -5,14 +5,13 @@ import { ROLE, ROLES, ROLE_IDS, DEFAULT_ROLE, isRole, normaliseRole, roleLabel }
 import { rowAuthorises } from '../src/lib/eligibility.js';
 
 /**
- * THE INVARIANT THIS FILE EXISTS FOR.
+ * Role names must match exactly.
  *
- * A gate stores `required_role` and a grant stores `role`, and
- * lib/eligibility.js compares them byte for byte. They used to be typed into
- * two unrelated free-text inputs. This suite pins the properties that make that
- * impossible now: one list, no coercion, and a comparison that really is exact
- * — so if somebody reintroduces a trim() or a toUpperCase() anywhere on the
- * path, a test fails instead of a customer's transitions silently denying.
+ * A gate stores required_role and a grant stores role. lib/eligibility.js
+ * compares them byte for byte. The values previously came from unrelated
+ * free-text inputs. These tests require one shared list and no coercion.
+ * Adding trim() or toUpperCase() anywhere on the path must fail a test
+ * before it causes valid customer transitions to be refused.
  */
 
 test('the canonical list is non-empty and every id is a distinct, bare uppercase token', () => {

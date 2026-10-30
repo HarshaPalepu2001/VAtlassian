@@ -67,7 +67,7 @@ export async function listGateFindings(req, overrides) {
     ),
     // Rows saved before an exact transition id was required. gatedTransition()
     // now matches on transition_id exactly, so a row with none can never match
-    // any Jira transition again — it is not "gating everything out of this
+    // any Jira transition again. It is not "gating everything out of this
     // status", it is silently gating nothing. That failure mode has no
     // gatecheck signature to diff against a live workflow, so it is surfaced
     // here directly rather than guessed at as one edge or another.

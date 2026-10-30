@@ -1,31 +1,14 @@
 /**
- * Id -> display name lookups, for rendering only.
+ * Resolve stored IDs to display names without affecting decisions.
  *
- * WHY THIS EXISTS. The app's own tables store what a decision has to be made
- * against: numeric project ids, issue type ids, status ids, account ids. That
- * is correct — names get renamed, and a rule matched on a name would silently
- * stop matching the day someone edits a workflow status. But it means every
- * admin screen reading those tables had nothing to show except the ids, and
- * so it showed the ids: a table of "712020:8a3f-…" and "10001" that no
- * administrator can act on, and that prints every user's account id on screen
- * for no benefit.
+ * Rules and matching retain numeric project, issue-type and status IDs and
+ * account IDs because names can change. Resolve names only when rendering.
+ * When Jira is unavailable, return empty maps and let the UI show unknown-name
+ * labels. Gate and eligibility checks must continue to compare IDs directly;
+ * these best-effort lookups must never determine authorization.
  *
- * So the ids stay in the database and stay in the matching logic, and this
- * module resolves them to names on the way out to a screen.
- *
- * NOTHING HERE MAY BE USED IN A DECISION. These lookups are best-effort by
- * design: every one of them returns an empty map rather than throwing when
- * Jira is unavailable, so that a listing screen degrades to "Unknown issue
- * type" instead of failing to load. That behaviour is safe for display and
- * catastrophic for authorisation — a silently empty map would read as "no
- * matches" to anything gating on it. Gate and eligibility checks must keep
- * comparing ids to ids. See src/gate.js and isEligible() in resolvers/panel.js.
- *
- * asApp, not asUser: an admin console lists rules that may reference projects
- * the reading admin is not themselves a member of, and a rule that renders as
- * blank because of the reader's own project permissions is worse than useless
- * on a compliance configuration screen. Only names are read, never issue
- * content.
+ * Read asApp because configuration may reference projects the viewing
+ * administrator does not belong to. Read names only, never issue content.
  */
 
 import { asApp, route } from '@forge/api';
@@ -67,9 +50,8 @@ export async function lookupUsers(accountIds) {
       for (const user of body?.values ?? []) {
         if (!user?.accountId) continue;
         result.set(user.accountId, {
-          // A deactivated user still has a display name, and a grant held by
-          // someone who has left is exactly the row an auditor is looking for
-          // — so they are resolved and flagged, not omitted.
+          // Resolve deactivated users' names and flag their status. Retain their grants
+          // in the listing so administrators can review former signers.
           displayName: user.displayName ?? null,
           active: user.active !== false
         });

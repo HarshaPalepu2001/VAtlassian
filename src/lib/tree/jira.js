@@ -10,10 +10,9 @@ const OPTIONAL_FIELDS = new Set(['security']);
 const omitted = (fields, f) => !OPTIONAL_FIELDS.has(f) && !(f in fields);
 
 /**
- * `canonicalise` reads each node's attachments under the ids they stand for
- * (../attachmentIdentity.js), so every tree comparison — capture, drift, the
- * approval hash, restore and its verification — sees a restored file as the
- * approved one. One lookup per read, none when no node has an attachment.
+ * Canonicalize attachment ids using attachmentIdentity.js so capture, drift,
+ * approval hashes, restores and verification recognize restored files as the
+ * approved originals. Perform one lookup per read, or none without attachments.
  */
 /**
  * `exclude(children) → Set<issueId>` names children that are not part of the

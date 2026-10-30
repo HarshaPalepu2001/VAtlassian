@@ -37,26 +37,21 @@ export function sqlStatementSummary(statement) {
 }
 
 /**
- * Slow-query threshold, in milliseconds, for the per-query log line below.
+ * Slow-query logging threshold in milliseconds.
  *
- * Forge SQL documents a 5 s SELECT / 10 s DML query timeout (see the "Known
- * bounds" section of docs/PERFORMANCE-CHECKLIST.md). A query already past 2 s
- * — 40% of the tightest of those budgets — is worth a loud line before it
- * ever reaches the platform's own timeout, not after.
+ * Forge SQL documents SELECT and DML timeouts of 5 and 10 seconds. A 2-second
+ * threshold reports a slow SELECT after 40% of its budget. See the "Known
+ * bounds" section of docs/PERFORMANCE-CHECKLIST.md.
  */
 export const SLOW_QUERY_MS = 2000;
 
 /**
- * Logs every query's duration, and separately tags one that crosses
- * `thresholdMs`. This IS the SQL wrapper's own alert: there is no outbound
- * delivery for it the way lib/alerts.js delivers a security event to Jira.
- * That pipeline exists specifically for 21 CFR 11.300(d) unauthorized-use
- * detection, and db/alertStore.js implements it by calling executeQuery — so
- * routing a slow-query signal through it would both conflate a performance
- * concern with a compliance one and risk a query alerting on its own
- * slowness. A distinguishable, always-on structured line, tagged so it is
- * trivially greppable/alertable from log collection, is the honest scope of
- * "alert" the wrapper can make on its own.
+ * Log every query duration and tag those crossing thresholdMs.
+ *
+ * This alert is a structured log entry, with no outbound delivery. Keep it
+ * separate from the 21 CFR 11.300(d) security-alert pipeline: db/alertStore.js
+ * calls executeQuery, so sending query alerts through it could recurse.
+ * Log collection can filter or alert on the distinct slow-query tag.
  */
 function logQueryDuration(queryText, durationMs, thresholdMs, succeeded) {
   const summary = sqlStatementSummary(queryText);
@@ -79,9 +74,8 @@ function logQueryDuration(queryText, durationMs, thresholdMs, succeeded) {
 export async function executeQuery(queryText, params = [], { slowQueryMs = SLOW_QUERY_MS } = {}) {
   const startedAt = Date.now();
   try {
-    // The installed @forge/sql exposes `bindParams`, not `bind` — `.bind()`
-    // isn't a method on SqlStatement at all. Result shape is
-    // `{ rows, metadata }`, not `{ rows, meta }`.
+    // The installed @forge/sql exposes bindParams, not bind. SqlStatement has no
+    // .bind() method. Results contain { rows, metadata }, not { rows, meta }.
     const result = await sql.prepare(queryText).bindParams(...params).execute();
     const durationMs = Date.now() - startedAt;
     logQueryDuration(queryText, durationMs, slowQueryMs, true);
@@ -104,16 +98,13 @@ export async function executeQuery(queryText, params = [], { slowQueryMs = SLOW_
 }
 
 /**
- * Forge SQL's wire protocol is JSON end to end, and BINARY/VARBINARY/BLOB
- * columns come back as String. A raw Buffer bound as a query parameter does
- * NOT travel as binary — it gets JSON.stringify'd into
- * `{"type":"Buffer","data":[...]}`, which is not a valid value for a VARBINARY
- * column and fails the write.
+ * Forge SQL uses JSON for parameters and results. BINARY, VARBINARY and BLOB
+ * columns return strings. Binding a raw Buffer serializes it as
+ * {"type":"Buffer","data":[...]}, which is not a valid VARBINARY value.
  *
- * The fix used throughout: base64-encode a Buffer on the JS side with
- * `toBinaryParam`, bind it as a normal string parameter, and wrap that
- * placeholder in `FROM_BASE64(?)` in the SQL text. Read it back with
- * `TO_BASE64(column) AS column` and decode with `fromBinaryColumn`.
+ * Base64-encode parameters through toBinaryParam, bind the string and use
+ * FROM_BASE64(?) in SQL. Read with TO_BASE64(column) AS column, then decode
+ * through fromBinaryColumn.
  */
 export function toBinaryParam(buffer) {
   if (typeof buffer === 'string') {
@@ -167,23 +158,15 @@ export function limitClause(count) {
 }
 
 /**
- * Is this error "that column does not exist yet"?
+ * Detect errors for columns that a scheduled migration has not added yet.
  *
- * FORGE SQL APPLIES DDL ON A SCHEDULE, NOT AT DEPLOY. jobs/migrate.js runs from
- * the five-minute trigger, so between a deploy and that trigger firing, the code
- * is new and the schema is old. Every read path in this app already tolerates a
- * missing TABLE — that is why executeQuery returns `{ result: false }` instead
- * of throwing — but a missing COLUMN on a table that does exist was not covered,
- * and it fails the whole statement.
+ * jobs/migrate.js runs every five minutes, not at deployment. New code may run
+ * against the previous schema until that trigger fires. executeQuery already
+ * returns { result: false } for missing tables; callers also need to tolerate
+ * missing columns on existing tables, including va_signature.
  *
- * Whoever adds a migration that widens a hot table needs this: without it, the
- * window between deploy and migration is one where every query naming the new
- * column fails, and for va_signature that means every gated approval in the
- * tenant refuses. A control that takes the product down for five minutes each
- * deploy will be removed by the next person who is on call.
- *
- * Matched on the driver's code where it survives the wrapper, and on the message
- * otherwise — same belt-and-braces reasoning as isDuplicateKey in db/store.js.
+ * Match the driver's code when available and otherwise its message, as
+ * isDuplicateKey does in db/store.js.
  */
 export function isUnknownColumn(error) {
   const code = error?.code === 'ER_BAD_FIELD_ERROR' ? error.code : error?.context?.debug?.code;

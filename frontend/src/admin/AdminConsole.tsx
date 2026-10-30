@@ -110,10 +110,8 @@ export default function AdminConsole({ configure = false }: { configure?: boolea
   if (access.needsBootstrap && !access.isAdmin) {
     return <AdminsPage bootstrap onBootstrap={() => void check()} />;
   }
-  // A Jira administrator owns the roster and nothing else. They get the
-  // Administrators page so a roster can always be repaired from inside Jira,
-  // and no control page at all — the resolvers refuse those regardless, but
-  // offering a page that cannot work is its own kind of wrong answer.
+  // Jira administrators can repair the VAtlassian administrator roster.
+  // Show them only the Administrators page. Resolvers deny other control pages.
   if (!access.isAdmin && access.isJiraAdmin) {
     return (
       <Page eyebrow="Setup" title="Administrators">

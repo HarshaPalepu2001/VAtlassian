@@ -4,17 +4,13 @@ import { executeQuery } from '../lib/db.js';
 import { defaultVaultObjectStore } from '../lib/vaultObjectStore.js';
 
 /**
- * TEMPORARY, READ-ONLY LIVE PROBE — remove once the attachment design is settled.
+ * Temporary read-only attachment probe. Remove after the design is settled.
  *
- * Answers, against the real site, what the attachment design depends on:
- *   1. Can a Forge function learn an attachment's media file id (the id a
- *      rich-text field points at) from the download redirect?
- *   2. Which media ids does the description point at, and which attachment is each?
- *   3. What does the vault hold for this issue, and do those copies — in
- *      the Forge Object Store — still hash to what was recorded?
- *   4. Who holds attachment-delete permission on the project's scheme?
+ * Check whether download redirects expose media IDs, map description media
+ * pointers to attachments, verify vaulted copies against recorded hashes and
+ * inspect attachment-delete grants on the project's permission scheme.
  *
- * Guarded by the encrypted PROBE_SECRET variable. It changes nothing.
+ * The encrypted PROBE_SECRET variable guards access. The probe changes nothing.
  */
 const sha256 = buffer => createHash('sha256').update(buffer).digest('hex');
 const json = (statusCode, body) => ({ statusCode, headers: { 'Content-Type': ['application/json'] },

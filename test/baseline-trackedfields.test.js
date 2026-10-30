@@ -90,26 +90,21 @@ test('an empty Jira catalogue proposes nothing rather than treating it as an ans
 });
 
 /**
- * ─────────────────────────────────────────────────────────────────────────────
- * SCOPING ONE WORK ITEM.
+ * Scope fields for one work item.
  *
- * scopeFromIssue() is the single definition of "which declared fields are on
- * this issue", used by capture.js, collect.js and all four field-set sites in
- * resolvers/panel.js.
+ * scopeFromIssue() defines which declared fields are on an issue.
+ * capture.js, collect.js, and all four field-set sites in resolvers/panel.js
+ * use it.
  *
- * THE BASIS IS THE SCREEN. BS-22's edit screen carries eighteen fields — the
- * list an administrator sees under Screens. `?fields=*all` returned 203,
- * because that is the PROJECT'S FIELD CONFIGURATION and not a screen: almost
- * all of them custom fields sitting at null that no screen in the project uses.
- * The panel duly reported "203 tracked fields" about an issue with eighteen.
+ * BS-22's edit screen had eighteen fields, as listed under Screens.
+ * `?fields=*all` returned 203 because it described the project's field
+ * configuration, including mostly null custom fields unused by any screen.
+ * The panel incorrectly reported 203 tracked fields for that issue.
  *
- * AND IT IS A PURE FUNCTION, which is the other half. The evidence hash a
- * reviewer's signature binds to is computed over this set. An earlier version
- * derived it from a live createmeta call, so the same work item could hash
- * differently between the panel rendering it and the resolver re-deriving it —
- * one call succeeding and one failing was enough to refuse the decision as
- * STALE_EVIDENCE. Every caller now passes reads it already performs.
- * ─────────────────────────────────────────────────────────────────────────────
+ * The function must be pure because its field set contributes to the
+ * signature's evidence hash. An earlier version called createmeta, so a
+ * success in the panel and a failure in the resolver could produce different
+ * hashes and STALE_EVIDENCE. Every caller now passes reads it already makes.
  */
 
 const scopeRow = (field_id) => ({ field_id, field_name: field_id, field_kind: 'TEXT', state: 'ACTIVE' });

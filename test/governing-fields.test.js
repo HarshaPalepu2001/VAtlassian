@@ -4,8 +4,8 @@ import { fieldsForItem, scopeForItem, fieldScope } from '../src/lib/tree/nodeFie
 
 // A work item's tracked fields are the fields of the approval that governs it.
 // A child covered by a parent's approved tree is held to the PARENT's
-// Controlled Fields, on every single-item path — drift, the panel, a decision,
-// a restore — not only while the parent's tree is being read. Otherwise the
+// Controlled Fields on every single-item path, including drift, the panel, a decision,
+// and a restore, as well as while reading the parent's tree. Otherwise the
 // child's own baseline (captured with the parent's fields) would be measured
 // over its own issue type's fields, and anything only the parent tracks, like
 // an attachment on a Task, would never register.

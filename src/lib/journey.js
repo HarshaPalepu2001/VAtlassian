@@ -1,32 +1,19 @@
 /**
- * WHAT THIS PERSON CAN SIGN, FROM WHERE THEY ARE STANDING, ON THIS SURFACE.
+ * Resolve which signing actions a viewer can perform in the current view.
  *
- * One question, asked by four surfaces: the issue panel, the worklist, and the
- * two transition-screen fields. Before this module each of them answered it
- * differently, and the differences were bugs rather than variations:
+ * The issue panel, worklist and transition-screen fields share these rules.
+ * Previously the panel exposed gated transitions without filtering eligibility,
+ * and the Electronic Signature field could offer an eligible transition that
+ * belonged to a different dialog. A signature must bind the exact transition
+ * whose meaning the signer reviewed.
  *
- *   - usecases/panel.js returned EVERY gated edge with an `eligible` flag and
- *     left the client to filter, which the panel then did not do — so the
- *     approval dropdown listed edges the reviewer had no authority over.
+ * Callers fetch all inputs. The rules perform no I/O, so tests can exercise them
+ * without Forge SQL. See lib/record.js and lib/transitionPlan.js for the same
+ * separation between policy and I/O.
  *
- *   - frontend/src/field/ApprovalField.tsx filtered on `eligible` but on
- *     nothing else, so the Electronic Signature field mounted on a "Create
- *     Baseline" screen offered "Bug Done (SDE-1 -> Done)" and told the signer
- *     "Signing this moves VJIRA-7 to Done". Signing the wrong edge from inside
- *     the right dialog is the worst failure this product can have: the
- *     signature is real, the meaning shown was true of a DIFFERENT transition.
- *
- * PURE, AND NO I/O. Every input is fetched by the caller. That is not tidiness
- * — the rules below are the ones worth testing exhaustively, and a rule that
- * can only be exercised by standing up Forge SQL does not get exercised. Same
- * split as lib/record.js and lib/transitionPlan.js.
- *
- * JIRA DECIDES WHAT IS POSSIBLE; THIS DECIDES WHAT IS OFFERED. `offered` comes
- * from Jira's own transitions endpoint, read as the user. This module never
- * widens that set — it only removes from it. If Jira will not let this person
- * make the move, no configuration on our side can put a button in front of
- * them, and an app that showed one would be promising something it cannot
- * deliver.
+ * The offered set comes from Jira's transitions endpoint, read as the user.
+ * This module only removes actions from that set. App configuration cannot
+ * authorize a transition Jira refuses to the viewer.
  */
 
 /** Which assurance levels each surface is able to actually carry out. */
@@ -43,20 +30,17 @@ const SURFACE_ASSURANCE = Object.freeze({
   // Custom UI, mounted from the retired "Biometric Authentication" field
   // before both fields showed one form. Kept for any caller still naming it.
   'device-field': ['BIOMETRIC'],
-  // THE ONE ELECTRONIC SIGNATURE FIELD. Custom UI, so it can open the device
-  // ceremony window as well as take a code: it serves every level, like the
-  // panel. The exact transition id, not the field, says which rule applies
-  // (usecases/signing.js narrows to it before this table is read).
+  // The Custom UI Electronic Signature field supports code entry and the device
+  // window. Resolve the exact transition ID through usecases/signing.js before
+  // using this table to select its assurance method.
   'signature-field': null
 });
 
 export const BLOCKER = Object.freeze({
   /**
-   * A rule exists for this edge, but our validator is not on the transition in
-   * Jira — so Jira will never call gate.js and nothing we record can stop the
-   * move. Offering a signature here would collect an attestation the app
-   * cannot enforce, which is worse than collecting none.
-   */
+ * A rule exists, but Jira does not carry its validator on this transition.
+ * Do not offer a signature the app cannot enforce when gate.js will not run.
+ */
   GATE_NOT_ENFORCED: 'GATE_NOT_ENFORCED',
   /** The rule needs an assurance this surface cannot perform. */
   WRONG_FIELD_FOR_RULE: 'WRONG_FIELD_FOR_RULE',
@@ -92,22 +76,22 @@ function describeAction(transition, gate) {
 }
 
 /**
- * Narrow Jira's offered transitions to the ones this person can sign here.
+ * Filter Jira's offered transitions to those this person can sign here.
  *
- * @param {object}   input
- * @param {Array}    input.offered      From lib/transitions.js availableTransitions(), read AS THE USER.
- * @param {Array}    input.gates        gatedTransition() result per offered entry, or null. Parallel array.
- * @param {Array}    input.eligible     isEligible() result per offered entry. Parallel array.
- * @param {Array}    [input.enforced]   Whether OUR validator is attached to that edge in Jira.
- *                                      Parallel array of boolean|undefined; `undefined` means
- *                                      "could not be checked" and is treated as enforced —
- *                                      see the note on failing open below.
- * @param {string}   input.surface      'panel' | 'queue' | 'signature-field' | 'esignature-field' | 'device-field'
+ * @param {object} input
+ * @param {Array} input.offered Jira transitions read as the user.
+ * @param {Array} input.gates gatedTransition() result or null per offered entry.
+ * @param {Array} input.eligible isEligible() result per offered entry.
+ * @param {Array} [input.enforced] Validator attachment per offered entry.
+ *        undefined means the workflow could not be checked and is treated as
+ *        enforced. See the fail-open note below.
+ * @param {string} input.surface 'panel' | 'queue' | 'signature-field' |
+ *        'esignature-field' | 'device-field'
  *
  * @returns {{actions: Array, blocker: string|null, gatedCount: number}}
- *   `actions` is empty or every entry is fully signable by this person on this
- *   surface — no caller filters again. `blocker` is non-null only when a rule
- *   existed and something specific stopped it being offered.
+ * Every returned action is signable by this viewer in this view; callers need
+ * no further filtering. blocker is non-null when an existing rule could not
+ * be offered for a specific reason.
  */
 export function resolveActions({ offered = [], gates = [], eligible = [], enforced = [], surface = 'panel' } = {}) {
   const allowed = Object.hasOwn(SURFACE_ASSURANCE, surface) ? SURFACE_ASSURANCE[surface] : [];
@@ -144,14 +128,10 @@ export function resolveActions({ offered = [], gates = [], eligible = [], enforc
 
     gatedCount += 1;
 
-    // FAILING OPEN HERE IS DELIBERATE, AND IS THE OPPOSITE OF THE ELIGIBILITY
-    // RULE. `undefined` means the workflow could not be read — a Jira outage,
-    // a permission gap, a check that has not run yet. Treating "unknown" as
-    // "not enforced" would silently empty the panel for every reviewer during
-    // an outage, and they would have no way to tell that from "nothing needs
-    // signing". The gate itself still fails closed at transition time, in
-    // gate.js, where the authority decision actually lives; this flag only
-    // decides whether to DRAW a button.
+    // Treat an unread workflow as unknown, not as a missing validator, when
+    // rendering actions. Otherwise an outage would remove every reviewer's buttons
+    // without explaining why. gate.js still enforces authority and refuses failures
+    // when the transition is attempted.
     if (enforced[i] === false) { notEnforced = true; continue; }
 
     if (allowed && !allowed.includes(gate.required_assurance)) { wrongSurface = true; continue; }
@@ -173,26 +153,20 @@ export function resolveActions({ offered = [], gates = [], eligible = [], enforc
 }
 
 /**
- * Does this person have something to do on this work item right now?
+ * Check whether the viewer has an available action on this item.
  *
- * Deliberately NOT "does this person hold an approver role". Somebody who
- * holds SDE-1 but is looking at an item in a status no rule fires from has
- * nothing to do, and showing them decision controls invites a decision the
- * app would then refuse. Authority is necessary; being asked is what makes
- * somebody an actor.
+ * Holding a role alone is insufficient. A workflow action also needs an
+ * applicable transition; otherwise the UI would offer a decision the app refuses.
  *
- * A SIGNED ITEM THAT HAS DRIFTED IS ALSO BEING ASKED. That decision is not a
- * workflow move and does not need one: approving captures a new baseline from
- * the current values, rejecting restores the approved ones, and both are
- * carried out with the item left exactly where it stands. Its authority comes
- * from the gate on the BASELINE's own edge, which is why panelAccess.js
- * resolves the gate from `baseline.from_status_id -> baseline.to_status_id`
- * when no transition is under review. Counting only transitions here told a
- * reviewer their item had a change needing a decision and then gave them the
- * observer card to make it with.
+ * A drift decision does not move the item. Approval captures current values;
+ * rejection restores approved values. Authority comes from the baseline's own
+ * transition rule. panelAccess.js resolves that rule through
+ * baseline.from_status_id and baseline.to_status_id when no transition is under
+ * review. Include decidesDrift so eligible reviewers get decision controls even
+ * without an offered workflow move.
  *
- * @param {Array}   actions               From resolveActions().
- * @param {boolean} [input.decidesDrift]  This person may decide live drift on this item.
+ * @param {Array} actions From resolveActions().
+ * @param {boolean} [input.decidesDrift] Whether this viewer may decide live drift.
  */
 export function tierFor(actions, { decidesDrift = false } = {}) {
   return actions.length > 0 || decidesDrift ? 'actor' : 'observer';

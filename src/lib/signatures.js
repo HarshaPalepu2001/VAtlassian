@@ -6,17 +6,10 @@ export const SIG_STATE = { PENDING: 'PENDING', CONSUMED: 'CONSUMED', EXPIRED: 'E
 export const PENDING_TTL_MS = 15 * 60 * 1000;
 
 /**
- * Consume a pending signature — atomically, without a transaction.
- *
- * A single UPDATE with the state predicate in the WHERE clause is a
- * compare-and-swap. The engine applies it atomically, so of N concurrent
- * callers exactly one observes affectedRows === 1. Everyone else sees 0 and is
- * denied. This closes the replay hole (one signature, one transition) without
- * needing BEGIN/COMMIT.
- *
- * Order matters: consume FIRST, then let the caller record the audit event. If
- * we audited first and the CAS then lost the race, the ledger would claim a
- * transition that never happened.
+ * Consume a pending signature with one conditional UPDATE. Exactly one
+ * concurrent caller can observe affectedRows === 1; deny the others.
+ * Consume before writing the audit event so a caller that loses the race
+ * cannot record a transition that did not happen. No transaction is needed.
  */
 export async function consume(store, { approvalId, now }) {
   const affected = await store.casConsume({

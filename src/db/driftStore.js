@@ -3,9 +3,9 @@ import { newId, throwing, isDuplicateKey } from './store.js';
 import { observationOf } from '../lib/observation.js';
 
 /**
- * va_drift — the append-only record of what changed after approval.
+ * va_drift is the append-only record of what changed after approval.
  *
- * `approval_id IS NULL` IS THE REVIEW QUEUE. There is deliberately no separate
+ * `approval_id IS NULL` defines the review queue. There is no separate
  * queue table: a nullable column whose NULL is a WHERE clause cannot fall out
  * of step with the rows it describes, and a
  * second table would need every write to keep two things true at once without
@@ -58,11 +58,11 @@ const LEGACY_INSERT_VALUES = 'FROM_BASE64(?), ?, ?, FROM_BASE64(?), ?, ?, ?, ?, 
 /**
  * Record one observed change.
  *
- * IDEMPOTENT BY CONSTRUCTION. idx_drift_dedupe is UNIQUE on
+ * idx_drift_dedupe makes inserts idempotent through a UNIQUE key on
  * (issue_id, changelog_id, field_id), so the event trigger and the hourly
  * reconcile can both try to insert the same change and exactly one wins. That
- * overlap is deliberate — the reconcile exists to cover what the events
- * dropped, which means it necessarily re-walks entries the events handled — and
+ * overlap is required. Reconcile covers what the events
+ * dropped, so it also revisits entries the events handled, and
  * without the constraint the belt-and-braces design would double-count every
  * change it successfully caught twice, showing a reviewer "4 changes" for two
  * edits.
@@ -103,7 +103,7 @@ export async function recordDrift(drift, query = throwing) {
 
 /**
  * VARCHAR(512) means 512 characters, and a value that overflows it fails the
- * whole INSERT — losing a real drift record over a long description. Truncated
+ * whole INSERT and lose a drift record because of a long description. Truncated
  * here rather than trusted to callers, with an ellipsis so the panel can tell a
  * cut string from a short one.
  */

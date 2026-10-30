@@ -47,8 +47,8 @@ function withTimeout(promise, ms, message) {
 
 /**
  * The comment a rejection leaves on the work item. It is posted BEFORE the
- * restore runs — a tree restore is only queued at that point, and may yet end
- * PARTIAL or FAILED — so it says a restore has started, never that it is done.
+ * restore runs. A tree restore is only queued then and may still finish
+ * PARTIAL or FAILED. Report that it started rather than claiming completion.
  * The outcome is on the panel and in the ledger.
  */
 export function rejectionComment(actorName) {
@@ -88,7 +88,7 @@ export async function prepareApproval({ issue, actor, decision, expectedEvidence
   if (immutable) {
     if (!prepared.baseline || !Buffer.from(prepared.baseline.baseline_id).equals(Buffer.from(immutable.baselineId))
         || Number(prepared.baseline.version) !== immutable.version) fail('STALE_EVIDENCE');
-    // NO REVIEW-STATUS CHECK. Drift outlives review status — the item is
+    // Drift decisions do not require a review status. The item is
     // wherever the workflow has since taken it, and approving its current
     // content is a statement about that content, not about where it sits.
     // See usecases/approval.js's drift branch for the whole reasoning; the
@@ -163,7 +163,7 @@ function linksBefore(checked) {
 }
 
 /**
- * ONE LINK CHANGE, ONE DECISION (lib/approval/linkPropagation.js). A link this
+ * Apply one decision per link change (lib/approval/linkPropagation.js). A link this
  * approval accepted or dropped is also recorded on the issue at its other end,
  * by jobs/linkWorker.js, off this approval's time budget. Queued, never
  * awaited to completion; a queue failure is audited and never fails the
@@ -207,7 +207,7 @@ async function queueLinkDecisions({ checked, approval, actor }) {
 
 /**
  * Hands each new baseline's attachments to the vault worker (jobs/vaultWorker.js)
- * — queued, so the copying never spends this approval's time budget. One job
+ * through the queue so copying does not consume the approval time budget. One job
  * for the captured item and one for every child its capture baselined: a
  * child's files are restored from the vault like anyone else's, so they must
  * be in it. Each job carries the files that baseline recorded, so the vault
@@ -294,7 +294,7 @@ export async function publishBaselineSideEffects({ capture, checked, approval, a
  * Every field approved: the live state is the new baseline, captured now.
  * Any field rejected: the rejected fields are restored first, by the queue
  * worker, which verifies them and ONLY THEN captures the next baseline
- * (jobs/restoreWorker.js) — capturing here would re-approve a value the
+ * (jobs/restoreWorker.js). Capturing here would re-approve a value the
  * reviewer explicitly rejected. No baseline exists until that worker succeeds.
  */
 async function applyMixedDecision({ checked, approval, actor }) {
@@ -339,8 +339,8 @@ export async function applyApproval({ issue, actor, approval, prepared, resuming
 
   // `resuming` is set ONLY by usecases/restore.js after resumable() has proved
   // every tracked field still holds either the signed candidate value or the
-  // approved baseline value. It relaxes the content-hash equality — never the
-  // eligibility, assurance or baseline-version checks around it.
+  // approved baseline value. It relaxes content-hash equality while preserving the
+  // eligibility, assurance and baseline-version checks around it.
   if (!resuming && approval.content_hash !== fresh.contentHash) fail('STALE_EVIDENCE');
   let locked = false;
   if (fresh.review) {

@@ -1,9 +1,6 @@
 /**
- * VAtlassian Observability Harness (Frontend)
- *
- * Captures, buffers, and dispatches real-time telemetry for every button click,
- * resolver invoke, WebAuthn ceremony step, drift review, and restore action.
- * Exposes window.__VA_HARNESS__ for interactive inspection and quick diagnostics export.
+ * Frontend telemetry for clicks, resolver calls, WebAuthn, drift and restores.
+ * window.__VA_HARNESS__ supports inspection and diagnostics export.
  */
 
 import { invoke } from './bridge';
@@ -68,9 +65,10 @@ export function withTrace<T>(traceId: string, fn: () => T): T {
 
 const SECRET_KEYS = ['code', 'secret', 'password', 'token', 'totp', 'authorization', 'signature'];
 
-/** Redacts at every depth. The bridge nests each resolver payload under
- *  `request`, so a top-level-only check let `request.code` — the signer's
- *  authenticator code — straight into the console and the server log. */
+/**
+ * Redact nested payloads too. Checking only top-level keys exposed
+ * request.code, the signer's authenticator code, in console and server logs.
+ */
 function sanitizeValue(value: unknown, depth: number): unknown {
   if (value instanceof Error) return { name: value.name, message: value.message, stack: value.stack };
   if (depth > 6 || value === null || typeof value !== 'object') return value;
@@ -154,12 +152,10 @@ export function recordHarnessEvent(
     try { fn([...eventBuffer]); } catch { /* ignore */ }
   });
 
-  // Fire-and-forget beacon to backend so events appear in Forge logs for the agent.
-  // Skip beaconing harness:logAction itself to prevent infinite recursion, and
-  // a resolver call that reached the server: its wrapper (lib/harnessLogger.js)
-  // already logged it with duration and outcome, and a beacon per call doubled
-  // every invocation. A call that failed in transport (`:failed`) never reached
-  // the server, so that one is still sent.
+  // Send telemetry to Forge logs without waiting for a response.
+  // Skip harness:logAction to avoid recursion. Successful resolver calls are
+  // already logged by lib/harnessLogger.js with duration and outcome. Send
+  // transport failures ending in :failed because they never reached that logger.
   const serverLogged = action.startsWith('invoke:') && !action.endsWith(':failed');
   if (action !== 'harness:logAction' && !serverLogged) {
     void invoke('harness:logAction', {

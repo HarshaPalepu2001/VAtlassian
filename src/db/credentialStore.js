@@ -1,13 +1,9 @@
 import { executeQuery } from '../lib/db.js';
 
 /**
- * The credential lifecycle state, and nothing else.
- *
- * WHY THIS IS NOT lib/approval/totpRuntime.js's `read`. That one selects the
- * encrypted secret because verification needs it. The panel only needs to know
- * whether this reviewer can sign at all, and pulling key material through a
- * read-only display path to answer a yes/no question is how secrets end up
- * somewhere they were never meant to be. This selects one column.
+ * Read only the credential lifecycle state needed to show whether a reviewer
+ * can sign. lib/approval/totpRuntime.js read also selects the encrypted secret
+ * for verification; keep that key material out of this display-only path.
  */
 export async function credentialState(accountId) {
   if (typeof accountId !== 'string' || !accountId) return null;

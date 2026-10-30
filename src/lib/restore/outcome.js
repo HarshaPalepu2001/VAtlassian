@@ -2,14 +2,8 @@ import { normaliseField, fieldDigest } from '../content.js';
 import { governedLinks } from '../linkPolicy.js';
 
 /**
- * The pure half of a restore: what an outcome means, and what digest a written
- * value will produce.
- *
- * SEPARATE FROM executor.js ON PURPOSE. The executor imports @forge/api, so
- * anything in that file is unreachable outside the Forge runtime — including,
- * until this split, the two functions that most need testing. Correctness rules
- * belong somewhere a test can reach them without a platform — the same
- * reasoning that keeps lib/interception.js and lib/decision.js pure.
+ * Pure restore outcome and digest functions. Keep them separate from
+ * executor.js, which imports @forge/api and requires the Forge runtime.
  */
 
 export const OUTCOME = {
@@ -26,19 +20,11 @@ export const RESTORE_STATE = {
 };
 
 /**
- * The digest a written value WILL produce once Jira stores it.
- *
- * THE SUPPRESSION CONTRACT. This must match exactly what content.js's project()
- * computes when the collector next reads the issue, or the write-suppression
- * entry will not match and the restore will be recorded as fresh drift — which
- * leaves the item DRIFTED immediately after being restored, with the reviewer's
- * own reversion sitting in their queue. A loop.
- *
- * The two are deliberately duplicated in STRUCTURE rather than in code, because
- * project() hashes a whole projection and this hashes one field. If project()'s
- * digest formula ever changes, this must change with it — and
- * test/restore.test.js asserts they agree, for every field kind, so the pair
- * cannot silently drift apart.
+ * Compute the digest Jira's stored value should produce. Match content.js
+ * project() exactly so the collector recognizes restore writes instead of
+ * recording them as fresh drift. project() hashes a full projection, while
+ * this function hashes one field. Update both if the formula changes.
+ * test/restore.test.js compares them for every field kind.
  */
 export function digestOf(field, value, context = {}) {
   if (field.field_kind === 'LINKS') value = governedLinks(value, context);
@@ -46,26 +32,18 @@ export function digestOf(field, value, context = {}) {
   try {
     normalised = normaliseField(field.field_kind, value);
   } catch {
-    // An unknown kind must not stop a restore. Hashing the raw value means the
-    // suppression may miss and the restore is recorded as drift — noisy, but
-    // recoverable, where refusing to write is not.
+    // Hash unknown kinds as raw values so a restore can continue. Write
+    // suppression may miss and report fresh drift, but the write is not refused.
     normalised = value ?? null;
   }
   return fieldDigest(field, normalised, context);
 }
 
 /**
- * Roll per-field outcomes into the counters va_restore stores.
- *
- * A FIELD THAT WAS WRITTEN BUT NOT VERIFIED COUNTS AS FAILED. There is
- * deliberately no third category: the whole value of the verification pass is
- * that "succeeded" means something.
- *
- * `unmatched` carries fields the verifier re-read and found NOT equal to the
- * baseline, whether or not this restore tried to write them. A tracked field a
- * post-function rewrote mid-restore lands here, and it is why COMPLETE cannot
- * be derived from the write outcomes alone: "complete" has to mean the whole
- * tracked projection matches, not that every attempt succeeded.
+ * Build va_restore counters from field outcomes. Written but unverified
+ * fields count as failed. unmatched includes every tracked field that fails
+ * read-back, including fields this restore did not write. COMPLETE requires
+ * the entire tracked projection to match the baseline.
  */
 export function tally(detail, unmatched = []) {
   const counters = {

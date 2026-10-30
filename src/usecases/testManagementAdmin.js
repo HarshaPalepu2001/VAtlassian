@@ -1,6 +1,6 @@
 /**
- * TEST MANAGEMENT ADMINISTRATION — per project: which Jira work types are
- * tests, executions and bugs, and the two sign-off chains.
+ * Test management administration configures each project's Jira work types
+ * for tests, executions and bugs, and the two sign-off chains.
  *
  * A VAtlassian administrator only. Every save is validated against Jira as it
  * is now, revision-checked, and audited; a refused save changes nothing.
@@ -13,8 +13,8 @@
  *     (testmgmt/treeExclusion.js) and nothing signed may be re-read under a
  *     different rule;
  *   - every sign-off chain role is a role someone holds in Approver roles for
- *     this project — on the Test type for test versions, on the Execution type
- *     for runs — as a controlled transition's role must be;
+ *     this project, on the Test type for test versions or the Execution type
+ *     for runs, as required for a controlled transition's role;
  *   - every transition of the Execution workflow into a Done status carries an
  *     enabled va-gate, because the execution guard runs inside it
  *     (testmgmt/executionGuard.js) and a Done transition without it closes an

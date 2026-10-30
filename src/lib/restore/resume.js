@@ -1,31 +1,24 @@
 /**
- * May a retry continue a signature that was given earlier?
+ * Decide whether a restore retry can use an earlier rejection signature.
  *
- * THE RULE. A reviewer signed a rejection of a specific candidate, to be
- * returned to a specific baseline. A retry may resume that signature only while
- * the work item is somewhere on the path between those two states — every
- * tracked field holding either the value they rejected or the value they
- * approved. Any third value means somebody edited the item after the signature
- * and the reviewer never saw it, so the signature no longer describes what
- * would be written.
+ * The signature binds a rejected candidate and a target baseline. A retry can
+ * continue only while every tracked field matches either its rejected value
+ * or its approved value. A third value indicates a later edit the signer did
+ * not review, so the signature no longer authorizes that write.
  *
- * WHY NOT JUST RE-HASH. The previous implementation replaced the signed content
- * hash with a hash computed at retry time, which made the comparison vacuous —
- * it compared today's content with itself and always passed. A signature bound
- * to content it does not describe is not a signature.
+ * Do not replace the signed content hash with a retry-time hash. The previous
+ * implementation did that and compared current content to itself, always
+ * passing the check.
  *
- * Pure. No I/O, no clock, no database.
+ * These functions perform no I/O and use no clock or database.
  */
 
 import { isStructuralField } from '../tree/structure.js';
 
 /**
- * The digests a retry may compare.
- *
- * `parent` and `subtasks` carry Jira-assigned ids that the tree model owns and
- * that a restore legitimately changes (see lib/tree/structure.js). Comparing
- * them here would report a correct restore as an outside edit and refuse the
- * retry — the same mistake, in a second place.
+ * Exclude parent and subtasks digests. The tree model owns these Jira ids,
+ * and restoration may change them without changing approved content.
+ * See lib/tree/structure.js.
  */
 export function comparableDigests(digests) {
   return Object.fromEntries(
@@ -34,27 +27,10 @@ export function comparableDigests(digests) {
 }
 
 /**
- * The approved digests to resume AGAINST.
- *
- * ─── WHY THIS IS NOT JUST `baseline.field_digests` ───────────────────────────
- *
- * A tree baseline keeps its digests per node, in va_baseline_node.field_digests;
- * va_baseline.field_digests is written as the literal string '{}' (see
- * lib/capture.js). Reading it here handed resumable() an EMPTY approved set,
- * while the candidate and current sets were full root projections. The approved
- * value was therefore never in the permitted pair, so every field a restore had
- * successfully put back read as an intrusion, and the check returned
- * NEW_EVIDENCE_REQUIRES_APPROVAL.
- *
- * The visible consequence: after a partial restore the panel offers "Retry
- * restore", the retry is refused as needing a fresh approval, and the fresh
- * approval is refused because the work item no longer matches the evidence the
- * reviewer signed. A dead end reachable only by the app's own failure — which
- * is exactly when a retry has to work.
- *
- * All three sides of the comparison must be computed over the same node and the
- * same fields. The root is the node the candidate and current projections are
- * taken from, so the root's approved digests are what belong here.
+ * Read the approved root digests from va_baseline_node for tree baselines.
+ * Their va_baseline.field_digests contains '{}', which would reject restored
+ * values as NEW_EVIDENCE_REQUIRES_APPROVAL. Candidate, current and approved
+ * digests must cover the same root node and tracked fields.
  */
 export function approvedDigestsFor({ baseline, baselineTree, issueId }) {
   if (baseline?.tree_hash) {

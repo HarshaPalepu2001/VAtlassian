@@ -1,43 +1,22 @@
 /**
- * DEVICE CHECK SCAN — noticing the authenticators that have gone quiet.
+ * Scan for authenticators overdue for an owner check.
  *
- * Replaces jobs/rotation.js, which was a three-line stub whose scheduled
- * trigger had been commented out since 2026-08-18. The comment left in the
- * manifest described exactly the right control — "flags credentials with zero
- * successful verifications in 90 days, a likely-lost or likely-uninstalled
- * authenticator, and prompts self-service re-confirmation" — and no code
- * performed it. The file is renamed because a file called `rotation` that does
- * not rotate anything is a trap for whoever reads it next: the 2026-08-18 note
- * is clear that fixed-schedule TOTP secret rotation was deliberately abandoned
- * as pointless churn, and the name outlived the idea.
+ * This replaces the unused jobs/rotation.js stub. Fixed-schedule TOTP secret
+ * rotation was abandoned on 2026-08-18. The retained control checks for
+ * credentials with no successful verification in 90 days and prompts the owner
+ * to reconfirm the authenticator. See lib/deviceCheck.js for the policy.
  *
- * WHY THIS JOB EXISTS AT ALL, given lib/deviceCheck.js's argument that every
- * signature is already a device test. Because the test only happens when
- * somebody signs. A device that nobody uses is never tested, and that is
- * precisely where the risk sits: a replaced phone, a deleted app, a secret
- * copied at enrolment and saved for later. None of it surfaces until a
- * signature — and if the person signing is not the owner, the first evidence is
- * the forged signature itself. Scanning for silence is what moves the discovery
- * to the owner, who knows whether they still have their phone.
+ * Signatures test a device only when someone signs. A daily dormancy scan can
+ * prompt the owner to notice a lost phone or deleted authenticator before its
+ * next use. Overdue status does not block signing or raise a security alert
+ * through jobs/alerts.js.
  *
- * IT PROMPTS, IT DOES NOT PUNISH. An overdue device is not blocked, and no
- * alert is raised through jobs/alerts.js. The alert channel is for things
- * somebody must act on tonight; an authenticator nobody has used since May is
- * housekeeping, and a channel that pages for housekeeping stops being read —
- * which would cost us the findings that mean signatures are being forged.
- *
- * ONE LEDGER ENTRY PER CREDENTIAL PER OVERDUE PERIOD. Without that, a daily
- * scan would write DEVICE_CHECK_DUE for the same dormant account every day
- * forever, and the audit trail would fill with a fact it already recorded. The
- * guard is `last_notified_step`, derived from how many whole intervals have
- * elapsed: the entry repeats only when the credential crosses into a new one.
+ * Record DEVICE_CHECK_DUE once per credential per overdue interval.
+ * last_notified_step stores the elapsed interval count, so daily scans do not
+ * repeat the same entry unless the credential crosses into another interval.
  */
-// Explicit .js extensions. Much of this codebase omits them and gets away with
-// it because the Forge bundler resolves extensionless specifiers — but Node's
-// own ESM loader does not, so an extensionless import here would make this file
-// unimportable from `node --test`. The pure helpers below are unit-tested
-// directly, and a module the tests cannot load is a module the tests do not
-// cover.
+// Use explicit .js extensions so Node's ESM loader can import this module in
+// node --test. Forge resolves extensionless imports, but Node does not.
 import { executeQuery, limitClause } from '../lib/db.js';
 import { append, EVENT } from '../lib/ledger.js';
 import { auditStore, newId } from '../db/store.js';
@@ -48,9 +27,10 @@ import { CREDENTIAL_STATE } from '../lib/totp.js';
 
 const BATCH = 500;
 
-/** Which overdue interval a credential is currently in. 1 on first crossing,
- *  2 after a second interval of silence, and so on — the number that decides
- *  whether this is a new fact or one already recorded. */
+/**
+ * Return the overdue interval number: 1 at the first crossing, 2 at the second.
+ * Use it to decide whether this interval has already been recorded.
+ */
 export function overduePeriod(msSinceProven) {
   if (msSinceProven == null) return 0;
   return Math.floor(msSinceProven / DEVICE_CHECK_INTERVAL_MS);
@@ -85,9 +65,8 @@ async function recordedPeriods() {
     [EVENT.DEVICE_CHECK_DUE]
   );
   if (!res.result) {
-    // Cannot tell what was already said. Stay quiet rather than risk writing a
-    // duplicate entry into an audit trail — a missed prompt is recoverable next
-    // scan, a polluted ledger is not.
+    // Skip notification when earlier entries cannot be read. The next scan can
+    // retry without risking a duplicate ledger entry.
     console.error('devicecheck: could not read prior notices; skipping this scan', res.error);
     return null;
   }

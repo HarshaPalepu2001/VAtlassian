@@ -16,13 +16,13 @@ import { controlledFields } from '../db/configStore.js';
 import { viewerProjection, projectRestore } from './viewerProjection.js';
 
 /**
- * The issue is read AS THE CALLER. This is served from the panel resolver,
+ * Read the issue as the caller. This is served from the panel resolver,
  * which every Jira user can reach, so the caller's own browse
  * permission is what stands between them and the stored record of an issue
  * hidden from them by issue security.
  */
 /**
- * THE SAME LIVE CHECK THE VALIDATOR RUNS — not the stored counter. The issue is
+ * Use the validator's live check instead of the stored counter. The issue is
  * read in full as the caller and compared exactly as lib/approval/runtime.js
  * does, so what this says is what the gate will say.
  */
@@ -101,7 +101,7 @@ export async function inspectIssue({ payload, context }, deps = defaultInspectDe
 
   const treeDrift = baseline?.baseline_id ? await deps.readTreeDrift(baseline.baseline_id).catch(() => []) : [];
 
-  // THE LIVE VERDICT. The stored counter (review.drift_count) and the live
+  // Live verdict. The stored counter (review.drift_count) and the live
   // comparison have disagreed before (VJIRA-17), and the validator, the signing
   // form and the panel header all hold on the live one. Reporting only the
   // counter is how this screen said HEALTHY while a transition was refused.
@@ -123,7 +123,7 @@ export async function inspectIssue({ payload, context }, deps = defaultInspectDe
     }
   }
 
-  // RULES ARE KEYED BY WORK ITEM TYPE, and a baseline remembers the type it was
+  // Rules are keyed by work item type, and a baseline records the type it was
   // captured under. A type change in between silently swaps the rule (and its
   // assurance) that applies, which no other screen says.
   const currentTypeId = issueData?.fields?.issuetype?.id == null ? null : String(issueData.fields.issuetype.id);
@@ -208,7 +208,7 @@ export async function inspectIssue({ payload, context }, deps = defaultInspectDe
     const cause = liveDrift.diagnostics?.cause;
     if (cause === 'BASELINE_UNREADABLE') {
       verdict = 'BASELINE_UNREADABLE';
-      remediations.push(`The live check could not read the active baseline's digests (source: ${liveDrift.diagnostics.digestSource}), so it reports every tracked field as changed. This is a baseline storage problem, not an edit — approving again will not clear it.`);
+      remediations.push(`The live check could not read the active baseline's digests (source: ${liveDrift.diagnostics.digestSource}), so it reports every tracked field as changed. The baseline storage problem must be repaired. Approving again will not clear it.`);
     }
     if (counterDisagrees) {
       remediations.push('The stored drift counter says clean but the live check the validator uses does not: the transition will be refused even though the panel looks in sync.');
@@ -317,11 +317,11 @@ export async function inspectIssue({ payload, context }, deps = defaultInspectDe
       decidedAt: a.decided_at,
       expiresAt: a.expires_at
     })),
-    // WHY THE VERIFICATION DETAIL IS HERE. The harness could report that a
+    // Include verification detail. The harness could report that a
     // restore came back PARTIAL and nothing else, so "why was it partial?" had
     // no answer short of reading va_restore.detail out of the database by hand.
     // The verifier already knows which field on which work item refused to
-    // match; this is the surface that says so.
+    // match; this view reports the difference.
     restores: visibleRestores.slice(0, 5).map(r => {
       const summary = Array.isArray(r.detail) ? r.detail.find(entry => entry && typeof entry === 'object') : null;
       return {

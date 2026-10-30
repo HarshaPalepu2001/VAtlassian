@@ -1,4 +1,4 @@
-# Restore reliability investigation — 27 October 2026
+# Restore reliability investigation. 27 October 2026
 
 Local reliability fixes are verified. These changes have not been deployed or
 tested against a live Jira restore, and do not establish a fixed restore latency

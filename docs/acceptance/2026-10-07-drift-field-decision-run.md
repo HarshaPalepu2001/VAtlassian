@@ -1,4 +1,4 @@
-# Per-field drift decisions — live acceptance checklist, 2026-10-07
+# Per-field drift decisions. live acceptance checklist, 2026-10-07
 
 Spec: `docs/specs/2026-10-07-drift-field-decision-design.md`.
 Plan: `docs/plans/2026-10-07-drift-field-decision.md`.

@@ -8,15 +8,11 @@ import { serialiseLinkPolicy } from '../lib/linkPolicy.js';
 export { encodeValue, decodeValue };
 
 /**
- * va_baseline and va_baseline_value.
+ * Store va_baseline and va_baseline_value.
  *
- * The value store is written per field, one statement per chunk, because Forge
- * SQL permits one statement per call. That is a lot of round trips for a wide
- * issue, so the writes for independent fields are issued together with
- * Promise.all rather than awaited one after another — the same technique
- * gate.js uses to fit three queries into one round trip of latency. It is safe
- * here for the same reason: no chunk write reads anything another chunk write
- * produces.
+ * Forge SQL permits one statement per call. Independent field-chunk writes use
+ * Promise.all to overlap round trips, as gate.js does for its three queries.
+ * No chunk depends on another chunk's output.
  */
 
 const LEGACY_COLUMNS = `
@@ -119,8 +115,8 @@ export async function baselineById(baselineId, query = throwing) {
 /**
  * Has this decision already produced a baseline?
  *
- * THE IDEMPOTENCY GUARD a capture needs the moment it can be triggered from
- * more than one place for the same approval — see writeCapturedBaseline() in
+ * Prevent duplicate capture when it can be triggered from
+ * more than one place for the same approval. See writeCapturedBaseline() in
  * lib/capture.js. A decision has one baseline in it; whichever caller gets
  * here first wins, and every caller after that has to be able to tell.
  */
@@ -154,29 +150,21 @@ export async function currentVersion(issueId) {
 }
 
 /**
- * Write a new baseline and its retained values.
+ * Write retained values, then the va_baseline row, then supersede the previous
+ * version. Forge SQL has no transactions, so preserve this order:
  *
- * ORDER MATTERS AND IS NOT ARBITRARY. Values are written FIRST, then the
- * va_baseline row, then the previous version is marked superseded. Forge SQL
- * has no transactions, so this sequence is chosen to make every possible
- * partial failure land somewhere safe:
+ * - If capture stops after writing values, no reader sees a baseline claiming
+ *   them. The daily prune removes the orphaned value rows.
+ * - If capture stops after writing the baseline row, two versions may be ACTIVE.
+ *   activeBaseline orders by version DESC and returns the newer row. A later
+ *   capture or prune supersedes the older one.
  *
- *   crash after values, before baseline row
- *     → orphaned value rows nobody reads. The daily prune collects them. No
- *       reader can see a baseline that claims values it does not have.
- *
- *   crash after baseline row, before supersede
- *     → two rows briefly marked ACTIVE. `activeBaseline` orders by version DESC
- *       and takes one, so the newer wins and the older is corrected on the next
- *       capture or by the prune. Readers are never wrong, only untidy.
- *
- * The forbidden order is the reverse — superseding the old baseline before the
- * new one is durable would leave a window where an item has NO active baseline
- * and every field reads as un-approved.
+ * Never supersede the old baseline before the new row is durable. That would
+ * leave the item without an active baseline and make every field unapproved.
  */
 export async function writeBaseline({ baseline, values, raw, writable, resume = null, evidence = null,
   query = throwing, execute = executeQuery, writeEvidence = writeVersionEvidence }) {
-  // EVERY CALLER STATES ITS EVIDENCE, including whether publication requires
+  // Every caller must supply its evidence, including whether publication requires
   // it. A call that omits it would otherwise publish ungated, so it is refused
   // before anything is written.
   if (!evidence) throw new FailClosed('CAPTURE_INCOMPLETE');
@@ -184,7 +172,7 @@ export async function writeBaseline({ baseline, values, raw, writable, resume = 
   const now = baseline.captured_at;
 
   // A resumed capture replays from a fresh read, gated upstream on the new
-  // read's content_hash matching what the crashed attempt already recorded —
+  // read's content_hash matching what the interrupted attempt recorded,
   // but that only proves the two reads are semantically equal, not that this
   // replay's chunk boundaries land on the exact same (field_id, seq) keys the
   // partial attempt left behind. `ON DUPLICATE KEY UPDATE data = data` below
@@ -201,9 +189,8 @@ export async function writeBaseline({ baseline, values, raw, writable, resume = 
     );
   }
 
-  // 1. Values first. Retained fields only — `values`/`raw` are already filtered
-  // by content.js's project(), which writes nothing for a field whose
-  // store_values is false.
+  // 1. Write retained values first. content.js project() has already filtered
+  // `values`/`raw` to omit fields with store_values = false.
   let totalBytes = 0;
   const allRows = [];
   for (const [fieldId, rawValue] of Object.entries(raw ?? {})) {
@@ -260,7 +247,7 @@ export async function writeBaseline({ baseline, values, raw, writable, resume = 
     );
   }
 
-  // THE VERSION'S EVIDENCE, WHILE IT IS STILL CAPTURING (db/evidenceStore.js).
+  // Write version evidence while the baseline is still CAPTURING (db/evidenceStore.js).
   // A new capture requires it at publication, below; a link record whose
   // source never recorded its policy passes required: false.
   await writeEvidence({ query, entries: [{ baselineId, evidence: evidence.evidence,
@@ -289,7 +276,7 @@ export async function writeBaseline({ baseline, values, raw, writable, resume = 
 
   // 4. Writability is advisory and belongs on the field definition, not on the
   // baseline: it describes the PROJECT's screen configuration, not this
-  // particular approval. Best-effort — a failure here costs the admin console a
+  // particular approval. A failure here costs the admin console a
   // warning, not the customer a baseline.
   if (writable) {
     const entries = Object.entries(writable);
@@ -325,8 +312,8 @@ export function valueBatches(rows) {
  * Read back one retained field value.
  *
  * Returns { present, value }. `present: false` means the field was never
- * retained — which the panel and the reject dialog must render as "contents not
- * retained", NEVER as an empty value. Those are completely different claims:
+ * retained. The panel and the reject dialog must render this as "contents not
+ * retained", never as an empty value. These claims differ:
  * one says we chose not to store it, the other says the field was cleared.
  */
 export async function readValue(issueId, version, fieldId, query = throwing) {

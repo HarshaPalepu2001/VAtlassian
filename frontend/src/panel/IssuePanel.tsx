@@ -41,8 +41,7 @@ export default function IssuePanel(props: Props) {
   </Page>;
 }
 
-/** A labelled row standing in for a fact that has not resolved yet — never a
- *  bare/unlabelled spinner, and never an empty panel. */
+/** Show a labelled row while a fact loads so the panel keeps its context. */
 function SkeletonRow({ label, failed }: { label: string; failed: boolean }) {
   return <div className="va-row"><span className="va-secondary">{label}</span><span className="va-muted">{failed ? 'Not available' : 'Loading…'}</span></div>;
 }
@@ -70,19 +69,11 @@ function IssuePanelBody({ issueKey: issueKeyProp, onDone }: Props) {
   const { state: summary, error, refresh, refreshing } = usePanelState(issueKeyProp);
   const issueKey = issueKeyProp ?? summary?.issue?.key ?? contextIssue?.key;
 
-  // A REJECTION FINISHES AFTER ITS SUBMIT DOES. The restore runs as a queued
-  // job (jobs/restoreWorker.js) that writes the fields a few seconds after
-  // signature:submit returns, so the redraw ApprovalControls asks for on
-  // submit lands before anything has changed — Jira kept showing the drifted
-  // values until someone reloaded. While a restore is running, this quietly
-  // re-reads the summary; when one ends, Jira is asked once to redraw, now
-  // that its fields really are different. A restore already finished when the
-  // panel opened is history and redraws nothing.
-  //
-  // Not an interval — this app keeps no standing poll (see the guard test in
-  // test/panel.test.mjs). One timeout is armed per summary read while the
-  // restore is running, so it ends the moment a read shows the restore ended,
-  // and gives up after RESTORE_POLL_LIMIT_MS whatever happens.
+  // Restore jobs write fields after signature:submit returns. While a restore
+  // runs, re-read the summary and ask Jira to redraw once it finishes. A restore
+  // that finished before the panel opened requires no redraw.
+  // Arm one timeout per summary read, not an interval. Stop when the restore
+  // finishes or RESTORE_POLL_LIMIT_MS expires. See test/panel.test.mjs.
   const restoreState = summary?.restore?.state;
   const restoreRunning = Boolean(restoreState) && !RESTORE_ENDED.has(restoreState!);
   const watchStarted = useRef<number | null>(null);
@@ -95,11 +86,9 @@ function IssuePanelBody({ issueKey: issueKeyProp, onDone }: Props) {
     }, RESTORE_POLL_MS);
     return () => clearTimeout(timer);
   }, [restoreRunning, summary, refresh]);
-  // A LINK APPROVED ON THE OTHER ISSUE is recorded here by a queued job
-  // (jobs/linkWorker.js) a few seconds after that approval, and nothing in
-  // Jira changes when it lands, so no Jira event would redraw this panel. While
-  // the summary says one is on its way, re-read quietly, the same bounded way
-  // as a running restore above; it stops the moment a read shows it recorded.
+  // jobs/linkWorker.js records links approved on another issue after a delay,
+  // without a Jira change event. While the summary reports a pending link,
+  // re-read with the same bounded timeout pattern used for restores.
   const linkPendingKey = (summary?.drift?.linkPending ?? []).map(p => `${p.decidedOnKey}:${p.queuedAt}`).join(',');
   const linkWatchStarted = useRef<number | null>(null);
   useEffect(() => {
@@ -123,7 +112,7 @@ function IssuePanelBody({ issueKey: issueKeyProp, onDone }: Props) {
   }, [summary]);
 
   // The selected action belongs to the controls. Evidence is keyed to the
-  // current baseline, because it is shared by every action surface.
+  // current baseline because every action shares it.
   const [selectedTransitionId, setSelectedTransitionId] = useState('');
   const { evidence, heldEvidence, evidenceLoading, evidenceError, retryEvidence, hasAuthoritativeEvidence,
     shownEvidence, evidenceReady, authoritativeSummary, shownDrift } = useDecisionState(summary, issueKey, refresh);
@@ -131,11 +120,9 @@ function IssuePanelBody({ issueKey: issueKeyProp, onDone }: Props) {
   // Drift is decided on the Baseline card; a clean record is decided in
   // Approvals. One set of controls either way, so one signing session.
   const reviewingDrift = resolveSelectedAction(authoritativeSummary, selectedTransitionId).reviewingDrift;
-  // HELD IS THE VALIDATOR'S VERDICT, not the review's. The review counts every
-  // change its decision would cover, children included, but drift is held only
-  // downward (lib/ancestorHold.js): this item is held by its OWN change (the
-  // server's live count, the same one the validator holds on) or by one above
-  // it. A change below only asks this item for a decision.
+  // Use the validator's hold rules in lib/ancestorHold.js. This item's own
+  // changes or an ancestor's changes hold it. Descendant changes need a decision
+  // but do not hold this item. The review count includes those descendants.
   const heldHere = (summary?.drift?.count ?? 0) > 0 || Boolean(summary?.drift?.heldBy);
   const heldMove = (summary?.transitions ?? []).find(t => t.canApprove) ?? summary?.transitions?.[0];
   const heldNote = !heldHere
@@ -172,7 +159,7 @@ function IssuePanelBody({ issueKey: issueKeyProp, onDone }: Props) {
       )}
 
       {/* A meaningful shell before the first response, and kept in place if
-          that response fails — never an empty panel or a bare spinner. */}
+          that response fails. Keep the panel's labels visible. */}
       {!summary && (
         <div className="va-stack" aria-busy={!error} aria-label="Approval summary">
           {(issueKeyProp ?? contextIssue?.key) && <p className="va-secondary">{issueKeyProp ?? contextIssue?.key}</p>}

@@ -1,18 +1,15 @@
 /**
- * THE VAULT BACKFILL — finds projects that need a vault and provisions them.
+ * Provision missing vaults for baseline-capturing projects each hour.
  *
- * A vault is otherwise provisioned only when an administrator SAVES a
- * baseline-capturing rule (usecases/transitions.js). That misses every rule
- * saved before vaulting existed, and leaves a failed attempt waiting for a
- * re-save nobody knows to make. This job closes both: each hour it asks which
- * projects have an ACTIVE rule that captures a baseline but no finished vault,
- * and provisions a bounded batch. provisionVault never throws and is idempotent,
- * so a project that keeps failing is simply retried next hour, with each failure
- * in the ledger.
+ * Saving a baseline-capturing rule in usecases/transitions.js normally
+ * provisions its vault. This job also covers older rules and failed attempts
+ * that have not been saved again. It processes a bounded batch of projects
+ * with an ACTIVE capturing rule and no completed vault. provisionVault is
+ * idempotent and never throws; failures are audited and retried next hour.
  *
- * Projects whose administrator turned the attachment-delete lockdown on and
- * that are not yet locked are provisioned too; provisionVault reads the
- * setting itself, so a project with it off never has its scheme touched.
+ * Also include projects with attachment-delete lockdown enabled but not yet
+ * applied. provisionVault reads that setting itself and leaves permission
+ * schemes unchanged when lockdown is off.
  */
 import { projectsNeedingVault, projectsNeedingLockdown } from '../db/vaultStore.js';
 import { projectsWantingLockdown } from '../db/configStore.js';

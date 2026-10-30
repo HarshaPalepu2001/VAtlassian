@@ -234,7 +234,7 @@ test('a value larger than one chunk round-trips across rows', () => {
 
 test('chunks reassemble correctly even when the rows arrive out of order', () => {
   // Guards against a missing ORDER BY producing corrupt JSON, which would
-  // surface as "this baseline is unreadable" — a scary and misleading message.
+  // produce the misleading message "this baseline is unreadable".
   const big = { text: 'y'.repeat(500_000) };
   const { encoding, chunks } = encodeValue(big);
   const rows = chunks.map((data, seq) => ({ seq, encoding, data })).reverse();

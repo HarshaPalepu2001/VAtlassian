@@ -6,7 +6,7 @@ import { FIELD_KIND, normaliseAdf } from '../src/lib/content.js';
 import { canonical } from '../src/lib/hash.js';
 
 // The diff has to understand every byte the hash does. content.js hashes the
-// whole normalised document — attrs, containers, mark attributes — so a change
+// whole normalised document, including attrs, containers, and mark attributes, so a change
 // there is drift. Until this suite, the differ compared only a block's type,
 // text and mark names, and every one of the edits below was either invisible
 // (reported as EQUAL) or shown with nothing to say what had changed.
@@ -119,7 +119,7 @@ test('bold is still cosmetic, and localId churn is still no change at all', () =
 
 // ─── The invariant ──────────────────────────────────────────────────────────
 
-test('whenever the hashed bytes differ, the diff reports a change — never "equal"', () => {
+test('different hashed bytes always produce a changed diff', () => {
   const base = doc(
     { type: 'heading', attrs: { level: 2 }, content: [text('Goal')] },
     panel('warning', para('Careful.')),

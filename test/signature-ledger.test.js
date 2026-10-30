@@ -22,15 +22,15 @@ test('sequential appends form a verifiable chain', async () => {
 });
 
 test('CONCURRENT appends do not fork the chain', async () => {
-  // The load-bearing test. 40 appends fired simultaneously against a store that
-  // yields between read and write, so they genuinely interleave.
+  // Fire 40 appends simultaneously against a store that
+  // yields between read and write so the appends interleave.
   const store = new FakeStore({ latency: 1 });
   const results = await Promise.all(
     Array.from({ length: 40 }, (_, i) => append(store, ev(i)))
   );
 
   assert.ok(store.duplicateCollisions > 0,
-    'test is not exercising the race — no duplicate-key collisions occurred');
+    'the race test must produce duplicate-key collisions');
 
   const seqs = results.map((r) => r.seq).sort((a, b) => a - b);
   assert.deepEqual(seqs, Array.from({ length: 40 }, (_, i) => i + 1),

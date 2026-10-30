@@ -71,7 +71,7 @@ export async function retry(args) { return respond(async () => {
   // A retry RESUMES the reviewer's signature; it never re-signs. The signed
   // content_hash is passed through untouched, and the item is only allowed to
   // sit somewhere on the path between the rejected candidate and the approved
-  // baseline. Substituting today's hash here — as this used to — made the
+  // baseline. Previously, substituting today's hash here made the
   // downstream comparison compare a value with itself and pass unconditionally.
   const check = resumable({
     baselineDigests: comparableDigests(approvedDigestsFor({ baseline: prepared.baseline,
@@ -86,10 +86,10 @@ export async function retry(args) { return respond(async () => {
   if (!locked?.acquired) fail('ALREADY_DECIDING');
 
   // A refusal is settled so that a requeue does not retry it for ever. A
-  // reviewer pressing Retry is saying the opposite — that something about the
+  // reviewer pressing Retry indicates that something about the
   // refusal may have changed, usually a field configuration an administrator
-  // has just corrected — so those steps are reopened for this attempt, once
-  // this retry holds the lock and no other restore can be reading them.
+  // has corrected. Reopen those steps once for this attempt because this
+  // retry holds the lock and no other restore can be reading them.
   await clearRefusedRestoreActions(restore.restore_id).catch(error =>
     console.error('restore: could not reopen refused actions', error));
   const restoreId = restore.restore_id;

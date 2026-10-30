@@ -1,16 +1,16 @@
-# Test Management Manual Scope Completion Implementation Plan
+# Test management manual scope completion implementation plan
 
 > **For agentic workers:** Use test-driven implementation and independent review. The user authorized continuing implementation and explicitly confirmed the remaining manual-testing scope on 21 October 2026.
 
-**Goal:** Repair the reviewed safety failures and deliver the remaining Jira-native manual workflow: plans/sets, datasets/iterations, selective reruns, signed source coverage and execution summary export.
+**Goal.** Repair the reviewed safety failures and deliver the remaining Jira-native manual workflow: plans/sets, datasets/iterations, selective reruns, signed source coverage and execution summary export.
 
-**Architecture:** Extend the existing Forge SQL/Jira-issue implementation. Immutable test versions and runs remain the signing subjects; source and planning snapshots are pinned into records and no later edit rewrites an executed record. All services enforce the viewer's issue access, project mapping, action permissions and revisions. Evidence is retained in the existing Forge Object Store and verified before signing/export.
+**Architecture.** Extend the existing Forge SQL/Jira-issue implementation. Immutable test versions and runs remain the signing subjects; source and planning snapshots are pinned into records and no later edit rewrites an executed record. All services enforce the viewer's issue access, project mapping, action permissions and revisions. Evidence is retained in the existing Forge Object Store and verified before signing/export.
 
-**Tech Stack:** Existing Node ESM, Forge SQL/Object Store, Jira REST, React/TypeScript, Node test runner. No new external service or dependency is needed.
+**Technology.** Existing Node ESM, Forge SQL/Object Store, Jira REST, React/TypeScript, Node test runner. No new external service or dependency is needed.
 
 **Spec:** `docs/superpowers/specs/2026-10-20-test-management-first-design.md`, owner decisions 1–13, and `docs/reviews/2026-10-21-test-management-readiness.md` findings F1–F8.
 
-## Global Constraints
+## Global constraints
 
 - Preserve the current dirty/untracked implementation; no reset, broad staging, automatic commit, deployment, install or live Jira mutation.
 - Work in the existing `VAtlassian` branch because the implementation under review is uncommitted here. A complete pre-edit source snapshot is at `/private/tmp/vat-tm-implementation-baseline`; review only the delta against it.
@@ -21,7 +21,7 @@
 - CI/JUnit, imports/migration, AI, the ten-report center and the separate biometric/egress solution remain deferred by the existing owner decisions.
 - Local, deploy, install/migration, eligibility and live acceptance remain independent gates.
 
-## Review Focus
+## Review focus
 
 1. A signature audit or state write failing mid-request cannot produce an unsigned terminal run or let a countersigner advance.
 2. Hidden/cross-project sources, collection members or retest targets must not leak data or count as covered.
@@ -91,7 +91,7 @@ All six local implementation tasks are verified. The final candidate passed 2,02
 
 ### Task 6: Complete native Jira Verifies and baseline ownership
 
-**Basis:** approved design, “The Verifies link through the whole governance pipeline”, lines 181–194. SQL associations alone do not satisfy the governed coverage contract.
+**Basis:** approved design, "The Verifies link through the whole governance pipeline", lines 181–194. SQL associations alone do not satisfy the governed coverage contract.
 
 - [x] Add stable typed-link configuration and freeze link type identity into signed source references.
 - [x] Implement signed-version outbox/reconciliation, exact Jira link readback and external-edit detection; never mirror draft references.

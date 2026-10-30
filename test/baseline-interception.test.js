@@ -176,7 +176,7 @@ test('a decision or restore in flight blocks observation entirely', () => {
   }
 });
 
-test('an item that has never been approved is edited freely — no drift, ever', () => {
+test('editing an item without an approval produces no drift', () => {
   const result = observe({
     prior: { issue_id: 1, baseline_id: null, state: REVIEW_STATE.ARCHIVED, version: 0 },
     baselineDigests: null,

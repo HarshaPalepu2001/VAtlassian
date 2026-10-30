@@ -10,30 +10,19 @@ export * from './text.js';
 export * from './adf.js';
 
 /**
- * The join that makes this a traceability tool rather than a diff tool.
- *
- *   VALUE comes from the baseline versus the live issue — exact, typed, and
- *   silent about who did it.
- *   ATTRIBUTION comes from the changelog — exact about who and when, and lossy
- *   about what.
- *
- * Neither source can answer a reviewer's real question on its own. "The
- * estimate went from 5 to 13" is a diff. "The estimate went from 5 to 13, in
- * two steps, first by an automation rule and then by the delivery lead, nine
- * days after you approved it" is something a reviewer can act on.
+ * Combine typed baseline/live value comparisons with changelog attribution.
+ * The comparison supplies exact values. The changelog supplies authors and
+ * times but may omit value details.
  */
 
 /**
- * Build the complete diff for one work item against its standing baseline.
- *
- * PURE. Every input is supplied by the caller; there is no I/O, no clock and no
- * database here, so the whole behaviour of the reviewer's screen is testable
- * without a Jira. Same discipline as `observe()` in lib/interception.js, and
- * for the same reason: this decides what a reviewer is told.
+ * Build the diff for one work item against its baseline.
+ * All inputs come from the caller. This function performs no I/O and reads
+ * neither the clock nor the database.
  *
  * @param baseline          va_baseline row
  * @param baselineValues    { fieldId: value } from va_baseline_value
- * @param currentFields     `fields` from GET /issue/{key}
+ * @param currentFields     fields from GET /issue/{key}
  * @param controlledFields  [{ field_id, field_kind, store_values, writable, materiality }]
  * @param driftRows         va_drift rows for this baseline version
  * @param changelogEntries  from lib/changelog.js
@@ -60,10 +49,8 @@ export function diffIssue({
   const fields = [];
 
   for (const field of controlledFields) {
-    // NOT IN THE BASELINE IS NOT DRIFT. A field that was not in scope when
-    // the baseline was taken has no approved value to compare against.
-    // Showing it as "changed (contents not retained)" incorrectly forces it
-    // into the UI. Skip it.
+    // Skip fields outside the baseline's scope. They have no approved value to
+    // compare and must not appear as changed unretained content.
     if (Object.keys(bDigests).length > 0 && !Object.prototype.hasOwnProperty.call(bDigests, field.field_id)) {
       continue;
     }
@@ -76,11 +63,8 @@ export function diffIssue({
     const afterRaw = filter(currentFields[field.field_id]);
     const displayKind = presentationKind(field.field_kind, beforeRaw, afterRaw);
 
-    // Compared NORMALISED, written back RAW. Normalisation sorts multi-values
-    // and strips ADF localIds, so comparing raw values would report phantom
-    // changes on every read; but writing a normalised value back into Jira
-    // would itself be a silent second edit. The differ therefore sees
-    // normalised values and the restore planner reads the raw ones.
+    // Compare normalised values to ignore multi-value ordering and ADF localIds.
+    // Restore from raw values so normalisation does not introduce a second edit.
     const before = retained ? safeNormalise(displayKind, beforeRaw) : undefined;
     const after = safeNormalise(displayKind, afterRaw);
 
@@ -117,17 +101,9 @@ export function diffIssue({
       ...diff,
       materiality,
 
-      // WHAT THE IDENTIFIERS MEAN.
-      //
-      // The differ compares NORMALISED values, and normalising a scalar yields
-      // Jira's identifier — "10000", not "Critical". That is correct for
-      // comparison and useless for review: nobody can audit "Priority 10000 →
-      // 3". The raw values still carry the display name, so it travels with the
-      // comparison as a lookup.
-      //
-      // A LOOKUP RATHER THAN A SUBSTITUTION, because in a signed record the
-      // stored identifier IS the evidence. The panel shows the name AND the id
-      // it resolves; it never silently replaces one with the other, and an id
+      // Normalised scalars retain Jira ids, such as "10000". Keep the raw values'
+      // display names in a separate lookup. The panel can show both the stored id
+      // and its name without substituting one for the other.
       valueLabels: {
         ...Object.fromEntries(mediaMap.entries()),
         ...valueLabels(beforeRaw, afterRaw)
@@ -153,10 +129,8 @@ export function diffIssue({
       lastChangedAt: confirmed.at(-1)?.at ?? null,
       lastChangedBy: confirmed.at(-1)?.authorName ?? null,
 
-      // WENT AWAY AND CAME BACK. A field edited three times that ends where it
-      // started is not drift a reviewer needs to act on, but it IS something
-      // they should know happened — it usually means two people disagreed.
-      // Neither a bare diff nor a bare changelog surfaces this.
+      // Report edits that returned to the approved value as history, without
+      // asking the reviewer to decide them as drift.
       churned: touches.length > 1 && !diff.changed
     });
   }
@@ -190,9 +164,7 @@ export function diffIssue({
     // fields reads as one action rather than four.
     timeline: timeline(changelogEntries, fieldIds),
 
-    // Keys the report cache. Any change to the evidence produces a different
-    // hash and therefore a fresh report; no change produces a cache hit
-    // forever, which is right for an item sitting in a queue for a week.
+    // Hash the evidence to invalidate cached reports only when it changes.
     evidenceHash: evidenceHash(baseline, driftRows, '', Object.fromEntries(
       controlledFields.map(field => [field.field_id, sha256Hex(canonical({
         f: field.field_id, k: field.field_kind,
@@ -219,12 +191,8 @@ export function evidenceHash(baseline, driftRows, model = '', liveDigests = null
 }
 
 /**
- * Normalisation must never be the reason a panel fails to render.
- *
- * normaliseField throws on an unknown kind, which is correct where a hash is
- * being computed — a silently mis-hashed field is a correctness failure. Here
- * it is not: the value is only being displayed, and falling back to the raw
- * value shows the reviewer something rather than nothing.
+ * Fall back to the raw value if display normalisation rejects its kind.
+ * Hashing must still reject unknown kinds to avoid incorrect digests.
  */
 function safeNormalise(kind, value) {
   try {
@@ -239,16 +207,9 @@ function materialityRank(m) {
 }
 
 /**
- * { identifier: display name } for the values on both sides of one field.
- *
- * Built from the RAW values, because they are the only place the name survives
- * — normalisation keeps the identifier and discards everything around it. Both
- * sides are walked: the approved value's name is as necessary as the current
- * one's, and after a change the current issue no longer contains it.
- *
- * An entry is written only when the name genuinely differs from the identifier,
- * so a label field ("urgent") does not produce a pointless "urgent" → "urgent"
- * mapping for the panel to render twice.
+ * Build an identifier-to-name lookup from raw values on both sides.
+ * Normalisation discards names, and current values no longer contain names
+ * for removed values. Add an entry only if the name differs from its id.
  */
 export function valueLabels(...raws) {
   const map = {};
@@ -307,12 +268,8 @@ function groupBy(list, keyFn) {
 }
 
 /**
- * The reviewer-facing headline, computed without the model.
- *
- * ALWAYS AVAILABLE, and that is the point: when Forge LLMs is unavailable, over
- * quota, or returns something unparseable, the panel still opens with a
- * truthful one-line summary and the full deterministic diff underneath. The AI
- * is the fastest path to understanding, never the only one.
+ * Compute the review headline without an LLM so the panel retains a summary
+ * and full deterministic diff when Forge LLMs fails or is unavailable.
  */
 export function ruleBasedSummary(diff) {
   if (!diff || diff.changedFieldCount === 0) {

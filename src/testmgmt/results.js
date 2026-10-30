@@ -1,14 +1,13 @@
 /**
- * RESULT RULES — what a run's result IS, computed, never typed.
+ * Compute run results from recorded steps on the server.
  *
- * The tester records each step. The run's result follows from those steps by
- * the rules below, on the server, so nobody can sign a run as Passed whose
- * steps say otherwise. The rules follow codebeamer's (spec, "Result rules"),
- * with one deliberate choice: PASSED means every step was executed and passed.
- * A run with N/A steps among passes is PARTLY_PASSED, disclosed as such.
+ * A signer cannot mark a run Passed when its steps disagree. The rules follow
+ * the spec's "Result rules" with one explicit choice: PASSED requires every
+ * step to have been executed and passed. A run with N/A steps among passes is
+ * PARTLY_PASSED.
  *
- * The semantic ids are stable. A project may later give them its own display
- * names and colours, but those never change what a signed run meant.
+ * Semantic IDs stay stable. Project-specific display names and colours must
+ * not change the meaning of a signed run.
  */
 
 export const STEP = Object.freeze({

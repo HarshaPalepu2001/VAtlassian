@@ -1,25 +1,16 @@
 #!/usr/bin/env node
 /**
- * Brings the global VAtlassian work types (work-types.mjs) into an existing
- * company-managed project:
- *
- *   1. adds Source Document and Requirements to the project's work type scheme;
- *   2. maps each to its VAtlassian workflow in the project's workflow scheme
- *      (through a draft, published — the types have no work items, so nothing
- *      migrates).
+ * Add the global work types from work-types.mjs to a company-managed project.
+ * Add Source Document and Requirements to its work-type scheme and map their
+ * workflows through a published workflow-scheme draft. These types have no work
+ * items, so publishing requires no migration.
  *
  *   node scripts/requirements-setup/attach-project.mjs --project VAT            # DRY RUN
  *   node scripts/requirements-setup/attach-project.mjs --project VAT --apply
  *
- * SAFETY RULES
- *  - Only schemes used by this ONE project are changed; a shared scheme stops
- *    the run (changing it would reach other projects).
- *  - Existing mappings are never replaced: a type already mapped to another
- *    workflow stops the run.
- *  - A pending workflow-scheme draft (someone else's unpublished edit) stops
- *    the run.
- *  - Every change is written to the ledger as a `schemeChange` with what it
- *    replaced, so it can be undone by hand.
+ * Change only schemes used by this project. Stop for shared schemes, conflicting
+ * workflow mappings or an existing unpublished draft. Record each change and
+ * its previous value as a schemeChange so an administrator can undo it.
  */
 import { createClient } from './jira.mjs';
 import { PLAN } from './plan.mjs';
@@ -32,7 +23,7 @@ const jira = createClient({ write: APPLY });
 const log = (s) => console.log(s);
 const { file: stateFile, createdId, record } = openLedger(jira, { apply: APPLY, log });
 
-log(`${APPLY ? 'APPLYING' : 'DRY RUN (read-only)'} on ${jira.site} — project ${projectKey}\n`);
+log(`${APPLY ? 'APPLYING' : 'DRY RUN (read-only)'} on ${jira.site}, project ${projectKey}\n`);
 
 const project = await jira.get(`/rest/api/3/project/${encodeURIComponent(projectKey)}`);
 if (project.style !== 'classic') throw new Error(`${projectKey} is team-managed; global work types and workflows cannot be used there.`);
@@ -148,7 +139,7 @@ async function waitForTask(task) {
   throw new Error(`Publish task ${id} did not finish in time.`);
 }
 
-log(`\n${APPLY ? 'Done.' : 'Dry run complete — nothing was changed.'} Ledger: ${stateFile}`);
+log(`\n${APPLY ? 'Done.' : 'Dry run complete. Nothing was changed.'} Ledger: ${stateFile}`);
 log(`\nStill to do in VAtlassian administration for ${projectKey}:`);
 for (const t of [...PLAN.sourceDocument.transitions.map((t) => ({ ...t, type: PLAN.sourceDocument.issueType.name })), ...PLAN.transitions.filter((t) => t.controlled).map((t) => ({ ...t, type: PLAN.issueType.name }))]) {
   log(`  - ${t.type}: "${t.name}" (${t.from.join('/')} → ${t.to}) controlled, role ${t.controlled.role}${t.controlled.captureBaseline ? ', capture baseline' : ''}`);

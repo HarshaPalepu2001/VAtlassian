@@ -14,7 +14,7 @@ import type { BaselineField, BaselineRecordData, PanelBaseline, PanelLatestAppro
 import { RestoreLine } from './RestoreStatus';
 import type { RestoreRow } from './RestoreStatus';
 
-/** The latest decision on this work item, in one line — including one that
+/** Show the latest decision on this work item, including one that
  *  never created a baseline (spec 5.2). Never silently omitted. */
 export function LatestApproval({ approval }: { approval: PanelLatestApproval | null }) {
   if (!approval) return <p className="va-subtlest">No decision has been recorded for this work item yet.</p>;
@@ -32,18 +32,16 @@ export function LatestApproval({ approval }: { approval: PanelLatestApproval | n
 type Version = { version: number; approvedName?: string | null; approvedAt?: number | null; assuranceLevel?: AssuranceLevel | null; current?: boolean };
 
 /**
- * THE HISTORY: every signed version of this work item, newest first, the way
- * an ALM tool lists them. Any version can be compared with the one before it
- * in a click, or any two ticked and compared. Restores sit under the versions
- * they put back; the tracked fields, with what each signature recorded, are
- * folded away until asked for.
+ * List signed versions newest first. Compare adjacent versions or any two
+ * selected versions. Group restores under their target version. Tracked
+ * fields and signature values remain collapsed until opened.
  */
 export default function BaselineRecord({ issueKey, baseline, latestApproval, record, restores, evidenceLoading, evidenceError, onRetryEvidence }: {
   issueKey?: string;
   baseline: PanelBaseline | null;
   latestApproval: PanelLatestApproval | null;
   record: BaselineRecordData | null;
-  /** Every restore of this work item, newest first — the permanent log of what was put back. */
+  /** List every restore newest first as a permanent record of what was restored. */
   restores?: RestoreRow[] | null;
   evidenceLoading?: boolean;
   evidenceError?: string;

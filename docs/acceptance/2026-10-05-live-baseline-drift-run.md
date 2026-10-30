@@ -1,4 +1,4 @@
-# Live baseline + drift run — 2026-10-05
+# Live baseline + drift run. 2026-10-05
 
 Site `mgtechdemo.atlassian.net`, project VAT, app 7.25.0 (development), deployed from the working tree.
 Signing by the account holder (electronic signature). Jira state read back through the Atlassian connector

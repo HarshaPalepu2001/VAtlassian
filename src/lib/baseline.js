@@ -3,37 +3,20 @@ import { FIELD_KIND } from './content.js';
 import { controlledFieldsHash } from './baselinePolicy.js';
 
 /**
- * Capturing a baseline, and the window that has to be closed to do it honestly.
+ * Reconstruct a baseline at the transition timestamp.
  *
- * THE BUG MOST IMPLEMENTATIONS SHIP WITH. The `avi:jira:transitioned:issue`
- * trigger is ASYNCHRONOUS. It normally fires within a second or two, but
- * nothing guarantees that, and anything edited between the transition
- * committing and this code running would be read as part of the "approved"
- * state. The baseline would then contain changes the reviewer never saw, and
- * every later diff would measure against a document that was never approved.
- * Worse, it fails silently and in the customer's favour, so nobody reports it.
+ * avi:jira:transitioned:issue runs asynchronously. Edits between the transition
+ * and this handler's read were not reviewed, so rewind them to transition_at.
+ * Store the reconstruction fidelity in va_baseline.fidelity and show it in
+ * the panel.
  *
- * The fix is to treat `transition_at` — not "now" — as the moment being
- * captured, and to REWIND anything that happened in between.
+ * EXACT means no later change occurred, or the changelog supplied a structured
+ * from value for options, priorities, users, dates, plain text or labels.
+ * RECONSTRUCTED means a rich-text change supplied only flattened fromString;
+ * the result retains text but loses ADF structure. PARTIAL means attachments
+ * or links could not be rewound, or the changelog could not be read.
  *
- * WHAT REWIND CAN AND CANNOT DO, stated plainly because the honesty is the
- * feature:
- *
- *   EXACT           Nothing changed after the transition. The read IS the
- *                   approved state. This is the overwhelmingly common case.
- *   EXACT           Something changed, and the changelog carries a structured
- *                   `from` we can restore (options, priorities, users, dates,
- *                   plain text, labels).
- *   RECONSTRUCTED   Something changed to a rich-text field. The changelog
- *                   carries only `fromString`, a flattened rendering of ADF, so
- *                   the rewound value is text-faithful and structure-lossy.
- *   PARTIAL         Something changed that cannot be rewound at all
- *                   (attachments, issue links), or the changelog could not be
- *                   read.
- *
- * The grade is stored on va_baseline.fidelity and shown in the panel. Baseline
- * never claims a fidelity it does not have — a diff presented as authoritative
- * against a silently approximated baseline is worse than no diff.
+ * Do not present a reconstructed or partial baseline as exact.
  */
 
 export const FIDELITY = {
@@ -80,12 +63,9 @@ function rewindability(kind) {
 }
 
 /**
- * Rebuild one field's value as it stood at `transitionAt`.
- *
- * Applies the OLDEST post-transition change's `from`, not the newest — walking
- * backwards through N changes lands on the value before the first of them,
- * which is the value at the transition. Taking the newest entry's `from` would
- * land one step short and is the obvious way to get this subtly wrong.
+ * Rebuild a field at transitionAt from the oldest post-transition change's
+ * from value. The newest entry's from would restore only the previous edit,
+ * not the value at the transition.
  */
 function rewindField(kind, currentValue, items) {
   if (!items || items.length === 0) return { value: currentValue, fidelity: FIDELITY.EXACT };
@@ -152,25 +132,19 @@ export function textToAdf(text) {
 }
 
 /**
- * Rewind an entire issue's controlled fields to their state at `transitionAt`.
+ * Rewind controlled fields to transitionAt without I/O or a clock.
+ * The caller supplies freshly read fields and changelog entries.
  *
- * PURE. No I/O, no clock, no database — the caller supplies the freshly-read
- * fields and the changelog it already fetched. Kept pure for the same reason
- * `observe()` is: this decides what "approved" means, so it has to be directly
- * testable without a Jira.
- *
- * @param issueFields       `fields` from GET /issue/{key}
- * @param controlledFields  [{ field_id, field_kind, store_values, … }]
- * @param changelogEntries  from lib/changelog.js fetchChangelog
- * @param transitionAt      epoch ms of the gated transition
- * @param changelogFailed   true when the changelog could not be read at all
+ * @param issueFields fields from GET /issue/{key}.
+ * @param controlledFields [{ field_id, field_kind, store_values, … }].
+ * @param changelogEntries Entries from lib/changelog.js#fetchChangelog.
+ * @param transitionAt Epoch milliseconds of the gated transition.
+ * @param changelogFailed True when the changelog could not be read.
  */
 export function rewind({ issueFields, controlledFields, changelogEntries = [], transitionAt, changelogFailed = false }) {
   const post = changelogEntries.filter((e) => e.at > transitionAt);
 
-  // THE COMMON CASE, and it deserves its own branch rather than falling out of
-  // the general one: the trigger ran promptly, nothing happened in between, and
-  // what we read is exactly what was approved.
+  // If nothing changed after the transition, the fresh read is the approved state.
   if (post.length === 0 && !changelogFailed) {
     return { fields: issueFields, perField: {}, fidelity: FIDELITY.EXACT, rewoundFields: [] };
   }

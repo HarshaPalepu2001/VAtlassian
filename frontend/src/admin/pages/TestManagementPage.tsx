@@ -117,7 +117,7 @@ export default function TestManagementPage({ projects }: { projects: Project[] }
               </Field>
             </div>
             <p className="va-subtlest" style={{ fontSize: 12 }}>
-              Use dedicated test work types. Test work items stay outside their Epic’s approved baseline.
+              Use dedicated test work types. Test work items stay outside their Epic's approved baseline.
             </p>
           </Section> },
             { id: 'signoff', label: 'Sign-off', content: <>
@@ -134,7 +134,7 @@ export default function TestManagementPage({ projects }: { projects: Project[] }
           </> },
             { id: 'repairs', label: 'Repairs', count: data.repairs?.items.length ?? 0, content:
           <Section title="Repair automatic bug">
-            <p>Review the run and Jira history, then link the existing bug. The bug must match the run’s project, work type, and parent. Your reason is recorded.</p>
+            <p>Review the run and Jira history, then link the existing bug. The bug must match the run's project, work type, and parent. Your reason is recorded.</p>
             {!data.repairs?.items.length && <p className="va-hint">No repairs are listed. Enter a run ID to investigate a specific run.</p>}
             {data.repairs?.items.map(item => <p key={item.runId}>
               <button className="va-button" disabled={busy} onClick={() => setRepair({ runId: item.runId, bugKey: item.issueKey ?? '', reason: '' })}>

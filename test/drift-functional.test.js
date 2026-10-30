@@ -371,7 +371,7 @@ test('a field Jira silently drops leaves restoration incomplete and the validato
   const result=await f.sign({decision:'REJECT'});
   assert.equal(result.restore.state,'PARTIAL');assert.equal(result.restore.success,false);
   // The verification named the field that did not take, so this is drift with
-  // evidence rather than an app error nobody can act on — and the transition is
+  // evidence rather than an app error. The transition is
   // still refused, which is the guarantee that matters here. ERROR would refuse
   // it too, as ITEM_BUSY, but leaves the reviewer no way out of the state.
   assert.equal(f.review.state,'DRIFTED');
@@ -500,7 +500,7 @@ test('a workflow transition out of a later status is not replayed against the ba
 // Drift and a workflow action are two different intents. A workflow action runs
 // a gated edge and records a fresh signature for it. A drift decision answers
 // "is the current content approved", which is true wherever the item happens to
-// be sitting — so approving it captures a new baseline in place under the
+// be sitting. Approving it captures a new baseline in place under the
 // policy the LATEST baseline recorded, and moves nothing.
 //
 // Replaying the baseline's original edge instead made drift undecidable the
@@ -649,7 +649,7 @@ test('controlled transition deleted: approving the drift moves nothing', async (
   assert.equal(f.transitionRequests.length, 0);
 });
 
-test('a disabled project refuses drift decisions — which is why the validator stops holding there', async () => {
+test('a disabled project refuses drift decisions and the validator stops holding its items', async () => {
   const f = fixture();
   f.projectConfig = async () => ({ enabled: false, restore: { queue: false } });
   const c = await f.api.challenge(f.args);

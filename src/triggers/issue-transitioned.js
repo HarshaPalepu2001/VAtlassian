@@ -54,13 +54,13 @@ async function runUncached(event, suppliedDeps) {
 /**
  * Normalise the event into { from: { id }, to: { id }, transitionId }.
  *
- * THREE SOURCES, IN ORDER OF DIRECTNESS:
+ * Check these three sources in order:
  *
  *   1. `event.transition`, when the platform supplies it. Field names have
  *      varied across payload shapes (`from` / `fromStatus` / `from_status`),
  *      so all three are read rather than betting on one.
  *   2. The changelog's `status` item. A transition ALWAYS produces one, and its
- *      `from` / `to` are the numeric status ids — the same values the gate
+ *      `from` / `to` are the numeric status IDs, matching the values the gate
  *      configuration stores. This is the reliable source and in practice the
  *      one that answers.
  *   3. `issue.fields.status.id` for the destination only. The issue on the

@@ -4,28 +4,19 @@ import { linkKey, keyAtOtherEnd } from '../restore/linkConflicts.js';
 import { governedLinks, excludesLink, normaliseLinkPolicy } from '../linkPolicy.js';
 
 /**
- * ONE LINK CHANGE, ONE DECISION (decided 2026-09-28).
+ * Apply one decision to both baseline records of a Jira link.
  *
- * A Jira link is one object that both issues list. Each issue's baseline
- * records its own links, so one link lives in two signed records — and before
- * this, approving a link change wrote only the approving issue's record.
+ * On 2026-09-26, "VAT-30 deploys VAT-3" was approved only on VAT-30. VAT-3's
+ * baseline still lacked the link, so three rejects there were refused by
+ * lib/restore/linkConflicts.js to protect VAT-30's signed approval. The
+ * 2026-09-28 decision makes approval on either end settle the link for both.
  *
- * Found live: on 2026-09-26 "VAT-30 deploys VAT-3" was added while both were
- * baselined, so both drifted. It was approved on VAT-30 alone. From then on
- * VAT-30's record had the link and VAT-3's did not: a reject on VAT-3 would
- * undo VAT-30's signed approval (refused, lib/restore/linkConflicts.js), so
- * three signed rejects there changed nothing.
+ * APPROVE creates a version on the other issue, changing only links and using
+ * the same signature. Other undecided content remains undecided. REJECT needs
+ * no propagation: the Jira link write is visible from both ends. Earlier signed
+ * versions are never edited.
  *
- * Now the first decision on either end settles the link for both:
- *   - APPROVE records the link on the other issue too, as a new baseline
- *     version authenticated by the same approval. Only the link changes in that
- *     version; anything else undecided on the other issue stays undecided.
- *   - REJECT needs nothing here: restoring the link is one Jira write that both
- *     issues see, so both match their records again.
- * A new version, never an edit of an old one: the other issue's earlier signed
- * versions stay exactly as they were signed.
- *
- * This module is pure. jobs/linkWorker.js reads and writes.
+ * These functions are pure. jobs/linkWorker.js reads and writes.
  */
 
 const LINKS_FIELD = { field_id: 'issuelinks', field_kind: 'LINKS', store_values: true };

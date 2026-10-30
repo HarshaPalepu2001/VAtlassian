@@ -1,18 +1,10 @@
 /**
- * A PARENT'S REVIEW, GROUPED BY ISSUE.
+ * Group the parent's review by changed work item, with separate structural
+ * changes. Each child is compared with its own latest baseline.
+ * See spec 2026-09-24 section 4.5.
  *
- * A parent decision covers the parent and every child (spec 2026-09-24 §4.5),
- * so the parent's review shows everything that decision would approve or
- * reject, read as "in this issue, these changed":
- *
- *   the parent, its own changed fields;
- *   structure, children added, removed or moved;
- *   each drifted child, against that child's own latest baseline.
- *
- * Children with no change are not listed. Pure over the review's field list,
- * each field carrying the `group` lib/tree/reviewDiff.js stamped on it, so it
- * can be recomputed after a viewer's visibility filter has removed fields
- * (panelAccess.filterViewableReviewDiff) and never names a hidden issue.
+ * Use the group metadata from reviewDiff.js after applying the viewer's
+ * visibility filter. Omit unchanged children and never name hidden issues.
  */
 const STRUCTURE = 'STRUCTURE';
 const ISSUE = 'ISSUE';

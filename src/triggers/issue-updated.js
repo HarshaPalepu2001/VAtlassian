@@ -8,21 +8,17 @@ export function isDependencyBundle(value) {
 }
 
 /**
- * avi:jira:updated:issue — the fast path for aggregate drift detection.
+ * Handle avi:jira:updated:issue by checking current content for drift.
  *
- * THE PAYLOAD IS A WAKE-UP ONLY. Nothing here reads the event's changelog for
- * values: it varies by field, is sometimes absent, and is reportedly absent
- * entirely in team-managed projects. collectAffectedTrees() re-reads the whole
- * governed tree the updated node belongs to and diffs it against the signed
- * baseline, which is why the same collector serves this trigger, issue
- * creation, issue deletion, and the hourly reconcile without a second
- * implementation.
+ * Use the event only to identify affected work. Its changelog varies by field,
+ * may be absent, and is reportedly absent entirely in team-managed projects.
+ * collectAffectedTrees() re-reads each governed tree and compares it with its
+ * signed baseline. Creation, deletion and hourly reconciliation use the same
+ * collector.
  *
- * That also makes redelivery harmless. Forge guarantees neither exactly-once
- * nor ordered delivery; a repeated event recomputes the same tree, finds the
- * same state, and writes nothing.
- *
- * NEVER THROWS.
+ * Forge does not guarantee exactly-once or ordered delivery. Repeated delivery
+ * recomputes current state and writes nothing when it is unchanged.
+ * The handler does not throw.
  */
 export async function run(event, suppliedDeps = null) {
   return withRequestCache(() => runUncached(event, suppliedDeps));
@@ -53,7 +49,7 @@ async function runUncached(event, suppliedDeps) {
     const failed = results.find(r => ['ERROR', 'UNREADABLE', 'BUSY'].includes(r.outcome));
     if (failed) return retryEvent(event, failed.outcome);
 
-    // Not required for correctness — the diff is already idempotent — but the
+    // The diff is already idempotent, but the
     // audit trail should be able to say WHY a check ran and whether an event
     // was seen twice. Pruned by the daily job after 30 days.
     if (eventId) await deps.recordReceipt(eventId, issueId, now, result.outcome);

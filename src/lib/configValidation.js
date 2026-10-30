@@ -1,22 +1,17 @@
 /**
- * Every key accepted here must have a module that reads it. A setting that
- * validates and persists but changes nothing is worse than a missing one: the
- * administration page presents it as a control, and the saved value becomes
- * evidence of an intent the runtime never honoured.
+ * Accept settings only when a runtime module reads them. A saved setting
+ * must control the behavior the administration page describes.
  *
- * RETIRED — accepted by earlier builds, refused now, and stripped from stored
- * configuration by stripRetiredConfig() below:
- *   visibility          no reader. The visibility filtering in panelAccess.js
- *                       is Jira issue-security scoped, not driven by this key.
- *   notifications.*     no reader; no digest job was ever built.
- *   restore.commentOnRestore  executeRestore() does not read it.
- *   reviewStatusIds     no reader. Nothing supersedes an approval when an
- *                       item re-enters a status, so there was nothing to set.
- *   queueThreshold      did not decide what is queued: any drift queues and
- *                       holds. It only relabelled the queue row, and could
- *                       call a major change "Formatting only".
- * `policy.mode` is kept because saveConfig refuses STRICT outright rather than
- * storing an unenforced locking promise; see fieldsConfiguration.js.
+ * stripRetiredConfig() removes keys accepted by earlier builds but now refused:
+ *   visibility has no reader; panelAccess.js uses Jira issue security instead.
+ *   notifications.* has no reader or digest job.
+ *   restore.commentOnRestore is not read by executeRestore().
+ *   reviewStatusIds has no reader that supersedes approvals on status re-entry.
+ *   queueThreshold only relabelled rows, sometimes calling major changes
+ *                  "Formatting only". All drift still queues and holds.
+ *
+ * Keep policy.mode because saveConfig explicitly refuses STRICT instead of
+ * saving an unenforced locking setting. See fieldsConfiguration.js.
  */
 export function validateConfig(config) {
   if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('Configuration must be an object.');
@@ -63,14 +58,11 @@ export function validateConfig(config) {
 }
 
 /**
- * Drops keys an earlier build stored but validateConfig no longer accepts.
+ * Remove retired keys from stored configuration without changing live siblings.
  *
- * saveConfig validates the MERGE of the stored row and the incoming patch, so
- * without this a project configured before a key was retired could never save
- * any setting again — the stored value alone would fail validation. Read paths
- * use it too, so the page never renders a control for a dead setting.
- *
- * Returns a new object; siblings that are still live are preserved.
+ * saveConfig validates the merge of the stored row and incoming patch. Retired
+ * stored keys would otherwise block every later save. Read paths also use this
+ * function so the UI does not offer controls for unused settings.
  */
 export function stripRetiredConfig(config) {
   if (!config || typeof config !== 'object' || Array.isArray(config)) return config;

@@ -1,37 +1,19 @@
 import { canonical, sha256Hex } from './hash.js';
 
 /**
- * Controlled content extraction, hashing, and — this app's addition — value
- * retention.
+ * Extract controlled content, compute hashes and retain opted-in values.
  *
- * THE INTAKE FILTER. Only fields explicitly declared as controlled are read,
- * hashed or stored. Everything else in the issue is dropped here and never
- * reaches storage.
+ * Read, hash and store only explicitly controlled fields. Other issue fields
+ * do not enter storage. Normalisation must be deterministic so identical
+ * content produces identical digests and changed content remains detectable.
  *
- * Determinism is the whole game. If the same content could hash two different
- * ways, we would raise false drift; if two different contents could hash the
- * same way, a change would slip past a review. The normalisation below is
- * deliberately strict and errs toward "this is a change".
+ * project() returns raw values only for fields whose va_controlled_field row
+ * has store_values = true. Value retention is an explicit per-field opt-in
+ * because diff and restore need content that a digest alone cannot provide.
  *
- * ─────────────────────────────────────────────────────────────────────────────
- * WHAT IS NEW HERE, AND WHY IT IS GUARDED
- *
- * Hashing alone would let this app say "we store no customer content", which is
- * the easy compliance position. Baseline cannot diff or restore without the
- * values, so project() ALSO returns them — but ONLY for fields whose
- * va_controlled_field row has store_values = true.
- *
- * That flag is not a performance switch. It is a compliance boundary, and it
- * has to be crossed explicitly: an opt-in, per-field extension behind its own
- * flag — not the default, and not silent.
- *
- * So: `values` is keyed only by fields that opted in, `digests` always covers
- * every controlled field, and the content hash is computed from the DIGESTS
- * alone. That last detail matters more than it looks — it means turning value
- * retention on or off for a field does NOT change its content hash, so an admin
- * flipping the flag cannot accidentally invalidate every standing baseline on
- * the site.
- * ─────────────────────────────────────────────────────────────────────────────
+ * values contains opted-in fields. digests covers every controlled field, and
+ * the content hash depends on digests alone. Changing value-retention settings
+ * therefore does not change a field's content hash or invalidate its baseline.
  */
 
 export const FIELD_KIND = {
@@ -45,17 +27,11 @@ export const FIELD_KIND = {
 };
 
 /**
- * Fields every baselined item is reviewed over, whether or not an admin
- * declared them.
+ * Always include these fields in baseline review, even without an explicit
+ * administrator declaration. Title and description identify the approved work.
  *
- * Title and description are the work item — an approval that did not cover them
- * would not be an approval of anything a reader would recognise.
- *
- * DEFINED ONCE, ON PURPOSE. This list feeds the hash written at capture
- * (lib/baseline.js) and the hash recomputed at every drift check
- * (lib/interception.js). If those two ever disagree about a single field, every
- * item drifts against its own baseline the moment it is created and can never
- * return to CLEAN — a permanent, self-inflicted review backlog.
+ * Capture in lib/baseline.js and drift checks in lib/interception.js share this
+ * list. Different sets would make an item drift against its own new baseline.
  */
 export const ALWAYS_CONTROLLED_FIELDS = [
   { field_id: 'summary', field_kind: 'TEXT', field_name: 'Summary' },
@@ -65,31 +41,17 @@ export const ALWAYS_CONTROLLED_FIELDS = [
 ];
 
 /**
- * Fields that must never be tracked, whoever asks.
+ * Fields that administrators cannot opt into tracking.
  *
- * TWO KINDS, AND THE SECOND KIND IS NEW.
+ * Comments, worklogs and watchers are outside the reviewed content. Attachments
+ * are tracked: jobs/vaultWorker.js keeps hashed baseline copies and
+ * lib/restore/attachments.js restores removed files or deletes added ones.
  *
- * The first are fields whose CONTENT is not part of the reviewed record:
- * comments, worklogs, watchers. A reviewer approves the work item, not the
- * conversation around it.
- *
- * `attachment` used to be here. It is not any more: the files on a work item
- * are part of what a reviewer approves, and since the vault keeps a hashed copy
- * of every baselined file (jobs/vaultWorker.js) a rejection can put a removed
- * file back and take an added one away (lib/restore/attachments.js).
- *
- * The rest are DERIVED OR VOLATILE: Jira recomputes them, and no human edited
- * anything when they change. `lastViewed` moves when somebody merely opens the
- * item. `workratio`, the aggregate time fields and `statuscategorychangedate`
- * are recalculated by Jira. `status`, `statusCategory` and `resolutiondate`
- * change as a CONSEQUENCE of the very transition this app gates, so tracking
- * them would make every approved item drift the instant it was approved.
- * `issuekey`, `project`, `created` and `creator` cannot change at all.
- *
- * All of these appeared in a real 306-field drift record for BS-11, which is
- * what this list exists to prevent. Anything here is unavailable to the admin
- * screen too — an admin cannot opt into tracking a field that reports drift
- * nobody caused.
+ * Also exclude derived or volatile fields. Opening an item changes lastViewed;
+ * Jira recomputes workratio, aggregate time and statuscategorychangedate.
+ * status, statusCategory and resolutiondate change during the gated transition
+ * itself. issuekey, project, created and creator are treated here as immutable.
+ * Tracking these fields caused 306 false drift rows for BS-11.
  */
 export const IGNORED_FIELDS = new Set([
   // Not part of the reviewed record.
@@ -97,35 +59,28 @@ export const IGNORED_FIELDS = new Set([
   'timetracking', 'progress', 'aggregateprogress',
   'thumbnail', 'environment',
 
-  // Immutable — cannot drift. `reporter` is deliberately NOT here: it is
-  // editable, it is in DEFAULT_LADDER, and a reporter swapped after approval is
-  // exactly the kind of quiet change this app exists to catch.
+  // These fields cannot drift here. Keep reporter trackable because it is
+  // editable and DEFAULT_LADDER assigns its materiality.
   'issuekey', 'project', 'created', 'creator',
 
-  // Recomputed by Jira, or moved by simply reading the item. `lastViewed` is the
-  // worst of them — it changes when a reviewer OPENS the item to review it, so
-  // tracking it makes the act of reviewing produce drift.
+  // Jira recomputes these fields. Opening the item changes lastViewed, so
+  // tracking it would make review itself produce drift.
   'lastViewed', 'updated', 'workratio', 'statuscategorychangedate',
   'aggregatetimeestimate', 'aggregatetimeoriginalestimate', 'aggregatetimespent',
   'timespent',
 
-  // Changed BY a transition, so tracking them would report drift on legitimate
-  // workflow movement. Status is already modelled in va_review; recording it
-  // twice would mean every approved item drifted the moment it moved on.
-  // `resolution` is NOT here — it is set once and a later change to it is a real
-  // edit worth catching — but `resolutiondate` is derived from it.
+  // The transition changes these fields. Tracking them would report drift on
+  // approved workflow movement; va_review already records status. Keep resolution
+  // trackable because a later explicit change matters; resolutiondate is derived.
   'status', 'statusCategory', 'resolutiondate'
 ]);
 
 /**
- * `declared` plus any ALWAYS_CONTROLLED_FIELDS it does not already contain.
+ * Add missing ALWAYS_CONTROLLED_FIELDS to declared fields.
  *
- * An admin's own declaration wins on collision: if they declared `summary` with
- * a different kind, or with store_values off, that row is left exactly as it is
- * rather than being silently replaced. The stored baseline hash was computed
- * under their kind, and overriding it here would invalidate it — and silently
- * turning on value retention for a field an admin left off would be precisely
- * the "not silent" rule broken.
+ * Preserve an administrator's existing row on collision, including its kind
+ * and store_values flag. Replacing the kind could invalidate the stored hash;
+ * enabling retention would override the administrator's explicit opt-out.
  */
 export function withAlwaysControlled(declared) {
   const alwaysMap = new Map(ALWAYS_CONTROLLED_FIELDS.map((f) => [f.field_id, f]));
@@ -155,28 +110,16 @@ export function withAlwaysControlled(declared) {
 }
 
 /**
- * CANDIDATES FOR TRACKING — the admin screen's menu, and nothing else.
+ * List candidate fields for the admin picker, not the tracked-field set.
  *
- * WHAT THIS USED TO BE, AND THE BUG THAT CAME OF IT. This function returned
- * every field Jira knows about, minus a ten-entry ignore list, and three
- * different callers treated the answer as "the tracked fields": capture.js
- * stored a baseline value for each, collect.js measured drift across each, and
- * the admin screen displayed them as already tracked. On a tenant with 300+
- * custom fields that meant a baseline of 306 fields, and a reconcile pass that
- * "found drift" on `lastViewed`, `workratio`, `statuscategorychangedate` and
- * `aggregatetimespent` — fields that change when nobody has touched the item.
- * One sweep took 142 seconds and inserted 306 drift rows for a single work item.
+ * Previously, capture.js and collect.js treated this catalogue as configuration.
+ * A tenant with over 300 custom fields produced a 306-field baseline and a
+ * 142-second sweep inserting 306 drift rows, including volatile lastViewed,
+ * workratio, statuscategorychangedate and aggregatetimespent. Meanwhile the
+ * panel read zero configured fields and bound the signature to that empty set.
  *
- * Meanwhile resolvers/panel.js asked configStore.controlledFields() — the rows
- * an administrator actually declared — and got ZERO. So the panel told a
- * reviewer "Baseline will record the 0 tracked fields", computed the evidence
- * hash their signature binds to over nothing at all, and the capture then stored
- * 306. Two definitions of "tracked field" in one app, and the weaker one was
- * driving what got signed.
- *
- * THE DECLARED SET IS NOW THE ONLY AUTHORITY. This function names what an admin
- * may CHOOSE from; configStore.controlledFields() names what they chose. Nothing
- * outside the admin screen may use this to decide what to baseline or diff.
+ * configStore.controlledFields() is the authority for fields to baseline or diff.
+ * Only the admin picker may use this function to list fields available to choose.
  */
 export function candidateFields(jiraFields, declaredOverrides) {
   const overrides = new Map((declaredOverrides ?? []).map(f => [f.field_id, f]));
@@ -221,23 +164,16 @@ export function candidateFields(jiraFields, declaredOverrides) {
 }
 
 /**
- * Keys Jira attaches to ADF nodes that carry no authored meaning and are not
- * stable across reads. Hashing them would produce phantom drift.
- *
- * Kept deliberately short. Anything not listed here is treated as content — if
- * we are unsure whether something is meaningful, we treat it as meaningful and
- * accept a false "changed" over a missed change.
+ * ADF keys without authored meaning that Jira may change between reads.
+ * Ignore only these known keys. Treat other attributes as content to avoid
+ * missing a meaningful change, even if that sometimes reports extra drift.
  */
 const ADF_VOLATILE_KEYS = new Set(['localId', 'version']);
 
 /**
- * Iterative on purpose: ADF documents nest one level per paragraph/list/table
- * cell a user typed, and a long enough document used to blow Node's call
- * stack in the original recursive walk (confirmed: ~2,000 levels). An
- * explicit work-stack has no recursion depth to exceed. No visited set is
- * needed here, unlike the logical-node tree walk elsewhere — ADF documents
- * from Jira are plain trees, not graphs, so there is no cycle to guard
- * against.
+ * Walk ADF iteratively to avoid recursive call-stack limits, previously
+ * reached near 2,000 levels. Jira ADF is a tree, so unlike logical-node graphs
+ * it needs no visited set for cycles.
  */
 export function normaliseAdf(node) {
   const rootHolder = {};
@@ -259,10 +195,9 @@ export function normaliseAdf(node) {
     } else {
       const out = {};
       parent[key] = out;
-      // Push in descending order so the LIFO stack pops them back out in
-      // ascending order — out's key insertion order (and so its
-      // JSON.stringify/for-in order) then matches the original recursive
-      // version exactly, not just its parsed structure.
+      // Push descending keys so the LIFO stack processes them in ascending order.
+      // This preserves key insertion order and JSON.stringify/for-in output byte for
+      // byte against the original recursive implementation.
       const keys = Object.keys(value).sort();
       for (let i = keys.length - 1; i >= 0; i--) {
         const k = keys[i];
@@ -298,14 +233,12 @@ export function normaliseMulti(v) {
 }
 
 /**
- * Attachments are compared by Jira id, which is exact: Jira never changes a
- * file in place, so different bytes always arrive under a new id, and a file
- * swapped under the same name is an add and a remove.
+ * Compare attachments by canonical Jira ID. Jira never changes a file's bytes
+ * in place; replacing a same-named file is an add and remove.
  *
- * The id is the CANONICAL one (lib/attachmentIdentity.js): a file the app
- * re-uploaded from the vault stands for the original it restored. Only what
- * that copy shares with its original is hashed — not `created`, `author` or
- * `mimeType`, which a re-upload changes and which say nothing about content.
+ * lib/attachmentIdentity.js maps a restored copy to its original ID. Hash only
+ * the attributes both share. Re-uploading changes created, author and mimeType,
+ * which do not identify the approved bytes.
  */
 export function normaliseAttachments(list, issueFields = null) {
   if (!Array.isArray(list)) return [];
@@ -375,18 +308,14 @@ export function normaliseField(kind, value, issueFields = null) {
 /**
  * Build the controlled projection of an issue.
  *
- * @param issueFields  the `fields` object from GET /rest/api/3/issue/{key}
- * @param controlledFields [{ field_id, field_kind, field_name, store_values }]
+ * @param issueFields The fields object from GET /rest/api/3/issue/{key}.
+ * @param controlledFields [{ field_id, field_kind, field_name, store_values }].
  *
- * Returns:
- *   contentHash  sha256 over the digest map. Independent of store_values.
- *   digests      { fieldId: sha256 } for EVERY controlled field.
- *   values       { fieldId: normalisedValue } for retained fields ONLY.
- *   raw          { fieldId: rawValue } for retained fields ONLY — the
- *                pre-normalisation value, which is what a restore has to write
- *                back. Normalisation is lossy on purpose (it sorts multi-values
- *                and strips ADF localIds); writing a normalised value back into
- *                Jira would be a second, silent edit.
+ * Return contentHash, a SHA-256 of the digest map independent of store_values;
+ * digests, the hash for each controlled field; values, normalised retained
+ * values; and raw, the retained pre-normalisation values used for restore.
+ * Normalisation sorts multi-values and strips ADF localIds, so writing its
+ * output back would introduce changes beyond the restore.
  */
 export function project(issueFields, controlledFields, context = {}) {
   const values = {};
@@ -402,8 +331,8 @@ export function project(issueFields, controlledFields, context = {}) {
 
     digests[field_id] = fieldDigest(field, normalised, context);
 
-    // THE BOUNDARY. Nothing but an explicit store_values = true puts customer
-    // content into `values`/`raw`, and therefore into the database.
+    // Require explicit store_values = true before adding customer content to
+    // values/raw or storing it in the database.
     if (field.store_values === true) {
       values[field_id] = normalised;
       raw[field_id] = rawValue === undefined ? null : rawValue;
@@ -423,48 +352,20 @@ export function fieldDigest(field, normalised, { linkPolicy } = {}) {
 }
 
 /**
- * Which fields of THIS WORK ITEM differ between two projections.
+ * Find value differences within the item's current tracked scope.
  *
- * ─── DRIFT IS A FACT ABOUT THE ITEM, NOT ABOUT THE TRACKED SET ───────────────
+ * scopeIds limits comparison to fields the item now tracks. Comparing the union
+ * of old and new digest keys instead treated scope changes as content edits.
+ * A 302-field baseline compared with four current fields reported 298 false
+ * changes. BS-21 recorded inserted:302, driftCount:604; BS-11 showed 14 fields
+ * from a sweep. The same arithmetic produced false STALE_EVIDENCE refusals.
  *
- * `scopeIds` is the set of fields in scope for the item right now, and passing
- * it is what keeps this function answering the question it claims to answer.
- * observe() has always passed it. This function used to accept two arguments
- * and drop it on the floor, and the result was the worst class of bug this app
- * can have: it reported changes to work items that nobody had touched.
+ * An excluded field is a configuration change recorded by EVENT.CONFIG_CHANGED,
+ * not drift on the item. A newly tracked field has no approved value to compare
+ * until the next baseline. Do not count either case as a changed value.
  *
- * Unioning the two key sets makes every difference in MEMBERSHIP look like a
- * difference in VALUE, because a key that is absent on one side reads as null
- * and null !== a digest. So:
- *
- *   · A baseline captured when the project tracked 302 fields, compared against
- *     a projection over the 4 in scope, reported 298 fields as changed. That is
- *     BS-21's `inserted:302, driftCount:604` — on an untouched item — and
- *     BS-11's 14 fields from the reconcile sweep.
- *   · Every field an administrator deliberately EXCLUDED came back as drift on
- *     every approved item, once, for ever.
- *   · The evidence hash is computed over the same arithmetic, so the reviewer
- *     was told "this work item changed while you were reading it" about an item
- *     that had not changed — and the decision was refused as STALE_EVIDENCE.
- *
- * TWO RULES, AND BOTH ARE ABOUT WHAT AN APPROVAL MEANT.
- *
- *   1. OUT OF SCOPE IS NOT DRIFT. A field the item no longer tracks cannot have
- *      drifted on the item. The tracked set narrowing is a configuration change;
- *      it has an author and a timestamp in the ledger (EVENT.CONFIG_CHANGED) and
- *      that is where it belongs, not on a reviewer's screen as a changed field.
- *
- *   2. NOT IN THE BASELINE IS NOT DRIFT. A newly tracked field has no approved
- *      value to have drifted FROM. Counting it would mean that installing an
- *      unrelated app which adds a custom field marks every approved item in the
- *      tenant as drifted — the exact failure trackedFields.js was written to
- *      prevent. It is covered from the next baseline onward, which is the only
- *      point at which a reviewer has actually approved it.
- *
- * Called WITHOUT `scopeIds` the old union behaviour stands, because with no
- * scope there is no way to tell a set change from a value change and the safe
- * reading of an unknown difference is "changed". Callers that know their scope
- * are expected to say so.
+ * observe() supplies scopeIds. Without it, retain the legacy union comparison:
+ * unknown scope cannot distinguish membership changes from value changes.
  */
 /**
  * Two stored digests for one field, read as the same value or not.
@@ -518,15 +419,10 @@ export function changedFields(prevDigests, nextDigests, scopeIds = null) {
 export const GENESIS_CONTENT = '0'.repeat(64);
 
 /**
- * Map a Jira field schema to a FIELD_KIND.
- *
- * Used by the admin console when an administrator adds a field, so they are not
- * asked to classify `customfield_10042` themselves. Advisory only — the stored
- * `field_kind` is what everything else reads, and an admin may override this.
- *
- * Unknown types fall back to SCALAR rather than throwing: a custom field this
- * function has never heard of should still be hashable, and SCALAR's
- * `id ?? value ?? name ?? canonical(x)` handles an arbitrary object safely.
+ * Suggest a FIELD_KIND from Jira schema for the admin field picker.
+ * The stored field_kind remains authoritative and an administrator may override
+ * this suggestion. Unknown types use SCALAR instead of throwing;
+ * id ?? value ?? name ?? canonical(x) handles arbitrary objects.
  */
 export function inferFieldKind(schema) {
   if (!schema) return FIELD_KIND.SCALAR;

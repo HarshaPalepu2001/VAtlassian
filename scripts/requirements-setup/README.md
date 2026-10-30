@@ -18,24 +18,25 @@ The scripts never print or store the token.
 
 ## Steps
 
-1. `node scripts/requirements-setup/inspect.mjs` — read-only. Writes `.out/inspect.json`.
-2. `node scripts/requirements-setup/work-types.mjs [--apply]` — the two work types,
-   their statuses, the VAtlassian signature screen and both workflows, all
-   GLOBAL. Not attached to any project.
-3. `node scripts/requirements-setup/attach-project.mjs --project <KEY> [--apply]` —
-   adds both work types to an existing company-managed project and maps them to
-   their workflows. Refuses shared schemes, existing mappings and existing items.
-4. `node scripts/requirements-setup/screens.mjs --project <KEY> [--apply]` — the
-   custom fields of both work types (scoped to that project and work type),
-   their create/edit/view screens, the Requirements transition screens, a screen
-   scheme per work type mapped in the project's work type screen scheme, and the
-   transition screens and "filled in" validators on both workflows. Refuses a
-   shared work type screen scheme and existing mappings.
-5. `node scripts/requirements-setup/link-types.mjs [--apply]` — creates the
-   planned site-wide trace link types, reusing an existing exact-name type
-   without modifying it.
-6. `node scripts/requirements-setup/setup.mjs [--apply]` — the full dedicated
-   `REQ` project (fields, screens, schemes). Not run; it predates steps 2–5.
+1. `node scripts/requirements-setup/inspect.mjs` reads configuration and writes
+   `.out/inspect.json`.
+2. `node scripts/requirements-setup/work-types.mjs [--apply]` creates the two
+   global work types, their statuses, the VAtlassian signature screen and both
+   workflows. It does not attach them to a project.
+3. `node scripts/requirements-setup/attach-project.mjs --project <KEY> [--apply]`
+   adds both work types to an existing company-managed project and maps their
+   workflows. It refuses shared schemes, conflicting mappings and existing items.
+4. `node scripts/requirements-setup/screens.mjs --project <KEY> [--apply]` creates
+   custom fields scoped to each project and work type, create/edit/view screens,
+   Requirements transition screens and a screen scheme per work type. It maps
+   those schemes in the project's work-type screen scheme and adds transition
+   screens and "filled in" validators to both workflows. It refuses shared
+   work-type screen schemes and existing mappings.
+5. `node scripts/requirements-setup/link-types.mjs [--apply]` creates the planned
+   site-wide trace link types. It reuses existing exact-name types without changes.
+6. `node scripts/requirements-setup/setup.mjs [--apply]` creates the dedicated
+   `REQ` project, including fields, screens and schemes. It has not been run and
+   predates steps 2 through 5.
 
 `plan.mjs` holds every name, status, transition and field as data.
 

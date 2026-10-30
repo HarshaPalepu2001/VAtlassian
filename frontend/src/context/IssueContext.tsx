@@ -11,9 +11,8 @@ import type { Result } from '../lib/result';
 type Glance=Result&{state?:string;version?:number;baselineVersion?:number;driftCount?:number;count?:number};
 
 /**
- * The sidebar glance: where the work item stands, readable without scrolling
- * to the panel. One lozenge and one line — and, when something has drifted,
- * the way straight into the review window.
+ * Show the work item's state in the sidebar and link to review when it has
+ * drifted.
  */
 export default function IssueContext(){const [state,setState]=useState<Glance|null>(null);const [error,setError]=useState('');const [issueKey,setIssueKey]=useState<string>();
  useEffect(()=>{
@@ -23,8 +22,7 @@ export default function IssueContext(){const [state,setState]=useState<Glance|nu
  void refresh();const unsubscribe=subscribeIssueUpdates(refresh);
  return()=>{active=false;++sequence;unsubscribe();};
  },[]);
- // Once a state has painted it stays: a later refresh that fails (they are all
- // background ones here) is not worth replacing the lozenge with an error.
+ // Keep the displayed state if a background refresh fails.
  if(!state)return error?<Notice danger>{error}</Notice>:<Loading/>;
  const version=state.baselineVersion??state.version;const changes=state.driftCount??state.count??0;
  return <div className="va-glance">

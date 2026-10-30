@@ -186,8 +186,8 @@ A refused app grant is retried daily, not hourly (`v070`).
 A site with Confluence vaults to its private space; a Jira-only site vaults
 to the Forge Object Store (`lib/vaultTier.js`, remembered in `vault:tier`).
 Objects are keyed `vault/sha256/<hex>`, uploaded with a base64 SHA-256
-checksum, and never expire. On a Confluence site, a file Confluence refuses —
-or every file, when the vault space cannot be made — goes to the Object Store
+checksum, and never expire. On a Confluence site, refused files go to the Object Store.
+If vault-space creation fails, every file goes to the Object Store
 and the ledger says why (`fallbackFrom`). Each copy records `storage` and
 `object_key` (`v071`–`v072`); restore reads each from where it went, and a
 copy missing from its store is named, not retried. A project on an Object

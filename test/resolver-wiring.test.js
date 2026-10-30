@@ -72,7 +72,7 @@ test('Panel summary/evidence resolvers are wired for the responsive read split',
   assert.ok(content.includes("resolver.define('panel:getSummary'"), 'panel:getSummary must be wired');
   assert.ok(content.includes("resolver.define('panel:getEvidence'"), 'panel:getEvidence must be wired');
   // panel:getState is a temporary compatibility adapter, kept until every
-  // caller migrates to the summary/evidence split — see Task 7's interfaces.
+  // caller migrates to the summary/evidence split. See Task 7's interfaces.
   assert.ok(content.includes("resolver.define('panel:getState'"), 'panel:getState must remain until callers migrate');
 });
 

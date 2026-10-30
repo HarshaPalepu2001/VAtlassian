@@ -1,35 +1,17 @@
 /**
- * Display formatting, and the one rule this UI is built around.
+ * Display names and Jira issue/project keys. Do not render account ids,
+ * numeric Jira ids, custom field ids, internal row ids or content hashes.
+ * Resolve names on the server. If a name is missing, nameOr() describes the
+ * missing value instead of falling back to its id.
  *
- * WHAT MAY APPEAR ON SCREEN. Only identifiers a person in Jira already uses
- * to refer to the thing: the issue key (AUT-1), the project key (AUT), and
- * names — of people, projects, issue types, statuses, roles.
- *
- * WHAT MAY NOT. Internal or platform identifiers: Atlassian account ids
- * (712020:8a3f…), numeric issue ids, numeric project and issue-type ids,
- * status ids, custom field ids (customfield_10050), our own row ids
- * (ct_id, el_id, signature_id) and content hashes. None of these mean
- * anything to the reader, and several of them are identifiers of a person
- * that we have no reason to print — an admin screen listing everyone's
- * account id is a disclosure with no corresponding benefit.
- *
- * The awkward case is a name we could not resolve, and the rule there is the
- * point of this file: DO NOT fall back to the id. `nameOr()` returns a phrase
- * describing the absence instead. A row reading "Unknown issue type" is worse
- * to look at than one reading "10001" and better to ship — "10001" only looks
- * like information. Where an admin genuinely needs to tell two unresolved
- * rows apart, the fix is to resolve the name on the server, which is what
- * src/resolvers/admin.js now does.
- *
- * Row ids are still passed around in props and sent back to resolvers to
- * identify what to revoke. That is fine. This rule is about rendering.
+ * Row ids may still identify records in props and resolver requests.
  */
 
 /**
  * A name that may not have resolved.
  *
  * @param name  the resolved display name, if there is one
- * @param noun  what could not be resolved, lowercase — "issue type", "user"
+ * @param noun  what could not be resolved, lowercase, for example "issue type", "user"
  * @returns the name, or `{ unknown: true }` for the caller to render as an
  *   absence. Returning a discriminated result rather than a string keeps
  *   callers from styling a real name as missing, or vice versa.
@@ -73,12 +55,9 @@ export function avatarColour(name: string | null | undefined): string {
 }
 
 /**
- * Absolute date and time, in the reader's locale and timezone.
- *
- * Signature timestamps are shown in full, never as "2 days ago". 21 CFR
- * 11.50(a)(2) wants the date and time of signing on the record, and a
- * relative phrase is not that — it also silently changes meaning depending
- * on when the page happened to be loaded.
+ * Absolute date and time in the reader's locale and timezone.
+ * Signature timestamps use the full date and time required by 21 CFR
+ * 11.50(a)(2). Relative timestamps change meaning as time passes.
  */
 export function formatTimestamp(ms: number | string | null | undefined): string | null {
   if (ms == null) return null;
@@ -95,7 +74,7 @@ export function formatTimestamp(ms: number | string | null | undefined): string 
   });
 }
 
-/** Date only — for table columns where the time of day is noise. */
+/** Date only for table columns that do not need a time. */
 export function formatDate(ms: number | null | undefined): string | null {
   if (ms == null || !Number.isFinite(Number(ms))) return null;
   const date = new Date(Number(ms));
@@ -125,14 +104,8 @@ export function waitingLabel(ms: number | null | undefined): string {
 }
 
 /**
- * A changed field's label.
- *
- * Jira returns `summary`/`description` for system fields and
- * `customfield_10050` for the rest. The custom field id is exactly the kind
- * of identifier this file exists to keep off the screen, so an unresolved
- * custom field becomes "A custom field" rather than its id — the diff below
- * it shows the before and after values, which is what the reviewer is
- * actually reading.
+ * A changed field's label. Use a resolved name when available. Unresolved
+ * custom field ids become "A custom field" so internal ids stay off screen.
  */
 export function fieldLabel(fieldId: string, resolvedName?: string | null): string {
   const named = (resolvedName ?? '').trim();
@@ -145,7 +118,7 @@ export function fieldLabel(fieldId: string, resolvedName?: string | null): strin
 }
 
 /**
- * "2 days ago", for a change on a worklist or a diff row — never for a
+ * "2 days ago", for a change on a worklist or a diff row. Never for a
  * signature, which formatTimestamp() spells out in full. Callers put the
  * absolute time on hover so the exact instant is always one step away.
  */
@@ -163,12 +136,8 @@ export function relativeTime(ms: number | null | undefined, now: number = Date.n
 }
 
 /**
- * How long after approval something happened: "+3 days", "+5 hours".
- *
- * The distance from the signature is what a reviewer is actually weighing —
- * an edit an hour after approval reads differently from one three weeks on —
- * so the diff prints it beside every step rather than leaving the arithmetic
- * to the reader.
+ * Elapsed time since approval, such as "+3 days" or "+5 hours".
+ * The diff shows this beside each edit so reviewers need not calculate it.
  */
 export function sinceLabel(fromMs: number | null | undefined, toMs: number | null | undefined): string | null {
   if (fromMs == null || toMs == null) return null;

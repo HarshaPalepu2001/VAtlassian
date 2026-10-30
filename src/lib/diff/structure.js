@@ -1,13 +1,9 @@
 import { canonical } from '../hash.js';
 
 /**
- * What a rich-text block IS, besides its words and marks — as sentences.
- *
- * Split from adf.js, which pairs blocks; this names what differs between a
- * pair. Every difference the hash can see and the words cannot — a node's own
- * attrs, the containers around it, the inline nodes that are not text — comes
- * out as one sentence a reviewer can read: "Checklist item (unticked) →
- * Paragraph", "Panel type: warning → info", "Status colour: green → red".
+ * Describe structural differences between paired ADF blocks. Compare node
+ * attrs, enclosing containers and inline nodes other than text. adf.js handles
+ * block pairing, words and marks.
  */
 
 /** ADF stores a date as epoch milliseconds, as a string. Shown as the day. */

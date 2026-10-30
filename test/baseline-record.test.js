@@ -5,17 +5,15 @@ import { adfText, previewOf, buildRecord } from '../src/lib/record.js';
 import { FIELD_KIND } from '../src/lib/content.js';
 
 /**
- * THE CLEAN STATE IS WHERE THE AUDIT LIVES.
+ * The baseline record remains visible when there is no drift to decide.
  *
- * A baselined work item spends almost all of its life with nothing to decide,
- * and the panel's whole answer to that was "All good. Unchanged since it was
- * approved by X." That sentence is true and it made the product invisible
- * exactly when it should be most reassuring — and unfalsifiable, because a
- * reviewer could not see WHICH fields "unchanged" was a claim about.
+ * The panel previously showed only "All good. Unchanged since it was
+ * approved by X." Reviewers could not see which fields that statement
+ * covered.
  *
- * These pin the two things that make the record trustworthy rather than
- * decorative: every tracked field is listed whether or not its contents were
- * kept, and a value that is absent is never rendered as a value that is empty.
+ * These tests require the record to list every tracked field, including
+ * fields whose values were not retained. An absent value must never appear
+ * as an empty value.
  */
 
 const FIELDS = [
@@ -124,8 +122,8 @@ test('attachments preview by filename, not by opaque id', () => {
 });
 
 test('links are counted rather than named, because their ids are not readable', () => {
-  // normaliseLinks stores immutable numeric ids on purpose — issue KEYS change
-  // when an item moves project. Printing "10432" at a reviewer helps nobody.
+  // normaliseLinks stores immutable numeric ids because issue keys change
+  // when an item moves project. The numeric id alone does not identify the issue to a reviewer.
   const preview = previewOf(FIELD_KIND.LINKS, [{ type: '10000', outward: '10432' }]);
   assert.equal(preview.text, '1 linked work item');
   assert.doesNotMatch(preview.text, /10432/);
@@ -149,9 +147,8 @@ test('every tracked field appears, retained or not', () => {
 
   assert.equal(record.fieldCount, 3);
   assert.equal(record.retainedCount, 2);
-  // The unretained field is still WATCHED — its digest is what detects a change
-  // — so omitting it would tell the reviewer they are covered on fewer fields
-  // than they are.
+  // The unretained field remains tracked because its digest detects a change.
+  // Omitting it would understate the tracked field set.
   assert.ok(record.fields.some((f) => f.fieldId === 'customfield_1'));
 });
 

@@ -1,7 +1,6 @@
 /**
- * WHERE A VAULTED COPY LIVES. Pure.
- *
- * Attachments are vaulted in the Forge Object Store only.
+ * Describe vaulted-copy locations. Attachments use Forge Object Store only.
+ * These functions are pure.
  */
 export const STORAGE = Object.freeze({ OBJECT_STORE: 'OBJECT_STORE' });
 

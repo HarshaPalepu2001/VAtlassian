@@ -6,30 +6,20 @@ import { adfMediaIds } from '../attachmentIdentity.js';
 export { ADAPTER_VERSION };
 
 /**
- * Deciding what a rejection will do, BEFORE it does any of it.
+ * Plan a rejection before changing Jira content.
  *
- * THE RULE THIS MODULE ENFORCES: there is no path where a reviewer clicks
- * Reject and discovers afterwards that two fields were quietly left drifted.
- * Everything that cannot be restored is named in the confirmation dialog, with
- * a reason, before they confirm. An app whose promise is "one click puts it
- * back exactly" has to be exact about what it cannot put back — and the
- * temptation to soften that, to make the button feel more powerful, is
- * precisely the thing that would make it untrustworthy.
+ * The confirmation dialog names every field that cannot be restored and gives
+ * its reason before the reviewer signs. It must not imply a complete restore
+ * when the plan will leave fields changed.
  *
- * Pure. No I/O, no clock, no database.
+ * These functions perform no I/O and use no clock or database.
  */
 
 /**
- * How each field kind is written back to Jira.
- *
- * The rules live in ./adapters.js so they can be tested exhaustively without
- * the planner, and so field IDENTITY — not just `schema.type` — decides the
- * adapter. See that module's header for why the previous schema-type switch
- * wrote "[object Object]" into description fields.
- *
- * Kept as a named export returning the bare value because existing callers and
- * test/baseline-restore.test.js read it that way. New code should call
- * `shapeFor` and honour `ok: false`.
+ * Use adapters.js to shape Jira field writes by field identity and schema.
+ * The named export returns a bare value for existing callers and
+ * test/baseline-restore.test.js. New callers should use shapeFor and handle
+ * ok: false.
  */
 export function writeShape({ field, value, editmeta }) {
   return shapeFor({ field, value, editmeta }).value;
@@ -58,19 +48,14 @@ export function planRestore({ diff, baselineValues = {}, controlledFields = [], 
   const needsHandler = [];
   const cannotRestore = [];
   const formattingOnly = [];
-  // Files, named: a rejection DELETES every file added since approval, which a
-  // reviewer must see before signing, and re-uploads every removed one from
-  // the vault. Whether the vault holds each one is asked separately
-  // (lib/restore/attachmentPreflight.js), since this module does no I/O.
+  // Preflight names files that rejection permanently deletes and files it
+  // re-uploads. attachmentPreflight.js checks vault availability separately
+  // because this planner performs no I/O.
   const attachments = { willDelete: [], willRestore: [] };
 
   for (const fieldDiff of diff.fields) {
-    // EVERY entry in diff.fields is integrity drift: lib/diff/index.js only
-    // pushes a field whose normalised value differs from the baseline. A
-    // formatting-only change is still a change to the record, so it is still
-    // restored — `semanticChange` decides what the reviewer is TOLD, never
-    // what is written. Skipping here is how a restore reported COMPLETE while
-    // a tracked field was still wrong.
+    // Restore every changed field, including formatting-only changes.
+    // semanticChange affects review presentation, not which values are restored.
     if (fieldDiff.changed === false) continue;
     const formattingOnlyChange = fieldDiff.semanticChange === false;
 
@@ -173,18 +158,10 @@ export function planRestore({ diff, baselineValues = {}, controlledFields = [], 
 }
 
 /**
- * RICH TEXT THAT DID NOT CHANGE, BUT WILL SHOW A RESTORED FILE.
- *
- * Deleting an attachment does not edit the description that shows it: the
- * description still points at the deleted file, reads exactly as approved, and
- * so is not in the diff. When the restore puts that file back, Jira gives the
- * copy a new media id, and a description left alone would keep showing a
- * broken image while every digest said it matched.
- *
- * So when files will be restored, each unchanged tracked rich-text value that
- * shows a file is a CANDIDATE: the executor writes it only if one of its
- * pointers is actually re-pointed at a restored copy, and never otherwise.
- * Named in the preflight so the reviewer knows the field is written.
+ * Consider unchanged tracked rich text when restoring files. Deleting a
+ * file leaves its description pointer intact, but the restored copy has a
+ * new media id. The executor rewrites a candidate only if a pointer changes.
+ * List it in preflight because the field may be written.
  */
 function repointCandidates({ byId, baselineValues, editmeta, planned }) {
   const candidates = [];
@@ -207,25 +184,19 @@ function describePlan(willRestore, needsHandler, cannotRestore, formattingOnly =
     parts.push(`${restorable} field${restorable === 1 ? '' : 's'} will be returned to the approved value`);
   }
   if (formattingOnly.length > 0) {
-    // Said out loud rather than silently skipped. The field IS being written —
-    // the reviewer just deserves to know the visible difference is small.
+    // Include the field in preflight even when only its media pointer changes.
     parts.push(`${formattingOnly.length} of them differ only in formatting`);
   }
   if (cannotRestore.length > 0) {
     parts.push(`${cannotRestore.length} cannot be restored`);
   }
-  if (parts.length === 0) return 'Nothing to restore — this work item matches its approved values.';
+  if (parts.length === 0) return 'Nothing to restore. This work item matches its approved values.';
   return `${parts.join(', ')}.`;
 }
 
 /**
- * Is rejecting worth offering at all?
- *
- * A reject that can restore nothing is not a reject, and presenting the button
- * as though it does something would be the app lying about its own capability.
- * The panel disables it and explains why — usually that no field has value
- * retention turned on, which is an administrator's decision the reviewer cannot
- * fix from here and should not be blamed for.
+ * Disable rejection if it can restore no fields. Explain the reason, such
+ * as disabled value retention, so the reviewer can seek an administrator's help.
  */
 export function canRestoreAnything(plan) {
   return plan.steps.some((s) => s.strategy !== 'none');

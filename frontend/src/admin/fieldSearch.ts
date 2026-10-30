@@ -1,16 +1,10 @@
 import type { AvailableField, ControlledField } from './types';
 
 /**
- * FIND A FIELD TO TRACK — across everything the Controlled fields page knows.
- *
- * The page's lists come from admin:fieldSetup, which already applies the rules
- * for what may be tracked: Jira's own catalogue for the project, minus the
- * fields that must never be (comments, worklogs, watchers, and what Jira
- * recomputes — content.js IGNORED_FIELDS). So a search over those lists can
- * only ever offer a field the resolver will accept; nothing here decides that.
- *
- * Matches name or id, so an admin can paste `customfield_10015` as easily as
- * type "start". Names that START with the query come first.
+ * Search the trackable fields returned by admin:fieldSetup. The resolver
+ * excludes comments, worklogs, watchers and recomputed fields using
+ * content.js IGNORED_FIELDS. This client does not decide trackability.
+ * Match names or ids, with name-prefix matches first.
  */
 export type FieldStatus = 'tracked' | 'excluded' | 'available';
 export type FieldHit = { fieldId: string; fieldName: string; kind?: string; status: FieldStatus; pinned?: boolean };

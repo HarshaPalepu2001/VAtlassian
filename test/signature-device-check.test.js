@@ -1,16 +1,10 @@
 /**
- * Device testing — 21 CFR 11.300(e).
+ * Device testing under 21 CFR 11.300(e).
  *
- * Two rules carry the weight here, and both are ways of being wrong that would
- * be invisible in production:
- *
- *   1. An unknown last-proven time must never read as overdue. Getting this
- *      backwards would declare every credential in the instance due on the day
- *      the migration ships, bury the real dormant ones in the noise, and train
- *      whoever reads the list to ignore it.
- *   2. A credential that cannot sign has no periodic obligation. Reporting a
- *      locked or half-enrolled credential as "overdue for testing" sends an
- *      admin to chase a device whose problem is something else entirely.
+ * 1. An unknown last-proven time must never count as overdue. Otherwise the
+ *    migration would mark every credential due and obscure dormant devices.
+ * 2. A credential that cannot sign has no periodic testing obligation.
+ *    Locked and half-enrolled credentials must not appear overdue for testing.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -132,7 +126,7 @@ test('a brand new credential is not dormant', () => {
 
 test('dormancy is measured on the same threshold the scan uses', () => {
   // If these drifted apart, a device could be reported dormant on use without
-  // ever having been listed as due, or vice versa — two controls describing
+  // ever having been listed as due, or vice versa. Both controls describe
   // the same silence with different numbers.
   assert.equal(DORMANCY_THRESHOLD_MS, DEVICE_CHECK_INTERVAL_MS);
 });

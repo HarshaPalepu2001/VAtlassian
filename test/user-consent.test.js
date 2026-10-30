@@ -40,7 +40,7 @@ test('panel and queue resolvers let a missing user consent reach Forge', async (
 test('retryGuidance never echoes a 403/404 status: that would hand back the one distinction NOT_FOUND exists to hide', async () => {
   // testmgmt/jira.js's json() collapses both into the same reason precisely so
   // a caller can never tell "exists but you can't see it" from "does not
-  // exist" — a permission-existence oracle. The raw status must not leak.
+  // exist". This prevents an existence oracle. The raw status must not leak.
   assert.deepEqual(retryGuidance(Object.assign(new Error('nope'), { status: 403 })), {});
   assert.deepEqual(retryGuidance(Object.assign(new Error('nope'), { status: 404 })), {});
   assert.deepEqual(

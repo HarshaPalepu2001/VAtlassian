@@ -169,7 +169,7 @@ const VERIFICATION_GUIDANCE = new Set([
   'The hierarchy could not be read back, so nothing about this restore could be confirmed.',
   'The linked work items could not be checked, so this restore could not be confirmed.',
   'The work item is no longer in the baseline review status, so restoration cannot be confirmed.',
-  'The work item could not be re-read, so this restore could not be confirmed. Nothing is known to have failed — but nothing is confirmed either.',
+  'The work item could not be re-read, so this restore could not be confirmed. No failure was confirmed, but no result was verified.',
   'The work item could not be re-read, so no field could be confirmed.',
   'No approved digest was recorded for this field, so the restore cannot be confirmed.',
   'Jira accepted the write but the field does not match the approved value. A screen configuration or a workflow post-function may be overriding it.',

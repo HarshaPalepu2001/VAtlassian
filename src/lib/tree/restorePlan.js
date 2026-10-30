@@ -155,10 +155,8 @@ export function planTreeRestore({ baselineTree, currentTree, controlledFields, f
           }
         }
 
-        // FILES BEFORE FIELDS: rich text that shows a file can only be written
-        // while Jira has it. A recreated work item starts with no files: only
-        // one that had some needs the step, and its files come from the
-        // ORIGINAL item's vault page.
+        // Restore files before rich text that references them. A recreated work
+        // item starts without files, so use the original item's vault page.
         if (!removedIds.has(idOf(node)) || (Array.isArray(target) && target.length > 0)) {
           const have = new Set((Array.isArray(current) ? current : []).map(a => String(a?.id)));
           filesComeBack = Array.isArray(target) && target.some(a => !have.has(String(a?.id)));
@@ -205,18 +203,9 @@ export function planTreeRestore({ baselineTree, currentTree, controlledFields, f
     .filter(node => parentOf(node) != null)
     .map(node => action('DELETE_ADDED_NODE', idOf(node), parentOf(node)));
 
-  // ── WHAT THIS REJECTION WILL COST, STATED BEFORE IT IS SIGNED ─────────────
-  //
-  // planRestore() has always returned a `preflight` so the confirmation dialog
-  // can say what cannot be restored, on the principle that "there is no path
-  // where a reviewer clicks Reject and discovers afterwards that two fields
-  // were quietly left drifted". The tree planner returned steps and nothing
-  // else, and the one consequence it carries that the field planner never did
-  // is PERMANENT DELETION of work items.
-  //
-  // A reviewer signing a rejection is authorising that deletion. They cannot
-  // authorise what they were not shown, so the keys are named here and the
-  // panel reads them straight out of the plan.
+  // Return preflight consequences before the reviewer signs, including
+  // permanent deletion of added work items. The panel reads the keys directly
+  // from this plan so the signature covers the deletions shown.
   const willDelete = deleteSteps.map(step => {
     const node = currentById.get(step.logicalNodeId);
     return { logicalNodeId: step.logicalNodeId, issueKey: node?.issueKey ?? node?.key ?? null };
@@ -251,9 +240,8 @@ export function planTreeRestore({ baselineTree, currentTree, controlledFields, f
       attachments,
       // Written only if a pointer in it really moves to a restored copy.
       richTextRepoint,
-      // Recreation is not destruction, but it is not invisible either: the
-      // recreated work item gets a NEW Jira key, and anything outside the tree
-      // that referenced the old one will not follow it.
+      // A recreated work item gets a new Jira key. References from outside the
+      // tree do not follow it.
       willRecreate,
       willMove: moveSteps.length,
       willRestoreFields: fieldSteps.length

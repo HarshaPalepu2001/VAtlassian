@@ -7,7 +7,7 @@ import { derivedEvidence, linkRows, linkedIssueIds, CAUSE, UNRECORDED_ROLE, pars
 import { FailClosed } from '../lib/errors.js';
 
 /**
- * A BASELINE VERSION THAT RE-RECORDS ONE LINK, ON ANOTHER ISSUE'S APPROVAL.
+ * Record a link in a new baseline version under the other issue's approval.
  *
  * jobs/linkWorker.js writes these when an approval on one issue decided a link
  * this issue shares (lib/approval/linkPropagation.js). The new version is this
@@ -58,7 +58,7 @@ function rowFor(source, approval, now, version) {
 }
 
 /**
- * THE EVIDENCE OF A LINK RECORD: the source version's signed definitions and
+ * Link-record evidence includes the source version's signed definitions and
  * rules with the derived digests, the deciding approval as a LINK_RECORD
  * signature, and the links it now records. A source whose policy was never
  * recorded gives only the signature, and its record publishes without the

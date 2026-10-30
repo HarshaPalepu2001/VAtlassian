@@ -2,21 +2,19 @@ import { createHash } from 'node:crypto';
 import { STORAGE, objectKeyFor } from './vaultLocation.js';
 
 /**
- * THE ATTACHMENT VAULT: the Forge Object Store.
+ * Store baseline attachment bytes in Forge Object Store.
  *
- * It keeps the app inside the customer's Atlassian tenant (Runs on Atlassian),
- * holds an object of up to 1 GB, and keeps it until it is deleted — there is no
- * expiry unless one is asked for, and none is. Objects are keyed by their
- * SHA-256 (./vaultLocation.js), so one set of bytes is stored once however many
- * baselines record it.
+ * The store keeps data within the customer's Atlassian tenant, supports objects
+ * up to 1 GB and retains them until deletion. This module requests no expiry.
+ * Keys use the bytes' SHA-256 through ./vaultLocation.js, so multiple baselines
+ * can share one stored object.
  *
- * TWO FAILURES ARE KEPT APART. An object that is not there is a 404: the copy is
- * gone, and a restore names that file as unrestorable. Anything else (the store
- * unreachable, rate limited) is a 503, which a queued restore retries — the
- * copy may be perfectly fine.
+ * A missing object returns 404 and restore identifies the file as unrestorable.
+ * Other store failures, including rate limits, return 503 for queued restore
+ * to retry. A temporary read failure does not establish that the copy is gone.
  *
- * `fos` is @forge/object-store's client and `fetch` is @forge/api's, injected so
- * this can be tested; the upload and download themselves go to pre-signed URLs.
+ * Inject fos from @forge/object-store and fetch from @forge/api for tests.
+ * Uploads and downloads use pre-signed URLs.
  */
 
 /**

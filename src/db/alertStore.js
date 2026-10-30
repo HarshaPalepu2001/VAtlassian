@@ -1,20 +1,15 @@
 /**
- * Persistence for the alert outbox. See lib/alerts.js for why alerts exist and
- * why Jira is the delivery channel; this file is only storage.
+ * Store the alert outbox. lib/alerts.js explains the alert policy and Jira
+ * delivery channel.
  *
- * EVERY WRITE HERE IS BEST-EFFORT AND SAYS SO. enqueue() is called from the
- * middle of a request that is already refusing a signer — the lockout path in
- * resolvers/panel.js. If the outbox INSERT fails, the correct outcome is a
- * logged error and a completed refusal, never an exception that turns "your
- * code was wrong" into "something went wrong", which would tell an attacker
- * they had found an edge and tell an honest user nothing useful.
+ * Writes return failure and log errors without throwing. enqueue() runs while
+ * resolvers/panel.js is refusing a locked-out signer. An outbox failure must
+ * preserve that refusal instead of replacing it with a generic exception that
+ * reveals the failing path and hides the useful error.
  *
- * That is a deliberate asymmetry with lib/ledger.js, which fails CLOSED when it
- * cannot record. The difference is what the record is for: an unrecorded
- * signature would be an action taken without evidence, so it must not happen;
- * an undelivered alert is evidence that exists (the ledger already has the
- * lockout) but has not yet been carried to a person. Losing the carrier must
- * not also lose the refusal.
+ * This differs from lib/ledger.js, which refuses an action if it cannot record
+ * the evidence. The ledger has already recorded the lockout before enqueue().
+ * Failure to deliver its alert must not undo the refusal.
  */
 import { executeQuery, toBinaryParam, affectedRows, limitClause } from '../lib/db.js';
 import { newId } from './store.js';
@@ -93,8 +88,10 @@ export async function markAttemptFailed(alertIdBase64, error) {
   return res.result === true;
 }
 
-/** How much is stuck. Surfaced in the admin console, because an outbox nobody
- *  can drain is the same failure as no outbox at all — just quieter. */
+/**
+ * Count undelivered alerts for the admin console so administrators can detect
+ * an outbox that is not draining.
+ */
 export async function undeliveredCount() {
   const res = await executeQuery(
     'SELECT COUNT(*) AS n FROM va_alert WHERE delivered_at IS NULL'

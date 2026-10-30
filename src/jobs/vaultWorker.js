@@ -1,30 +1,24 @@
 /**
- * THE ATTACHMENT VAULTING WORKER — consumer of va-vault-queue.
+ * Copy captured baseline attachments through va-vault-queue.
  *
- * applyApproval (usecases/drift.js) enqueues one job per captured baseline —
- * the approved item's and every child its capture baselined — so this runs off
- * the approval's own 25-second budget. It copies files to the Forge Object
- * Store, hashing each one and recording it against the baseline in
- * va_vault_attachment.
+ * applyApproval in usecases/drift.js queues one job for the approved baseline
+ * and each child baseline. Copying runs outside the approval's 25-second
+ * budget. The worker hashes each file, stores its bytes in Forge Object Store
+ * and records the baseline association in va_vault_attachment.
  *
- * WHICH FILES. When the baseline tracks attachments the job carries the files
- * it recorded (`body.attachments`), and exactly those are copied: the set that
- * was signed, not whatever is on the issue by the time this runs. A recorded
- * file already gone from the issue is carried forward from an earlier vaulted
- * copy of the same Jira id (the same bytes, since Jira never changes a file),
- * or reported as not vaulted. Without `body.attachments`, no files are copied:
- * current attachments are not evidence of baseline membership. Files use their CANONICAL id
- * (lib/attachmentIdentity.js), so a restored copy is filed as the original.
+ * Copy only the files recorded in body.attachments when the baseline tracks
+ * attachments. Current issue attachments do not prove baseline membership;
+ * without body.attachments the worker copies nothing. If a recorded file has
+ * already been removed, reuse an earlier vaulted copy of the same Jira ID or
+ * report it as not vaulted. Jira attachment bytes do not change in place.
  *
- * AND UNDER THE ID RICH TEXT USES. Each file's media id is recorded with it
- * (lib/mediaIdentity.js), canonical too: a description that shows this file
- * points at that id, and a restore needs it to know which vaulted file each
- * pointer in an approved description is.
+ * Store canonical attachment IDs from lib/attachmentIdentity.js and canonical
+ * media IDs from lib/mediaIdentity.js. Restore uses the media ID to map each
+ * approved description pointer to its vaulted file.
  *
- * Forge queues deliver at least once: an attachment already recorded for this
- * baseline is skipped. One attachment failing never stops the rest — each
- * failure is audited. Temporary failures request redelivery of the same job;
- * successful copies are skipped on that delivery.
+ * Queues deliver at least once. Skip files already recorded for the baseline,
+ * audit each failure and continue with the remaining files. Temporary failures
+ * request redelivery; the next delivery skips successful copies.
  */
 import api, { route } from '@forge/api';
 import { InvocationError, InvocationErrorCode } from '@forge/events';

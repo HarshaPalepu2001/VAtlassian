@@ -77,14 +77,10 @@ export function createRestoreAdapters({ api, route, actorAccountId = 'system', a
   };
   return {
     /**
-     * A recursive hierarchy can span more than one Jira project. Checking
-     * permissions only against rootIssueKey lets a plan pass preflight and
-     * then fail midway on a child in a project the actor cannot touch.
-     * Grouped by project (never by node — that would reintroduce an
-     * unbounded-round-trip risk like the unbatched tree writer had), so
-     * this is at most one request per DISTINCT project the plan touches,
-     * not one per step.
-     */
+ * Check permissions once per project in the plan. Checking only the root
+ * can miss denied access to descendants in other projects. Group requests by
+ * project to avoid an unbounded request count per node or step.
+ */
     async checkPermissions({ steps, rootIssueKey, baselineTree, currentTree }) {
       const nodesByLogicalId = new Map();
       for (const node of baselineTree?.nodes ?? []) nodesByLogicalId.set(String(node.logicalNodeId), node);

@@ -146,7 +146,7 @@ test('a device check refuses an approval it was not collected for', async () => 
 });
 
 test('a device check completes only the approval challenge it was started for', async () => {
-  // The binding hash names issue, decision and content — not the transition or
+  // The binding hash names issue, decision and content. It excludes the transition and
   // the meaning the signer was shown. Two challenges on one item can share all
   // three, so the check must name its own challenge.
   for (const approvalChallengeId of [Buffer.alloc(16, 0xc), undefined]) {

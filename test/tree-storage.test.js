@@ -63,8 +63,8 @@ test('activeRootsForNode returns only complete active baselines', async (t) => {
   };
 
   // The approval provenance travels with the coverage. A child work item has no
-  // va_baseline row of its own, so this is the only way its panel — and an
-  // auditor — can say who approved it, when, and at what assurance.
+  // va_baseline row of its own. This lets its panel and an
+  // auditor identify who approved it, when, and at what assurance.
   const roots = await activeRootsForNode(20002, query);
   assert.deepEqual(roots, [{
     baselineId: baselineIdBuffer,

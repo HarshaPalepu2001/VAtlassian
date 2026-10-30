@@ -1,15 +1,13 @@
 /**
- * Eligibility scope — 21 CFR 11.10(g) authority checks.
+ * Project-scoped eligibility under 21 CFR 11.10(g).
  *
- * The situation these tests describe is the one that motivated the change: ten
- * QA leads, ten projects, one lead each. Before project scoping, granting the
- * QA lead role for the Task issue type authorised every one of them on all ten
- * projects — nobody unauthorised could sign, but everybody authorised could
- * sign everywhere, and 11.10(g) is a statement about a specific record.
+ * The motivating case had ten QA leads across ten projects, one lead per
+ * project. Before project scoping, a QA lead grant for Task authorized each
+ * lead on all ten projects. The signers were eligible people, but their
+ * grants covered the wrong records.
  *
- * The failure mode to defend against is a widening one: any path by which a
- * grant scoped to one project ends up satisfying another. Absence of a match
- * must never read as permission.
+ * These tests forbid a grant for one project from satisfying another.
+ * A missing match must never grant permission.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

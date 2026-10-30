@@ -163,11 +163,9 @@ test('a disabled project does not advertise a drift hold that its validator will
 
 // The signing screen (src/ui-kit/edit.jsx) renders issue.assignee,
 // issue.reporter, issue.issueTypeName and issue.description* directly from
-// this resolver's response. Dropping them here does not make the field
-// "stale" — it makes it wrong: the signer sees "Unassigned" / "Unknown" /
-// a blank description regardless of the work item's actual current values,
-// which is exactly the attestation-content mismatch a signature is supposed
-// to prevent.
+// this resolver's response. Omitting them shows the signer "Unassigned",
+// "Unknown", or a blank description instead of the current values.
+// The attestation must describe the content the signer reviews.
 test('signing context carries the current assignee, reporter, issue type and description through to the signer', async () => {
   const f = fixture({
     available: [{ id: '101', toStatusId: '4', name: 'Create Baseline', toStatusName: 'Selected for Development' }]

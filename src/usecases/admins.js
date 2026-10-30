@@ -9,7 +9,7 @@ export async function check(req, overrides) {
     // Only asked when it changes what the console may show. A permission read
     // that fails is not standing: it denies the roster page rather than
     // opening it on an unverified claim. A read refused for want of the
-    // person's consent is the exception — it must reach Forge, which then asks
+    // person's consent is the exception. It must reach Forge, which then asks
     // them to allow access, or a new Jira administrator is told "no access".
     const isJiraAdmin = isAdmin ? false : await deps.isJiraAdmin().catch(error => {
       if (needsUserConsent(error)) throw error;

@@ -2,24 +2,18 @@ import { linkStateUnknown } from '../lib/restore/linkConflicts.js';
 import { baselineLinkPolicy, normaliseLinkPolicy } from '../lib/linkPolicy.js';
 
 /**
- * WHAT THE OTHER END OF A LINK APPROVED.
+ * Read the approved links for the issue at the other end before a restore
+ * changes a link (../lib/restore/linkConflicts.js). Return null when the issue
+ * is ungoverned or its baseline does not track links, so no approval applies.
  *
- * A restore that is about to add or remove a link asks this, for the issue at
- * the other end, before touching it (../lib/restore/linkConflicts.js). The
- * answer is that issue's approved link list, or null when it has none — not
- * governed at all, or governed without tracking links — and so no approval a
- * link change could contradict.
+ * Resolve the approved record in this order:
+ * 1. The destination tree of this restore, if it contains the other issue.
+ *    Apply newer child baselines as ../lib/tree/childBaselines.js does.
+ * 2. The issue's active single-issue baseline.
+ * 3. Its own tree if it is a root, or the most recently approved tree covering it.
  *
- * Where the answer comes from, most specific first:
- *   1. The tree this restore is returning to, when the other end is in it:
- *      that is the state the same restore is putting it in, child baselines
- *      already standing in for their own records (../lib/tree/childBaselines.js).
- *   2. Its own active single-issue baseline.
- *   3. The tree that covers it — its own, when it is a root, or the most
- *      recently approved tree it is a node of.
- *
- * A governed end whose links were tracked but not retained cannot be checked;
- * that refuses the link (linkStateUnknown) rather than guessing either way.
+ * If the baseline tracks links but did not retain them, refuse the link change
+ * with linkStateUnknown rather than infer the approved state.
  */
 const LINKS = 'issuelinks';
 const nodeIssueId = node => String(node?.currentIssueId ?? node?.originalIssueId ?? '');

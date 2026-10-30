@@ -7,21 +7,21 @@ import { FailClosed } from '../lib/errors.js';
 import { serialiseLinkPolicy } from '../lib/linkPolicy.js';
 
 /**
- * A BASELINE FOR EVERY CHILD, WRITTEN BY ITS PARENT'S CAPTURE.
+ * Write a baseline for each child reached by a parent's capture.
  *
  * Decided 2026-09-24 (docs/specs/2026-09-24-child-baselines-design.md): when a
  * parent is baselined, every child its tree capture reaches gets an ordinary
  * single-issue baseline of its own, at the child's next version, over the
  * child's own project and issue type's Controlled Fields. From then on the
- * child is simply a baselined item: the validator holds it on its own drift,
+ * child has a baseline: the validator holds it on its own drift,
  * the single-issue collector measures it, and its own panel decides it.
  *
- * THE AUTHENTICATION IS THE PARENT'S. The parent's signature binds the tree
+ * Use the parent's authentication. The parent's signature binds the tree
  * hash, which covers each child's content hash exactly as recorded here, so
  * each row carries the parent's approval, signer and control policy, and
  * `captured_by_baseline_id` names the parent baseline it came from.
  *
- * SAME ORDER AS EVERY OTHER CAPTURE. Rows are written CAPTURING, published only
+ * Use the same ordering as other captures. Write rows as CAPTURING, publish only
  * after the parent's tree is published, and every step can be repeated: a
  * retry clears this parent's unpublished rows before writing them again, and
  * publication activates whatever is still CAPTURING.
@@ -169,7 +169,7 @@ export async function writeChildBaselines({ rows, parentBaselineId, query = stor
  */
 export async function publishChildBaselines({ parentBaselineId, requireEvidence = false, query = store.throwing, write = executeQuery }) {
   const parentId = toBinaryParam(parentBaselineId);
-  // A capture that requires evidence must publish EVERY child it wrote: a child
+  // A capture that requires evidence must publish every child it wrote: a child
   // left CAPTURING without its evidence would otherwise be skipped silently by
   // the update below, and the capture would report a child baseline that is not
   // standing. Counted first, compared after.

@@ -1,23 +1,13 @@
 /**
- * The changelog: attribution, and only attribution.
+ * Read who changed an issue and when.
  *
- * THE DIVISION OF LABOUR THIS WHOLE APP RESTS ON.
+ * Changelog entries supply attribution. Baseline/live-issue comparisons supply
+ * changed values. Do not derive drift or field values from the changelog:
+ * entries vary by field and may be absent.
  *
- *   The changelog is authoritative for WHO and WHEN, and lossy for WHAT.
- *   The baseline versus the live issue is authoritative for WHAT, and silent
- *   about WHO.
- *
- * Drift detection is deliberately NOT derived from the event changelog: the
- * changelog is unreliable — it varies by field and is sometimes absent
- * entirely. This module does not contradict that rule. Nothing here is ever
- * used to decide WHETHER something changed, or what its value is; values come
- * from the projection. This module answers the other question — "who did it,
- * and when" — and it is the only source that can.
- *
- * Concretely: `fromString`/`toString` on a description change are a flattened,
- * lossy rendering of ADF. Trusting them for VALUE would produce a diff that is
- * subtly wrong. Trusting them for ATTRIBUTION is exact, because the author and
- * timestamp on a changelog entry are facts about the edit, not renderings of it.
+ * For example, a description's fromString/toString is a flattened, lossy
+ * rendering of ADF. Its author and timestamp describe the edit, but its strings
+ * cannot replace the values from the content projection.
  */
 
 /** Where a change came from, derived from the changelog author. */
@@ -35,10 +25,9 @@ export const SOURCE = {
 };
 
 /**
- * Display names Atlassian uses for its own automation actor. Matched
- * case-insensitively and only as a REFINEMENT of accountType === 'app' — never
- * as the primary signal, because a display name is user-visible text that a
- * site admin can change and another app could imitate.
+ * Atlassian automation display names, matched case-insensitively only after
+ * accountType === 'app'. Never use the name as the primary signal: an
+ * administrator can rename it and another app can imitate it.
  */
 const AUTOMATION_NAMES = [/^automation for jira$/i, /^automation$/i, /\bautomation\b.*\brule/i];
 
@@ -56,20 +45,13 @@ export function classifySource(author) {
 }
 
 /**
- * Read an issue's changelog, newest page last, following pagination.
+ * Read all available changelog pages, returning the newest page last.
  *
- * @param request  async ({ startAt, maxResults }) => Response — injected so
- *                 this is testable without a Jira client.
- * @param sinceMs  stop paging once entries are older than this. The API returns
- *                 oldest-first, so this cannot short-circuit the fetch; it
- *                 filters. Kept as a parameter anyway because the filter is the
- *                 caller's intent and doing it here keeps the intent in one
- *                 place.
- * @param maxPages hard bound. A work item with tens of thousands of changelog
- *                 entries exists in the wild, and a resolver that walks all of
- *                 them will time out. Paging stops and `truncated` is set, and
- *                 every caller renders that honestly rather than presenting a
- *                 partial history as complete.
+ * @param request Injected async ({ startAt, maxResults }) => Response.
+ * @param sinceMs Filter entries older than this timestamp. The oldest-first API
+ *                still requires fetching every page before applying the filter.
+ * @param maxPages Bound pagination to the resolver budget. Reaching this limit
+ *                 sets truncated; callers must disclose the incomplete history.
  */
 export async function fetchChangelog(request, { sinceMs = 0, maxPages = 10, pageSize = 100 } = {}) {
   const entries = [];
@@ -136,17 +118,13 @@ export async function fetchChangelog(request, { sinceMs = 0, maxPages = 10, page
 }
 
 /**
- * Group changelog entries into a per-field timeline.
+ * Build a per-field timeline ordered oldest to newest. This lets the panel
+ * show successive edits and their authors rather than only before/after values.
  *
- * @param entries    from fetchChangelog
- * @param fieldIds   only these fields; everything else is dropped
+ * @param entries Entries from fetchChangelog.
+ * @param fieldIds Keep only these fields.
  * @returns { [fieldId]: Array<{ changelogId, at, authorId, authorName, source,
- *            fromString, toString }> } — ordered oldest to newest.
- *
- * This is the object that makes the panel able to say "changed three times:
- * Priya raised it, Automation lowered it again, then Sam raised it back" rather
- * than a bare before/after. A reviewer's second question is always "how did we
- * get here", and a two-column diff cannot answer it.
+ *            fromString, toString }> }
  */
 export function attributionByField(entries, fieldIds) {
   const wanted = new Set(fieldIds);
@@ -173,13 +151,9 @@ export function attributionByField(entries, fieldIds) {
 }
 
 /**
- * A flat, chronological timeline suitable for the AI payload and the panel's
- * activity strip: one row per (author, moment), listing the fields they touched
- * together.
- *
- * SESSIONISED, because a single save that changes four fields produces one
- * changelog entry with four items and must read as one action. Presenting it as
- * four separate changes overstates how much happened.
+ * Build a chronological timeline for the AI payload and panel activity strip.
+ * Each row groups fields changed by the same author at the same moment. A single
+ * save with four changed fields should appear as one action, not four.
  */
 export function timeline(entries, fieldIds) {
   const wanted = new Set(fieldIds);
@@ -201,15 +175,11 @@ export function timeline(entries, fieldIds) {
 }
 
 /**
- * Which fields, of those we care about, changed after `sinceMs` — and who
- * touched each one last.
+ * Find fields changed after sinceMs and each field's latest editor.
  *
- * Used by the collector to attribute a drift row it detected by hash. The hash
- * comparison says a field is different; this says who made it different. When
- * the changelog has nothing to offer (team-managed projects, some field types,
- * a failed fetch) the drift row is still written with a null author and
- * `detected_via: 'SWEEP'`. An unattributed change is worth recording; a
- * change dropped because we could not name its author is not.
+ * The collector uses this after detecting drift by hash. If the changelog is
+ * unavailable or lacks attribution, still record the drift with a null author
+ * and detected_via: 'SWEEP'. Missing attribution must not suppress a change.
  */
 export function lastTouchByField(entries, fieldIds, sinceMs = 0) {
   const byField = attributionByField(entries.filter((e) => e.at >= sinceMs), fieldIds);

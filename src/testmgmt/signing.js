@@ -5,18 +5,15 @@ import { TM_ASSURANCE } from './chain.js';
 import crypto from 'node:crypto';
 
 /**
- * ONE SIGNING STEP, WITH THE SAME CONTROLS AS EVERY OTHER VAtlassian SIGNATURE.
+ * Apply the same signature controls to test-management sign-off under owner
+ * decision 4. Check role eligibility through va_eligibility and verify the
+ * authenticator code through lib/approval/totpVerification.js.
  *
- * Owner decision 4: the role, the assurance level, a signature bound to the
- * content hash and usable exactly once, and an audit entry. Here that is:
- *   - eligibility: the same va_eligibility predicate the gate uses;
- *   - assurance: the signer's authenticator code (lib/approval/totpVerification.js);
- *   - content: the caller recomputes the hash on the server and compares it
- *     with the hash the signer was shown; any difference is CONTENT_CHANGED;
- *   - once: tm_signature's primary key is (kind, subject, step);
- *   - audit: an entry in the va_audit hash chain. If it cannot be written the
- *     signature row is removed again and the step reports LEDGER_UNAVAILABLE:
- *     an unrecorded signature must not take effect (lib/ledger.js).
+ * Recompute the content hash server-side and reject mismatches as
+ * CONTENT_CHANGED. The tm_signature primary key on kind, subject and step
+ * prevents reuse. Write the va_audit entry before the signature takes effect.
+ * If audit fails, remove the signature row and return LEDGER_UNAVAILABLE.
+ * See lib/ledger.js.
  */
 
 /**

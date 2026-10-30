@@ -1,10 +1,10 @@
-# Baseline-Owned Recall and Responsive Controls Implementation Plan
+# Baseline-owned recall and responsive controls implementation plan
 
-**Goal:** Make the latest active baseline the server-owned authority for drift recall, drift approval, restoration, and UI actions while keeping the transition screen exact and making the issue panel and My Approvals immediately useful.
+**Goal.** Make the latest active baseline the server-owned authority for drift recall, drift approval, restoration, and UI actions while keeping the transition screen exact and making the issue panel and My Approvals immediately useful.
 
-**Architecture:** Preserve the existing `va_approval` lifecycle and exact Jira transition binding. Repair recursive baseline storage first, persist immutable role/provider/edge provenance on every baseline, derive drift actions only from the latest active baseline, and journal restoration as idempotent actions continued by a Forge async-events consumer. Split the shared panel model into a compact summary and lazy evidence read; authorization paths continue to perform fresh full reads.
+**Architecture.** Preserve the existing `va_approval` lifecycle and exact Jira transition binding. Repair recursive baseline storage first, persist immutable role/provider/edge provenance on every baseline, derive drift actions only from the latest active baseline, and journal restoration as idempotent actions continued by a Forge async-events consumer. Split the shared panel model into a compact summary and lazy evidence read; authorization paths continue to perform fresh full reads.
 
-**Tech Stack:** Atlassian Forge Node.js 22, Jira Cloud REST API v3, Forge SQL/MySQL, Forge Async Events API (`@forge/events` 3.x), React 19, Atlaskit, UI Kit, SimpleWebAuthn, Node test runner, TypeScript 6, Vite 8.
+**Technology.** Atlassian Forge Node.js 22, Jira Cloud REST API v3, Forge SQL/MySQL, Forge Async Events API (`@forge/events` 3.x), React 19, Atlaskit, UI Kit, SimpleWebAuthn, Node test runner, TypeScript 6, Vite 8.
 
 **Spec:** `docs/specs/2026-09-13-baseline-owned-recall-and-responsive-controls-design.md`
 

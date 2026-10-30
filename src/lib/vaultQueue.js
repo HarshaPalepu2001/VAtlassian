@@ -39,12 +39,8 @@ export function enqueueVault(body, { queue = vaultQueue } = {}) {
 const PUSH_LIMIT = 50;
 
 /**
- * Many jobs at once — one per baseline a capture wrote, which for a parent is
- * one per child as well. Pushed in batches, so a 500-node tree costs ten
- * requests, not five hundred, inside the approval's time budget. Never throws:
- * returns the jobs that were not queued, each with its error, for the caller
- * to audit. A job Forge reports as failed within an otherwise accepted batch
- * is reported alone; if the batch as a whole failed, all of it is.
+ * Enqueue one vault job per captured baseline, including child baselines.
+ * Batch pushes so large trees do not create one queue request per node.
  */
 export async function enqueueVaultJobs(bodies, { queue = vaultQueue } = {}) {
   const failed = [];

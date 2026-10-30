@@ -1,27 +1,10 @@
 /**
- * Design tokens and base element styles for every Custom UI surface.
+ * Shared tokens and element styles, imported after @atlaskit/css-reset.
  *
- * Imported once, from main.tsx, immediately after @atlaskit/css-reset. Every
- * surface in this app (panel, queue, admin console, personal settings) draws
- * from this file so that a signer who meets the product on an issue panel and
- * an auditor who meets it in the admin console are looking at the same thing.
- *
- * The palette tracks Atlassian's, because these surfaces are embedded in Jira
- * chrome and anything else reads as a bolted-on third-party app — which is
- * exactly the impression a signing control should not give.
- *
- * DARK MODE IS DRIVEN BY data-color-mode, NOT prefers-color-scheme. Jira's
- * light/dark theme is a per-user setting inside Jira, independent of the
- * browser/OS preference — someone can run an OS in light mode and Jira in
- * dark mode, or vice versa. A Custom UI app lives in its own iframe, so it
- * never sees Jira's setting unless it asks: main.tsx calls the Forge bridge's
- * `view.theme.enable()`, which is Atlassian's documented mechanism for
- * syncing a Custom UI iframe to the host's actual theme, and which sets this
- * attribute on the iframe's own <html> element (falling back to
- * prefers-color-scheme itself, in main.tsx, only when that bridge call fails
- * — e.g. running the Vite dev server standalone, outside any Jira page).
- * Reacting to prefers-color-scheme directly here, as before, meant this app
- * silently disagreed with Jira any time the two settings differed.
+ * Use data-color-mode for Jira's theme, which may differ from the OS theme.
+ * main.tsx calls view.theme.enable() to set this attribute inside the Custom
+ * UI iframe. It falls back to prefers-color-scheme only if the bridge call
+ * fails, such as when running Vite outside Jira.
  */
 
 :root {
@@ -73,9 +56,9 @@
   --va-shadow-overlay: 0 8px 12px rgba(9, 30, 66, 0.15),
     0 0 1px rgba(9, 30, 66, 0.31);
 
-  /* Materiality — an ordinal scale, not three unrelated badge colours.
-     Used as the spine down the left of a changed field, where weight and
-     hue together say how much attention the change is owed. */
+  /**
+ * Materiality uses line weight and colour beside each changed field.
+ */
   --va-mat-critical: #c9372c;
   --va-mat-major: #b65c02;
   --va-mat-minor: #0c66e4;
@@ -112,12 +95,8 @@
 }
 
 /**
- * Figures line up in columns everywhere.
- *
- * This is the single typographic decision that makes the app read as an
- * instrument rather than a web page: a column of timestamps, versions, counts
- * and identifiers in proportional figures wobbles, and a reader comparing two
- * of them has to actually read both. Tabular figures let the eye compare shape.
+ * Tabular figures align timestamps, versions, counts and identifiers
+ * so readers can compare table columns.
  */
 time,
 code,
@@ -220,9 +199,9 @@ body {
   margin-bottom: 28px;
 }
 
-/* Sentence case, at reading size. This was a tracked-out uppercase eyebrow —
-   the kind of label that decorates a heading rather than telling anyone
-   anything. It names the product area, so it should be legible, not shouted. */
+/**
+ * Use sentence case and body-sized text for the product-area label.
+ */
 .va-page__eyebrow {
   font-size: var(--va-size-meta);
   font-weight: 500;
@@ -531,7 +510,7 @@ body {
 }
 
 /* ---------------------------------------------------------------------------
-   Definition list — label/value pairs for record context
+   Definition list for record context
    --------------------------------------------------------------------------- */
 
 .va-facts {
@@ -630,10 +609,10 @@ body {
   cursor: not-allowed;
 }
 
-/* Grid for the multi-control configuration forms in the admin console. Each
-   control gets a real label rather than a placeholder standing in for one —
-   a placeholder disappears the moment a value is chosen, which is when an
-   admin reviewing a half-filled rule most needs to know what the field was. */
+/**
+ * Keep labels visible after a value is chosen so administrators can review
+ * partially completed configuration forms.
+ */
 .va-form-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
@@ -709,9 +688,10 @@ body {
   color: var(--va-text-subtlest);
 }
 
-/* The explicit affirmation. 21 CFR 11.50(a) wants the meaning associated with
-   the signature; a checkbox the signer has to tick is the difference between
-   "typed six digits into a box" and "declared something". */
+/**
+ * Require an explicit affirmation of the signature's meaning for
+ * 21 CFR 11.50(a).
+ */
 .va-affirm {
   display: flex;
   gap: 10px;
@@ -772,7 +752,7 @@ body {
 }
 
 /* ---------------------------------------------------------------------------
-   Record summary — what is being signed
+   Record summary
    --------------------------------------------------------------------------- */
 
 .va-record {
@@ -917,7 +897,7 @@ body {
 }
 
 /* ---------------------------------------------------------------------------
-   Admin Console in-app navigation (Configure mode & fallback)
+   Admin console navigation in Configure mode and as a fallback
    --------------------------------------------------------------------------- */
 
 .va-nav-tabs {

@@ -1,5 +1,5 @@
 /**
- * TEST AUTHORING — drafts, published versions, and their sign-off.
+ * Test authoring manages drafts, published versions and sign-off.
  *
  * Owner decision 3: a run that counts is created only from a signed version.
  * A draft is free to edit and never executed for the record. Publishing

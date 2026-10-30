@@ -1,15 +1,12 @@
 /**
- * Retention and pruning — 21 CFR 11.10(c).
+ * Retention and pruning under 21 CFR 11.10(c).
  *
- * Every other test in this suite defends against letting something through.
- * These defend against DESTROYING something. Pruning is the only irreversible
- * act this app can perform, and the records it would destroy are ones a
- * customer may be legally required to hold for years. So the tests are written
- * from the position that any path reaching `prune: true` by accident is the
- * worst defect the codebase could have.
+ * Pruning irreversibly deletes records a customer may need to retain for
+ * years. These tests guard every path to `prune: true` against accidental
+ * deletion.
  *
- * The 90-day near miss is pinned below as a named case, because that is exactly
- * how it would happen again: an operational number typed into a legal field.
+ * The named 90-day case reproduces a near miss in which an operational
+ * device-check interval was used as a legal retention period.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -62,7 +59,7 @@ test('unreadable or nonsense config falls back to never, not to zero', () => {
 
 test('90 days is refused without an explicit acknowledgement', () => {
   // The number that was nearly adopted. It came from the device-check
-  // interval — an operational figure in a different unit of meaning.
+  // interval, which measures device activity rather than legal retention.
   const policy = policyOf({ [RETENTION_DAYS_CFG]: '90' });
 
   assert.equal(policy.configured, true);
@@ -167,6 +164,6 @@ test('the period boundary retains rather than prunes', () => {
 
 test('the console describes each of the three states distinctly', () => {
   assert.match(describeRetention(policyOf({})), /indefinitely/);
-  assert.match(describeRetention(policyOf({ [RETENTION_DAYS_CFG]: '90' })), /needs acknowledgement/);
+  assert.match(describeRetention(policyOf({ [RETENTION_DAYS_CFG]: '90' })), /Awaiting acknowledgement before taking effect/);
   assert.match(describeRetention(enabled), /730 days after sealing, once exported and verified/);
 });

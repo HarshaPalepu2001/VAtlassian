@@ -4,17 +4,15 @@ import assert from 'node:assert/strict';
 import { rowAuthorises, anyAuthorises, ELIGIBILITY_PREDICATE } from '../src/lib/eligibility.js';
 
 /**
- * THE WILDCARD IS THE WHOLE POINT OF THIS FILE.
+ * Issue-type wildcard eligibility.
  *
- * The admin console grants a reviewer with `issue_type_id = '*'`, because a
- * person trusted to review a Story is trusted to review the Bug beside it.
- * If the predicate matched that column exactly, the console could only ever
- * write rows nothing could find — and the failure would be silent: every
- * decision refused as "not an eligible reviewer", with a grant visible on the
- * screen saying otherwise.
+ * The admin console grants a reviewer `issue_type_id = '*'` to cover Story
+ * and Bug work items alike. An exact-only predicate would never find those
+ * grants and would refuse each decision as "not an eligible reviewer" even
+ * though the console showed the grant.
  *
- * rowAuthorises() is the in-memory twin of ELIGIBILITY_PREDICATE. These tests
- * are what keep the two from drifting apart.
+ * These tests check that rowAuthorises(), the in-memory implementation,
+ * matches ELIGIBILITY_PREDICATE.
  */
 
 const SCOPE = { projectId: 10001, issueTypeId: '10004', role: 'REVIEWER' };
@@ -48,7 +46,7 @@ test('a revoked grant authorises nothing, wildcard or not', () => {
   assert.equal(rowAuthorises(grant({ state: 'REVOKED', issue_type_id: '*' }), SCOPE), false);
 });
 
-test('the role must match exactly — there is no role wildcard', () => {
+test('the role must match exactly without a wildcard', () => {
   assert.equal(rowAuthorises(grant({ role: 'APPROVER' }), SCOPE), false);
 });
 

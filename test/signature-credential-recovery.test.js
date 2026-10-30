@@ -1,12 +1,12 @@
 /**
- * Who may replace a second factor — 21 CFR 11.300(c) and 11.200(a)(3).
+ * Second-factor replacement under 21 CFR 11.300(c) and 11.200(a)(3).
  *
- * The regression these tests exist to prevent is the one that was live until
- * 2026-08-31: resolvers/totp.js guarded only LOCKED, so an ACTIVE credential
- * could be deleted and replaced on request. Anyone with a live Atlassian
- * session could register their own authenticator over the signer's and then
- * sign as them, which reduces the two identification components of
- * 11.200(a)(1) to one and makes 11.200(a)(3) reachable by a single person.
+ * Until 2026-08-31, resolvers/totp.js guarded only LOCKED credentials. An
+ * ACTIVE credential could be deleted and replaced on request. Anyone with
+ * a live Atlassian session could register another authenticator and sign as
+ * the original signer. This reduced the two identification components in
+ * 11.200(a)(1) to one and let one person perform the actions covered by
+ * 11.200(a)(3). These tests prevent that regression.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -38,7 +38,7 @@ test('a LOCKED credential cannot be replaced without a grant', () => {
   assert.match(verdict.error, /locked/i);
 });
 
-test('ACTIVE and LOCKED are refused identically — being locked is not a way in', () => {
+test('ACTIVE and LOCKED credentials both refuse replacement', () => {
   const active = enrolmentDecision({ credential: cred(CREDENTIAL_STATE.ACTIVE), grant: null, now: NOW });
   const locked = enrolmentDecision({ credential: cred(CREDENTIAL_STATE.LOCKED), grant: null, now: NOW });
   assert.equal(active.decision, locked.decision);
@@ -143,6 +143,6 @@ test('a stale enrolment can be restarted, and says why', () => {
 
 test('a missing enrolled_at does not expire the row by accident', () => {
   // A row written before this column was reliably populated must not become
-  // unusable — failing the wrong way here locks people out of their own setup.
+  // unusable. Refusing it would lock people out of their own setup.
   assert.equal(enrolmentExpired({ state: CREDENTIAL_STATE.PENDING_CONFIRM, enrolled_at: null }, NOW), false);
 });

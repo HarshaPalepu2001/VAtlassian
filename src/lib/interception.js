@@ -12,14 +12,13 @@ export const REVIEW_STATE = {
 };
 
 /**
- * HOW LONG AN OPERATION LOCK IS TRUSTED WITHOUT A HEARTBEAT. The one
- * definition; every reader of a DECIDING or RESTORING row asks this.
+ * Maximum operation-lock age without a heartbeat, shared by readers of
+ * DECIDING and RESTORING rows.
  *
- * A decision runs inside one resolver call, so a minute is generous. A restore
- * does not: it is queued, waits for delivery, and its worker may spend up to
- * its 600 s timeout on one batch (jobs/restoreWorker.js heartbeats the row
- * between batches). A minute there declared a running restore abandoned, and
- * the collectors and a second reviewer then acted underneath it.
+ * A decision runs within one resolver call, so one minute suffices. A queued
+ * restore can wait for delivery and spend up to its 600-second worker timeout
+ * on a batch. jobs/restoreWorker.js heartbeats between batches. Applying the
+ * one-minute limit there let collectors and another reviewer act during restore.
  */
 export const LOCK_TTL_MS = 60 * 1000;
 export const RESTORE_LEASE_MS = 11 * 60 * 1000;
@@ -42,24 +41,15 @@ export const OUTCOME = {
 };
 
 /**
- * WHICH TRACKED FIELDS NO LONGER MATCH THE SIGNATURE — the whole definition of
- * drift, as one pure function.
+ * Compare tracked-field digests to derive drift instead of trusting a counter.
  *
- * DRIFT IS DERIVED, NOT COUNTED. It used to be a number on va_item_state that
- * the collector wrote and the decision paths zeroed, which made it a second
- * answer to a question the content already settles — and on VJIRA-17 the two
- * disagreed permanently: the row said 0 while the live comparison said one
- * field had moved, so the panel showed a change it would not let anyone decide.
- * A stored counter can be missed, double-cleared or left stale by any path that
- * forgets to update it. A comparison cannot.
+ * Collectors wrote va_item_state counters and decision paths cleared them.
+ * A missed update could leave the stored count at zero while live fields
+ * differed, as on VJIRA-17. observe() and the panel summary now share this
+ * comparison so their drift counts agree.
  *
- * So this is the single implementation, and observe() and the panel summary
- * both call it. They cannot disagree about what drift is, because there is only
- * one place that decides.
- *
- * A BASELINE THAT CANNOT BE READ REPORTS EVERYTHING, for the reason spelled out
- * in observe() below: an absence of digests is not evidence of a match, and
- * concluding "clean" from it would report a corrupt baseline as an approved one.
+ * Unreadable baseline digests report all scoped fields as changed. Missing
+ * digests do not establish that the current content matches the approval.
  */
 export function driftedFields({ baselineDigests, issueFields, controlledFields, linkPolicy, issue }) {
   const fields = controlledFields ?? [];
@@ -77,7 +67,7 @@ export function driftedFields({ baselineDigests, issueFields, controlledFields, 
   try {
     return { changed: changedFields(bDigests, digests, ids), contentHash, digests, baselineReadable: true };
   } catch {
-    // FAILS TOWARDS DRIFT, for the same reason as an unreadable baseline.
+    // Report drift when the baseline is unreadable.
     return { changed: ids, contentHash, digests, baselineReadable: false };
   }
 }
@@ -98,34 +88,14 @@ export function observe({ prior, baselineDigests, issueFields, controlledFields,
 
   const { contentHash, digests: currentDigests } = project(issueFields, controlledFields, { linkPolicy, issue });
 
-  // ── ONE COMPARISON, USED FOR BOTH DECISIONS ────────────────────────────────
+  // Use one scoped comparison for both change detection and changed-field names.
+  // The earlier key-count check treated a 302-key baseline and four-field current
+  // scope as drift even when scoped values matched.
   //
-  // "Has anything changed?" and "what changed?" are now the same question asked
-  // once, and they cannot disagree.
-  //
-  // They used to be two. The no-change fast path required the key COUNTS to
-  // match — `Object.keys(currentDigests).length === Object.keys(bDigests).length`
-  // — so a baseline carrying 302 keys compared against a projection over 4 fell
-  // straight through it, whatever the values were. The item was then recorded as
-  // DRIFTED on the strength of a set difference alone, which is how an untouched
-  // work item acquired 302 drift rows.
-  //
-  // Deriving the answer from the scoped field list closes that: if no field in
-  // scope moved, there is no change, regardless of how the tracked set has been
-  // reshaped since the baseline was taken.
-  // A BASELINE WE CANNOT READ IS NOT A BASELINE THAT MATCHES.
-  //
-  // This is the one case that must NOT get the treatment above. An empty or
-  // unparseable digest map means the approved state is unknown — and because
-  // the scoped comparison only considers keys the baseline carries, it would
-  // find nothing to compare and conclude "nothing changed". Concluding that
-  // from an ABSENCE OF EVIDENCE is the one answer this function must never
-  // give: it would report a corrupt baseline as a clean one.
-  //
-  // Over-report instead. The reviewer sees every field once, and the next
-  // successful capture self-corrects.
-  // driftedFields() is the single definition, shared with the panel summary so
-  // the two can never disagree about what counts as drift.
+  // An empty or invalid baseline digest map is different: the approved state is
+  // unknown. A scoped comparison would find no keys and falsely report clean.
+  // Report every field instead until a successful capture repairs the baseline.
+  // Share driftedFields() with the panel summary so both counts agree.
   const changes = driftedFields({ baselineDigests: bDigests, issueFields, controlledFields, linkPolicy, issue }).changed;
 
   if (changes.length === 0) {

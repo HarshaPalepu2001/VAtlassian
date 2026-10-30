@@ -1,16 +1,15 @@
 /**
- * END-TO-END: ONE LINK CHANGE, ONE DECISION.
+ * End-to-end link decisions.
  *
- * Two separately baselined work items, linked the way Jira links them (one
- * object both list), run through the REAL validator and panel
- * (test/helpers/validator-world.js) and the REAL link worker. An approval on
- * one end is applied the way usecases/drift.js applies it: the item's own
- * capture, then the link decision queued for the other end, which the worker
- * then records.
+ * Two separately baselined work items share one Jira link object. The tests
+ * run the validator and panel through test/helpers/validator-world.js and
+ * use the link worker. As in usecases/drift.js, approval captures the item's
+ * own baseline before queueing a link decision for the other end. The
+ * worker records that decision.
  *
- * Replays VAT-3 / VAT-30 (2026-09-26): both baselined, "VAT-30 deploys VAT-3"
- * added, approved on VAT-30 only — which left VAT-3 held with a record no
- * decision could reconcile.
+ * The suite reproduces VAT-3 / VAT-30 on 2026-09-26. Both were baselined,
+ * "VAT-30 deploys VAT-3" was added, and VAT-30 alone was approved. VAT-3
+ * remained held with a record no decision could reconcile.
  */
 import { world, DRIFT, TRACKED } from './helpers/validator-world.js';
 import test from 'node:test';

@@ -1,17 +1,9 @@
 import { avatarColour, initials, nameOr } from './format';
 
 /**
- * THE SEAL.
- *
- * A small glyph drawn from a baseline's content hash: twelve ticks whose
- * lengths come from the hash's first twelve hex digits, around a ring whose
- * size comes from the thirteenth. The same record always draws the same seal
- * and a new version draws a different one, so a reviewer comparing the panel,
- * the review window and the signed record can see at a glance that all three
- * are talking about the same thing — without reading a single hex digit.
- *
- * It is decoration that carries information, which is the only kind this app
- * allows itself. The hash is also on hover for anyone who wants the digits.
+ * Draw a seal from a baseline's content hash. The first twelve hex digits
+ * set tick lengths, and the thirteenth sets the ring size. Matching seals help
+ * reviewers compare records across views. The full hash is available on hover.
  */
 export function Seal({ hash, size = 28, tone = 'brand', label }: { hash?: string | null; size?: number; tone?: 'brand' | 'success' | 'warning' | 'neutral'; label?: string }) {
   const digits = (hash ?? '').replace(/[^0-9a-f]/gi, '').toLowerCase();
@@ -38,7 +30,7 @@ export function Seal({ hash, size = 28, tone = 'brand', label }: { hash?: string
   );
 }
 
-/** A round avatar with initials — the same colour a person gets everywhere else. */
+/** An initials avatar with a consistent colour for each person. */
 export function Avatar({ name, size = 20, automation = false }: { name?: string | null; size?: number; automation?: boolean }) {
   const resolved = nameOr(name, 'user');
   if (automation) {

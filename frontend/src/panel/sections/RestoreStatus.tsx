@@ -33,13 +33,11 @@ const UNSUCCESSFUL = ['PARTIAL', 'FAILED', 'QUEUING_FAILED', 'ERROR'];
 export const restoreFinished = (state?: string | null) => !!state && (SUCCEEDED.includes(state) || UNSUCCESSFUL.includes(state));
 
 /**
- * Whether a restore is a fact about this baseline. A restore to version 2 is
- * version 2's history: once version 3 is signed, showing "Back to version 2"
- * on version 3's card reads as if version 3 had been undone. The review
- * window's record keeps every restore, each with its own version, and the
- * server refuses to retry one against a newer baseline (STALE_BASELINE).
- * A restore with no recorded version counts only if it ended after this
- * baseline was signed; one that cannot be placed is not claimed for it.
+ * Show a restore only on the baseline version it restored. The review
+ * window retains all restores. The server refuses retries against a newer
+ * baseline with STALE_BASELINE.
+ * If no version was recorded, include the restore only when it finished after
+ * this baseline was signed. Omit restores whose baseline cannot be identified.
  */
 export function restoreBelongsTo(restore: PanelRestore | null | undefined,
   baseline: { version: number; transitionAt?: number | null; capturedAt?: number | null } | null | undefined): boolean {
@@ -56,13 +54,8 @@ const refusedOf = (detail: any): Refused[] => summaryOf(detail)?.refused ?? [];
 const replacementsOf = (detail: any): any[] => detail?.find?.((d: any) => d.replacements)?.replacements ?? [];
 
 /**
- * What stopped this restore being complete, in the reviewer's own terms.
- *
- * A badge reading PARTIAL next to "All tracked fields" told a reviewer that
- * something had not been put back and gave them no way to find out what — on a
- * work item that, on screen, looked entirely correct. The verifier has always
- * known which field on which work item refused to match; this is where that
- * finally reaches the person who has to decide what to do about it.
+ * Show which fields on which work items failed restore verification so the
+ * reviewer can identify what still needs attention.
  */
 function Outstanding({ detail }: { detail: any }) {
   const unmatched = unmatchedOf(detail);
@@ -77,7 +70,7 @@ function Outstanding({ detail }: { detail: any }) {
           <li key={`u${idx}`}>
             <strong>{entry.fieldName ?? entry.kind ?? 'This work item'}</strong>
             {entry.issueKey ? ` on ${entry.issueKey}` : ''}
-            {entry.reason ? ` — ${entry.reason}` : ''}
+            {entry.reason ? `. ${entry.reason}` : ''}
           </li>
         ))}
       </ul>
@@ -90,7 +83,7 @@ function Outstanding({ detail }: { detail: any }) {
         {refused.map((entry, idx) => (
           <li key={`r${idx}`}>
             {entry.kind ?? 'Change'}{entry.issueKey ? ` on ${entry.issueKey}` : ''}
-            {entry.error?.detail ? ` — ${entry.error.detail}` : ''}
+            {entry.error?.detail ? `. ${entry.error.detail}` : ''}
           </li>
         ))}
       </ul>
@@ -148,16 +141,13 @@ export function RestoreLine({ restore: r, action }: { restore: RestoreRow; actio
 }
 
 /**
- * The latest restore. While it runs it has a card of its own, beside the
- * Baseline card; once it has finished — restored or not — the card goes and
- * the outcome is one line on the Baseline card (IssuePanel places it), with
- * Retry when it did not restore everything.
+ * Show a progress card while the latest restore runs. When it finishes,
+ * IssuePanel shows its outcome on the Baseline card and offers Retry if
+ * some fields were not restored.
  *
- * Restoration detail is read only once the summary reports a restoration and
- * re-read whenever that summary fact changes. The panel's own refresh
- * triggers drive it, so this section never subscribes to events separately.
- * The centralised bridge emits VA_ISSUE_CHANGED after a durable
- * 'restore:retry' (see lib/bridge.ts); this component never emits.
+ * Read details only after the summary reports a restore, and refresh them
+ * when that summary changes. Panel refresh triggers handle subscriptions.
+ * lib/bridge.ts emits VA_ISSUE_CHANGED after a durable restore:retry.
  */
 export default function RestoreStatus({ issueKey, restore, onDone }: { issueKey?: string; restore: PanelRestore | null; onDone?: () => void | Promise<void> }) {
   const [rows, setRows] = useState<RestoreRow[]>([]);

@@ -16,15 +16,14 @@ export async function getVaultSpace(projectId, query = executeQuery) {
 export const APP_GRANT_RETRY_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Projects with an ACTIVE baseline-capturing rule whose vault is not complete
- * — the app's own grant to delete attachments (which a rejection needs to
- * remove a file added after approval) not yet in place. The hourly backfill
- * provisions these, so rules saved before vaulting existed, and any attempt
- * that failed, are picked up without anyone re-saving a rule.
+ * Find projects with an ACTIVE capturing rule whose vault setup lacks the
+ * app's attachment-delete grant. Rejection needs that grant to remove files
+ * added after approval. The hourly backfill provisions rules saved before
+ * vaulting existed and retries failed setup without requiring another save.
  *
- * The attachment-delete LOCKDOWN is not part of "complete": it is a per-project
- * choice, off by default (projectsNeedingLockdown). A grant Jira refused counts
- * as done for a day, so a site that will never allow it is not asked hourly.
+ * Attachment-delete lockdown is separate, per project and off by default
+ * (projectsNeedingLockdown). After Jira refuses a grant, wait a day before
+ * asking again rather than retrying every hour.
  */
 export async function projectsNeedingVault({ limit = 10, now = Date.now() } = {}, query = executeQuery) {
   const rows = await query(
@@ -41,8 +40,8 @@ export async function projectsNeedingVault({ limit = 10, now = Date.now() } = {}
 }
 
 /**
- * Of `projectIds` — the projects whose administrator turned the lockdown on
- * (configStore.projectsWantingLockdown) — those with an ACTIVE capturing rule
+ * From `projectIds`, the projects enabled for lockdown by their administrators
+ * (configStore.projectsWantingLockdown), select those with an ACTIVE capture rule
  * and no lockdown recorded yet. A project with no capturing rule has nothing
  * baselined to protect, and is locked when its first rule is saved.
  */
@@ -186,7 +185,7 @@ export async function vaultedCopies({ issueId, attachmentIds }, query = executeQ
  *   mediaOwner: Map(media id -> the Jira id of the restored copy it belongs to) }.
  * See lib/attachmentIdentity.js.
  *
- * OLDEST FIRST. A file removed and restored twice has two copies standing for
+ * Read oldest first. A file removed and restored twice has two copies standing for
  * one original, the first of them deleted; Maps keep insertion order, so a
  * reader walking them meets the newest copy last (restore/attachments.js
  * pointAtLiveFiles relies on it). Rows are never deleted: a deleted copy's row

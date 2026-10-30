@@ -1,12 +1,9 @@
 /**
- * Record export — 21 CFR 11.10(b).
+ * Record export under 21 CFR 11.10(b).
  *
- * The clause's own words are "accurate and COMPLETE copies", so the failures
- * that matter here are not crashes. They are an export that is quietly short,
- * an export whose two forms disagree, and an export that stays silent about a
- * broken audit chain. Each of those produces a document that looks correct and
- * misleads the person it was produced for, which is worse than producing
- * nothing.
+ * The clause requires accurate and complete copies. These tests check for
+ * omitted records, disagreement between export formats, and undisclosed
+ * breaks in the audit chain. An export must disclose incomplete evidence.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

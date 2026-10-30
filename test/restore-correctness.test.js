@@ -205,7 +205,7 @@ test('a tree spanning two projects is preflighted per project, not only against 
     currentTree: { nodes: [{ logicalNodeId: 'n2', projectId: '20' }] },
     baselineTree: null
   });
-  // Root's own project (unstated here) never had EDIT_ISSUES denied — only
+  // The root's project (unstated here) had EDIT_ISSUES permission. Only
   // project 20, reached through the child node, did. A root-only preflight
   // would have missed this and let the restore fail midway instead.
   assert.equal(allowed, false);

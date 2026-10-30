@@ -6,20 +6,18 @@ import { executeTreeRestore } from '../src/lib/tree/restoreExecutor.js';
 import { project } from '../src/lib/content.js';
 
 /**
- * Destroying a work item is the one thing a restore does that cannot be undone.
+ * Restore deletion must preserve the removed record and approved scope.
  *
- * A subtask added after approval genuinely has to be DELETED rather than
- * detached — unlike an issue link, a subtask has no existence apart from its
- * parent, so leaving it means the hierarchy was not returned to its approved
- * shape. But deletion takes a Jira record with it: its changelog, its comments,
- * and the trail of who created it.
+ * A subtask added after approval must be deleted to restore the approved
+ * hierarchy. Unlike an issue link, it cannot remain detached from its parent.
+ * Deletion also removes the Jira record's changelog, comments, and creation
+ * history.
  *
- * 21 CFR Part 11 §11.10(e) requires audit trails that record the actions which
- * create, modify OR DELETE electronic records, and says record changes "shall
- * not obscure previously recorded information". Deleting a work item and
- * writing nothing down obscures it completely. So the rule these tests hold the
- * code to is: nothing is destroyed until what it contained is durably recorded,
- * and nothing outside what the reviewer approved is destroyed at all.
+ * 21 CFR Part 11 §11.10(e) requires an audit trail for actions that create,
+ * modify, or delete electronic records. Changes "shall not obscure previously
+ * recorded information". These tests require durable recording of the removed
+ * content before deletion and forbid deletion outside the reviewer's approved
+ * scope.
  */
 
 const controlledFields = [
@@ -100,7 +98,7 @@ test('what a deleted work item contained is written to the ledger before Jira is
   assert.equal(preserved.contentHash, project({ summary: 'Subtask nobody approved', description: null },
     controlledFields).contentHash);
   assert.equal(preserved.values.summary, 'Subtask nobody approved',
-    'the content is preserved, not just its hash — a hash alone cannot show an auditor what was removed');
+    'the removed content is preserved for audit as well as its hash');
 });
 
 test('a work item is never destroyed when its content could not be recorded', async () => {

@@ -1,20 +1,17 @@
 /**
- * END-TO-END SCENARIOS FOR THE ONE VALIDATOR.
+ * End-to-end validator scenarios.
  *
- * Every scenario runs the real validator and the real panel against a
- * simulated Jira site and database (test/helpers/validator-world.js), changes
- * something the way a Jira admin, a VAtlassian admin or a user would, and
- * checks what the validator and the panel now say.
+ * Each scenario runs the validator and panel against a simulated Jira site
+ * and database in test/helpers/validator-world.js. It applies a Jira admin,
+ * VAtlassian admin, or user action, then checks both responses.
  *
- * The rules under test:
- *   1. A baselined work item whose tracked content no longer matches its
- *      baseline is HELD on every transition the validator is attached to,
- *      until the change is approved or reverted — whatever happened to the
- *      controlled transitions since.
- *   2. Anything the validator holds, the panel can decide.
- *   3. The signature half is unchanged: controlled transitions need a valid,
- *      unspent, eligible signature over the current content.
- *   4. A project disabled in VAtlassian holds nothing for drift.
+ * 1. When baselined content changes, every transition with the validator
+ *    attached holds the item until approval or reversion. Changes to
+ *    controlled-transition configuration do not remove that hold.
+ * 2. The panel can decide every item the validator holds.
+ * 3. Controlled transitions still require a valid, unspent, eligible
+ *    signature over the current content.
+ * 4. Disabling VAtlassian for a project removes its drift holds.
  */
 import { world, DRIFT, doc, WORKFLOW, TRACKED } from './helpers/validator-world.js';
 import test from 'node:test';
@@ -821,7 +818,7 @@ test('S104 a restore genuinely running still holds every transition', async () =
 // ─── I. People who never opened VAtlassian, and automation ──────────────────
 //
 // The validator now runs on every transition, for every user and automation
-// rule — most of whom never opened the app and never granted it consent to act
+// rule. Most users have not opened the app or granted it consent to act
 // as them. What the drift hold needs to know (the issue, its transitions) the
 // app can read as itself.
 

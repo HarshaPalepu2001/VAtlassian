@@ -83,7 +83,7 @@ export default function ExecutionView({ model, onModel }: { model: ExecutionView
     <div className="tm">
       {error?.at === null && <Notice danger>{error.message}</Notice>}
       <Facts items={[
-        { label: 'Parent', value: model.parent ? model.parent.key : <Badge tone="danger">No parent — set the Epic before running</Badge> },
+        { label: 'Parent', value: model.parent ? model.parent.key : <Badge tone="danger">No parent. Set the Epic before running</Badge> },
         { label: 'Status', value: model.issue.status },
         { label: 'Sign-off chain', value: model.runChain.steps.map(s => `${s.label} (${s.role})`).join(' → ') }
       ]} />
@@ -149,7 +149,7 @@ function RunCard({ run, model, busy, expanded, onToggle, call, errorAt }: {
       </p>
       {run.signatures.map(s => (
         <p key={s.stepIndex} style={{ fontSize: 12 }}>
-          {s.decision === 'REJECT' ? '✕' : '✓'} {s.label}: <strong>{s.printedName}</strong>, <When ms={s.signedAt} />{s.reason ? ` — ${s.reason}` : ''}
+          {s.decision === 'REJECT' ? '✕' : '✓'} {s.label}: <strong>{s.printedName}</strong>, <When ms={s.signedAt} />{s.reason ? `. ${s.reason}` : ''}
         </p>
       ))}
       {run.notExecuted && <p style={{ fontSize: 12 }}>Closed as not executed by <strong>{run.notExecuted.printedName}</strong>: {run.notExecuted.reason}</p>}
@@ -305,7 +305,7 @@ function StepRow({ run, step, model, busy, editable, signing, call, errorAt }: {
               {h.kind === 'EVIDENCE_REMOVED'
                 ? <>Evidence removed (SHA-256 <code>{h.evidence?.sha256?.slice(0, 12)}…</code>)</>
                 : <>Was {words(h.status ?? '')}{h.actual ? ` · Actual: ${h.actual}` : ''}{h.comment ? ` · Comment: ${h.comment}` : ''}</>}
-              {' · changed '}<When ms={h.changedAt} />{` — ${h.reason}`}
+              {' · changed '}<When ms={h.changedAt} />{`. ${h.reason}`}
             </p>
           ))}
         </div></Disclosure>

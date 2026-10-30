@@ -1,19 +1,16 @@
 import { DENY, needsUserConsent } from '../lib/errors.js';
 
 /**
- * THE THREE PRIMITIVES EVERY RESOLVER SHARES, AND NOTHING ELSE.
- *
- * Pulled out of panelAccess.js so a caller that only needs "who is asking"
- * and "how do I report failure" — panelSummary.js's narrow read, most of
- * all — does not import panelAccess.js's heavy snapshot() graph (recursive
- * tree reads, the changelog, editmeta) just to reach these three functions.
- * panelAccess.js re-exports all of them unchanged for every existing caller.
+ * Shared access and refusal helpers. Keeping these separate lets callers such
+ * as panelSummary.js avoid importing panelAccess.js and its heavy snapshot()
+ * dependencies, including recursive tree reads, changelog and editmeta.
+ * panelAccess.js re-exports the helpers for existing callers.
  */
 
 export function fail(reason) { const error = new Error(reason); error.reason = reason; throw error; }
 
-/** A refusal whose sentence depends on the case — it names the work items
- *  involved — so it carries its own words instead of a DENY entry. */
+/** A refusal naming the affected work items. Use its supplied message
+ *  instead of the generic DENY entry. */
 export function failWith(reason, message) {
   const error = new Error(message); error.reason = reason; error.userMessage = message; throw error;
 }
@@ -30,16 +27,14 @@ export function serialise(value) {
   return value;
 }
 
-/** The two fields a thrown error carries for a transient, retry-able failure
- *  — an upstream 429/503, and nothing else. Several Jira adapters (e.g.
- *  testmgmt/jira.js's `json()`) deliberately set `error.status` to the raw
- *  403/404 from Jira while collapsing both into the SAME `reason` ('NOT_FOUND'),
- *  specifically so a caller can never tell "exists but you can't see it" from
- *  "does not exist" — a permission-existence oracle. Forwarding `status`
- *  unconditionally would hand that distinction straight back to the client,
- *  so this only ever forwards it for a status that is itself the transient
- *  signal (429/503), never fabricated, and never for any other code.
- *  Exported so tmRespond (testmgmt/messages.js) applies the same contract. */
+/**
+ * Forward supplied retry metadata only for upstream 429/503 failures.
+ *
+ * Jira adapters such as testmgmt/jira.js json() retain raw 403/404 status on the
+ * error while mapping both to NOT_FOUND. Forwarding those statuses would reveal
+ * whether an inaccessible issue exists. Never fabricate metadata or forward
+ * other codes. tmRespond in testmgmt/messages.js uses the same helper.
+ */
 export function retryGuidance(error) {
   if (error?.status !== 429 && error?.status !== 503) return {};
   return {

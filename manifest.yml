@@ -61,11 +61,10 @@ modules:
   jira:workflowValidator:
     - key: va-gate
       name: VAtlassian Approval
-      # ONE VALIDATOR, ATTACHED TO EVERY TRANSITION. It holds a baselined work
-      # item whose content has changed since approval on every transition until
-      # that change is approved or reverted, and asks for a signature only on
-      # the transitions VAtlassian administration controls. There is no second
-      # Jira rule to attach. See src/gate.js.
+      # Attach this validator to every transition. It holds baselined items with
+      # unreviewed changes until approval or restore. It requires a signature
+      # only on transitions configured in VAtlassian administration.
+      # No second Jira rule is needed. See src/gate.js.
       description: Attach to every transition. Holds a work item with unreviewed
         changes since approval, and requires an eligible approval at the
         configured assurance level on transitions VAtlassian controls.
@@ -84,11 +83,9 @@ modules:
       view:
         resource: main-ui
   jira:customField:
-    # ONE SIGNING FORM, WHICHEVER FIELD IS ON THE SCREEN. Both fields mount the
-    # same Custom UI form (frontend/src/field/ApprovalField.tsx): it takes an
-    # authenticator code or opens the device-check window, whichever the rule
-    # for that exact transition requires. Custom UI is required for the second:
-    # UI Kit has no `navigator`, so it can never run a WebAuthn ceremony.
+    # Both fields mount frontend/src/field/ApprovalField.tsx. The exact
+    # transition rule selects an authenticator code or device-check window.
+    # Custom UI supports WebAuthn; UI Kit has no navigator for that check.
     - key: va-approval-field
       name: Electronic signature
       description: The VAtlassian signing form for a controlled transition. Put it
@@ -109,7 +106,7 @@ modules:
         resource: main-ui
         experience: [ issue-transition ]
 
-    # RETIRED: the former "Biometric Authentication" field. It stays registered
+    # Retired field. The former "Biometric Authentication" field. It stays registered
     # so the receipts stored in it, and screens that still carry it, keep
     # working; it shows exactly the same form as the field above. Swap it for
     # "Electronic signature" on transition screens, then remove this module.
@@ -191,7 +188,7 @@ modules:
       function: on-issue-link
       events: [ avi:jira:created:issuelink, avi:jira:deleted:issuelink ]
 
-  # TEMPORARY live probe for the attachment design (src/jobs/probe.js).
+  # Temporary live probe for the attachment design (src/jobs/probe.js).
   # Read-only, guarded by the encrypted PROBE_SECRET variable. Remove when done.
   webtrigger:
     - key: va-probe
@@ -264,20 +261,16 @@ resources:
   - key: ui-kit-approval-view
     path: src/ui-kit/view.jsx
 permissions:
-  # THIS BLOCK FORFEITS RUNS ON ATLASSIAN. It is here for one reason: biometric
-  # approval needs navigator.credentials.get(), which a Forge Custom UI iframe
-  # cannot call unless the parent page delegates `publickey-credentials-get`,
-  # and Jira does not. The ceremony therefore runs in a top-level popup, and
-  # popups from Forge iframes are sandbox-blocked by default. Declaring
-  # `external.fetch.client` is the only documented way to get `allow-popups`
-  # and `allow-popups-to-escape-sandbox` onto the iframe sandbox attribute, and
-  # `"*"` is the form that recipe specifies.
+  # This declaration forfeits Runs on Atlassian eligibility. Biometric approval
+  # needs navigator.credentials.get(), but Jira does not delegate
+  # publickey-credentials-get to Custom UI iframes. The check runs in a popup.
+  # The documented popup recipe requires external.fetch.client: "*" to add
+  # allow-popups and allow-popups-to-escape-sandbox to the iframe sandbox.
   #
-  # THE APP STILL MAKES NO EGRESS CALLS. Nothing here fetches an external
-  # domain; this is a CSP connect-src declaration kept only for the sandbox
-  # side effect. Eligibility looks at the presence of the block, not at whether
-  # it is used. Delete it if an assurance level of BIOMETRIC is withdrawn, or
-  # if Atlassian ever delegates publickey-credentials-get to app frames.
+  # The app makes no external fetch calls here. This connect-src declaration
+  # supplies the popup sandbox permissions. Eligibility checks the declaration,
+  # not its use. Remove it if BIOMETRIC is withdrawn or Atlassian delegates
+  # publickey-credentials-get to app frames.
   external:
     fetch:
       client:

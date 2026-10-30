@@ -7,7 +7,7 @@ export async function issueCredentialResetGrant(req, overrides) {
   const targetAccountId = req.payload?.targetAccountId;
   if (!targetAccountId) return { success: false, error: 'Choose the person whose authenticator needs resetting.' };
   if (targetAccountId === accountId) {
-    return { success: false, error: 'You cannot issue yourself a reset. Ask another administrator — replacing a signature credential deliberately takes two people.' };
+    return { success: false, error: 'You cannot issue yourself a reset. Ask another administrator. Replacing a signature credential requires two people.' };
   }
   if (typeof targetAccountId !== 'string' || targetAccountId.length > 128) throw new Error('Invalid target account.');
   const target = (await lookupUsers([targetAccountId])).get(targetAccountId);

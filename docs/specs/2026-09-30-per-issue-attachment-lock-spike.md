@@ -38,7 +38,7 @@ statuses locks the baselined items, and only while they sit there.
 Is it truly "per item"? Almost. The lock follows the **status**, so:
 
 - an item in that status which was never baselined is locked too;
-- an item moved out of the status gets delete rights back — but moving it out
+- an item moved out of the status gets delete rights back, but moving it out
   is itself a transition, which `va-gate` holds while the item has drift.
 
 ## 3. Questions the spike answers

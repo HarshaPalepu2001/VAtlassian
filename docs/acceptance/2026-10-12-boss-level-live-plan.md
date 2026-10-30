@@ -1,4 +1,4 @@
-# Boss-level live plan — 2026-10-12
+# Boss-level live plan. 2026-10-12
 
 Merges the suite structure and tree semantics of the 2026-10-05 plan (A–I, named cast,
 "who decides, which versions move, what holds") with the oracles and combined-risk cases
@@ -63,7 +63,7 @@ Created through Jira REST in the signed-in tenant session, then read back. All s
 
 Gaps: raw ADF JSON not yet saved to file; Admin controlled-field list and transitions not yet read (the Forge admin iframe is opaque to text reads).
 
-## Suite A — core path (the A1–A9 flow, now with files and ADF)
+## Suite A. core path (the A1–A9 flow, now with files and ADF)
 
 | ID | Scenario | Expected | Dims |
 |---|---|---|---|
@@ -77,7 +77,7 @@ Gaps: raw ADF JSON not yet saved to file; Admin controlled-field list and transi
 | A8 | S1 (description null at baseline): add a rich description, then reject at S1. | Empty-ADF compares as no content; zero drift; no phantom structure change; no new version; parent settles. | ADF TREE |
 | A9 | E: structured ADF edit (paragraph, list, hard-break, table cell) plus priority and labels; approve. | Structured diff, exact count, one new version from current ADF, no restore write. | ADF FIELD AUTH CAP |
 
-## Suite B — which side decides (scope and symmetry)
+## Suite B. which side decides (scope and symmetry)
 
 | ID | Scenario | Expected | Dims |
 |---|---|---|---|
@@ -89,7 +89,7 @@ Gaps: raw ADF JSON not yet saved to file; Admin controlled-field list and transi
 | B6 | C1 approved alone (newer signed content); then E's field drifts; reject at E. | E's field restored; **C1 keeps its newer signed content and file**. | TREE ATT FIELD AUTH |
 | B7 | After B6, approve at E. | C1 gets a new version over its current content, never over older E-captured content. | TREE ATT CAP |
 
-## Suite C — attachments end to end (the two earlier FAILs, T07 and T08, rerun)
+## Suite C. attachments end to end (the two earlier fails, T07 and T08, rerun)
 
 | ID | Scenario | Expected | Dims |
 |---|---|---|---|
@@ -100,7 +100,7 @@ Gaps: raw ADF JSON not yet saved to file; Admin controlled-field list and transi
 | C5 | Child file added and removed under a parent reject. | Child restored through the parent; child panel reads "Restored and verified through <parent>'s rejection". | ATT TREE |
 | C6 | Legacy `storage = CONFLUENCE` row, if any exists. | Restore refuses with "stored in Confluence, which is no longer supported". | ATT AUTH |
 
-## Suite D — per-field (mixed) decisions
+## Suite D. per-field (mixed) decisions
 
 | ID | Scenario | Expected | Dims |
 |---|---|---|---|
@@ -110,7 +110,7 @@ Gaps: raw ADF JSON not yet saved to file; Admin controlled-field list and transi
 | D4 | E: summary, description, priority, labels, assignee changed; 3 approve, 2 reject; close and reopen the diff. | Decisions survive close and reopen; one signature; evidence hash unchanged. | FIELD ADF AUTH |
 | D5 | E five fields and C1 three fields; open the child diff. | The child shows exactly its three fields with its own controls; the parent stays separately reviewable. | TREE FIELD |
 
-## Suite E — links (two owners)
+## Suite E. links (two owners)
 
 | ID | Scenario | Expected | Dims |
 |---|---|---|---|
@@ -120,7 +120,7 @@ Gaps: raw ADF JSON not yet saved to file; Admin controlled-field list and transi
 | E4 | Link between siblings C1↔C2, plus a type change. | One decision settles both; direction and type recreated exactly on reject. | LINK TREE |
 | E5 | Add then remove a link before any decision. | Drift clears by itself; no decision, no version. | LINK |
 
-## Suite F — stale, cancel, replay (fail-closed)
+## Suite F. stale, cancel, replay (fail-closed)
 
 | ID | Scenario | Expected | Dims |
 |---|---|---|---|
@@ -129,7 +129,7 @@ Gaps: raw ADF JSON not yet saved to file; Admin controlled-field list and transi
 | F3 | Double click Approve on a child with a file. | One version, no duplicate ledger rows. | AUTH ATT TREE |
 | F4 | Attempt the controlled transition before and after settlement. | Blocked while drift remains; succeeds only after fresh verification. | AUTH TREE CAP |
 
-## Suite G — validator holds and agreement
+## Suite G. validator holds and agreement
 
 | ID | Scenario | Expected | Dims |
 |---|---|---|---|
@@ -138,7 +138,7 @@ Gaps: raw ADF JSON not yet saved to file; Admin controlled-field list and transi
 | G3 | After any decision, run the issue's controlled transition. | Refused before the decision; succeeds with a signature after; no `CONTENT_OR_EVIDENCE_CHANGED`. | AUTH CAP |
 | G4 | Second user or role, if available. | Wrong role sees the drift but cannot decide; server refuses. | AUTH |
 
-## Suite H — structure
+## Suite H. structure
 
 | ID | Scenario | Expected | Dims |
 |---|---|---|---|
@@ -146,7 +146,7 @@ Gaps: raw ADF JSON not yet saved to file; Admin controlled-field list and transi
 | H2 | Move a child to X and back. | Child's baseline survives; no permanent drift against E. | TREE |
 | H3 | Delete a child (**separate explicit confirmation immediately before**). | `NODE_REMOVED`; record what restore does; ledger holds the full values first. | TREE ATT |
 
-## Suite I — ledger, evidence, health
+## Suite I. ledger, evidence, health
 
 After each decision: chain is `Approval recorded → Baseline captured (per issue) →
 Signature consumed` (or the restore chain), hash-chained, one approval id on every child
@@ -162,10 +162,10 @@ and the new logging only fires on a first capture of a new child.
 
 | ID | Keys / version before | Decision | Version after | Jira / ADF / file read-back | Panel / diff | Logs | Result / finding |
 |---|---|---|---|---|---|---|---|
-| A1 | VAT-65 (E) In Review, no baseline; VAT-66..70 unbaselined | APPROVE at VAT-65 (In Review → To Do), electronic signature, 5:05 PM IST (11:35 UTC) | E v1; VAT-68, VAT-69, VAT-70 each v1 "Baselined with VAT-65 version 1" | Jira: E now To Do, children and L1/L2 unchanged (`updated` stamps from fixture creation); C1 file id 12180 still present, downloaded SHA-256 matches local (`2543f90e…88df94d8`); E has no attachment; link E–L1 intact; S1 description still null. | E panel: "Matches baseline version 1", IN SYNC, 18 tracked fields across 4 work items, "None since the latest baseline", next transition To Do → In Progress "Does not capture a baseline". C1 (VAT-68), C2 (VAT-69), S1 (VAT-70): each v1, IN SYNC, 18 tracked fields. C1 and C2 next transition In Review → To Do "Captures a new baseline" (electronic signature); S1's is biometric. | `approval:hash-basis` (VAT-65): mode `tree`, scope `own`, type 10000, 18 field ids incl. `attachment`, no attachments on E. `gate:allow SIGNATURE_CONSUMED`, `transitioned: true`. `vault:copied` VAT-68 file 12180, key `vault/sha256/2543f90e…88df94d8`, `OBJECT_STORE`, no fallback. No other file vaulted. | PASS — baseline propagation, sync and vault proof verified. Open: raw ADF JSON not saved; vault row not read from SQL (log only); no ledger chain read. |
-| A6 | VAT-68 (C1) In Review, v1 "Baselined with VAT-65 version 1", never captured on its own; covered by E's baseline | APPROVE at VAT-68 (In Review → To Do, captures), electronic signature, 11:39 UTC (5:09 PM IST) | Unchanged to the user: approval VOID, transition not made, VAT-68 still In Review. The capture itself ran (new baseline `5407e417…`, file re-vaulted). | Jira unchanged apart from the refused transition; attachment 12180 still present. | Panel showed "Approval recorded. Jira refused the transition: This work item changed after approval…" | `approval:hash-basis` (signing): mode `tree`, scope **`governing-root`**, issue type **10000 (Epic)**, **18** field ids incl. `customfield_10001` and `customfield_10017`, attachment 12180 `isRichText:false`. `gate:deny CONTENT_CHANGED / CONTENT_OR_EVIDENCE_CHANGED` (validator): `evidenceValid:true`, approval hash `e0898f9b…cc9de`, recomputed `6964c5b4…c3c3`, mode `tree`, scope **`own`**, issue type **10007 (Story)**, **16** field ids (no `customfield_10001`, no `customfield_10017`), same attachment flags. | **FAIL — root cause confirmed.** The capture makes VAT-68 the root of its own baseline, so `scopeForItem` flips it from `governing-root` (Epic's 18 fields) to `own` (Story's 16 fields) between signing and the validator's recompute. Same hash inputs, different tracked field set. Attachment/rich-text candidate ruled out (flags identical on both sides). Same defect as VAT-59 at 11:04 UTC; a retry passes because the item is already its own root. Fix not yet made. |
+| A1 | VAT-65 (E) In Review, no baseline; VAT-66..70 unbaselined | APPROVE at VAT-65 (In Review → To Do), electronic signature, 5:05 PM IST (11:35 UTC) | E v1; VAT-68, VAT-69, VAT-70 each v1 "Baselined with VAT-65 version 1" | Jira: E now To Do, children and L1/L2 unchanged (`updated` stamps from fixture creation); C1 file id 12180 still present, downloaded SHA-256 matches local (`2543f90e…88df94d8`); E has no attachment; link E–L1 intact; S1 description still null. | E panel: "Matches baseline version 1", IN SYNC, 18 tracked fields across 4 work items, "None since the latest baseline", next transition To Do → In Progress "Does not capture a baseline". C1 (VAT-68), C2 (VAT-69), S1 (VAT-70): each v1, IN SYNC, 18 tracked fields. C1 and C2 next transition In Review → To Do "Captures a new baseline" (electronic signature); S1's is biometric. | `approval:hash-basis` (VAT-65): mode `tree`, scope `own`, type 10000, 18 field ids incl. `attachment`, no attachments on E. `gate:allow SIGNATURE_CONSUMED`, `transitioned: true`. `vault:copied` VAT-68 file 12180, key `vault/sha256/2543f90e…88df94d8`, `OBJECT_STORE`, no fallback. No other file vaulted. | PASS. baseline propagation, sync and vault proof verified. Open: raw ADF JSON not saved; vault row not read from SQL (log only); no ledger chain read. |
+| A6 | VAT-68 (C1) In Review, v1 "Baselined with VAT-65 version 1", never captured on its own; covered by E's baseline | APPROVE at VAT-68 (In Review → To Do, captures), electronic signature, 11:39 UTC (5:09 PM IST) | Unchanged to the user: approval VOID, transition not made, VAT-68 still In Review. The capture itself ran (new baseline `5407e417…`, file re-vaulted). | Jira unchanged apart from the refused transition; attachment 12180 still present. | Panel showed "Approval recorded. Jira refused the transition: This work item changed after approval…" | `approval:hash-basis` (signing): mode `tree`, scope **`governing-root`**, issue type **10000 (Epic)**, **18** field ids incl. `customfield_10001` and `customfield_10017`, attachment 12180 `isRichText:false`. `gate:deny CONTENT_CHANGED / CONTENT_OR_EVIDENCE_CHANGED` (validator): `evidenceValid:true`, approval hash `e0898f9b…cc9de`, recomputed `6964c5b4…c3c3`, mode `tree`, scope **`own`**, issue type **10007 (Story)**, **16** field ids (no `customfield_10001`, no `customfield_10017`), same attachment flags. | **FAIL. root cause confirmed.** The capture makes VAT-68 the root of its own baseline, so `scopeForItem` flips it from `governing-root` (Epic's 18 fields) to `own` (Story's 16 fields) between signing and the validator's recompute. Same hash inputs, different tracked field set. Attachment/rich-text candidate ruled out (flags identical on both sides). Same defect as VAT-59 at 11:04 UTC; a retry passes because the item is already its own root. Fix not yet made. |
 | A6b | VAT-69 (C2, no attachment) In Review, v1, never captured on its own | APPROVE at VAT-69 from the **transition screen** (not the panel), electronic signature, 11:44 UTC | Unchanged: approval refused, VAT-69 still In Review. Screen showed "This work item changed after approval…" | Jira unchanged. | Review Gate dialog showed the error. | `approval:hash-basis`: `governing-root`, type 10000, 18 fields, no attachments, hash `04d57649…2b84`. `gate:deny CONTENT_OR_EVIDENCE_CHANGED`: `own`, type 10007, 16 fields (same two missing), recomputed `e7117bfd…3582`, no attachments. | **FAIL, same cause, route-independent, attachment-independent.** Panel and transition screen both go through `prepareApproval` and the validator. VAT-68's later retry passed on the transition screen only because the first attempt had already made it its own root. |
-| A6c | VAT-70 (S1) In Review, v1, never captured on its own; app **8.8.0** (scope fix in `scopeForItem`: a covered child that is also its own root stays governed by the covering root) | APPROVE at VAT-70 from the panel (biometric), 12:00 UTC (5:30 PM IST) | VAT-70 To Do | Jira: VAT-70 status To Do (`updated` 17:30:48); no attachments; other fixture issues unchanged. | VAT-68 (already its own root, now on To Do) after the deploy: "Matches baseline version 3", IN SYNC, 16 tracked fields across 2 work items, no phantom drift. | `approval:hash-basis` (VAT-70): mode `tree`, scope `governing-root`, 16 fields, no attachments, hash `19da27da…8b7f`. **No `gate:deny`**: `gate:allow SIGNATURE_CONSUMED`, `transitioned: true`, first attempt. | **PASS — A6 regression fixed on a never-captured child, first attempt.** Note: VAT-70's governing root resolved to VAT-68's tree (most recent approval, Story type, 16 fields), not E's 18; signing and validation both use that same resolution. |
-| A6d | VAT-69 (C2, no attachment) In Review; failed first attempt at 11:44 UTC (A6b) had already captured it; app 8.8.0 | RETRY APPROVE at VAT-69 from the **transition screen** (`approval:challenge/submit`), 12:03 UTC | VAT-69 To Do | Jira: VAT-69 status To Do, no attachment, labels `c2-base`, priority Low, parent VAT-65. | Not captured (panel not screenshotted). | `approval:hash-basis`: `governing-root`, type 10000, 18 fields, no attachments, hash `04d57649…2b84` — **identical to the signing hash of the failed 11:44 attempt**, so the same content now hashes the same on both sides. `gate:allow SIGNATURE_CONSUMED` at 12:04:04, no `gate:deny`. | **PASS — fix holds on the transition screen route and on an item already in the "both" state.** |
+| A6c | VAT-70 (S1) In Review, v1, never captured on its own; app **8.8.0** (scope fix in `scopeForItem`: a covered child that is also its own root stays governed by the covering root) | APPROVE at VAT-70 from the panel (biometric), 12:00 UTC (5:30 PM IST) | VAT-70 To Do | Jira: VAT-70 status To Do (`updated` 17:30:48); no attachments; other fixture issues unchanged. | VAT-68 (already its own root, now on To Do) after the deploy: "Matches baseline version 3", IN SYNC, 16 tracked fields across 2 work items, no phantom drift. | `approval:hash-basis` (VAT-70): mode `tree`, scope `governing-root`, 16 fields, no attachments, hash `19da27da…8b7f`. **No `gate:deny`**: `gate:allow SIGNATURE_CONSUMED`, `transitioned: true`, first attempt. | **PASS. A6 regression fixed on a never-captured child, first attempt.** Note: VAT-70's governing root resolved to VAT-68's tree (most recent approval, Story type, 16 fields), not E's 18; signing and validation both use that same resolution. |
+| A6d | VAT-69 (C2, no attachment) In Review; failed first attempt at 11:44 UTC (A6b) had already captured it; app 8.8.0 | RETRY APPROVE at VAT-69 from the **transition screen** (`approval:challenge/submit`), 12:03 UTC | VAT-69 To Do | Jira: VAT-69 status To Do, no attachment, labels `c2-base`, priority Low, parent VAT-65. | Not captured (panel not screenshotted). | `approval:hash-basis`: `governing-root`, type 10000, 18 fields, no attachments, hash `04d57649…2b84` matches the signing hash of the failed 11:44 attempt. The same content now hashes the same on both sides. `gate:allow SIGNATURE_CONSUMED` at 12:04:04, no `gate:deny`. | **PASS. fix holds on the transition screen route and on an item already in the "both" state.** |
 
 Observed in the same log window, not part of this plan row (run by the user, not by the agent): after A6d, VAT-69 showed drift (`click:open:changes`, driftCount 1 then 3, 12:08–12:10 UTC) and a MIXED per-field decision was signed at 12:14 UTC (panel, TOTP, approval `2711e869…` CONSUMED, `transitioned:false`). Its `approval:hash-basis` listed attachment 12181 with `isRichText:true`. The outcome of that decision was not read.

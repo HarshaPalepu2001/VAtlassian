@@ -58,7 +58,7 @@ export async function finishRestoreAction(restoreId, stepKey, success, detail, o
  * Reopen the steps Jira refused, so a reviewer's explicit retry attempts them
  * again.
  *
- * The executor settles a refusal durably — otherwise a requeue would retry the
+ * The executor persists a refusal. Otherwise a requeue would retry the
  * same impossible write for ever and the restore would never reach its
  * verification pass. That is right for the queue and wrong for a person, who
  * presses Retry precisely because they believe the refusal no longer applies.

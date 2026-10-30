@@ -61,17 +61,13 @@ function grantHolder(grant) {
 }
 
 /**
- * THE LOCKDOWN — only when the project's administrator turned it on
- * (config `vault.lockAttachmentDeletion`, off by default; see provisionVault).
- * Removes every attachment-delete grant on the project's scheme except those
- * that let the app delete, whose own grant it makes sure of FIRST, so there is
- * no moment at which the app has lost it.
+ * Apply attachment-deletion lockdown only when the project opts in through
+ * vault.lockAttachmentDeletion, which defaults to false. First preserve the
+ * app's delete grant, then remove other delete grants from the scheme.
  *
- * It always reads the scheme and removes whatever is there: a project locked
- * before, whose grants a person re-added, is locked again. Who held each
- * removed grant is in the ATTACHMENT_DELETE_LOCKED entry, because turning the
- * lockdown off does NOT put them back and the scheme may be shared with other
- * projects (otherProjectKeys), which lose them too.
+ * Re-read grants every time so repeated lockdown removes re-added grants.
+ * Record removed holders in ATTACHMENT_DELETE_LOCKED. Disabling lockdown does
+ * not restore grants. A shared scheme also affects otherProjectKeys.
  */
 export async function lockAttachmentDeletion(projectId, deps = {}) {
   const d = {
@@ -115,10 +111,8 @@ async function lockdownWanted(projectId, d) {
 }
 
 /**
- * Never throws — vaulting is defense-in-depth and must not block the caller.
- *
- * Keeps the Jira side only: the project's va_vault_space row, the app's
- * attachment-delete grant, and the opt-in lockdown.
+ * Maintain the Jira-side vault row, app delete grant and opt-in lockdown.
+ * Return failures without throwing so vault provisioning cannot block callers.
  */
 export async function provisionVault(projectId, deps = {}) {
   const d = { tryAppend, actorAccountId: 'system', getVaultSpace, projectConfig, ensureVaultProjectRow, now: Date.now, ...deps };

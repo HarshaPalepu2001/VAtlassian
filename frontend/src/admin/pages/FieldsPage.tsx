@@ -90,8 +90,8 @@ const STATUS_LABEL: Record<FieldHit['status'], string> = { tracked: 'Tracked', e
 
 function SearchResults({ hits, query, busy, onTrack }: { hits: FieldHit[]; query: string; busy: boolean; onTrack: (fieldId: string) => void }) {
   if (!hits.length) return <Card title="Search results"><p className="va-muted">
-    No trackable field matches “{query.trim()}”. Fields that change without anyone editing the work item — comments,
-    worklogs, watchers, status, updated — are never tracked, and a field is offered only once it is on one of this project's screens.
+    No trackable field matches &quot;{query.trim()}&quot;. Comments, worklogs, watchers, status and updated
+    can change without anyone editing the work item, so they are never tracked. A field is offered only once it is on one of this project's screens.
   </p></Card>;
   return <Card title="Search results">{hits.map(h => <div className="va-record-field va-row" key={h.fieldId}>
     <strong>{h.fieldName}</strong><span className="va-muted">{h.fieldId}</span>{h.kind && <Badge>{h.kind}</Badge>}

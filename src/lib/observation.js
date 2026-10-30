@@ -1,10 +1,8 @@
 /**
- * HOW MUCH WE KNOW ABOUT ONE OBSERVED CHANGE (docs/specs/2026-10-03-baseline-evidence-model-design.md §7.1).
- *
- * A Jira event only wakes the collector. Its user is who TRIGGERED the check,
- * and `now` is when the difference was SEEN. Neither is the editor or the edit
- * time: those come only from a matching Jira history item. Each fact has its
- * own column, so a fallback can never pass for a confirmed edit.
+ * Record observation provenance separately from confirmed edit attribution.
+ * An event identifies who triggered the check; now is detection time.
+ * Only a matching Jira history item confirms the editor and edit time.
+ * See docs/specs/2026-10-03-baseline-evidence-model-design.md section 7.1.
  */
 export const EDIT_STATUS = Object.freeze({
   CONFIRMED: 'CONFIRMED',

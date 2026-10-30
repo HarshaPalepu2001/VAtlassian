@@ -1,17 +1,8 @@
 /**
- * Product surfaces: the change ledger, the value chips, the attribution trail.
- *
- * WHY THIS FILE LOOKS THE WAY IT DOES. The reader is a QA or regulatory
- * reviewer deciding whether a change to a signed record is acceptable. The
- * artefact they know from their own world is a controlled document — a batch
- * record, a validation protocol, a change-control form. Those are *ruled and
- * registered*: hairlines, aligned columns, figures that line up, and a formal
- * signature block at the end. That is the register this app is written in.
- *
- * So the diff is a ledger, not a stack of cards. Boldness is spent in exactly
- * two places — the materiality spine down the left of each changed field, and
- * the signature block in tokens.css. Everything else is deliberately quiet.
-/* Sleek custom scrollbars across all surfaces */
+ * Styles for the change ledger, value chips and attribution history.
+ * Use aligned columns and rules for review of signed records. Emphasize
+ * materiality and the signature block.
+ */
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--va-border-strong) transparent;
@@ -47,7 +38,7 @@
 }
 
 /* ---------------------------------------------------------------------------
-   Banner — a statement with a coloured rule, not a filled alert box
+   Banner with a coloured rule
    --------------------------------------------------------------------------- */
 
 .va-banner {
@@ -79,12 +70,12 @@
 }
 
 /* ---------------------------------------------------------------------------
-   Review header — what the reviewer is being asked to do
+   Review header
    --------------------------------------------------------------------------- */
 
-/* Replaces a yellow warning box. Drift on a signed record is not a warning
-   about a malfunction; it is the reviewer's actual work arriving. It reads as
-   a heading with a count, the way an inbox does. */
+/**
+ * Show content drift as a heading and change count for the review task.
+ */
 .va-review-head {
   display: flex;
   align-items: baseline;
@@ -110,9 +101,10 @@
    The ledger
    --------------------------------------------------------------------------- */
 
-/* THE REVIEW: every change on the left, the selected change on the right.
-   Each pane scrolls on its own, so the list stays in view beside a long
-   description diff. */
+/**
+ * Keep the change list visible beside the selected change. Each pane
+ * scrolls independently so long descriptions do not hide the list.
+ */
 .va-review {
   flex: 1 1 auto;
   min-height: 0;
@@ -157,8 +149,9 @@
   overflow-wrap: anywhere;
 }
 
-/* THE SPINE. Colour and presence encode materiality — an ordinal property, on
-   an ordinal channel. */
+/**
+ * Use colour and line weight to show the change's materiality.
+ */
 .va-review__row {
   display: flex;
   flex-direction: column;
@@ -258,9 +251,10 @@
   }
 }
 
-/* Drawn rather than typed: a "▾" glyph renders at wildly different weights
-   across the fonts Jira ships on Windows, macOS and Linux, and at 12px the
-   difference is a chevron versus a speck. */
+/**
+ * Draw the disclosure arrow so its weight stays consistent across the
+ * fonts Jira uses on Windows, macOS and Linux.
+ */
 .va-ledger__toggle {
   flex: 0 0 auto;
   display: grid;
@@ -293,7 +287,7 @@
 }
 
 /* ---------------------------------------------------------------------------
-   Value chips — the answer to "what does 10000 mean"
+   Value chips
    --------------------------------------------------------------------------- */
 
 .va-change {
@@ -325,9 +319,10 @@
   border-color: var(--va-ins-line);
 }
 
-/* "was" / "now". Three letters doing real work: they carry the before/after
-   distinction for a reader who cannot see the red and green, and they say
-   which side is current without the reader inferring it from position. */
+/**
+ * Label before and after values so readers can distinguish them without
+ * relying on colour or position.
+ */
 .va-chip__side {
   font-size: var(--va-size-micro);
   font-weight: 600;
@@ -347,9 +342,10 @@
   overflow-wrap: anywhere;
 }
 
-/* THE STORED IDENTIFIER, KEPT. The name above it is what the value means; this
-   is what the signed record actually holds. A compliance tool showing one and
-   hiding the other is choosing which of them the auditor gets to see. */
+/**
+ * Show the stored identifier alongside the resolved name so an auditor
+ * can inspect the exact value in the signed record.
+ */
 .va-chip__id {
   font-family: var(--va-font-mono);
   font-size: var(--va-size-micro);
@@ -365,7 +361,7 @@
 }
 
 /* ---------------------------------------------------------------------------
-   Attribution — who, when, how many times
+   Attribution history
    --------------------------------------------------------------------------- */
 
 .va-trace {
@@ -581,10 +577,10 @@
   border-bottom: none;
 }
 
-/* One disclosure affordance across the app. The browser default marker is a
-   solid triangle that matches nothing else on the page, and setting
-   display:flex on a summary silently removes it altogether in some engines —
-   leaving a row that expands with no sign that it can. */
+/**
+ * Use the same disclosure marker throughout the app. Some browsers hide
+ * the default marker when summary uses display:flex.
+ */
 .va-record-field summary,
 .va-details > summary {
   cursor: pointer;
@@ -718,8 +714,9 @@
   color: var(--va-brand-text);
 }
 
-/* Evidence citation in the AI summary. Reads as a reference marker, which is
-   what it is — it points at the exact recorded change behind a claim. */
+/**
+ * Link each AI summary citation to the recorded change that supports it.
+ */
 .va-cite {
   cursor: pointer;
   color: var(--va-brand-text);
@@ -762,8 +759,9 @@
   font-weight: 600;
 }
 
-/* A cited field, flashed so the claim and its evidence are visibly one thing.
-   The only non-user-triggered motion in the app, and it answers a click. */
+/**
+ * Highlight the cited field when a reader follows a summary citation.
+ */
 .va-highlight {
   outline: 2px solid var(--va-brand);
   outline-offset: 2px;

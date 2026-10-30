@@ -49,17 +49,12 @@ const COLUMNS = [
   { key: 'expand', label: '', align: 'right' as const }
 ];
 
-/** The audit-relevant counts a JIRA admin actually asks for: how many times
- *  was this signed, approved, declined, rejected or blocked. Read from the
- *  issue's full ledger history server-side, not just the page on screen —
- *  see admin.js's admin:listLedger.
- *
- *  The badges must add up to the total beside them. An issue records plenty
- *  of events that belong to none of these categories — baselines captured,
- *  supersessions, first observations — and leaving them as an unexplained
- *  gap between "2 signatures" and "7 events in total" reads like a
- *  miscount. Whatever is not named above is named in `other`, which lists
- *  what it consists of. */
+/**
+ * Count signatures, approvals, declines, rejections and blocks across the
+ * issue's full server-side ledger history, not only the displayed page.
+ * admin:listLedger groups remaining events in other and lists their types
+ * so the category counts add up to the total.
+ */
 const NAMED_COUNTS: [key: string, noun: string, tone: (n: number) => Tone][] = [
   ['SIGNATURE_CONSUMED', 'signature', () => 'success'],
   ['CHANGE_APPROVED', 'approved change', () => 'success'],
@@ -95,7 +90,7 @@ function SignaturesSummary({ summary }: { summary: any[] }) {
 
   return (
     <div style={{ marginTop: '16px', borderTop: '1px solid var(--va-border)', paddingTop: '12px' }}>
-      <h4 style={{ fontSize: '12px', fontWeight: 600, color: 'var(--va-text-subtle)', margin: '0 0 8px 0', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Signature Log</h4>
+      <h4 style={{ fontSize: '12px', fontWeight: 600, color: 'var(--va-text-subtle)', margin: '0 0 8px 0', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Signature log</h4>
       <ul style={{ listStyleType: 'none', padding: 0, margin: 0 }}>
         {summary.map((s, i) => {
           let actionLabel = '';
@@ -109,7 +104,7 @@ function SignaturesSummary({ summary }: { summary: any[] }) {
             <li key={i} style={{ fontSize: '13px', marginBottom: '6px', lineHeight: '1.4' }}>
               <strong style={{ color: 'var(--va-text)' }}>{s.actorName || 'Unknown'}</strong>{' '}
               <span style={{ color: tone, fontWeight: 500 }}>{actionLabel}</span>{' '}
-              {s.payload?.meaning ? `— ${s.payload.meaning}` : ''}
+              {s.payload?.meaning ? `. ${s.payload.meaning}` : ''}
               <span className="va-muted" style={{ marginLeft: '8px', fontSize: '12px' }}>
                 {formatTimestamp(s.occurredAt)}
               </span>
@@ -142,7 +137,7 @@ function VerifyPanel() {
   return (
     <Card
       title="Chain integrity"
-      subtitle="Walks the hash chain and reports the first break, if any — the discern-tampering guarantee 21 CFR 11.10(a) asks for."
+      subtitle="Checks the hash chain and reports the first break, if any, to detect tampering as required by 21 CFR 11.10(a)."
     >
       <div className="va-row" style={{ justifyContent: 'space-between' }}>
         <Button appearance="primary" onClick={run} isDisabled={checking}>
@@ -167,11 +162,11 @@ function VerifyPanel() {
         <div style={{ marginTop: '14px' }}>
           <SectionMessage appearance={result.result.ok ? 'success' : 'error'}>
             {result.result.ok ? (
-              <p>Verified {plural(result.result.checked, 'entry', 'entries')}. Every hash chains to the one before it — nothing in this window has been altered or removed.</p>
+              <p>Verified {plural(result.result.checked, 'entry', 'entries')}. Every hash chains to the one before it. Nothing in this window has been altered or removed.</p>
             ) : (
               <p>
                 Chain break at seq {result.result.brokenAt} ({result.result.reason}). Treat every entry from that point on
-                as unverified evidence and escalate — a hash-chained ledger cannot repair itself, only detect this.
+                as unverified evidence and escalate. A hash-chained ledger detects this damage but cannot repair itself.
               </p>
             )}
           </SectionMessage>
@@ -259,8 +254,7 @@ export default function LedgerPage() {
     }
   };
 
-  // Recent activity across the site, on first load — before an admin has
-  // typed anything an empty issue-lookup panel would otherwise look broken.
+  // Show recent site activity on first load, before an issue is selected.
   useEffect(() => {
     void runQuery(null, null, false);
     return () => { ++sequence.current; };
@@ -281,18 +275,11 @@ export default function LedgerPage() {
     await runQuery(queryKey, nextBeforeSeq, true);
   };
 
-  // Ledger sequence numbers only increase and rows are never deleted, so a
-  // head above the newest entry on screen means activity was recorded after
-  // this view loaded.
-  //
-  // Checked when the reader comes back to the tab, never on a timer: this app
-  // does not poll (frontend/test/panel.test.mjs enforces that), and an admin
-  // page left open in a background tab should cost nothing.
-  //
-  // It is announced, not applied. Re-ordering rows under somebody reading an
-  // audit record is how a reader loses their place, so an evidence view
-  // changes only when its reader asks it to. A failed check leaves the view
-  // alone rather than implying it is current.
+  // Ledger sequence numbers only increase, and entries are never deleted.
+  // A higher head means activity was recorded since this view loaded.
+  // Check when the tab regains focus, without polling. Announce new activity
+  // but let the reader refresh to avoid reordering the record during review.
+  // A failed check preserves the view without claiming it is current.
   useEffect(() => {
     let active = true;
     const check = async () => {

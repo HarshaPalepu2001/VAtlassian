@@ -1,29 +1,18 @@
 /**
- * THE ROLE VOCABULARY. ONE LIST, AND THIS IS IT.
+ * Define the role names accepted by every configuration screen and write path.
  *
- * A role in this app is a STRING COMPARED BYTE FOR BYTE. lib/eligibility.js
- * matches `role = ?` exactly — no trimming, no case folding, no aliasing — and
- * that is deliberate: an authority check that quietly accepts "reviewer" for
- * "REVIEWER" also quietly accepts whatever else somebody typed.
+ * lib/eligibility.js compares role strings byte for byte, without trimming,
+ * case folding or aliases. Separate free-text inputs previously allowed a
+ * trailing space to make otherwise identical grants and transition rules fail
+ * with NO_ELIGIBLE_REVIEWER.
  *
- * The cost of that strictness is that the two screens which write a role MUST
- * write the same bytes. They did not. The gate screen had a free-text input
- * defaulted to "REVIEWER" and the reviewers screen had a second free-text input
- * defaulted to "REVIEWER", and nothing tied them together. A trailing space in
- * either one produces a configuration that looks completely correct on both
- * screens and denies every transition with NO_ELIGIBLE_REVIEWER — the worst
- * failure shape this app has, because nothing appears broken.
+ * Both screens now use the picker served by admin:roles, and server-side
+ * validation rejects values outside this list, including edited requests.
  *
- * So there is no free text anywhere any more. Both screens render a picker from
- * this list, served by `admin:roles`, and every write path validates against it
- * server-side. The frontend cannot invent a role even if somebody edits the
- * request, because the resolver refuses one that is not here.
- *
- * ADDING A ROLE. Add it here and it appears in both pickers on the next deploy.
- * REMOVING ONE IS NOT SAFE: va_eligibility and va_controlled_transition rows already
- * name it, and deleting the entry strands them — the grant still matches the
- * gate, but no admin can read or re-create either. Retire a role by migrating
- * the rows that use it first.
+ * Adding a role here adds it to both pickers on the next deployment. Before
+ * removing a role, migrate va_eligibility and va_controlled_transition rows
+ * that reference it. Otherwise matching rows remain but administrators cannot
+ * read or recreate them through the pickers.
  */
 
 export const ROLE = {
@@ -34,12 +23,8 @@ export const ROLE = {
 };
 
 /**
- * What each role is FOR, in the words an admin needs to choose between them.
- *
- * The help text is here rather than in the component because the same sentence
- * has to appear on the gate screen and the People screen — an admin who reads
- * one description when granting and a different one when gating has been given
- * two different ideas of what they just configured.
+ * Describe each role for the administrator's selector. Keep descriptions
+ * beside role definitions so all clients explain the same role names.
  */
 export const ROLES = [
   {
@@ -74,11 +59,8 @@ export function isRole(value) {
 }
 
 /**
- * The value to store, or null.
- *
- * RETURNS NULL RATHER THAN FALLING BACK TO THE DEFAULT. A save that silently
- * rewrites an unrecognised role as REVIEWER grants authority the admin did not
- * ask for; the resolvers refuse the write instead and say so.
+ * Return the accepted role value or null. Never replace an unrecognized role
+ * with a default during save.
  */
 export function normaliseRole(value) {
   return isRole(value) ? String(value) : null;

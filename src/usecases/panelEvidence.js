@@ -13,14 +13,14 @@ import { mixedEligibility } from '../lib/approval/mixedDecision.js';
 import { projectRestoreRows } from './viewerProjection.js';
 
 /**
- * THE HEAVY READ — recursive tree, retained values, changelog attribution,
+ * Read detailed evidence: recursive tree, retained values, changelog attribution,
  * full differences, baseline history, and restoration history.
  *
  * Loaded after the summary, or when the evidence section opens. Uses
  * panelAccess.js's snapshot() for the authoritative state, then reads saved
  * version history and descendant drift attribution for the review display.
  * Every approval challenge/submit/retry still performs its own fresh
- * authoritative read — this is presentation, not authorization.
+ * authoritative read. This result controls display rather than authorization.
  */
 
 /** Flatten ADF description into a bounded preview. Shared with panel.js so the
@@ -72,7 +72,7 @@ export async function getEvidence(args) { return respond(async () => {
   const { baseline, issue } = prepared;
 
   // A newer baseline than the one the caller last saw makes this evidence
-  // stale before it is even assembled — the client must refresh its summary
+  // stale before assembly. The client must refresh its summary
   // and re-request evidence against the current version, never render mixed
   // vintages of baseline/tree/diff together.
   if (payload.expectedBaselineVersion != null

@@ -1,11 +1,10 @@
 /**
- * Windowed verification — the behaviour jobs/verify.js depends on.
+ * Windowed verification for jobs/verify.js.
  *
- * The daily job cannot walk an unbounded ledger inside one invocation, so it
- * verifies WINDOW entries and resumes next run. These tests pin the contract
- * that resumption rests on: a bounded call must say it stopped short, must say
- * exactly where to resume, and must never report a partial window as a clean
- * bill of health for the whole chain.
+ * The daily job verifies WINDOW entries per invocation and resumes on its
+ * next run. A bounded verification must report whether it stopped early
+ * and where to resume. It must never report a partial window as proof of
+ * the whole chain's integrity.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -87,8 +86,8 @@ test('tampering beyond the window is missed now and caught on the next pass', as
   const row = store.entries.get(40);
   store.entries.set(40, { ...row, payload: JSON.stringify({ n: 'edited' }) });
 
-  // The first window cannot see it — this is the detection-latency bound the
-  // job header describes, asserted rather than assumed.
+  // The first window cannot see it. This checks the detection-latency bound the
+  // job header describes.
   const first = await verifyChain(store, { from: 1, maxEntries: 20 });
   assert.equal(first.ok, true);
   assert.equal(first.partial, true);

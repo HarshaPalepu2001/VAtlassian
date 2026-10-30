@@ -1,11 +1,9 @@
 /**
- * WHAT AN APPROVAL CONTENT HASH WAS COMPUTED OVER.
+ * Describe the inputs used to compute an approval content hash.
  *
- * Two hashes that disagree say nothing about why. This is the small, secret-free
- * description both sides log (the approval when it is signed, the validator when
- * it recomputes): tree or flat, which scope the tracked fields came from, which
- * field ids they were, and how the issue's attachments read (the rich-text flag
- * removes a file from the hash). Logged only; never stored or audited.
+ * Signing and validation log the same secret-free details: tree/flat mode,
+ * tracked-field scope and IDs, and attachment handling. The rich-text flag
+ * excludes a file from hashing. These diagnostics are logged, not stored or audited.
  */
 export function hashBasis({ mode, scopeSource = null, scopeIssueTypeId = null, fields = [], issue = null, linkPolicy = null }) {
   const attachments = Array.isArray(issue?.fields?.attachment) ? issue.fields.attachment : [];

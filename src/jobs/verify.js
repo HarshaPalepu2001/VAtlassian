@@ -1,49 +1,22 @@
 /**
- * VERIFY — the daily walk of the audit chain.
+ * Verify the audit hash chain on a daily schedule.
  *
- * This file was `export const run = async () => {}` while manifest.yml
- * scheduled it daily with the comment "walk the audit chain, alert on break".
- * The walk itself was never missing — lib/ledger.js's verifyChain() has always
- * been complete and tested. What was missing was anything that CALLED it on a
- * schedule, so a broken chain would have sat undetected until someone happened
- * to open the admin console and ask.
+ * The scheduled handler was previously empty even though
+ * lib/ledger.js#verifyChain was implemented and tested. Successful checks record
+ * CHAIN_VERIFIED under 21 CFR 11.10(e); detected breaks record CHAIN_BROKEN.
  *
- * WHY THIS IS A CONTROL AND NOT A HEALTH CHECK. 21 CFR 11.10(e) requires a
- * secure, computer-generated, time-stamped audit trail. A hash chain nobody
- * walks is an assertion, not a control: it makes tampering detectABLE without
- * making it detectED. The daily pass is what converts the one into the other,
- * and the CHAIN_VERIFIED entry it appends is the dated evidence that the
- * detection actually ran — which is the part an auditor asks for, because
- * "our records are tamper-evident" is a claim and "here is the daily record of
- * us checking" is proof.
+ * Verify at most WINDOW entries per run using a cursor in va_config. Resume
+ * from that cursor on the next run. At the tail, reset to sequence 1 for the
+ * next full pass. A pass across several runs does not prove the whole chain
+ * was intact at one instant. State the detection interval as "verified within
+ * N days", never "continuously verified". Increasing WINDOW shortens the
+ * cycle at the cost of invocation time.
  *
- * WINDOWED, AND WHAT THAT COSTS. A full walk is O(ledger), which is fine today
- * and will not be after a year on a busy instance. So each run verifies at most
- * WINDOW entries from a cursor in va_config and stops; the next run resumes
- * where it left off. When a pass reaches the tail the cursor resets to 1 and
- * the next cycle starts over.
- *
- * Be honest about what that proves. A pass spread over several runs does NOT
- * show the whole chain was intact at any single instant — an alteration could
- * in principle move behind the cursor mid-pass. What it does guarantee is that
- * any alteration is caught within one full cycle, because every cycle restarts
- * at seq 1 and re-checks everything. That is a detection-latency bound, not a
- * gap: state it as "verified within N days", never as "continuously verified".
- * Raise WINDOW to shorten the cycle; the cost is invocation time.
- *
- * A BREAK DOES NOT ADVANCE THE CURSOR. It is a standing alarm, re-raised on
- * every run until someone resolves it. Advancing past a break would silence the
- * alarm on the second day, which is precisely when it matters most.
- *
- * MISSING_PREDECESSOR IS NOT TREATED AS TAMPERING. verifyChain reports it when
- * the entry before the cursor cannot be read, which will one day be the normal
- * result of sealing and pruning an old segment (jobs/seal.js, va_chain_segment)
- * rather than evidence of anything. Since prune does not exist yet this cannot
- * currently happen, but crying wolf the first time it does would train whoever
- * reads these alerts to ignore them. So it resyncs the cursor to 1 and lets the
- * next run start a clean pass. Nothing is lost by that: a genuinely DELETED
- * entry still surfaces as SEQUENCE_GAP on the pass from seq 1, which is where
- * every cycle begins.
+ * A break leaves the cursor unchanged and is reported on each run until
+ * resolved. MISSING_PREDECESSOR resets the cursor to 1 instead of reporting
+ * tampering: a sealed and pruned prefix could make the preceding entry
+ * unavailable. Pruning is not yet implemented. A deleted entry still appears
+ * as SEQUENCE_GAP in a pass starting at sequence 1.
  */
 import { verifyChain, append, EVENT } from '../lib/ledger.js';
 import { auditStore, newId } from '../db/store.js';
@@ -53,9 +26,8 @@ import { enqueue } from '../db/alertStore.js';
 
 export const CURSOR_KEY = 'verify.cursor';
 
-// Entries per run. Deliberately conservative: verifyChain re-hashes every row
-// it reads, and the cost of a slow pass is latency to detection rather than a
-// failed transition — this job holds nothing open.
+// Bound entries per run because verifyChain re-hashes every row. A smaller
+// window increases detection latency without holding a Jira transition open.
 export const WINDOW = 2_000;
 
 const ACTOR = 'system:verify';
@@ -65,7 +37,7 @@ export async function readCursor() {
     'SELECT cfg_value FROM va_config WHERE cfg_key = ?',
     [CURSOR_KEY]
   );
-  // An unreadable cursor must not skip verification — start a full pass.
+  // An unreadable cursor starts a full pass instead of skipping verification.
   if (!res.result) {
     console.error('verify: could not read cursor, starting a full pass', res.error);
     return 1;
@@ -81,8 +53,8 @@ export async function writeCursor(seq) {
      ON DUPLICATE KEY UPDATE cfg_value = VALUES(cfg_value), updated_at = VALUES(updated_at)`,
     [CURSOR_KEY, String(seq), Date.now(), ACTOR]
   );
-  // A cursor that fails to persist costs a repeated window next run — wasted
-  // work, never a missed check. Not worth failing the run over.
+  // A failed cursor write repeats a window next run but skips no checks.
+  // Keep the verification result instead of failing the run.
   if (!res.result) {
     console.error('verify: could not persist cursor; next run repeats this window', res.error);
   }
@@ -99,9 +71,8 @@ async function record(eventType, payload) {
     });
     return true;
   } catch (e) {
-    // The ledger being unwritable is itself something this job exists to
-    // notice. Log loudly and still return the verdict — a break that could not
-    // be recorded must not also go unreported.
+    // Log and return the verdict even when the ledger cannot record it.
+    // A failed audit write must not hide a detected chain break.
     console.error(`verify: could not append ${eventType}`, e);
     return false;
   }

@@ -1,16 +1,16 @@
-# Child Baselines Implementation Plan
+# Child baselines implementation plan
 
 > Steps use checkbox (`- [x]`) syntax for tracking. Commits are authored as `Palepu Sai Sri Harsha <harsha.palepu@mgtechsoft.com>`.
 
-**Goal:** When a parent is baselined, every child (through Jira's `parent` link, recursively) gets its own baseline, tracked with its own project/issue type's controlled fields. A child's drift is held and decided in the child. The parent's review groups changes by issue, and a parent decision covers the parent and every child.
+**Goal.** When a parent is baselined, every child (through Jira's `parent` link, recursively) gets its own baseline, tracked with its own project/issue type's controlled fields. A child's drift is held and decided in the child. The parent's review groups changes by issue, and a parent decision covers the parent and every child.
 
-**Architecture:** The parent's tree capture also writes an ordinary single-issue (flat) baseline row for each child, linked to the parent's baseline by `captured_by_baseline_id` and authenticated by the parent's approval. From then on each child is a normal baselined item, so the validator, panel and decisions work on it unchanged. The parent's own drift becomes its own fields plus the structure. Its review adds per-child sections compared against each child's own active baseline. A parent decision re-baselines (approve) or restores (reject) every child to its latest recorded baseline.
+**Architecture.** The parent's tree capture also writes an ordinary single-issue (flat) baseline row for each child, linked to the parent's baseline by `captured_by_baseline_id` and authenticated by the parent's approval. From then on each child is a normal baselined item, so the validator, panel and decisions work on it unchanged. The parent's own drift becomes its own fields plus the structure. Its review adds per-child sections compared against each child's own active baseline. A parent decision re-baselines (approve) or restores (reject) every child to its latest recorded baseline.
 
-**Tech Stack:** Forge (Node 22, `@forge/api`, Forge SQL/MySQL), React 18 Custom UI, `node:test`.
+**Technology.** Forge (Node 22, `@forge/api`, Forge SQL/MySQL), React 18 Custom UI, `node:test`.
 
 **Spec:** `docs/specs/2026-09-24-child-baselines-design.md`
 
-## Global Constraints
+## Global constraints
 
 - Tracked fields per issue: exactly the Controlled Fields page rows for **that issue's own** project and issue type (`controlledFields({ projectId, issueTypeId })`). A child with none gets no baseline row.
 - Scope: every child through `parent`, recursively (the existing tree reader). Linked issues: link only (`issuelinks`, kind `LINKS`), never their content.
@@ -71,7 +71,7 @@ test('v061 adds the parent-capture link to va_baseline', async () => {
 ```
 (If the module exports the list under another name, use that name; check the top of `migrations.js` first.)
 
-- [x] **Step 2: Run it and see it fail** — `node --test test/migrations.test.js` → FAIL "migration present".
+- [x] **Step 2: Run it and see it fail.** `node --test test/migrations.test.js` → FAIL "migration present".
 
 - [x] **Step 3: Implement**
 
@@ -87,7 +87,7 @@ test('v061 adds the parent-capture link to va_baseline', async () => {
 - [x] **Step 4: Run** `npm test` → PASS.
 - [x] **Step 5: Commit** `feat(baseline): record which parent capture produced a child baseline`
 
-### Task 2: every node tracked with its own fields
+### Task 2: Every node tracked with its own fields
 
 **Files:**
 - Create: `src/lib/tree/nodeFields.js`
@@ -210,7 +210,7 @@ In `diffTree`: add `scopeFor = null`; per node `const scopeIds = contentFieldIds
 - [x] **Step 5: Run** `npm test` → PASS. Existing tree tests pass unchanged because a tree whose nodes share one scope projects exactly as before.
 - [x] **Step 6: Commit** `feat(tree): track every node with its own project and issue type's fields`
 
-### Task 3: materialise a baseline for each child at the parent's capture
+### Task 3: Materialise a baseline for each child at the parent's capture
 
 **Files:**
 - Create: `src/db/childBaselineStore.js`
@@ -277,7 +277,7 @@ After `publishTreeBaseline`: `await services.publishChildBaselines({ parentBasel
 - [x] **Step 5: Run** `npm test` → PASS. Update `test/drift-functional.test.js` / `test/controlled-transition-tree-acceptance.test.js` fixtures only if they now need the new services injected (add no-op fakes).
 - [x] **Step 6: Commit** `feat(capture): give every child its own baseline when its parent is baselined`
 
-### Task 4: parent drift is its own fields and structure; children are collected on their own
+### Task 4: Parent drift is its own fields and structure; children are collected on their own
 
 **Files:**
 - Modify: `src/lib/treeCollect.js` (`collectTree`, `collectAffectedTrees`)
@@ -296,7 +296,7 @@ After `publishTreeBaseline`: `await services.publishChildBaselines({ parentBasel
 - [x] **Step 4: Run** `npm test` → PASS.
 - [x] **Step 5: Commit** `feat(drift): a child's changes are its own drift, not its parent's`
 
-### Task 5: scenarios for Part 1
+### Task 5: Scenarios for Part 1
 
 **Files:**
 - Modify: `test/helpers/validator-world.js` (a `childOf` option on `createIssue` to set `fields.parent`; `baseline(key, { capturedBy })` to set `captured_by_baseline_id`)
@@ -314,7 +314,7 @@ After `publishTreeBaseline`: `await services.publishChildBaselines({ parentBasel
 
 # Part 2: the parent's review covers its children
 
-### Task 6: grouped review diff
+### Task 6: Grouped review diff
 
 **Files:**
 - Create: `src/lib/tree/groupedReview.js`
@@ -339,7 +339,7 @@ After `publishTreeBaseline`: `await services.publishChildBaselines({ parentBasel
 - [x] **Step 4: Run** `npm test` → PASS.
 - [x] **Step 5: Commit** `feat(review): group a parent's changes by issue`
 
-### Task 7: a parent decision covers its children
+### Task 7: A parent decision covers its children
 
 **Files:**
 - Modify: `src/usecases/drift.js` (`prepareApproval` restore plan), `src/lib/tree/restorePlan.js` (`planTreeRestore`)
@@ -355,7 +355,7 @@ After `publishTreeBaseline`: `await services.publishChildBaselines({ parentBasel
 - [x] **Step 3: Run** `npm test` → PASS.
 - [x] **Step 4: Commit** `feat(decision): a parent decision re-baselines or restores every child`
 
-### Task 8: panel and diff view
+### Task 8: Panel and diff view
 
 **Files:**
 - Modify: `src/usecases/panelSummary.js` (children awaiting decision), `frontend/src/review/DiffView.tsx`, `frontend/src/review/types.ts`, `frontend/src/panel/sections/DriftSection.tsx`
@@ -371,7 +371,7 @@ After `publishTreeBaseline`: `await services.publishChildBaselines({ parentBasel
 - [x] **Step 3: Run** `npm test` and `npm run test:ui` → PASS.
 - [x] **Step 4: Commit** `feat(panel): show a parent's changes grouped by issue`
 
-### Task 9: verify, report, deploy
+### Task 9: Verify, report, deploy
 
 - [x] `npm run verify` green.
 - [x] Extend `docs/acceptance/2026-09-24-validator-scenarios.md` with the Part 1 and 2 scenarios.

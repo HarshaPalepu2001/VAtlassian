@@ -1,25 +1,16 @@
 /**
- * Atlassian Document Format -> plain text, for DISPLAY ONLY.
+ * Render Atlassian Document Format as plain text for display only.
  *
- * WHY NOT AdfRenderer. @forge/react does export an AdfRenderer component, and
- * on a roomy surface it is the right choice. This text runs inside Jira's
- * transition dialog, which is a narrow modal that already has to carry a
- * statement of meaning, a status change and a code box; a full renderer there
- * costs layout we do not have and pulls a full editor bundle into a component
- * whose job is to be fast enough that the signer does not close the dialog.
+ * The Jira transition dialog has limited space for context, signature meaning,
+ * status change and a code input. A full @forge/react AdfRenderer would add
+ * layout and bundle cost that this short context preview does not need.
  *
- * WHY THIS IS NOT lib/content.js. content.js normalises ADF for HASHING —
- * every byte of it is part of the compliance record, and changing how it
- * walks a document would change every content hash ever computed. This
- * function is cosmetic: it feeds a paragraph of context to a human who is
- * about to sign. Sharing code between them would couple a display tweak to
- * the integrity of the audit trail. They are deliberately separate, and this
- * file must never be imported by anything that hashes.
+ * Keep this renderer separate from lib/content.js, which normalises ADF for
+ * hashing. A display change must not change content hashes. Code that hashes
+ * content must never import this module.
  *
- * Unknown node types degrade to their children rather than being dropped, so
- * a document using a node type that did not exist when this was written still
- * shows its text instead of silently rendering as blank. A signer seeing
- * LESS than the record contains is the failure that matters here.
+ * Unknown node types render their children. New ADF containers should still
+ * show their text rather than hide part of the record from the signer.
  */
 
 /** Node types that are not text and should be announced, not omitted. */

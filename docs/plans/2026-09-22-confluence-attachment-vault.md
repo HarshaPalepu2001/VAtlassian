@@ -1,20 +1,20 @@
-# Confluence Attachment Vault (Phases 1 & 2) Implementation Plan
+# Confluence attachment vault (phases 1 & 2) implementation plan
 
 > **Superseded 2026-10-12**: VAtlassian drops every Confluence integration. Attachments are vaulted in the Forge Object Store only.
 
 > Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** When a Jira project gets a controlled transition with `capture_baseline = true`, silently provision a dedicated, locked-down Confluence space for it and block attachment deletion project-wide; when a baseline is captured for an issue in such a project, push a copy of its current attachments into that vault as durable, hashed evidence.
+**Goal.** When a Jira project gets a controlled transition with `capture_baseline = true`, silently provision a dedicated, locked-down Confluence space for it and block attachment deletion project-wide; when a baseline is captured for an issue in such a project, push a copy of its current attachments into that vault as durable, hashed evidence.
 
-**Architecture:** Two new orchestration points hang off existing code: `usecases/transitions.js` (where `capture_baseline` gets turned on) triggers space creation + permission lockdown synchronously; `usecases/drift.js`'s `applyApproval` (where a baseline is actually captured) enqueues attachment vaulting onto a new Forge queue, processed by a new worker, mirroring the existing `va-restore-queue`/`restoreWorker.js` pattern. All of it is best-effort and audited — nothing here can fail an approval or a config save.
+**Architecture.** Add vault provisioning and attachment copying to existing code. `usecases/transitions.js` (where `capture_baseline` gets turned on) triggers space creation + permission lockdown synchronously; `usecases/drift.js`'s `applyApproval` (where a baseline is actually captured) enqueues attachment vaulting onto a new Forge queue, processed by a new worker, mirroring the existing `va-restore-queue`/`restoreWorker.js` pattern. Audit failures without failing an approval or a config save.
 
-**Tech Stack:** Node.js (Forge app runtime), `@forge/api` (Jira/Confluence REST), `@forge/sql`, `@forge/events` (Queue), `node:test`/`node:assert/strict` for tests.
+**Technology.** Node.js (Forge app runtime), `@forge/api` (Jira/Confluence REST), `@forge/sql`, `@forge/events` (Queue), `node:test`/`node:assert/strict` for tests.
 
 **Spec:** [docs/specs/2026-09-22-confluence-attachment-vault-design.md](../specs/2026-09-22-confluence-attachment-vault-design.md)
 
-## Global Constraints
+## Global constraints
 
-- No new Forge permission scopes — `write:confluence-space`, `write:confluence-content`, `read:confluence-content.all`, `manage:jira-configuration` are already declared in `manifest.yml`.
+- No new Forge permission scopes. `write:confluence-space`, `write:confluence-content`, `read:confluence-content.all`, `manage:jira-configuration` are already declared in `manifest.yml`.
 - Every new DB access function accepts an injectable query function (`query = executeQuery` default param), matching `src/db/driftStore.js`'s pattern, so it's unit-testable without a live Forge SQL connection.
 - Every new orchestration function accepts an injectable `deps` object with real defaults, matching `src/lib/capture.js`/`src/jobs/restoreWorker.js`'s pattern.
 - Nothing in this plan may cause `createControlledTransition`, `updateControlledTransition`, or `applyApproval` to fail because of a vaulting/lockdown problem. Every call site catches, logs to console, and appends a best-effort audit event via `tryAppend`.
@@ -30,7 +30,7 @@
 - Test: `test/migrations.test.js` (append new tests)
 
 **Interfaces:**
-- Produces: three new tables — `va_vault_space(project_id PK, space_id, space_key, permission_scheme_id, permission_locked_at, created_at, created_by)`, `va_vault_page(issue_id PK, project_id, confluence_page_id, created_at)`, `va_vault_attachment(id PK, baseline_id, issue_id, jira_attachment_id, filename, content_hash, confluence_attachment_id, vaulted_at, UNIQUE(baseline_id, jira_attachment_id))`.
+- Produces: three new tables, `va_vault_space(project_id PK, space_id, space_key, permission_scheme_id, permission_locked_at, created_at, created_by)`, `va_vault_page(issue_id PK, project_id, confluence_page_id, created_at)`, `va_vault_attachment(id PK, baseline_id, issue_id, jira_attachment_id, filename, content_hash, confluence_attachment_id, vaulted_at, UNIQUE(baseline_id, jira_attachment_id))`.
 - Produces: `EVENT.VAULT_SPACE_CREATED`, `EVENT.VAULT_SPACE_CREATE_FAILED`, `EVENT.ATTACHMENT_DELETE_LOCKED`, `EVENT.ATTACHMENT_DELETE_LOCK_FAILED`, `EVENT.VAULT_QUEUE_FAILED`, `EVENT.ATTACHMENT_VAULTED`, `EVENT.ATTACHMENT_VAULT_FAILED`.
 
 - [ ] **Step 1: Write the failing migration tests**
@@ -65,7 +65,7 @@ test('vault attachment is unique per baseline and jira attachment', () => {
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `node --test test/migrations.test.js`
-Expected: FAIL — `Migration v056_vault_space not found` (and similarly for v057/v058).
+Expected failure. `Migration v056_vault_space not found` (and similarly for v057/v058).
 
 - [ ] **Step 3: Add the migrations**
 
@@ -103,7 +103,7 @@ Append to the `MIGRATIONS` array in `src/db/migrations.js`, right after the `v05
   )` }
 ```
 
-Note: keep `v055_va_events` as the final entry in the array *before* these three — do not reorder existing entries.
+Note: keep `v055_va_events` as the final entry in the array *before* these three. Do not reorder existing entries.
 
 Add the seven new event constants to `src/lib/ledger.js`'s `EVENT` object, replacing the closing line:
 
@@ -133,7 +133,7 @@ git commit -m "feat(vault): add vault space/page/attachment tables and audit eve
 
 ---
 
-## Task 2: `src/db/vaultStore.js` — DB access layer
+## Task 2: `src/db/vaultStore.js`, DB access layer
 
 **Files:**
 - Create: `src/db/vaultStore.js`
@@ -234,7 +234,7 @@ test('insertVaultAttachment generates and returns a fresh id', async () => {
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `node --test test/vault-store.test.js`
-Expected: FAIL — `Cannot find module '../src/db/vaultStore.js'`.
+Expected failure. `Cannot find module '../src/db/vaultStore.js'`.
 
 - [ ] **Step 3: Implement `src/db/vaultStore.js`**
 
@@ -323,7 +323,7 @@ git commit -m "feat(vault): add vault space/page/attachment DB access layer"
 
 ---
 
-## Task 3: `src/lib/vaultConfluence.js` — Confluence I/O
+## Task 3: `src/lib/vaultConfluence.js`, Confluence I/O
 
 **Files:**
 - Create: `src/lib/vaultConfluence.js`
@@ -437,7 +437,7 @@ test('uploadAttachmentToPage posts multipart form data with the filename', async
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `node --test test/vault-confluence.test.js`
-Expected: FAIL — module not found.
+Expected failure. Module not found.
 
 - [ ] **Step 3: Implement `src/lib/vaultConfluence.js`**
 
@@ -538,7 +538,7 @@ git commit -m "feat(vault): add Confluence space/page/attachment API adapter"
 
 ---
 
-## Task 4: `src/lib/vaultPermissions.js` — Jira permission-scheme lockdown
+## Task 4: `src/lib/vaultPermissions.js`, Jira permission-scheme lockdown
 
 **Files:**
 - Create: `src/lib/vaultPermissions.js`
@@ -613,7 +613,7 @@ test('removeAttachmentDeleteGrants throws on a real failure', async () => {
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `node --test test/vault-permissions.test.js`
-Expected: FAIL — module not found.
+Expected failure. Module not found.
 
 - [ ] **Step 3: Implement `src/lib/vaultPermissions.js`**
 
@@ -660,7 +660,7 @@ git commit -m "feat(vault): add Jira permission-scheme attachment-delete lockdow
 
 ---
 
-## Task 5: `src/lib/vaultProvision.js` — orchestration
+## Task 5: `src/lib/vaultProvision.js`, orchestration
 
 **Files:**
 - Create: `src/lib/vaultProvision.js`
@@ -668,7 +668,7 @@ git commit -m "feat(vault): add Jira permission-scheme attachment-delete lockdow
 
 **Interfaces:**
 - Consumes: `getVaultSpace`, `insertVaultSpace`, `markPermissionLocked` from `../db/vaultStore.js`; `deriveSpaceKey`, `createSpace`, `restrictSpacePermissions` from `./vaultConfluence.js` (`findSpaceByKey` is used internally by `createSpace` on a 409 and is not called directly here); `getProjectPermissionScheme`, `attachmentDeleteGrantIds`, `removeAttachmentDeleteGrants` from `./vaultPermissions.js`; `tryAppend` from `../db/store.js`; `EVENT` from `./ledger.js`; `api`, `route` from `@forge/api`.
-- Produces: `ensureVaultSpace(projectId, deps?)` → `{created, spaceId, spaceKey}`; `lockAttachmentDeletion(projectId, deps?)` → `{schemeId, grantsRemoved}`; `provisionVault(projectId, deps?)` → `{space, lockdown, errors: []}` — never throws.
+- Produces: `ensureVaultSpace(projectId, deps?)` → `{created, spaceId, spaceKey}`; `lockAttachmentDeletion(projectId, deps?)` → `{schemeId, grantsRemoved}`; `provisionVault(projectId, deps?)` → `{space, lockdown, errors: []}`. It never throws.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -780,7 +780,7 @@ test('provisionVault records the lockdown failure independently of the space res
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `node --test test/vault-provision.test.js`
-Expected: FAIL — module not found.
+Expected failure. Module not found.
 
 - [ ] **Step 3: Implement `src/lib/vaultProvision.js`**
 
@@ -881,7 +881,7 @@ git commit -m "feat(vault): orchestrate vault-space provisioning and attachment 
 
 **Files:**
 - Modify: `src/usecases/transitions.js:61-83` (`createControlledTransition`) and `:91-125` (`updateControlledTransition`)
-- Test: `test/admin-configuration.test.js` (append) — this is the file that already exercises `createControlledTransition`/`updateControlledTransition` end-to-end via `admin.createControlledTransition`/`admin.updateControlledTransition` and the shared `fixture()`/`request()` helpers from `./admin-fixture.js`. (`test/admin-workflow-transitions.test.js` tests a different usecase, `listWorkflowTransitions` — not this one.)
+- Test: `test/admin-configuration.test.js` (append). This file already exercises `createControlledTransition`/`updateControlledTransition` end-to-end via `admin.createControlledTransition`/`admin.updateControlledTransition` and the shared `fixture()`/`request()` helpers from `./admin-fixture.js`. (`test/admin-workflow-transitions.test.js` tests a different usecase, `listWorkflowTransitions`, rather than this usecase.)
 
 **Interfaces:**
 - Consumes: `provisionVault(projectId, deps?)` from `../lib/vaultProvision.js` (Task 5).
@@ -934,12 +934,12 @@ test('updating a transition to capture-baseline provisions the vault for its pro
 });
 ```
 
-`fixture()` (from `test/admin-fixture.js`) returns the exact `deps` object `runAdmin` passes to the usecase — `adminDependencies(overrides, profile)` returns `overrides` unchanged when it's truthy, so setting `deps.provisionVault` before calling the usecase is a real, complete override, not a partial mock. `edge.projectId` is `'1'`; `Number('1') === 1`, which is what the implementation below passes through.
+`fixture()` (from `test/admin-fixture.js`) returns the exact `deps` object `runAdmin` passes to the usecase. `adminDependencies(overrides, profile)` returns a truthy `overrides` unchanged. Set `deps.provisionVault` before calling the usecase to replace the dependency completely. `edge.projectId` is `'1'`; `Number('1') === 1`, which is what the implementation below passes through.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `node --test test/admin-configuration.test.js`
-Expected: FAIL — `deps.provisionVault` is never called (the real dynamic import fallback would otherwise try to reach live Confluence/Jira APIs and throw, since the wiring doesn't exist yet in production code).
+Expected failure. `deps.provisionVault` is never called (the real dynamic import fallback would otherwise try to reach live Confluence/Jira APIs and throw, since the wiring doesn't exist yet in production code).
 
 - [ ] **Step 3: Wire `provisionVault` into `src/usecases/transitions.js`**
 
@@ -996,7 +996,7 @@ In `updateControlledTransition`, change the final `return { success: true, ctId:
     return { success: true, ctId: req.payload.ctId, ...(note ? { note } : {}) };
 ```
 
-`deps.provisionVault ?? (await import(...)).provisionVault` means: the fixture's injected `provisionVault` (as in Step 1's tests) is used under test, and the real module loads in production. `adminDependencies` in `src/usecases/adminRuntime.js` returns `overrides` completely unchanged when `overrides` is truthy (confirmed by reading that file) — so `deps` under test is exactly the `fixture()` object with `provisionVault` attached, no allowlist filtering to worry about.
+`deps.provisionVault ?? (await import(...)).provisionVault` means: the fixture's injected `provisionVault` (as in Step 1's tests) is used under test, and the real module loads in production. `adminDependencies` in `src/usecases/adminRuntime.js` returns `overrides` completely unchanged when `overrides` is truthy (confirmed by reading that file). Therefore `deps` under test is exactly the `fixture()` object with `provisionVault` attached, no allowlist filtering to worry about.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -1017,7 +1017,7 @@ git commit -m "feat(vault): provision the vault when a controlled transition cap
 
 ---
 
-## Task 7: `src/lib/vaultQueue.js` — enqueue helper
+## Task 7: `src/lib/vaultQueue.js`, enqueue helper
 
 **Files:**
 - Create: `src/lib/vaultQueue.js`
@@ -1063,7 +1063,7 @@ test('enqueueVault rejects a non-numeric issueId', async () => {
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `node --test test/vault-queue.test.js`
-Expected: FAIL — module not found.
+Expected failure. Module not found.
 
 - [ ] **Step 3: Implement `src/lib/vaultQueue.js`**
 
@@ -1110,7 +1110,7 @@ git commit -m "feat(vault): add the attachment-vaulting queue helper"
 
 ---
 
-## Task 8: `src/jobs/vaultWorker.js` — the vaulting worker
+## Task 8: `src/jobs/vaultWorker.js`, the vaulting worker
 
 **Files:**
 - Create: `src/jobs/vaultWorker.js`
@@ -1221,7 +1221,7 @@ test('falls back to lazily provisioning the vault space when it was not created 
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `node --test test/vault-worker.test.js`
-Expected: FAIL — module not found.
+Expected failure. Module not found.
 
 - [ ] **Step 3: Implement `src/jobs/vaultWorker.js`**
 
@@ -1322,17 +1322,17 @@ git commit -m "feat(vault): add the baseline attachment-vaulting worker"
 ## Task 9: Wire attachment vaulting into `applyApproval`
 
 `applyApproval` (the function that actually captures a baseline on approval)
-lives in `src/usecases/drift.js`, **not** `src/usecases/approval.js` —
+lives in `src/usecases/drift.js`, **not** `src/usecases/approval.js`.
 `approval.js` only holds the challenge/submit layer that eventually calls into
 `drift.js`. Double-check this against the current file before starting: `grep -n
 "^export async function applyApproval" src/usecases/drift.js`.
 
 **Files:**
 - Modify: `src/usecases/drift.js` (imports, and the block right after `if (!capture.captured) fail(capture.reason ?? 'CAPTURE_FAILED');`)
-- Modify: `test/drift-functional.test.js` — this file already runs `applyApproval` end-to-end through a module-resolution-hook fixture (`registerHooks`) that intercepts a fixed list of modules (the `modules` map near the top) and routes their exports to a `globalThis.vaFlow` fixture object. Add `lib/vaultQueue.js` to that list, exactly like `db/store.js` is already there for `tryAppend`.
+- Modify: `test/drift-functional.test.js`. This file already runs `applyApproval` end-to-end through a module-resolution-hook fixture (`registerHooks`) that intercepts a fixed list of modules (the `modules` map near the top) and routes their exports to a `globalThis.vaFlow` fixture object. Add `lib/vaultQueue.js` to that list, exactly like `db/store.js` is already there for `tryAppend`.
 
 **Interfaces:**
-- Consumes: `enqueueVault` from `../lib/vaultQueue.js` (Task 7, plain static import — this file does not use parameter-injected deps, it uses top-level imports, matching how `markDecided`/`clearDrift`/`writeCapturedBaseline` are already imported here); `EVENT` from `../lib/ledger.js`; `tryAppend` from `../db/store.js` (neither is currently imported in this file — confirm with `grep -n "^import" src/usecases/drift.js` before adding).
+- Consumes: `enqueueVault` from `../lib/vaultQueue.js` (Task 7, plain static import. This file does not use parameter-injected deps, it uses top-level imports, matching how `markDecided`/`clearDrift`/`writeCapturedBaseline` are already imported here); `EVENT` from `../lib/ledger.js`; `tryAppend` from `../db/store.js` (neither is currently imported in this file. Confirm with `grep -n "^import" src/usecases/drift.js` before adding).
 
 - [ ] **Step 1: Add `vaultQueue.js` to the test fixture's module-interception list**
 
@@ -1351,7 +1351,7 @@ Change it to:
 };
 ```
 
-This is necessary, not optional: without it, `drift.js`'s new static import of the real `enqueueVault` would call the real `@forge/events` `Queue.push()` during this test (there is no Forge queue backend in a plain `node:test` run), which this fixture avoids everywhere else it can — note how `projectConfig:async()=>({enabled:true,restore:{queue:false}})` already forces the *existing* restore path off the real queue for the same reason. `enqueueVault` has no equivalent "off switch" in production (vaulting is unconditional whenever a baseline is captured), so the module hook is how this test avoids the same problem.
+This is necessary, not optional: without it, `drift.js`'s new static import of the real `enqueueVault` would call the real `@forge/events` `Queue.push()` during this test (there is no Forge queue backend in a plain `node:test` run), which this fixture avoids elsewhere. In particular, `projectConfig:async()=>({enabled:true,restore:{queue:false}})` already forces the *existing* restore path off the real queue for the same reason. `enqueueVault` has no equivalent "off switch" in production (vaulting is unconditional whenever a baseline is captured), so the module hook is how this test avoids the same problem.
 
 - [ ] **Step 2: Add the fixture's `enqueueVault` and a call log**
 
@@ -1395,7 +1395,7 @@ test('a vault-queue failure is audited and never fails the approval', async () =
 - [ ] **Step 4: Run the tests to verify they fail**
 
 Run: `node --test test/drift-functional.test.js`
-Expected: FAIL — `f.vaultCalls` stays empty (the production wiring doesn't exist yet).
+Expected failure. `f.vaultCalls` stays empty (the production wiring doesn't exist yet).
 
 - [ ] **Step 5: Wire the enqueue call into `applyApproval`**
 
@@ -1430,7 +1430,7 @@ Change it to:
     }
 ```
 
-The gate here is simply `capture.captured` — the spec's trigger is "whenever a baseline is captured," and `capture.captured` is already exactly that signal (true for both the tree-capture and field-only capture branches, and only when the write actually succeeded), so no extra `capturesBaseline`/`gate.capture_baseline` check is needed or more correct than this.
+Gate enqueueing on `capture.captured`. The spec requires vaulting whenever a baseline is captured. This value is true only after a successful write in either the tree-capture or field-only capture branch. Do not add a `capturesBaseline`/`gate.capture_baseline` check.
 
 - [ ] **Step 6: Run the tests to verify they pass**
 
@@ -1486,7 +1486,7 @@ Run:
 node -e "console.log(require('js-yaml') ? 'has js-yaml' : '')" 2>/dev/null; grep -n "va-vault-consumer\|vault-worker" manifest.yml
 ```
 
-Expected: both the consumer and function entries print back, at the correct indentation matching the surrounding `consumer:`/`function:` blocks (2-space nesting consistent with `confl-reconcile-cnsmr`/`confl-reconcile-wrk` immediately above them). If a YAML linter is available in this project's toolchain (check `package.json` devDependencies), run it; otherwise a visual diff against the surrounding entries' indentation is sufficient — Forge's own `forge lint`/`forge deploy` will catch a real syntax error.
+Expected: both the consumer and function entries print back, at the correct indentation matching the surrounding `consumer:`/`function:` blocks (2-space nesting consistent with `confl-reconcile-cnsmr`/`confl-reconcile-wrk` immediately above them). If a YAML linter is available in this project's toolchain (check `package.json` devDependencies), run it; otherwise a visual diff against the surrounding entries' indentation is sufficient. Forge's own `forge lint`/`forge deploy` will catch a real syntax error.
 
 - [ ] **Step 4: Run the full test suite one final time**
 
@@ -1502,4 +1502,4 @@ git commit -m "feat(vault): register the attachment-vaulting queue consumer"
 
 - [ ] **Step 6: Flag remaining manual verification (not automatable in this session)**
 
-This plan's spec calls for one live end-to-end pass against the VJIRA/Confluence test site before Phases 1–2 are considered done: create a controlled transition with baseline capture on a real test project, confirm the vault space and permission-scheme change land, approve an issue with an attachment, confirm it appears on the vault page, and confirm a normal attachment-delete attempt is now refused. This step touches live, shared Jira/Confluence configuration (a permission scheme edit) and should be run deliberately by a human, not automatically — do not run `forge deploy` or perform this verification without the user's explicit go-ahead at that time.
+This plan's spec calls for one live end-to-end pass against the VJIRA/Confluence test site before Phases 1–2 are considered done: create a controlled transition with baseline capture on a real test project, confirm the vault space and permission-scheme change land, approve an issue with an attachment, confirm it appears on the vault page, and confirm a normal attachment-delete attempt is now refused. This step edits a shared Jira/Confluence permission scheme and requires a human to run it. Do not run `forge deploy` or perform this verification without the user's explicit go-ahead at that time.

@@ -82,7 +82,7 @@ and more places for the two verdicts to disagree.
    - `field_digests` and stored values from the child's projection over its own
      fields;
    - the approval and signer of the parent's capture (`approval_id`,
-     `approved_by`, `assurance_level`) — this is the authentication attached;
+     `approved_by`, `assurance_level`), which records the attached authentication;
    - the parent's policy as provenance (`transition_id`, `required_role`,
      `required_assurance`), so the child's drift is decided under the rule that
      signed it;

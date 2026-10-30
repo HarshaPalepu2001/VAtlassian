@@ -286,7 +286,7 @@ export default function DiagnosticsHud({
         fontSize: 12
       }}
     >
-      {/* Top Header Bar */}
+      {/* Header bar */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden' }}>
           <span style={{ fontWeight: 700, color: '#172b4d' }}>⚡ Harness:</span>
@@ -345,10 +345,10 @@ export default function DiagnosticsHud({
         </div>
       </div>
 
-      {/* Expanded HUD Panel */}
+      {/* Expanded HUD panel */}
       {open && (
         <div style={{ marginTop: 10, borderTop: '1px solid #dfe1e6', paddingTop: 10 }}>
-          {/* Mode Switcher Tabs */}
+          {/* Mode tabs */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
             <div style={{ display: 'flex', gap: 4 }}>
               <button
@@ -365,7 +365,7 @@ export default function DiagnosticsHud({
                   cursor: 'pointer'
                 }}
               >
-                Live Telemetry ({filteredEvents.length})
+                Live telemetry ({filteredEvents.length})
               </button>
               <button
                 type="button"
@@ -384,7 +384,7 @@ export default function DiagnosticsHud({
                   cursor: 'pointer'
                 }}
               >
-                Server Diagnostics
+                Server diagnostics
               </button>
             </div>
             <span style={{ color: '#6b778c', fontSize: 11 }}>
@@ -392,10 +392,10 @@ export default function DiagnosticsHud({
             </span>
           </div>
 
-          {/* Tab 1: Live Telemetry Stream */}
+          {/* Tab 1: live telemetry */}
           {activeTab === 'telemetry' && (
             <div>
-              {/* Category Pills & Controls */}
+              {/* Category filters and controls */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
                 <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                   {categoriesAvailable.map(cat => (
@@ -450,7 +450,7 @@ export default function DiagnosticsHud({
                 </div>
               </div>
 
-              {/* Event List */}
+              {/* Event list */}
               <div
                 style={{
                   maxHeight: 220,
@@ -511,7 +511,7 @@ export default function DiagnosticsHud({
                           )}
                         </div>
 
-                        {/* Expanded Event Details */}
+                        {/* Expanded event details */}
                         {isExpanded && (
                           <div
                             style={{
@@ -526,7 +526,7 @@ export default function DiagnosticsHud({
                               color: '#333'
                             }}
                           >
-                            <div style={{ fontWeight: 700, marginBottom: 2 }}>Event Payload:</div>
+                            <div style={{ fontWeight: 700, marginBottom: 2 }}>Event payload:</div>
                             {JSON.stringify(e.details, null, 2)}
                             {e.traceId && (
                               <div style={{ marginTop: 4, color: '#6b778c' }}>
@@ -543,11 +543,11 @@ export default function DiagnosticsHud({
             </div>
           )}
 
-          {/* Tab 2: Server Diagnostics View */}
+          {/* Tab 2: server diagnostics */}
           {activeTab === 'server' && (
             <div style={{ fontSize: 11 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                <span style={{ fontWeight: 600, color: '#42526e' }}>Server State & Gate Evaluation</span>
+                <span style={{ fontWeight: 600, color: '#42526e' }}>Server state and gate evaluation</span>
                 <button
                   type="button"
                   onClick={runServerDiagnostics}
@@ -563,7 +563,7 @@ export default function DiagnosticsHud({
                     fontWeight: 600
                   }}
                 >
-                  {diagLoading ? 'Refreshing...' : '🔄 Refresh Diagnostics'}
+                  {diagLoading ? 'Refreshing...' : 'Refresh diagnostics'}
                 </button>
               </div>
 
@@ -575,7 +575,7 @@ export default function DiagnosticsHud({
 
               {serverDiag && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {/* Health Verdict Card */}
+                  {/* Health verdict card */}
                   {serverDiag.verdict && (
                     <div
                       style={{
@@ -600,9 +600,9 @@ export default function DiagnosticsHud({
 
                   {/* Grid details */}
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-                    {/* Baseline Info */}
+                    {/* Baseline information */}
                     <div style={{ padding: 6, background: '#fff', border: '1px solid #dfe1e6', borderRadius: 3 }}>
-                      <strong>Active Baseline:</strong>
+                      <strong>Active baseline:</strong>
                       {serverDiag.baseline ? (
                         <div style={{ marginTop: 2 }}>
                           <div>Version: <strong>v{serverDiag.baseline.version}</strong></div>
@@ -615,9 +615,9 @@ export default function DiagnosticsHud({
                       )}
                     </div>
 
-                    {/* Gate Simulation */}
+                    {/* Gate simulation */}
                     <div style={{ padding: 6, background: '#fff', border: '1px solid #dfe1e6', borderRadius: 3 }}>
-                      <strong>Workflow Gate:</strong>
+                      <strong>Workflow gate:</strong>
                       {serverDiag.gateSimulation ? (
                         <div style={{ marginTop: 2 }}>
                           <div>Status: {serverDiag.gateSimulation.workitemHeld ? (
@@ -633,7 +633,7 @@ export default function DiagnosticsHud({
                           {serverDiag.gateSimulation.counterDisagrees && (
                             <div style={{ color: '#de350b', fontWeight: 600 }}>Stored counter and live check disagree</div>
                           )}
-                          <div>Controlled Transitions: {serverDiag.gateSimulation.activeControlledTransitions}</div>
+                          <div>Controlled transitions: {serverDiag.gateSimulation.activeControlledTransitions}</div>
                           {(serverDiag.gateSimulation.applicableTransitions ?? []).map(rule => (
                             <div
                               key={`${rule.issueTypeId}-${rule.transitionId}-${rule.fromStatusId}`}
@@ -655,7 +655,7 @@ export default function DiagnosticsHud({
                       {serverDiag.vault ? (
                         <div style={{ marginTop: 2 }}>
                           <div>Storage: Forge Object Store</div>
-                          <div>Vaulted Files: {serverDiag.vault.attachmentCount}</div>
+                          <div>Vaulted files: {serverDiag.vault.attachmentCount}</div>
                           {(serverDiag.vault.attachments ?? []).slice(0, 5).map(a => (
                             <div key={`${a.jiraAttachmentId}-${a.vaultedAt}`} style={{ color: '#6b778c' }}>
                               {a.filename}: {a.storage ?? 'OBJECT_STORE'}{a.mediaId ? '' : ', no media id'}
@@ -667,12 +667,12 @@ export default function DiagnosticsHud({
                       )}
                     </div>
 
-                    {/* Drift & Child Status */}
+                    {/* Drift and child status */}
                     <div style={{ padding: 6, background: '#fff', border: '1px solid #dfe1e6', borderRadius: 3 }}>
-                      <strong>Hierarchy & Drift:</strong>
+                      <strong>Hierarchy and drift:</strong>
                       <div style={{ marginTop: 2 }}>
-                        <div>Tree Drift: {serverDiag.drift?.treeDriftCount ?? 0} items</div>
-                        <div>Child Baselines: {serverDiag.childBaselines?.length ?? 0} children</div>
+                        <div>Tree drift: {serverDiag.drift?.treeDriftCount ?? 0} items</div>
+                        <div>Child baselines: {serverDiag.childBaselines?.length ?? 0} children</div>
                       </div>
                     </div>
                   </div>
@@ -684,7 +684,7 @@ export default function DiagnosticsHud({
                       <div style={{ marginTop: 2, color: serverDiag.typeCheck.typeChangedSinceBaseline ? '#de350b' : '#172b4d', fontWeight: serverDiag.typeCheck.typeChangedSinceBaseline ? 600 : 400 }}>
                         Type now: {serverDiag.typeCheck.issueTypeName ?? serverDiag.typeCheck.issueTypeId} ({serverDiag.typeCheck.issueTypeId})
                         {' · '}baseline captured as: {serverDiag.typeCheck.baselineIssueTypeId ?? 'N/A'}
-                        {serverDiag.typeCheck.typeChangedSinceBaseline ? ' — TYPE CHANGED SINCE BASELINE' : ''}
+                        {serverDiag.typeCheck.typeChangedSinceBaseline ? '. Type changed since baseline' : ''}
                       </div>
                     )}
                     {serverDiag.liveDrift?.checked ? (

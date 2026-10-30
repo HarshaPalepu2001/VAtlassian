@@ -1,35 +1,17 @@
 /**
- * RECORD EXPORT — 21 CFR 11.10(b).
+ * Export records in human-readable and electronic forms under 21 CFR 11.10(b).
  *
  * "The ability to generate accurate and complete copies of records in both
  * human readable and electronic form suitable for inspection, review, and
  * copying by the agency."
  *
- * This is the first thing an inspector asks for and it is the provision this
- * app scored worst on: the sealed-export design existed only as columns in
- * va_chain_segment behind a job that was three empty functions. An export is
- * not the archival pipeline, though — it is the far simpler thing the clause
- * actually names, and it does not need one: produce, on demand, a complete and
- * verifiable copy of the records in scope.
+ * Generate both forms from one object so they agree. Include each signature's
+ * content hash and each audit entry's prev_hash and entry_hash so recipients
+ * can verify them independently. Report completeness and truncation rather than
+ * presenting a limited range as all requested records.
  *
- * BOTH FORMS FROM ONE SOURCE. The clause asks for human readable AND
- * electronic. Rendering them from the same object rather than assembling each
- * separately is the whole point: two builders would eventually disagree, and an
- * inspector holding a readable copy that does not match the electronic one is a
- * data integrity finding rather than a formatting bug.
- *
- * IT CARRIES ITS OWN PROOF. Every signature ships with the content hash it
- * attested to, and every audit entry with its prev_hash and entry_hash. The
- * recipient can therefore re-walk the chain themselves without our code and
- * without our word for it. A copy that can only be checked by the system that
- * produced it is not evidence — it is a claim.
- *
- * AND IT SAYS WHAT IT COULD NOT INCLUDE. `completeness` reports whether the
- * requested range was returned in full or truncated by a limit. An export that
- * silently returns the first N records looks identical to a complete one, and
- * "complete" is a word the clause actually uses.
- *
- * PURE. Assembly and rendering here; resolvers/admin.js supplies the rows.
+ * This on-demand export is separate from the archival pipeline. Assembly and
+ * rendering are pure; resolvers/admin.js supplies the rows.
  */
 import { canonical, sha256Hex } from './hash.js';
 
@@ -88,9 +70,8 @@ export function buildExport({
     auditEntries: auditEntries.map(normaliseAuditEntry)
   };
 
-  // The hash covers the document WITHOUT this field, so a recipient can
-  // recompute it by removing it — the usual self-reference problem, solved the
-  // usual way and stated so nobody has to guess the convention.
+  // Hash the document without this digest field. Recipients remove the field
+  // before recomputing the hash.
   const sha256 = sha256Hex(canonical(document));
   return { document, sha256 };
 }
@@ -104,8 +85,8 @@ function describeScope(scope) {
 }
 
 /**
- * One signature, in the shape 11.50 asks a signed record to show: who, when,
- * and what the signature meant — plus what it was bound to.
+ * Export a signature's signer, timestamp and meaning under 11.50, plus its
+ * content hash and record version.
  */
 function normaliseSignature(row) {
   const signedAt = row.signed_at ?? row.created_at ?? row.decided_at ?? null;
@@ -166,11 +147,8 @@ function safeParse(value) {
 }
 
 /**
- * The human-readable form.
- *
- * Plain text on purpose. It has to survive being printed, pasted into a finding
- * response, and read on a terminal by someone who will not install anything to
- * see it — which rules out a format that needs a viewer to be trustworthy.
+ * Render plain text for printing, copying or terminal inspection without
+ * requiring a separate viewer.
  */
 export function renderHuman({ document, sha256 }) {
   const lines = [];

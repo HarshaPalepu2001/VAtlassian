@@ -1,11 +1,9 @@
 /**
- * The created-object ledger shared by the setup scripts.
+ * Share a created-object ledger across setup scripts.
  *
- * Every id a script creates is written to .out/state.<host>.json the moment it
- * exists, so a re-run — of the same script or of another one that names the
- * same object — finds it and never creates it twice. A script never adopts an
- * object it did not create: a name clash with something not in the ledger
- * stops the run.
+ * Record each new ID immediately in .out/state.<host>.json. Later runs reuse
+ * those IDs. Stop on name clashes with objects outside the ledger rather than
+ * adopting objects this setup did not create.
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -39,7 +37,7 @@ export function openLedger(jira, { apply, log = console.log }) {
     if (found) {
       const id = String(found.id);
       if (mine && mine === id) { log(`  ok      ${kind} "${name}" (${id}, created earlier by this setup)`); return id; }
-      if (allowForeign) { log(`  reuse   ${kind} "${name}" (${id}, existing — referenced, not modified)`); return id; }
+      if (allowForeign) { log(`  reuse   ${kind} "${name}" (${id}, existing, referenced without changes)`); return id; }
       throw new Error(`${kind} "${name}" already exists (${id}) but this setup did not create it. Stopping rather than adopting it.`);
     }
     if (mine) throw new Error(`${kind} "${name}" is in the ledger (${mine}) but no longer on the site. Resolve by hand before re-running.`);

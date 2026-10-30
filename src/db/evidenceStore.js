@@ -3,7 +3,7 @@ import { toBinaryParam, fromBinaryColumn, isUnknownColumn } from '../lib/db.js';
 import { FailClosed } from '../lib/errors.js';
 
 /**
- * THE EVIDENCE ROWS OF A BASELINE VERSION
+ * Evidence rows for a baseline version.
  * (docs/specs/2026-10-03-baseline-evidence-model-design.md §4).
  *
  * Written while the version is CAPTURING, before it publishes: a new capture's
@@ -98,7 +98,7 @@ export async function writeVersionEvidence({ entries, query = store.throwing }) 
 }
 
 /**
- * A RESUMED VERSION STARTS ITS EVIDENCE AGAIN. A replay's insert of a key the
+ * Clear the evidence before resuming a version. A replay's insert of a key the
  * crashed attempt already wrote is a no-op (above), and a row the replay no
  * longer produces (a link removed meanwhile) would stay, so the version would
  * publish with a mix of two attempts. Its rows are cleared first. Only a

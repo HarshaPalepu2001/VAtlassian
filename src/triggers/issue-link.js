@@ -4,14 +4,11 @@ import { retryEvent } from './retry.js';
 import { withRequestCache } from '../lib/cache.js';
 
 /**
- * avi:jira:created:issuelink / deleted:issuelink — a link is one object both
- * issues list, so both ends are measured.
- *
- * Each end goes the way an issue update goes (triggers/issue-updated.js): the
- * governed tree it belongs to, and its own single-issue record when it has one.
- * It used to run the single-issue collector directly, which for a tree baseline
- * (every capture writes one) compared the item against the row's empty digest
- * map and recorded every tracked field as drift.
+ * Handle avi:jira:created:issuelink and deleted:issuelink for both linked issues.
+ * Each issue lists the same link, so check its governed tree and any single-issue
+ * baseline as triggers/issue-updated.js does. Previously, using only the
+ * single-issue collector against a tree baseline's empty digest map incorrectly
+ * reported every tracked field as drift.
  */
 export async function run(event, suppliedDeps = null) {
   return withRequestCache(() => runUncached(event, suppliedDeps));

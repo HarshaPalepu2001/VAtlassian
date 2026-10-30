@@ -1,9 +1,10 @@
 import { invoke as forgeInvoke, events } from '@forge/bridge';
 import { recordHarnessEvent, getActiveTraceId } from './harness';
 
-/** Resolver keys whose success means a durable, visible state change — a
- *  signature recorded, a transition retried, a restoration retried. Every
- *  other open surface needs to know when one of these actually happens. */
+/**
+ * Successful mutations that persist state changes and require other views
+ * to refresh.
+ */
 const MUTATION_KEYS = ['signature:submit', 'approval:submit', 'approval:retryTransition', 'restore:retry'];
 const CONFIGURATION_MUTATIONS = new Set([
   'admin:grantAdmin', 'admin:revokeAdmin', 'admin:grantEligibility', 'admin:revokeEligibility',
@@ -11,13 +12,12 @@ const CONFIGURATION_MUTATIONS = new Set([
   'admin:saveConfig', 'admin:issueCredentialResetGrant'
 ]);
 
-/** `respond()` on the server never rejects the resolver call — it resolves
- *  with `{ error, reason }` — so a failed mutation still returns here as a
- *  normal value. This is the one place that decides "durable" from that
- *  shape, so every caller of `invoke` gets the same answer without having to
- *  emit anything itself. A `transitionError` can follow a persisted approval:
- *  in that case other views still need to refresh and show the recorded
- *  decision, even though Jira did not complete the requested move. */
+/**
+ * The server's respond() resolves errors as { error, reason } rather than
+ * rejecting. Check this result before notifying other views of a mutation.
+ * A transitionError may follow a persisted approval. Other views must still
+ * show that decision even though Jira did not complete the transition.
+ */
 function isDurable(result: unknown): boolean {
   if (!result || typeof result !== 'object') return false;
   const r = result as { success?: boolean; ok?: boolean; error?: string; transitionError?: string; approvalId?: string };

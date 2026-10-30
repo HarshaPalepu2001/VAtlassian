@@ -2,18 +2,16 @@ import { testManagementRole } from './treeExclusion.js';
 import { listOpenRunsForExecution } from './store.js';
 
 /**
- * THE EXECUTION GUARD — a Test Execution reaches Done only when every run in
- * it is terminal and every failed run has its bug.
+ * Hold a Test Execution before Done until every run is terminal and every
+ * failed run has its bug.
  *
- * Spec, "Run sign-off": Done means "every run in this execution is terminal",
- * nothing more. The guard is one more check inside va-gate, judged on the
- * destination's status category, not its name. It holds only where va-gate
- * runs, so enabling test management refuses an Execution workflow with a
- * transition into Done that lacks it (usecases/testManagementAdmin.js).
+ * This check runs inside va-gate and uses the destination's status category,
+ * not its name. Enabling test management refuses Execution workflows with an
+ * unguarded transition into Done through usecases/testManagementAdmin.js.
+ * The sign-off spec defines Done as every run in the execution being terminal.
  *
- * Returns { open: [...] } listing what holds the execution, { open: [] } when
- * nothing does, or null when this issue is not a test execution or the
- * transition does not go to Done.
+ * Return { open: [...] } for blocking runs, { open: [] } when none block, or
+ * null when the issue is not a test execution or the destination is not Done.
  */
 export const TERMINAL_RUN_STATES = new Set(['SIGNED', 'REJECTED', 'NOT_EXECUTED']);
 

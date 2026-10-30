@@ -3,20 +3,13 @@ import { canonical } from '../hash.js';
 import { dateText } from './structure.js';
 
 /**
- * WHAT A BLOCK IS — the layer adf.js diffs over.
- *
- * Split from adf.js so that file can stay about pairing. Everything here
- * answers one question: given an ADF document, what are its blocks, and what
- * exactly is each one? Its words (inlineText), its formatting (markSignature),
- * the containers it sits in (context), and its identity (sig): the normalised
- * bytes plus that container chain, which is what makes "equal" mean equal.
+ * Extract ADF blocks for adf.js. Each block includes inline text, formatting,
+ * container context and a signature over its normalised bytes and context.
  */
 
 /**
- * Blocks are the unit a person edits. Anything not listed is descended into
- * rather than treated as a block, so a document using a node type that did not
- * exist when this was written still diffs its text instead of rendering as one
- * opaque lump.
+ * Descend through unlisted node types to find blocks so new ADF containers
+ * do not hide their text from the diff.
  */
 const BLOCK_TYPES = new Set([
   'paragraph', 'heading', 'blockquote', 'codeBlock', 'rule', 'panel',
@@ -25,23 +18,16 @@ const BLOCK_TYPES = new Set([
 ]);
 
 /**
- * What separates two cells in a row's flat text.
- *
- * The row's `text` exists so that the LCS, the similarity pairing and the
- * whitespace check can treat a row like any other block. The cells are carried
- * alongside it and are what the panel actually draws, so this only has to be
- * something a person would not type inside a cell.
+ * Separate cells in a row's flat text for LCS, similarity and whitespace
+ * comparison. Keep the cells separately for rendering. The separator should
+ * not occur in ordinary cell text.
  */
 const CELL_SEPARATOR = ' | ';
 
 /**
- * Flatten an ADF document into an ordered list of blocks.
- *
- * Each block carries its plain text, its mark signature and a path, so the
- * renderer can point at the exact node and the differ can compare like with
- * like. Nested structures (a list inside a panel inside a blockquote) flatten
- * to their leaf blocks: a person editing a bullet expects the bullet to be the
- * thing that changed, not the panel three levels up.
+ * Flatten ADF into ordered leaf blocks with text, formatting and paths.
+ * Compare nested paragraphs individually instead of treating their enclosing
+ * list, panel or blockquote as one block.
  */
 export function flatten(doc, options = {}) {
   const blocks = [];
@@ -50,11 +36,8 @@ export function flatten(doc, options = {}) {
     return [withSignature({ type: 'paragraph', text: doc, marks: [], path: [0], context: [], node: null })];
   }
 
-  // `context` is every container between the document and the block — lists,
-  // panels, quotes, tables, expands — each with its attrs. `ancestry` (block
-  // types only) predates it and is kept for callers that read it; `context` is
-  // what the comparison uses, because a bulleted list renumbered as an ordered
-  // list, or a panel changed from warning to info, changes nothing else.
+  // context records each enclosing container and its attrs for comparison.
+  // Keep the older ancestry list for callers that read block types.
   const walk = (node, path, ancestry, context) => {
     if (!node || typeof node !== 'object') return;
     if (Array.isArray(node)) {
@@ -62,27 +45,16 @@ export function flatten(doc, options = {}) {
       return;
     }
 
-    // A TABLE ROW IS THE BLOCK, AND IT KEEPS ITS CELLS.
-    //
-    // Every cell holds a paragraph, so the ordinary container rule would
-    // descend past the row and emit one block per cell. A table added after
-    // approval then rendered as a column of green lines — "Planet",
-    // "Diameter (km)", "Type", "Jupiter", … — which is every value the table
-    // contains and none of the structure that makes them mean anything.
-    //
-    // Stopping at the row keeps one edited cell as one changed row, and lets
-    // the panel put the rows back together as a table.
+    // Keep each table row as one block with separate cells. Descending to cell
+    // paragraphs would lose the table structure when rendering changes.
     if (node.type === 'tableRow') {
       blocks.push(withSignature({ ...tableRow(node, path, ancestry, options), context }));
       return;
     }
 
     const isBlock = BLOCK_TYPES.has(node.type);
-    // DEEP, not shallow. A node whose only descendants are inline content has
-    // no block inside it to descend to, so it IS the block — including one of a
-    // type this file has never heard of. A shallow check drops such a node's
-    // text entirely, which is the failure that matters: a reviewer seeing LESS
-    // than the record contains is far worse than one seeing an odd wrapper.
+    // Treat a node with only inline descendants as a block, including unknown
+    // node types. Checking only immediate children can drop nested text.
     const container = hasBlockDescendant(node);
 
     // A blockquote whose children are paragraphs is a container, not a block.
@@ -158,12 +130,8 @@ function tableRow(node, path, ancestry, options = {}) {
 }
 
 /**
- * Does this node contain a recognised block anywhere beneath it?
- *
- * Deep rather than shallow because ADF nests freely — a panel containing a
- * bullet list containing paragraphs has no block among its immediate children,
- * and a shallow check would emit the whole panel as one block, burying which
- * bullet actually changed.
+ * Check all descendants for recognized blocks. A shallow search can combine
+ * nested lists into one block and hide which bullet changed.
  */
 function hasBlockDescendant(node) {
   if (!node || typeof node !== 'object') return false;
@@ -214,12 +182,8 @@ export function inlineText(node, options = {}) {
 }
 
 /**
- * A stable description of the formatting inside a block.
- *
- * Sorted and de-duplicated, so reordering `[bold, link]` to `[link, bold]` —
- * which Jira does freely — is not a change. Comparing these separately from the
- * text is what lets the differ say "same words, now bold" instead of reporting
- * the sentence as rewritten.
+ * Compare formatting separately from text. Sort and deduplicate marks so
+ * reordering them does not count as a change.
  */
 export function markSignature(node) {
   const marks = new Set();
@@ -230,8 +194,7 @@ export function markSignature(node) {
     add(n);
     walk(n.content);
   };
-  // The block's OWN marks too — alignment and indentation sit on the paragraph
-  // or heading, not on its text, and were never looked at.
+  // Include block-level marks, such as paragraph alignment and indentation.
   if (node && !Array.isArray(node) && node.content) add(node);
   walk(node?.content ?? node);
   return [...marks].sort();

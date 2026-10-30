@@ -19,9 +19,8 @@ type IssueType = { id: string; name: string };
 type Status = { id: string; name: string };
 
 /**
- * One exact edge from admin:listWorkflowTransitions — Jira's live workflow,
- * read fresh every time project or work item type changes. Nothing here is
- * typed in by an administrator; it is exactly what workflowSource.js read.
+ * One exact edge from admin:listWorkflowTransitions. Re-read Jira's live
+ * workflow whenever the project or work item type changes.
  */
 type WorkflowTransition = {
   transitionId: string;
@@ -36,18 +35,17 @@ type WorkflowTransition = {
   jiraRules: { conditions: boolean; otherValidators: number; postFunctions: number };
 };
 
-/** Two Jira transitions can share a destination status (and, for a DIRECTED
- *  transition reachable from several statuses, even a transition id) — see
- *  transitionsValidation.js's "exact Jira transition" doc. `transitionId`
- *  alone is not a unique option key; the pair is. */
+/**
+ * Transitions can share a destination and even a transition id when a
+ * DIRECTED transition is reachable from several statuses. Use the pair as
+ * the option key. See transitionsValidation.js's "exact Jira transition" doc.
+ */
 const optionKey = (t: WorkflowTransition) => `${t.transitionId}:${t.fromStatusId}`;
 
 /**
- * Note what is NOT on this type: project_id, issue_type_id, from_status_id,
- * to_status_id. admin:listControlledTransitions resolves those to names
- * server-side and no longer returns the ids at all, so there is nothing for
- * this screen to accidentally print. `ctId` is the exception — revoking a
- * rule has to name one — and it is never rendered.
+ * The server returns names instead of project_id, issue_type_id,
+ * from_status_id and to_status_id. Keep ctId only for revoking a rule.
+ * Do not render it.
  */
 type ControlledTransition = {
   ctId: string; revision?: string;
@@ -179,14 +177,9 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
     return () => { active = false; };
   }, [projectId, issueTypeId, refresh, rolesRefresh, editing]);
 
-  // The transition picker. A change to either scope input invalidates
-  // whatever was selected — Jira's workflow for a different project or work
-  // item type may not even have the same transition ids — so the selection
-  // and the offered options are cleared before the new read starts, never
-  // after it lands, so nothing stale can be picked while a newer read is in
-  // flight. `discoverySeq` drops a response overtaken by a later one; save
-  // stays disabled for the whole of `loading`, so an overtaken response
-  // cannot be told apart from one that is simply slow.
+  // Clear the selected transition and options before loading a new project or
+  // work item type. Jira may use different transition ids in the new scope.
+  // discoverySeq discards older responses. Disable Save throughout loading.
   useEffect(() => {
     const seq = ++discoverySeq.current;
     setSelectedKey('');
@@ -220,9 +213,8 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
     : null;
   const allTransitionsAlreadyControlled = discovery === 'loaded' && workflowTransitions.length > 0
     && workflowTransitions.every(transition => transitions.some(rule => controls(rule, transition)));
-  // A transition with no enabled va-gate of ours cannot be enforced no matter
-  // what is saved — Jira would never call this app on it. That is a blocking
-  // finding, not a soft warning: saving must stay disabled until it clears.
+  // Jira never calls this app for an edge without an enabled va-gate validator.
+  // Keep Save disabled until the blocking finding clears.
   const blockingFinding = selectedTransition != null && !selectedTransition.validatorAttached;
 
   const transitionOptions = workflowTransitions.map((t) => ({
@@ -299,7 +291,7 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
 
       <Card
         title={editing?'Edit controlled transition':'Require an approval'}
-        subtitle="Company-managed projects only — team-managed projects cannot express segregation of duties."
+        subtitle="Company-managed projects only. Team-managed projects cannot express segregation of duties."
       >
         <fieldset disabled={saving} style={{border:0,padding:0,margin:0,minWidth:0}}><div className="va-form-grid">
           <Field label="Project">
@@ -325,7 +317,7 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
               discovery === 'loading' ? 'Reading the live Jira workflow…'
               : discovery === 'error' ? 'Could not read the live Jira workflow.'
               : discovery === 'loaded' && transitionOptions.length === 0 ? 'This workflow has no controllable transitions.'
-              : 'Read live from Jira — the exact edge, not a status guess.'
+              : "Read the exact transition from Jira's live workflow."
             }
           >
             <Select
@@ -352,7 +344,7 @@ export default function TransitionsPage({ projects }: { projects: Project[] }) {
                 label: 'Signature validator',
                 value: selectedTransition.validatorAttached
                   ? 'Attached and enabled'
-                  : <span className="va-unknown">Not attached — this edge cannot be enforced yet</span>
+                  : <span className="va-unknown">Not attached. This edge cannot be enforced yet</span>
               },
               {
                 label: 'Other Jira rules on this edge',

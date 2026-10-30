@@ -2,13 +2,10 @@ import { gzipSync, gunzipSync } from 'zlib';
 import { canonical, sha256Hex } from './hash.js';
 
 /**
- * The value codec: how a retained field value becomes rows in
- * va_baseline_value, and how it comes back.
+ * Encode retained field values as va_baseline_value rows and decode them.
  *
- * This module is where the app stops storing digests and starts storing
- * contents, which is the whole compliance boundary. Everything here is
- * therefore conservative about two things — never losing a byte, and never
- * storing a byte it was not told to store.
+ * Preserve every byte of each supplied value. Store content only when the
+ * caller has explicitly requested value retention.
  */
 
 /** Encoding tags written into va_baseline_value.encoding. */
@@ -16,37 +13,21 @@ export const ENCODING = {
   /** JSON, gzipped, base64'd. The normal case. */
   GZIP_B64: 'GZIP_B64',
   /**
-   * JSON, base64'd, not compressed. Used when gzip made the payload BIGGER,
-   * which happens for very short values where the gzip header dominates.
-   * Storing the larger form "for consistency" would be a waste on exactly the
-   * fields there are most of.
-   */
+ * Use uncompressed base64 when gzip would make short values larger.
+ */
   PLAIN_B64: 'PLAIN_B64'
 };
 
 /**
- * Base64 characters per chunk row.
- *
- * Chosen well below MEDIUMTEXT's 16 MiB ceiling because the real limit is not
- * the column, it is the size of a single Forge SQL statement — a bound that is
- * not published as a number and that we should not discover in production on a
- * customer's largest description. 180k base64 chars is ~135 KiB of gzipped
- * data, which for ADF is on the order of a megabyte of source document, so the
- * overwhelming majority of fields are a single row and chunking costs nothing.
+ * Limit each base64 chunk below MEDIUMTEXT's 16 MiB ceiling to bound the size
+ * of individual Forge SQL statements.
  */
 export const CHUNK_CHARS = 60_000;
 
 /**
- * Encode one field value into chunk payloads.
- *
- * Returns { encoding, rawBytes, chunks: string[] } where `chunks` is already
- * split to CHUNK_CHARS. The caller writes one row per chunk with its index as
- * `seq`.
- *
- * `canonical` rather than JSON.stringify: two structurally identical values
- * must produce identical bytes, so that a re-capture of unchanged content
- * writes an identical row and the storage-accounting figures on the retention
- * screen do not wobble for no reason.
+ * Encode one value as { encoding, rawBytes, chunks: string[] } split to
+ * CHUNK_CHARS. Callers write one row per chunk using its index as seq.
+ * Canonical JSON gives structurally identical values identical bytes.
  */
 export function encodeValue(value) {
   const json = canonical(value === undefined ? null : value);
@@ -79,14 +60,9 @@ export function encodeValue(value) {
 }
 
 /**
- * Reassemble chunk rows into the original value.
- *
- * @param rows [{ seq, encoding, data }] — ANY order; sorted here.
- *
- * Sorting rather than trusting the caller's ORDER BY is deliberate: a
- * mis-ordered reassembly produces corrupt JSON, which throws, which surfaces as
- * "this baseline is unreadable" — a scary and misleading message for what would
- * be a missing ORDER BY clause. One sort removes the whole class.
+ * Sort chunks by seq and reassemble the original value. Do not depend on
+ * caller row order, which could otherwise corrupt the JSON.
+ * @param rows [{ seq, encoding, data }] in any order
  */
 export function decodeValue(rows) {
   if (!rows || rows.length === 0) return { present: false, value: null };
@@ -136,18 +112,10 @@ export function decodeValue(rows) {
 }
 
 /**
- * A short, human-readable rendering of a value, for va_drift.from_repr /
- * to_repr and for queue rows.
- *
- * These columns are VARCHAR(512) and this is what keeps them inside it. The
- * point is that a queue row can say "Priority: High -> Highest" without reading
- * the value store at all; the full before/after for the diff always comes from
- * va_baseline_value and the live issue, never from here.
- *
- * Returns null for a value that was never retained, and the panel renders that
- * as "changed (contents not retained)" rather than as an empty string — an
- * empty string would read as "this field was cleared", which is a completely
- * different and much more alarming claim.
+ * Summarize values for va_drift.from_repr, to_repr and queue rows within
+ * their VARCHAR(512) columns. Full diffs read va_baseline_value and the live
+ * issue instead. Return null for unretained values so they cannot be mistaken
+ * for fields cleared to an empty string.
  */
 export function summarise(value, kind, { maxLength = 200 } = {}) {
   if (value === undefined) return null;
@@ -181,12 +149,8 @@ function shortScalar(v) {
 }
 
 /**
- * ADF to plain text, for summaries only.
- *
- * Deliberately a local, minimal walker rather than an import of the diff
- * engine's ADF handling: a function that feeds a one-line summary must never
- * share code with one that decides whether content changed, or a display tweak
- * becomes a correctness change.
+ * Extract plain text for summaries with a separate local walker. Keep display
+ * changes independent of the diff engine's content comparisons.
  */
 export function adfPlainText(doc) {
   if (doc == null) return '';

@@ -4,18 +4,15 @@ import { recordHarnessEvent } from '../lib/harness';
 export type ReviewTab = 'changes' | 'summary' | 'record';
 /** What the review window hands back when it closes. */
 export type ReviewOutcome = { decided?: boolean } | null | undefined;
-/** The context a review window is opened with — read back in ReviewWindow. */
+/** Context passed to the review window and read by ReviewWindow. */
 export type ReviewContext = { view: 'review'; issueKey?: string; tab: ReviewTab };
 
 /**
- * THE PANEL NEVER GROWS. Everything a reviewer reads at length — the changes,
- * the AI summary, the full baseline record — opens here, in a Jira modal, so
- * the issue panel stays the same size whatever state the work item is in.
- *
- * The window is the same Custom UI resource with the same resolver, so it
- * reads the summary and evidence exactly as the panel does and carries its
- * own Approve and Reject. `onClose` receives `{ decided: true }` when a
- * decision was recorded inside it, which is the caller's cue to re-read.
+ * Open changes, the AI summary and baseline history in a Jira modal to keep
+ * the issue panel compact. The modal uses the same Custom UI resource and
+ * resolver as the panel, with its own Approve and Reject controls.
+ * When a decision is recorded, onClose receives { decided: true } so the
+ * caller can refresh.
  */
 export function openReview({ issueKey, tab = 'changes', onClose }: { issueKey?: string; tab?: ReviewTab; onClose?: (outcome: ReviewOutcome) => void }) {
   recordHarnessEvent('UI', 'open:reviewWindow', { issueKey, tab });

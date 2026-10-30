@@ -68,7 +68,7 @@ export default function QueueList() {
   const loadedOnce = useRef(false);
   // `background` is a refresh nobody asked for (lib/issueUpdates.ts): it
   // updates the list in place, without the busy state, and once the list has
-  // loaded a failure is kept quiet — the next event or focus retries it.
+  // loaded, a failed refresh preserves the list. The next event or focus retries it.
   const load = useCallback(async (token?: string, { background = false }: RefreshOptions = {}) => {
     const quiet = background && loadedOnce.current;
     if (!quiet) { setLoading(true); setError(''); }
@@ -85,23 +85,14 @@ export default function QueueList() {
     } finally { if (!quiet) setLoading(false); }
   }, []);
 
-  // LIVE, LIKE THE PANEL.
-  //
-  // This loaded once on mount and then sat there until somebody pressed
-  // Refresh, so a decision taken in the issue panel — or an edit made anywhere
-  // in Jira — left this list showing work that was already done. The panel and
-  // the context lozenge have subscribed to the same signals all along
-  // (lib/issueUpdates.ts); the queue was the surface that never did.
-  //
-  // Reloading the FIRST page only is deliberate: re-requesting every page the
-  // reviewer had scrolled through would reorder the list under their cursor.
+  // Refresh on the same issue events as the panel and context lozenge.
+  // Reload only the first page so loaded pages do not reorder during review.
   useEffect(() => {
     void load();
     return subscribeIssueUpdates(options => load(undefined, options));
   }, [load]);
 
-  // THE SAME WINDOW AS THE PANEL. Review opens the review window the panel
-  // opens, and the list re-reads when it closes.
+  // Use the panel's review window and refresh the list when it closes.
   const review = (item: Item, tab: ReviewTab) => {
     recordHarnessEvent('UI', 'click:review', { issueKey: item.issueKey, tab });
     void openReview({ issueKey: item.issueKey, tab, onClose: () => void load(undefined, { background: true }) }).catch(() => {});
@@ -133,7 +124,7 @@ export default function QueueList() {
     <Page
       eyebrow="VAtlassian"
       title="My approvals"
-      lead="Everything waiting on you, from the approval roles you hold: changes to decide, restores to finish and transitions to sign."
+      lead="Your approval roles determine which changes, restores and transitions appear here."
       actions={<Button isDisabled={loading} onClick={() => { recordHarnessEvent('UI', 'click:refreshQueue'); void load(); }}>Refresh</Button>}
     >
       {error && <Notice danger>{error}</Notice>}
@@ -248,7 +239,7 @@ function Need({ item, kind }: { item: Item; kind: Kind }) {
   if (kind === 'TRANSITION') {
     return <>
       <Badge tone="brand">{item.transitionLabel || item.transitionName || 'Approval required'}</Badge>
-      <div className="va-secondary">{item.pendingMove ? 'Approved — retry the move' : 'Workflow transition'}</div>
+      <div className="va-secondary">{item.pendingMove ? 'Approved. Retry the move' : 'Workflow transition'}</div>
     </>;
   }
   return <>

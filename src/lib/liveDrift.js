@@ -4,24 +4,19 @@ import { harnessLog } from './harnessLogger.js';
 import { baselineLinkPolicy, hydrateLinkPolicyIssue } from './linkPolicy.js';
 
 /**
- * WHICH TRACKED FIELDS OF THIS WORK ITEM NO LONGER MATCH ITS ACTIVE BASELINE?
+ * Compare a work item's tracked fields with its active baseline.
  *
- * The one live answer, shared by the panel (usecases/panelSummary.js) and the
- * validator (lib/approval/runtime.js). The validator holds an item still while
- * this reports a change, and the panel is where that change is decided — so the
- * two must reach the same verdict by construction, or an item is held with
- * nothing on the panel to approve or reject.
+ * The panel in usecases/panelSummary.js and validator in lib/approval/runtime.js
+ * share this comparison. They must agree so a drift hold always has a
+ * corresponding decision in the panel.
  *
- * A TREE baseline — every one a controlled transition captures — keeps its
- * digests on the root node, not on the va_baseline row, which it leaves as
- * '{}'. Comparing against that empty map fails towards drift on every read.
- * If the root node's digests cannot be read, the '{}' fallback still
- * over-reports rather than clearing.
+ * Controlled-transition captures produce TREE baselines whose digests live on
+ * the root node. Their va_baseline row holds '{}'. Comparing to that empty map
+ * would report drift on every read. If root digests are unreadable, the '{}'
+ * fallback over-reports drift rather than clearing a hold.
  *
- * THE RESULT ALSO SAYS WHY. `diagnostics` is what a held item needs when this
- * disagrees with the panel's own diff: which fields were flagged, whether the
- * baseline could be read at all, and where its digests came from. Digests are
- * shortened and values never appear, so it is safe to log.
+ * diagnostics reports flagged fields, baseline readability and the digest
+ * source. It includes shortened digests and no field values, so it can be logged.
  */
 export async function baselineDrift({ baseline, issueId, issueFields, declared, readRootDigests }) {
   if (!baseline) return { changed: [], contentHash: null, diagnostics: { cause: null, baselinePresent: false } };
@@ -42,15 +37,13 @@ export async function baselineDrift({ baseline, issueId, issueFields, declared, 
   }
 
   const controlledFields = scopeFromIssue({ declared, issueFields }).fields;
-  // A tree is read with its ROOT's Jira parent set to null (lib/tree/jira.js):
-  // that parent lies outside the tree. So a baseline that is the root of its own
-  // tree — a child re-baselined by a decision on it, with no covering parent
-  // capture — recorded parent = null. Comparing the issue's real parent against
-  // that null reported one field of drift that no new baseline could ever clear,
-  // because each one recorded null again. Compare it as the tree saw it.
+  // Read a tree root with parent = null, as lib/tree/jira.js captures it.
+  // An independently re-baselined child has no covering capture and therefore
+  // records that null too. Comparing its real Jira parent produced drift that
+  // recapture could never clear.
   //
-  // `=== null` and not falsy: a baseline row read before captured_by existed
-  // has it undefined, and that must not be mistaken for "not covered".
+  // Use === null, not a falsy check. Rows predating captured_by have undefined,
+  // which does not establish that the item has no covering capture.
   const parentOutsideTree = Boolean(baseline.tree_hash) && baseline.captured_by_baseline_id === null
     && issueId != null && Number(baseline.issue_id) === Number(issueId);
   const comparedFields = parentOutsideTree && issueFields && typeof issueFields === 'object'
@@ -86,9 +79,9 @@ function explain({ baseline, result, baselineDigests, digestSource, rootDigestEr
     currentKeyCount: Object.keys(current).length,
     scopeFieldCount,
     parentTreatedAsOutsideTree: parentOutsideTree === true,
-    // BASELINE_UNREADABLE: nothing was compared — every field in scope is
-    // reported because the approved state could not be read. DIGEST_MISMATCH:
-    // the baseline was read and these fields genuinely differ from it.
+    // BASELINE_UNREADABLE reports every scoped field because approved content
+    // could not be read. DIGEST_MISMATCH identifies actual differences from readable
+    // digests.
     cause: changed.length === 0 ? null : (result.baselineReadable === false ? 'BASELINE_UNREADABLE' : 'DIGEST_MISMATCH'),
     fields: changed.slice(0, MAX_FIELDS_LISTED).map(field => ({
       field, baseline: short(previous?.[field]), current: short(current[field])
@@ -97,13 +90,12 @@ function explain({ baseline, result, baselineDigests, digestSource, rootDigestEr
 }
 
 /**
- * ONE LOG LINE FOR EVERY TIME THE LIVE CHECK HOLDS AN ITEM, from whichever
- * surface asked (gate, signing form, panel summary, diagnostics). Silent when
- * nothing is flagged, so a healthy item never adds noise.
+ * Log each live comparison that holds an item, whether requested by the gate,
+ * signing form, panel summary or diagnostics. Log nothing when no fields differ.
  *
- * `typeChangedSinceBaseline` is the first thing to read when a rule seems not
- * to apply: controlled fields and transition rules are keyed by work item
- * type, and a baseline carries the type it was captured under.
+ * typeChangedSinceBaseline helps explain scope mismatches because tracked fields
+ * and transition rules use the current work-item type while baselines retain
+ * their capture-time type.
  */
 export function logLiveDrift(surface, { issueKey, issueTypeId, comparison, scope = null }) {
   const changed = comparison?.changed ?? [];

@@ -1,12 +1,9 @@
 /**
- * Directory reconciliation — 21 CFR 11.300(b)'s "recalled" half.
+ * Directory reconciliation under 21 CFR 11.300(b).
  *
- * Most tests in this suite defend a refusal. These defend the opposite: this is
- * the one job that TAKES an action, so the failure that matters is not letting
- * something through, it is stripping authority from people who still have it on
- * the strength of a directory response we did not confirm. A rate-limited
- * lookup that revoked every signer on the site would be an outage of the
- * signing capability itself, caused by the control meant to protect it.
+ * The job revokes credentials, so it must confirm directory evidence before
+ * removing a signer's authority. A rate-limited lookup must not revoke valid
+ * signers or disable signing across the site.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

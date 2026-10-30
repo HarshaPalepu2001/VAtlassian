@@ -4,16 +4,13 @@ import { listGateFindings } from '../src/usecases/adminAlerts.js';
 import { fixture, request } from './admin-fixture.js';
 
 /**
- * CONTROL HEALTH — an active controlled transition with no exact transition id.
+ * Control health for active controlled transitions without an exact transition id.
  *
- * gatedTransition() now matches on transition_id exactly (see
- * db/configStore.js), so a va_controlled_transition row saved before that id
- * was required can never match a live Jira transition again. It does not fail
- * loudly — it is simply never selected, which reads exactly like "nothing is
- * gated here" to everyone downstream. That is a silent configuration gap, not
- * a workflow drift finding gatecheck's diff already covers, so
- * listGateFindings() surfaces it directly from the table rather than waiting
- * to be told by a workflow comparison.
+ * gatedTransition() matches transition_id exactly in db/configStore.js. A
+ * va_controlled_transition row saved before that id was required cannot match
+ * a live Jira transition. Downstream callers see no configured gate rather
+ * than an error. listGateFindings() reports this configuration gap directly
+ * from the table because gatecheck's workflow diff does not cover it.
  */
 
 test('an active controlled transition with no exact Jira transition id surfaces as a blocking health finding', async () => {

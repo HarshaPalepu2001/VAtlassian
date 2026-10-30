@@ -2,25 +2,14 @@ import { vaultedCopies } from '../../db/vaultStore.js';
 import { isReadableCopy } from '../vaultLocation.js';
 
 /**
- * WHAT A REJECTION WILL DO TO FILES, SAID BEFORE IT IS SIGNED.
+ * Name every permanent file deletion before the reviewer signs. For removed
+ * files, check whether the vault recorded a copy and name any that cannot be
+ * restored. This checks availability only. attachments.js verifies copy hashes
+ * before restoring bytes.
  *
- * Deleting an added file is permanent, and a reviewer cannot authorise a
- * deletion they were not shown, so every such file is named with its work
- * item. A removed file comes back only if the vault holds a copy of it; one it
- * never received (vaulting failed, or the vault was not set up yet) cannot be
- * restored, and the reviewer is told that too, before signing rather than
- * after.
- *
- * The vault check here is only whether a copy was recorded. Whether its bytes
- * still match their hash is established by the restore itself, which refuses a
- * copy that does not (./attachments.js).
- *
- * @param reviewFields  the review diff's fields (a single issue's diff, or a
- *                      tree's grouped review), already filtered to what the
- *                      viewer may see
- * @param issue         { issueId, issueKey } for fields that carry no group
- * @param removedNodes  work items a tree rejection recreates: [{ issueId,
- *                      issueKey, files }], each file re-uploaded to the copy
+ * @param reviewFields  visibility-filtered single-issue or grouped tree diff
+ * @param issue         { issueId, issueKey } for fields without a group
+ * @param removedNodes  recreated work items, [{ issueId, issueKey, files }]
  */
 export async function attachmentRejection({ reviewFields = [], issue = {}, removedNodes = [], lookup = vaultedCopies }) {
   const file = (issueId, issueKey, a) => ({ issueId: issueId == null ? null : Number(issueId), issueKey: issueKey ?? null,

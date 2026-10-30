@@ -3,18 +3,13 @@ import { tryAppend } from '../db/store.js';
 import { EVENT } from './ledger.js';
 
 /**
- * A BASELINED WORK ITEM MOVED TO ANOTHER PROJECT OR ISSUE TYPE.
+ * After a project or issue-type move, use the destination's tracked fields.
+ * A destination tracking no fields holds nothing. Record the source,
+ * destination and destination tracking state once in the audit trail.
+ * This rule was decided on 2026-09-24.
  *
- * Decided 2026-09-24: the item follows the destination's configuration from
- * then on, as a tracker item does after a move in codebeamer — the destination's
- * tracked fields decide what drift is, and a destination with none holds
- * nothing. The move itself must not pass silently, so it is recorded once in the
- * audit trail with where the item came from, where it went, and whether the
- * destination tracks anything.
- *
- * Returns true when the item was found in a new scope (whether or not this call
- * was the one that recorded it), so a caller that chose its tracked fields from
- * the old scope knows to re-read under the new one.
+ * Return true for a changed scope, even if another caller recorded the move,
+ * so callers can re-read content with the destination's fields.
  */
 export async function recordScopeMove({ issueId, review, projectId, issueTypeId, actorAccountId = null,
   destinationFieldCount = null, deps = { moveScope, tryAppend } }) {

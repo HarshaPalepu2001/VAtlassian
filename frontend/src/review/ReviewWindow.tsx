@@ -29,17 +29,13 @@ const TABS: { id: 'changes' | 'record'; label: string }[] = [
 ];
 
 /**
- * THE REVIEW WINDOW.
+ * A Jira modal with Changes and signed-history tabs and decision controls
+ * in its footer. An available AI summary appears above the tabs as a reading
+ * aid. Reviewers still need to read the changes.
  *
- * One Jira modal with two tabs — the changes and the signed history — and the
- * decision in its footer. A short written summary of the changes sits above
- * them when one has been generated; it is a reading aid, never a tab of its
- * own, and never stands in for reading the changes.
- *
- * It reads the summary and evidence through the same hooks as the panel, so
- * the counts and the permissions it shows are the panel's, exactly. When a
- * decision is recorded here the window ends on the signed receipt, and closes
- * with `{ decided: true }` so whatever opened it re-reads.
+ * Shared hooks keep counts and permissions consistent with the panel.
+ * A recorded decision opens the receipt. Closing returns { decided: true }
+ * so the caller can refresh.
  */
 export default function ReviewWindow({ issueKey, tab: requestedTab = 'changes', now = Date.now() }: { issueKey?: string; tab?: ReviewTab; now?: number }) {
   // Older callers still ask for the summary tab; the summary now heads Changes.

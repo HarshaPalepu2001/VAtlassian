@@ -35,19 +35,16 @@ type Challenge = { id: string; nonce: string; decision: Decision; expiresAt: num
   decisions?: FieldDecision[]; fields?: DiffField[] };
 
 /**
- * A request to sign a per-field decision, from the review window's Save button.
- * Each new request carries a new `token`. Saving only asks the server for a
- * challenge — which validates the whole map before anything is signed and
- * records nothing — and then opens the same signing sheet every decision uses.
+ * The review window's Save request carries a new token each time.
+ * It first asks the server for a challenge, which validates the entire map
+ * without recording a signature, then opens the shared signing sheet.
  */
 export type MixedRequest = { token: number; decisions: FieldDecision[]; fields: DiffField[] };
 
 /**
- * EVERYTHING GATHERED FOR ONE ACTION — the code, the confirmation, the note,
- * the open challenge, the in-flight phase and its progress copy, and any
- * message. It belongs to exactly one action key and one generation: choosing
- * another action replaces it in the same event, and an async result carrying
- * an older generation is dropped.
+ * Keep the code, confirmation, note, challenge, request phase, progress text
+ * and message under one action key and generation. Choosing another action
+ * replaces this state synchronously. Discard older async results.
  */
 type Session = {
   actionKey: string;
@@ -74,7 +71,7 @@ const fileList = (files: RejectedFile[]) => files.map(f => f.issueKey ? `${f.fil
 
 /**
  * `evidence`/`evidenceLoading`/`evidenceError` are the authoritative current
- * record read owned by IssuePanel — see usePanelEvidence.ts. Selection is
+ * record read owned by IssuePanel. See usePanelEvidence.ts. Selection is
  * controlled by the parent when `onSelectTransition` is given; it does not
  * create a competing evidence read.
  */
@@ -132,9 +129,8 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
     if (selectedId && !eligible.some(t => t.transitionId === selectedId)) setSelection('');
   }, [selectedId, eligible, setSelection]);
 
-  // A refresh that removes the action — or its eligibility — fails closed:
-  // everything gathered for it is discarded, and a reviewer who was part-way
-  // through signing is told why it disappeared.
+  // Discard signing state if a refresh removes the action or its eligibility.
+  // Tell the reviewer why the signing session closed.
   useEffect(() => {
     if (stored.actionKey === actionKey) return;
     const engaged = stored.actionKey !== '' && Boolean(stored.challenge || stored.confirmed || stored.code || stored.phase);
@@ -178,8 +174,10 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
 
   const patch = (gen: number, next: Partial<Session>) => setStored(prev => prev.generation === gen ? { ...prev, ...next } : prev);
 
-  /** Starts an action synchronously — progress shown and duplicates refused
-   *  in the same click — or returns null if one is already running. */
+  /**
+ * Start the action and show progress synchronously to reject duplicate clicks.
+ * Return null if an action is already running.
+ */
   function begin(phase: Phase, progress: string, phaseDecision: Decision | null = null): number | null {
     if (lock.current !== null) return null;
     const gen = generation.current;
@@ -359,17 +357,14 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
     </Field>
   );
 
-  // THE RECEIPT. In the review window a recorded signature ends on the record
-  // of it — who, when, how, what it meant and exactly what it covered — rather
-  // than on a toast that disappears. It is what an auditor will later ask for.
+  // After recording a signature, keep its signer, time, method, meaning and
+  // coverage visible in the review window's receipt.
   if (variant === 'window' && receipt) {
     return <div className="va-sheet" role="dialog" aria-modal="true"><SignedReceipt receipt={receipt} issueKey={targetKey} onFinished={onFinished} /></div>;
   }
 
-  // THE SIGNING MOMENT. One sheet, the same wherever a signature starts: what
-  // it means, who is signing, an optional reason, then the credential. The
-  // method is only the last line — a code box, or a note that a device window
-  // opens. The hash, method and exact coverage go on the receipt afterwards.
+  // Use the same signing sheet for every action. Show meaning, signer, optional
+  // reason and credential. Put the hash, method and exact coverage on the receipt.
   if (session.challenge && canSign && mode !== 'unavailable') {
     const decline = session.challenge.decision === 'REJECT';
     const mixedSheet = session.challenge.decision === 'MIXED';
@@ -406,7 +401,7 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
         </div>
       </div>
       {ownEdits && <p className="va-warning-text">Some of these changes are yours. That is recorded with your signature.</p>}
-      {/* The reason travels with the signature: it is read at submit and stored on the approval. */}
+      {/* Read the reason at submit and store it with the approval. */}
       <Field label="Reason (optional)">
         <textarea className="va-input" value={session.note} maxLength={4000} disabled={busy || disabled} onChange={e => patch(session.generation, { note: e.target.value })} rows={2} />
       </Field>
@@ -449,8 +444,7 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
     )}
   </>;
 
-  // THE WINDOW'S FOOTER. Field by field, it counts the choices and signs them
-  // all at once; otherwise it carries the whole-set decision.
+  // The footer signs all field decisions together or offers a whole-set decision.
   if (variant === 'window') {
     const byField = reviewingDrift && canAct && fieldDecisions;
     return <div className="va-decision-bar">
@@ -466,15 +460,15 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
               : transition ? `Approve the move to ${transitionDestination(transition)}.` : 'Choose which transition to approve.'}
           </span>
           {selector}
-          {/* Jira puts a window's primary action rightmost — in the markup too,
-              so keyboard order matches what the eye sees. */}
+          {/* Keep Jira's primary action rightmost in the markup so keyboard and visual
+              order match. */}
           {canAct && mode !== 'unavailable' && <>{rejectButton}{approveButton}</>}
         </>}
       </div>
     </div>;
   }
 
-  // DRIFT, ON THE BASELINE CARD: the whole-set decision beside Review changes.
+  // Show the whole-set drift decision beside Review changes on the Baseline card.
   if (reviewingDrift) {
     return <div className="va-stack va-stack--tight">
       {messages}
@@ -487,7 +481,7 @@ export default function ApprovalControls({ summary, issueKey, onDone, disabled =
     </div>;
   }
 
-  // THE NEXT CONTROLLED MOVE, when nothing is waiting on the baseline.
+  // Show the next controlled transition when the baseline needs no decision.
   if (!transitions.length) return messages;
   return <div className="va-stack va-stack--tight">
     {messages}
@@ -547,19 +541,16 @@ function MixedConsequence({ decisions, fields }: { decisions: FieldDecision[]; f
 }
 
 
-/** "9f3a·c21e" — enough of a hash to compare by eye, the whole of it on hover elsewhere. */
+/** Shorten hashes to "9f3a·c21e" for comparison. Show the full hash on hover elsewhere. */
 function shortHash(hash: string): string {
   const clean = hash.replace(/[^0-9a-z]/gi, '');
   return clean.length > 10 ? `${clean.slice(0, 4)}·${clean.slice(-4)}` : clean;
 }
 
 /**
- * THE SIGNED RECORD, as the signer sees it the moment it is made.
- *
- * Name, date and time (local and UTC), and meaning are the three things 21 CFR
- * 11.50 asks a signature to show; the method, the reason and exactly what was
- * covered are what an auditor asks next. All of it is what was just sent and
- * accepted — nothing here is inferred.
+ * Show the accepted signature record. 21 CFR 11.50 requires the name,
+ * date and time, and meaning. Also show the signing method, reason and exact
+ * coverage. These values come from the accepted response, not inference.
  */
 function SignedReceipt({ receipt, issueKey, onFinished }: { receipt: Receipt; issueKey?: string; onFinished?: () => void }) {
   const approved = receipt.decision === 'APPROVE';
@@ -585,7 +576,7 @@ function SignedReceipt({ receipt, issueKey, onFinished }: { receipt: Receipt; is
       <dt>Time</dt><dd><time>{formatTimestamp(receipt.at)}</time> <span className="va-subtlest">· {utc} UTC</span></dd>
       <dt>Method</dt><dd>{assuranceLabel(receipt.level)}</dd>
       <dt>Meaning</dt><dd>{receipt.meaning}</dd>
-      <dt>Reason</dt><dd>{receipt.note ? `“${receipt.note}”` : <span className="va-muted">None given</span>}</dd>
+      <dt>Reason</dt><dd>{receipt.note ? `"${receipt.note}"` : <span className="va-muted">None given</span>}</dd>
       {receipt.evidenceHash && <><dt>Evidence</dt><dd><code className="va-hash" title={receipt.evidenceHash}>{shortHash(receipt.evidenceHash)}</code></dd></>}
       {receipt.approvalId && <><dt>Record</dt><dd><code className="va-hash">{receipt.approvalId}</code> <span className="va-subtlest">· added to the audit ledger</span></dd></>}
     </dl>
@@ -610,13 +601,9 @@ function noActionExplanation(summary: PanelSummary, reviewingDrift: boolean): st
 }
 
 /**
- * The control summary every viewer receives from `panel:getSummary`.
- *
- * Every controlled transition from here is listed as its own row — where it
- * goes, who signs, how, and what it does to the baseline — so an ineligible
- * viewer knows exactly what they are waiting for and an eligible one knows
- * exactly what they are about to sign. While drift is open the rows say they
- * are held, and why, instead of offering a button that would be refused.
+ * Show every controlled transition returned by panel:getSummary with its
+ * destination, required signer, assurance and baseline effect. When drift
+ * holds a transition, explain the hold instead of offering an action.
  */
 /**
  * The Restoration row. A parent's rejection restores each child under the

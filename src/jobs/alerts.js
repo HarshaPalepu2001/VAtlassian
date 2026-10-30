@@ -1,30 +1,18 @@
 /**
- * ALERT DELIVERY — carrying a detected security event to a person.
+ * Deliver queued security alerts as Jira work items.
  *
- * The reasoning for alerting at all, and for Jira being the channel, is in
- * lib/alerts.js. This is the drain on the outbox.
+ * Detection writes a local outbox row. This job attempts delivery every five
+ * minutes, the shortest Forge scheduled-trigger interval. Describe that
+ * cadence as "reported within five minutes", never "reported immediately".
+ * See lib/alerts.js for the alert policy and channel choice.
  *
- * EVERY FIVE MINUTES, and that number is the compliance claim. 11.300(d) asks
- * for reporting "in an immediate and urgent manner". Five minutes is the
- * tightest cadence a Forge scheduled trigger offers, so the honest statement to
- * a customer is "reported within five minutes", never "reported immediately" —
- * the same discipline as jobs/verify.js, where the interval is the bound and
- * saying otherwise would be a claim the code cannot keep.
+ * Delivery stays outside the lockout request. A caller can trigger that path
+ * repeatedly; creating Jira work items inline would add network latency and
+ * could turn a wrong-code response into a delivery error.
  *
- * WHY NOT DELIVER INLINE AT THE POINT OF DETECTION. The lockout path is inside
- * a request that is already refusing a signer, and it is the one path an
- * attacker can drive at will. Creating a Jira work item there would put a
- * network call with an unbounded tail latency into a refusal, give the attacker
- * a way to make the app slow on demand, and add a failure mode where the alert
- * throwing turns a clean "wrong code" into an opaque server error — which tells
- * an attacker they found an edge and tells an honest user nothing. Detection
- * writes one local row; delivery happens here, where taking its time is free.
- *
- * AN UNCONFIGURED CHANNEL DOES NOT DROP ALERTS. If no alert project is set,
- * alerts accumulate undelivered and this job says so on every run rather than
- * discarding them. When a project is finally configured the backlog goes out in
- * order, so the record of what happened before configuration is not lost — the
- * gap is in when someone was told, not in whether it was recorded.
+ * Without a configured alert project, the job retains pending alerts and logs
+ * the configuration gap on each run. Once configured, it delivers the backlog
+ * in order. Recording an event does not prove anyone received it on time.
  */
 import { asApp, route } from '@forge/api';
 import { executeQuery } from '../lib/db.js';
@@ -116,9 +104,8 @@ export async function run({ request = defaultCreate } = {}) {
       await markDelivered(alert.alert_id, ref);
       delivered += 1;
     } catch (e) {
-      // One undeliverable alert must not block the rest of the queue — a
-      // malformed body or a since-deleted project would otherwise wedge every
-      // later alert behind it forever.
+      // Continue after an undeliverable alert. A malformed body or deleted project
+      // must not block later alerts.
       failed += 1;
       await markAttemptFailed(alert.alert_id, e?.message ?? String(e));
       console.error(`alerts: delivery failed for ${alert.dedupe_key} (attempt ${alert.attempts + 1})`, e);

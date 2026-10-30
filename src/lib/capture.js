@@ -30,13 +30,11 @@ import {
 const MAX_VERSION_ATTEMPTS = 3;
 
 /**
- * Two DIFFERENT approvals racing the same issue can both read the same
- * MAX(version) before either write commits. idx_baseline_version(issue_id,
- * version) already turns that into a clean duplicate-key error instead of
- * silent corruption — nobody turned it into a retry. Same shape as
- * lib/ledger.js's append(): read again, try again, bounded attempts.
- * A resumed capture (existing.version already fixed) never retries here;
- * only a fresh version allocation can collide.
+ * Retry a fresh baseline-version allocation after a duplicate-key collision.
+ * Concurrent approvals can read the same MAX(version); idx_baseline_version on
+ * issue_id and version rejects one insert. Re-read and retry within the attempt
+ * limit, as lib/ledger.js does. A resumed capture already has its version and
+ * does not retry allocation here.
  */
 async function writeWithVersionRetry(currentVersionFn, issueId, initialVersion, attempt) {
   let version = initialVersion;
@@ -47,8 +45,8 @@ async function writeWithVersionRetry(currentVersionFn, issueId, initialVersion, 
     } catch (error) {
       if (!isDuplicateKey(error)) throw error;
       lastError = error;
-      // Someone else took that version. Read the table again — a plain
-      // increment would just collide a second time.
+      // Another capture took this version. Re-read before retrying; incrementing
+      // alone could collide again.
       version = (await currentVersionFn(issueId)) + 1;
     }
   }
@@ -161,9 +159,8 @@ export async function writeCapturedBaseline({ issueId, issueKey, projectId, issu
   if (existing?.state === 'CAPTURING' && existing.content_hash !== plan.baseline.content_hash) {
     return { captured: false, reason: 'CAPTURE_INCOMPLETE' };
   }
-  // THE EVIDENCE THIS VERSION PUBLISHES WITH. Built from exactly what was
-  // projected and checked above; writeBaseline writes it before publishing and
-  // refuses to publish without it.
+  // Build evidence from the projection verified above. writeBaseline saves it
+  // before publication and refuses to publish without it.
   const writesVersion = !existing || existing.state === 'CAPTURING';
   let evidence = null;
   if (writesVersion) {
@@ -402,10 +399,9 @@ export async function writeCapturedTreeBaseline({
     expectedTreeHash: treePlan.treeHash
   });
 
-  // EVERY CHILD GETS ITS OWN BASELINE (db/childBaselineStore.js), at its own
-  // next version, over its own fields, authenticated by this approval. Written
-  // before the parent publishes and published after it, so a child never has a
-  // standing baseline from a parent capture that did not complete.
+  // Write each child's next baseline over its own field set before publishing the parent;
+  // publish children afterwards. The approval authenticates each child under
+  // db/childBaselineStore.js, without publishing a parent capture that failed.
   const childRows = planChildBaselines({ treePlan, rootIssueId: rootIssue.id, fieldsFor, nodeOf,
     parent: { baselineId: reserved.baselineId, approvalId: approval.approvalId, accountId: approval.accountId,
       displayName: approval.displayName, assuranceLevel: approval.assuranceLevel, policy,
@@ -417,8 +413,8 @@ export async function writeCapturedTreeBaseline({
     ? await services.writeChildBaselines({ rows: childRows, parentBaselineId: reserved.baselineId })
     : [];
 
-  // THE EVIDENCE OF EVERY VERSION THIS CAPTURE WRITES (evidence/treeEvidence.js),
-  // before anything publishes: publication requires it.
+  // Write evidence for every version through evidence/treeEvidence.js before
+  // publication, which requires that evidence.
   await services.writeVersionEvidence({ entries: await treeCaptureEvidence({
     rootIssueId: rootIssue.id, parentBaselineId: reserved.baselineId, parentVersion: version,
     rootDigests: rootNode.fieldDigests, controlledFields, children, nodeOf, fieldsFor, ruleScope, cause, policy, approval,

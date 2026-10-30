@@ -2,18 +2,12 @@ import { REVIEW_STATE, lockLeaseMs } from './interception.js';
 import { MATERIALITY } from './materiality.js';
 
 /**
- * The rules governing a reviewer's decision.
+ * Define reviewer-decision rules without I/O.
  *
- * An automatic revert means retaining the contents of a customer's fields, and
- * crossing that boundary has to be an opt-in, per-field extension — not the
- * default, and not silent. This module is where `revertsField` exists, gated on
- * the per-field retention flag, with everything it cannot restore named out
- * loud.
- *
- * Pure. No I/O, no clock, no database. The caller supplies the rows and `now`;
- * this returns what to write. Kept pure for the same reason interception.js is:
- * these rules decide whether a record may proceed, so they
- * have to be testable without a Jira and without a database.
+ * Automatic revert needs retained raw values. revertsField requires explicit
+ * per-field retention and names every field it cannot restore. The caller
+ * supplies rows and now; these functions return the required writes so tests
+ * can exercise the rules without Jira or a database.
  */
 
 export const DECISION = { APPROVE: 'APPROVE', REJECT: 'REJECT', MIXED: 'MIXED' };
@@ -39,11 +33,11 @@ export const REFUSE_MESSAGE = {
   ALREADY_DECIDING:
     'Another decision on this work item is already in progress. Reload the panel in a moment.',
   NOTHING_RESTORABLE:
-    'None of the changed fields have their contents retained, so nothing can be written back. An administrator can turn retention on for a field in Baseline\'s field settings — but that only helps from the next approval onward, since values are stored when a baseline is captured.',
+    'None of the changed fields have their contents retained, so nothing can be written back. An administrator can turn retention on for a field in Baseline\'s field settings. This applies from the next approval onward because capture stores the values.',
   AUTH_REQUIRED:
-    'This decision has to be confirmed on your device before it can be recorded. Use Face ID, Touch ID or Windows Hello — or your device PIN or password if no biometric is available — and try again.',
+    'This decision has to be confirmed on your device before it can be recorded. Use Face ID, Touch ID or Windows Hello. If no biometric is available, use your device PIN or password, then try again.',
   STALE_EVIDENCE:
-    'This work item changed while you were reading it. The panel has reloaded with the new changes — please review them before deciding.'
+    'This work item changed while you were reading it. The panel has reloaded with the new changes. Review them before deciding.'
 };
 
 
@@ -69,18 +63,16 @@ export function canDecide({ review, baseline, isEligible, authRequired = false, 
 }
 
 /**
- * Decide what an approve or reject means.
+ * Determine the effects of approval or rejection.
  *
- * @param decision       APPROVE | REJECT
- * @param diff           from lib/diff/index.js
- * @param plan           from lib/restore/planner.js — only needed for REJECT
- * @param evidenceHash   the hash the panel was rendering when the reviewer
- *                       clicked
+ * @param decision APPROVE | REJECT.
+ * @param diff From lib/diff/index.js.
+ * @param plan From lib/restore/planner.js, required only for REJECT.
+ * @param evidenceHash Hash displayed when the reviewer clicked.
  *
- * THE STALE-EVIDENCE CHECK IS NOT OPTIONAL. A reviewer reads a diff, somebody
- * edits the item, and the reviewer clicks Approve — approving a version they
- * never saw. The panel sends back the evidence hash it rendered; if the current
- * evidence differs, the decision is refused and the panel reloads.
+ * Refuse the decision and reload when current evidence differs from the hash
+ * the reviewer saw. Otherwise an edit made during review could receive a
+ * signature without review.
  */
 export function decide({ decision, diff, plan = null, evidenceHash = null, approvedCount = null }) {
   if (!diff) return { allow: false, reason: REFUSE.NO_BASELINE };
@@ -98,10 +90,8 @@ export function decide({ decision, diff, plan = null, evidenceHash = null, appro
     return {
       allow: true,
       decision,
-      // Approve means RATIFY THE DRIFT: the current state becomes the approved
-      // state, and a new baseline is cut from it. It does not mean "ignore" —
-      // the drift rows stay, stamped with this decision, so the trail still
-      // shows what was changed and who accepted it.
+      // Approval ratifies current content and captures a new baseline. Retain drift
+      // rows with this decision so the audit trail records the changes and acceptance.
       cutsNewBaseline: true,
       // Every outstanding change is now decided, which is what removes them
       // from the reviewer's queue.
@@ -131,10 +121,8 @@ export function decide({ decision, diff, plan = null, evidenceHash = null, appro
     return {
       allow: true,
       decision,
-      // No new baseline. The point of a rejection is that the STANDING baseline
-      // was right all along and the item is being returned to it — cutting a
-      // new one would quietly re-approve the restored state under the
-      // reviewer's name, which is not what they did.
+      // Rejection restores the existing baseline. Do not capture a new one that
+      // would incorrectly attribute a fresh approval to the rejecting reviewer.
       cutsNewBaseline: false,
       marksDriftDecided: true,
       appliesTransition: false,
@@ -147,40 +135,20 @@ export function decide({ decision, diff, plan = null, evidenceHash = null, appro
 }
 
 /**
- * Where the review row lands after a decision. THE ONLY DEFINITION.
+ * Choose review state after a decision.
  *
- * ─── WHY IT NOW DISTINGUISHES TWO KINDS OF "NOT COMPLETE" ────────────────────
+ * If restore finishes and verification identifies remaining field differences,
+ * return DRIFTED. The panel can list those fields and offer another restore or
+ * decision. The gate reports UNDECIDED_DRIFT.
  *
- * This used to send every unfinished restore to ERROR, on the reasoning that a
- * partly restored item is "neither at its approved state nor honestly drifted".
- * That reasoning holds for one of the two things PARTIAL can mean and not the
- * other, and collapsing them had a cost a reviewer paid directly.
+ * If a batch could not run, verification could not read the issue or restore
+ * stopped midway, return ERROR. The current state is unknown and needs an
+ * operational retry, not a review decision. ERROR blocks controlled transitions
+ * with RESTORE_IN_PROGRESS or ITEM_BUSY; uncontrolled transitions still depend
+ * on drift.
  *
- * gate.js refuses a controlled transition on an item in ERROR with
- * RESTORE_IN_PROGRESS — ITEM_BUSY (uncontrolled transitions are held only by
- * drift). It is a state a person cannot act their way out of from the panel:
- * the only exit is a restore retry, and while the retry was itself refused (see
- * lib/restore/resume.js) an item whose fields were in fact all correct could
- * sit there blocking every controlled transition, for ever, with no
- * explanation.
- *
- * So the two are separated by whether the app knows what it is looking at:
- *
- *   · The restore ran to the end and the verification pass named exactly which
- *     tracked fields still differ from the approved values. That is DRIFT, with
- *     evidence. It belongs in the reviewer's queue, where the fields are listed
- *     and can be restored again or decided on. The gate still refuses the
- *     transition — as UNDECIDED_DRIFT, which is true and which a reviewer can
- *     clear.
- *
- *   · Anything else — a batch that could not run, a verification read that
- *     failed, a restore that died midway — leaves the app unable to say what
- *     state the item is in. That is ERROR: an operational problem, surfaced in
- *     the admin console, not a review decision anybody should be asked to make.
- *
- * COMPLETE_WITH_REPLACEMENTS is a success. It was missing here, so a tree
- * restore that recreated a deleted work item and verified perfectly would have
- * landed in ERROR.
+ * COMPLETE_WITH_REPLACEMENTS counts as success. Previously omitting it sent
+ * correctly verified recreated work items to ERROR.
  */
 export function stateAfter({ decision, restoreState, unmatchedCount = 0 }) {
   if (decision === DECISION.APPROVE) return REVIEW_STATE.BASELINED;
@@ -223,16 +191,9 @@ export function undecidedCounters(diff) {
 }
 
 /**
- * The comment Baseline leaves on the work item after a restore.
- *
- * Left at all because the people who made the changes are not the people
- * reading the reviewer's queue, and an item silently reverting under them is
- * both confusing and slightly hostile. The comment names what was put back,
- * what was not, and who decided — so the conversation happens on the work item
- * where it belongs rather than in a support ticket.
- *
- * Returns ADF, because Jira's comment endpoint takes ADF and building it here
- * keeps the wording in one place instead of scattered across resolvers.
+ * Build the Jira comment after restore. Name what was restored, what was not
+ * and who decided, so the people who edited the issue can understand the change.
+ * Return ADF as required by Jira's comment endpoint.
  */
 export function restoreComment({ actorName, counters, state, detail, baselineVersion }) {
   const lines = [];
@@ -247,7 +208,7 @@ export function restoreComment({ actorName, counters, state, detail, baselineVer
   if (problems.length > 0) {
     lines.push('Not restored:');
     for (const p of problems.slice(0, 10)) {
-      lines.push(`• ${p.fieldName} — ${p.reason ?? 'reason not recorded'}`);
+      lines.push(`• ${p.fieldName}: ${p.reason ?? 'reason not recorded'}`);
     }
   }
 
@@ -264,13 +225,9 @@ export function restoreComment({ actorName, counters, state, detail, baselineVer
 }
 
 /**
- * Should this decision block until the reviewer has actually read something?
- *
- * A deliberately small nudge rather than a gate: if the AI report says the
- * change is material and the reviewer approves within a few seconds of the
- * panel opening, the panel asks them to confirm. It never refuses — a reviewer
- * who already knows what changed should not be lectured by their tools — but a
- * one-click approval of a critical scope change deserves one question.
+ * Ask for confirmation after an unusually fast approval of a material change.
+ * The panel prompts when the AI report marks the change material and approval
+ * follows within a few seconds. It does not refuse the decision.
  */
 export function needsConfirmation({ diff, report, dwellMs }) {
   if (diff.maxMateriality !== MATERIALITY.CRITICAL) return false;

@@ -52,29 +52,19 @@ export async function updateSignatureToken(issueId, tokenHex) {
 }
 
 /**
- * THE ONE PLACE A GOLDEN TICKET IS STAMPED ONTO A WORK ITEM.
+ * Set the Electronic Signature field to the latest durable signature ID.
  *
- * The invariant this exists to hold: the Electronic Signature field is either
- * EMPTY, or it carries the id of the most recent signature on that work item.
- * Never a stale one, never a half-written one. Every path that verifies a TOTP
- * and creates a signature ends here — the issue panel's sign-and-transition,
- * the content approval, and the gate after it consumes a transition-screen
- * signature — so there is exactly one definition of "latest".
+ * The field is either empty or identifies the most recent signature on the
+ * work item. The panel's sign-and-transition, content approvals and the gate's
+ * consumption of transition-screen signatures all use this function.
  *
- * TWO RULES ABOUT WHEN IT IS CALLED, and both are load-bearing:
+ * Call only after the signature row and ledger entry are durable. The field
+ * is a receipt; writing it first could display a signature that failed to save.
  *
- * 1. AFTER the signature is durable, never before. The signature row and the
- *    ledger entry are the record; the field is a receipt rendered on the issue.
- *    Stamping first would put a receipt on screen for a signature that might
- *    then fail to be stored, which is the one direction of inconsistency an
- *    auditor cannot forgive.
- *
- * 2. IT NEVER THROWS, and a failure never fails the signature. By the time
- *    this runs the signature is already recorded, already audited, and already
- *    valid. Reporting "signing failed" because a cosmetic field write got a
- *    403 would tell the signer a lie about the state of the record and invite
- *    them to sign a second time. The caller gets {ok:false, error} to surface
- *    as a warning, and the field is repaired on the next signature.
+ * Never throw or fail an already recorded signature when this field write
+ * fails. Return {ok:false, error} for a warning and repair the field on the next
+ * signature. Reporting signing failure after a receipt-write error could
+ * prompt an unnecessary second signature.
  *
  * @returns {Promise<{ok: true} | {ok: false, error: string}>}
  */

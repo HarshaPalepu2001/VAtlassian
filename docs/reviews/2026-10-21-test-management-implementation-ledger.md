@@ -1,4 +1,4 @@
-# Manual test-management implementation — 21 October 2026
+# Manual test-management implementation. 21 October 2026
 
 **Manual workflow and native Jira Verifies integration verified locally. Tenant release acceptance remains unperformed.** Existing dirty work is preserved; no repository commit, deployment, installation, live migration or Jira mutation was performed in this implementation pass.
 

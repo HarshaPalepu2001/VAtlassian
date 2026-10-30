@@ -17,10 +17,8 @@ type IssueType = { id: string; name: string };
 type JiraUser = { accountId: string; displayName: string; emailAddress?: string };
 
 /**
- * As with the transitions list, the account id and issue type id are resolved
- * server-side and not returned. This screen used to have two columns headed
- * "Account ID" and "Issue Type ID" — a directory of every signer's Atlassian
- * account id, printed for an audience that cannot do anything with one.
+ * The server resolves account and issue type ids to names and omits the ids
+ * from its response. This screen must not expose signers' account ids.
  */
 type EligibilityGrant = {
   elId: string;

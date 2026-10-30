@@ -66,9 +66,8 @@ export function treeReviewDiff({ baseline, baselineTree, currentTree, treeDiff, 
           attributionStatus: isRoot
             ? (changelogUnavailable ? 'UNAVAILABLE' : 'AVAILABLE')
             : 'NOT_COLLECTED',
-          // Live content about a node the viewer's own permission check hides
-          // must be filterable the same way the structural tree already is —
-          // see filterViewableReviewDiff() in panelAccess.js.
+          // Apply the same visibility filter to live field content and structural
+          // changes. See filterViewableReviewDiff() in panelAccess.js.
           logicalNodeId: change.logicalNodeId
         });
       }
@@ -107,10 +106,8 @@ export function treeReviewDiff({ baseline, baselineTree, currentTree, treeDiff, 
       attributionStatus: 'NOT_COLLECTED',
       occurrences: 0,
       logicalNodeId: change.logicalNodeId,
-      // NODE_REMOVED describes baseline history the viewer already had
-      // legitimate access to when it was captured, not current-tree content —
-      // filterViewableReviewDiff() keeps it regardless of live visibility,
-      // matching filterViewableTreeDiff()'s existing rule for the same change.
+      // Keep NODE_REMOVED baseline history regardless of current visibility.
+      // filterViewableReviewDiff() follows the same rule as filterViewableTreeDiff().
       nodeRemoved: change.kind === 'NODE_REMOVED'
     });
   }

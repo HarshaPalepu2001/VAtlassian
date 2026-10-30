@@ -1,24 +1,14 @@
 import { FIELD_KIND } from '../content.js';
 
 /**
- * How a baselined value is turned into something Jira will accept on
- * PUT /rest/api/3/issue/{key}.
+ * Shape baseline values for PUT /rest/api/3/issue/{key}. Choose adapters by
+ * field identity, then refine by schema. Jira labels description and environment
+ * as strings while accepting ADF. A generic string conversion would write
+ * "[object Object]" instead of the approved document.
  *
- * WHY THIS IS NOT A SWITCH ON schema.type. Jira REST v3 reports `description`
- * and `environment` as `{ type: 'string', system: 'description' }` while
- * accepting and returning an ADF document. A generic string branch therefore
- * stringifies the approved document into the literal text "[object Object]"
- * and writes that into the field — a restore that destroys the record it was
- * asked to protect. Field IDENTITY decides the adapter; the schema only
- * refines it.
- *
- * REFUSING IS A RESULT. Every adapter returns { ok, value, adapter, reason }.
- * A lossy coercion is never performed silently: the planner turns `ok: false`
- * into a named "cannot be restored" entry that the reviewer sees BEFORE they
- * confirm, which is the same contract lib/diff/fields.js already keeps for
- * irreversible and unretained fields.
- *
- * Pure. No I/O, no clock, no database.
+ * Return { ok, value, adapter, reason }. Do not coerce values lossily.
+ * The planner presents ok: false as a preflight reason before rejection.
+ * This module performs no I/O and reads no clock or database.
  */
 
 /** Bumped whenever these rules change, so a restore can record which ran. */

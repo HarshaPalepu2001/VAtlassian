@@ -26,19 +26,13 @@ type Loaded = { cacheKey: string; evidence: PanelEvidence | null; loading: boole
 export const STALE_EVIDENCE_MESSAGE = 'The evidence changed while it was loading. Reload it to see the current baseline.';
 
 /**
- * THE HEAVY READ — `panel:getEvidence`, shared by the panel's current-record
- * surfaces.
+ * Read panel:getEvidence once for the current record and baseline id/version.
+ * Workflow action selection does not create a separate evidence read.
+ * Sequence checks discard late responses for old keys.
  *
- * Keyed by the current record plus the baseline id/version it is reviewed
- * against. Selecting a different workflow action must not create a competing
- * authority read for the same record. A late response for an old key is
- * dropped by sequence.
- *
- * Evidence that belongs to another baseline — refused as STALE_EVIDENCE, or
- * returned for a different version — is discarded without being exposed, and
- * `onStale` refreshes the summary so the key moves to the authoritative
- * baseline. If the refreshed summary still names the same key, loading stops
- * with a scoped error and a manual retry rather than looping.
+ * Discard STALE_EVIDENCE and mismatched versions before display. onStale
+ * refreshes the summary to obtain the current baseline. If the refreshed
+ * summary still has the same key, stop with an error and manual retry.
  */
 export default function usePanelEvidence({ issueKey, actionId, baselineVersion, baselineId = null, evidenceVersion = null, contentHash = null, enabled, onStale }: Options) {
   const cacheKey = baselineVersion == null ? null : `${actionId}::${baselineVersion}::${baselineId ?? ''}::${evidenceVersion ?? ''}::${contentHash ?? ''}`;
@@ -93,14 +87,10 @@ export default function usePanelEvidence({ issueKey, actionId, baselineVersion, 
   const retry = useCallback(() => { void load(); }, [load]);
   const current = loaded && loaded.cacheKey === cacheKey ? loaded : null;
   const loading = current ? current.loading : enabled && cacheKey != null;
-  // A REFRESH IS NOT A RESET. Every edit moves `contentHash`, and with it the
-  // key — so a background refresh used to blank the change list and tracked
-  // fields to "Checking…" for the whole of this (slow) read, then paint them
-  // back. While the replacement for the SAME baseline is still loading, the
-  // previous read is offered for display. It is never `evidence`: callers
-  // that gate a decision keep waiting for the authoritative read, so nothing
-  // can be approved or rejected on what is merely still on screen. A
-  // different baseline, or a failed read, gets no stand-in.
+  // Keep the previous same-baseline read visible while contentHash changes and
+  // replacement evidence loads. This is display-only. Decisions must wait for
+  // the authoritative evidence. A different baseline or failed read gets no
+  // fallback.
   const held = lastGood.current;
   const heldEvidence = loading && !current?.evidence && held
     && held.baselineVersion === baselineVersion && held.baselineId === baselineId

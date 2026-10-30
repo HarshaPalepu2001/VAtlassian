@@ -5,22 +5,19 @@ import { registerHooks } from 'node:module';
 import { recallPlan, RECALL } from '../src/lib/recall.js';
 
 /**
- * DRIFT PUTS THE ITEM BACK IN FRONT OF A REVIEWER.
+ * Drift recall uses the latest active baseline's review status.
  *
- * BS-11 was DRIFTED in our database and "In Progress" on the board, and every
- * transition out of In Progress was unguarded — the gate is configured on the
- * way out of REVIEW. The database knew and the board did not, and the board is
- * the one people act on.
+ * BS-11 was DRIFTED in the database and "In Progress" on the board. Every
+ * transition out of In Progress was unguarded because the gate was configured
+ * on the transition out of REVIEW.
  *
- * THE TARGET IS THE LATEST ACTIVE BASELINE'S OWN REVIEW STATUS, and nothing
- * else — never a list of "every status this project calls review", never
- * today's va_controlled_transition configuration. See lib/recall.js and
- * lib/restore/recall.js for why.
+ * Recall must use the latest active baseline's own review status. It must
+ * not use every status called review or today's va_controlled_transition
+ * configuration. See lib/recall.js and lib/restore/recall.js.
  *
- * These pin the things that make an automatic transition on somebody's live
- * work item defensible: it happens only when it is warranted, it happens
- * through exactly one screen-free route, and when the workflow offers zero,
- * two, or a blocked route it fails visibly instead of improvising.
+ * These tests require recall to run only when warranted and through exactly
+ * one screen-free route. Zero routes, multiple routes, or a blocked route
+ * must produce a visible failure.
  */
 
 const REVIEW = '10426';
@@ -132,8 +129,8 @@ test('a screen on one of several routes does not change an ambiguous result', ()
 //
 // Only @forge/api, the audit store, and the incident store are replaced.
 // db/configStore.js is deliberately NOT wired to anything recallToReview can
-// reach — if a future change reintroduced a configuration lookup on this path,
-// the module would fail to resolve and every test below would fail loudly.
+// reach. A configuration lookup reintroduced on this path would mean
+// the module could not resolve and every test below would fail.
 
 const modules = {
   'db/store.js': ['tryAppend'],
@@ -161,7 +158,7 @@ const hooks = registerHooks({
 });
 const { recallToReview } = await import('../src/lib/restore/recall.js');
 
-// Raw Jira /transitions response shape — distinct from the already-normalised
+// Raw Jira /transitions response. This differs from the already-normalised
 // shape recallPlan takes directly (see `route()` above). availableTransitions()
 // (src/lib/transitions.js) is the real, unmocked code doing that normalising
 // here, so the fixture has to hand it what Jira actually returns.

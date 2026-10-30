@@ -4,26 +4,22 @@ import { fieldsForItem } from './tree/nodeFields.js';
 export { ancestorDriftMessage } from './errors.js';
 
 /**
- * IS A WORK ITEM ABOVE THIS ONE DRIFTED?
+ * Check whether an ancestor's own tracked fields have drifted.
  *
- * Drift is FLAGGED upward and HELD downward (decided by the user 2026-10-12).
- * A drifted work item asks every ancestor for a decision, but holds no
- * ancestor. It holds itself and everything below it: its children were
- * signed through it, so none of them may move while the content above them
- * is undecided. A sibling, or an issue at the other end of a link, is not
- * below it and is never held by it.
+ * The 2026-10-12 decision flags drift upward and holds transitions downward.
+ * A drifted item appears for review on every ancestor, but does not hold those
+ * ancestors. It holds itself and its descendants. Siblings and linked issues
+ * are outside that descendant set.
  *
- * "Below" is Jira's own `parent` field, walked upward from the item. Each
- * ancestor is judged on ITS OWN tracked fields with the same live comparison
- * the validator holds that ancestor on (lib/liveDrift.js), so an item is held
- * here exactly while its nearest drifted ancestor's own panel offers the
- * decision. An ancestor merely flagged by a drifted child of its own is not
- * drifted, and holds nothing.
+ * Walk Jira's parent field upward. Compare each ancestor's own tracked fields
+ * through lib/liveDrift.js, as its validator does. An ancestor merely flagged
+ * because of another child's drift does not itself hold descendants.
  *
- * A read that fails throws: the validator fails closed on it.
+ * Failed reads throw so the validator can refuse the transition.
  *
- * deps: readIssue(key) → canonicalised Jira issue (fields=*all), projectConfig,
- * activeBaseline, activeRootsForNode, controlledFields, rootNodeDigests.
+ * deps supplies readIssue(key), returning a canonicalised issue with fields=*all,
+ * and projectConfig, activeBaseline, activeRootsForNode, controlledFields and
+ * rootNodeDigests.
  */
 export const MAX_ANCESTOR_DEPTH = 8;
 

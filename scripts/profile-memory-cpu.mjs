@@ -1,24 +1,16 @@
-// Local memory/CPU profiling only. No network, no DB, no production data.
+// Profile local memory and CPU without network, database or production data.
 //
-// Measures two things the Performance Checklist marks Unverified/Partial:
-//   1. Heap growth (process.memoryUsage()) for a tree fixture sized near the
-//      documented TREE_LIMIT (src/lib/tree/model.js) and for a value-store
-//      encode/decode round trip (src/lib/valuestore.js) on a large payload.
-//   2. CPU self-cost (perf_hooks performance.now()) of the three operations
-//      the checklist already names as CPU candidates — synchronous level-9
-//      gzip, hashing (src/lib/hash.js), and content canonicalization
-//      (src/lib/content.js) — on an identical workload, ranked by measured
-//      time.
+// Measure heap growth for a near-TREE_LIMIT fixture and a large value-store
+// encode/decode round trip. Rank level-9 synchronous gzip, hashing and content
+// canonicalization by self-time on identical input. The performance checklist
+// records these measurements as Unverified or Partial.
 //
-// This script only imports and calls existing exports; it does not modify
-// product source. Source hashes are checked before and after the run so a
-// concurrent edit (a sibling agent, or this script itself misbehaving) is
-// caught rather than silently producing numbers for different code.
+// Import existing exports without changing product source. Compare source hashes
+// before and after to detect concurrent edits that would invalidate the results.
 //
 // Run: node --expose-gc scripts/profile-memory-cpu.mjs [outDir]
-// Without --expose-gc, global.gc() is unavailable and heap deltas between
-// phases are noisier (uncollected garbage from an earlier phase can bleed
-// into the next one's "before" snapshot) — the report says so either way.
+// Without --expose-gc, uncollected objects can affect the next phase's starting
+// heap. The report records whether forced garbage collection was available.
 
 import assert from 'node:assert/strict';
 import { performance } from 'node:perf_hooks';
@@ -97,9 +89,8 @@ function buildAdfDescription(paragraphs, sentencesPerParagraph) {
   return { type: 'doc', version: 1, content };
 }
 
-// Per-node description: small, like most real fields — the 500-node fixture
-// below uses this, not the large one, matching "the overwhelming majority of
-// fields are a single row" (src/lib/valuestore.js comment on CHUNK_CHARS).
+// Use a small per-node description in the 500-node tree fixture. Most fields
+// fit one row, as documented by CHUNK_CHARS in src/lib/valuestore.js.
 const SMALL_DESCRIPTION = buildAdfDescription(8, 4);
 // One large outlier value, sized to cross CHUNK_CHARS and force decodeValue's
 // multi-row reassembly path rather than the common single-row path.
@@ -137,7 +128,7 @@ function issueFieldsFor(n) {
 }
 
 // ─── Memory phase 1: build a tree fixture sized at TREE_LIMIT ─────────────
-const nodeCount = TREE_LIMIT; // 500 — src/lib/tree/model.js
+const nodeCount = TREE_LIMIT; // 500 nodes, as defined in src/lib/tree/model.js.
 assert.equal(nodeCount, 500, 'TREE_LIMIT moved; this script is now measuring the wrong size');
 
 let builtTree;
@@ -154,8 +145,8 @@ phase(`build ${nodeCount}-node tree fixture (= TREE_LIMIT), 10 controlled fields
   return nodes;
 });
 
-// ─── Memory phase 2: project() every node — the real per-node content-
-// canonicalization + digesting pass a tree capture runs ─────────────────
+// Memory phase 2: run project() for each node to measure tree capture's
+// content canonicalization and digest computation.
 let projected;
 phase(`project() all ${nodeCount} nodes' controlled fields (normalise + digest, content.js)`, () => {
   projected = builtTree.map(n => ({
@@ -197,9 +188,8 @@ phase(`decodeValue() reassembling ${encoded.chunks.length} chunks`, () => {
 });
 assert.deepEqual(decoded.value, LARGE_DESCRIPTION, 'encode/decode round trip did not reproduce the original value');
 
-// ─── CPU: rank the three named candidates on an identical workload ───────
-// Same input, same iteration count, same machine moment — the only thing
-// that differs between the three timed functions is the function itself.
+// Rank CPU candidates with identical input, iteration counts and environment.
+// Only the timed function differs between measurements.
 const cpuSamplePlain = JSON.stringify(SMALL_DESCRIPTION);
 const cpuSampleBytes = Buffer.from(cpuSamplePlain, 'utf8');
 const ITERATIONS = 2000;

@@ -1,4 +1,4 @@
-# Test-management readiness assessment — 21 October 2026
+# Test-management readiness assessment. 21 October 2026
 
 > Historical audit baseline. These defects were subsequently addressed locally in the [manual-scope implementation follow-up](2026-10-21-test-management-implementation-ledger.md), which records current checks and remaining release boundaries. Reproductions below describe the original failures.
 
@@ -16,7 +16,7 @@ This assessment reads the current working tree, including untracked implementati
 | Versioning | Numbered immutable content snapshots and digests; publish, sign and reject; official runs select the latest signed version | `src/testmgmt/content.js`, `src/testmgmt/store.js`, `src/usecases/testAuthoring.js` |
 | Manual execution | Per-step status, actual result, comment, attachment reference/hash, environment/configuration text and optional Jira release | `src/usecases/testExecution.js`, `frontend/src/testmgmt/ExecutionView.tsx` |
 | Results and sign-off | Server result rules, N/A rationale, role eligibility, default Tester → QA separation, frozen run content after first sign-off | `src/testmgmt/results.js`, `chain.js`, `signing.js`, `src/usecases/testRunSigning.js` |
-| Automatic defects | Intent row, marker reconciliation, app-created Bug after a fully signed Failed run, parent and links | `src/testmgmt/bug.js`, `src/usecases/testRunSigning.js` — important limitations below |
+| Automatic defects | Intent row, marker reconciliation, app-created Bug after a fully signed Failed run, parent and links | `src/testmgmt/bug.js`, `src/usecases/testRunSigning.js`. See limitations below |
 | Governance integration | Done guard, mapped test-management descendants excluded from parent baselines, ancestor-hold exemption, audit events | `src/testmgmt/executionGuard.js`, `treeExclusion.js`, `src/gate.js`, `src/lib/approval/runtime.js` |
 
 These are executable features, not only a design or menu placeholder. Six `tm_*` table migrations exist (`v109`–`v114`). The focused test-management suite contains 44 tests across authoring/execution journeys, rules and administration.
@@ -44,7 +44,7 @@ The current manifest declares `external.fetch.client: "*"` and an untyped `va-pr
 
 Priorities below are assessed against the product's promised signed/auditable test cycle. Reproductions use production use-case functions with the repository's in-memory dependencies and injected boundary failures; they are local evidence, not observations of Jira incidents.
 
-### F1 — P1: a run can remain SIGNED after the tester signature is removed
+### F1. P1: a run can remain SIGNED after the tester signature is removed
 
 **Source:** `src/testmgmt/signing.js:78`, `src/usecases/testRunSigning.js:80`, `src/testmgmt/store.js:175`.
 
@@ -54,7 +54,7 @@ Priorities below are assessed against the product's promised signed/auditable te
 
 **Required before release:** signatures must become effective only after durable audit confirmation; advancement and terminal guards must reject incomplete or unconfirmed chains, with recoverable interruption handling.
 
-### F2 — P1: Not executed becomes terminal before authentication and signature succeed
+### F2. P1: Not executed becomes terminal before authentication and signature succeed
 
 **Source:** `src/usecases/testRunSigning.js:131`, `src/testmgmt/executionGuard.js:18`, `src/testmgmt/store.js:175`.
 
@@ -64,7 +64,7 @@ Priorities below are assessed against the product's promised signed/auditable te
 
 **Required before release:** use a nonterminal closing state until the required signature is durable, and make the Done guard validate closure proof.
 
-### F3 — P1: deleted evidence still allows a fully signed Passed run
+### F3. P1: deleted evidence still allows a fully signed Passed run
 
 **Source:** `src/usecases/testExecution.js:186`, `src/testmgmt/jira.js:83`, `src/usecases/testRunSigning.js:24`.
 
@@ -74,7 +74,7 @@ Evidence attachment bytes are hashed when added. Run signing recomputes the dige
 
 **Required before release:** integrate protected evidence retention and retrieval/read-back, and distinguish an integrity-bound record from currently retrievable proof. Missing/invalid evidence must prevent any claim requiring complete evidence. This finding does not mean every manual test must contain an attachment.
 
-### F4 — P1: the version sign-off screen does not show the frozen test being signed
+### F4. P1: the version sign-off screen does not show the frozen test being signed
 
 **Source:** `frontend/src/testmgmt/TestView.tsx:47` and `:87`.
 
@@ -84,7 +84,7 @@ The screen renders current draft text. Published-version cards show version numb
 
 **Required before release:** display the immutable version snapshot being approved, and preserve readable historical versions. A digest is an integrity identifier, not a human review of its contents.
 
-### F5 — P2: a completed version approval can become stranded
+### F5. P2: a completed version approval can become stranded
 
 **Source:** `src/usecases/testAuthoring.js:129` and `:146`.
 
@@ -94,7 +94,7 @@ After the final version signature and its audit entry are durable, the state upd
 
 **Required before release:** idempotently settle version outcomes from confirmed signatures and handle failed/losing state writes explicitly.
 
-### F6 — P2: the fixed search delay does not guarantee one bug per failed run
+### F6. P2: the fixed search delay does not guarantee one bug per failed run
 
 **Source:** `src/testmgmt/bug.js:96`–`:112`.
 
@@ -104,7 +104,7 @@ After an ambiguous create response, an empty marker search after five minutes pe
 
 **Required before release:** preserve uncertainty without a second create until absence is established by a stronger mechanism or an explicit audited repair decision. Do not advertise an unconditional exactly-once guarantee from the current implementation.
 
-### F7 — P1: repair accepts an unrelated work item as the automatic bug
+### F7. P1: repair accepts an unrelated work item as the automatic bug
 
 **Source:** `src/usecases/testManagementAdmin.js:170`, `src/testmgmt/store.js:279`, `src/testmgmt/treeExclusion.js:47`.
 
@@ -114,7 +114,7 @@ Repair validates only that the selected issue exists in the same project. It doe
 
 **Required before release:** validate the repair target and its governed-tree safety, reconcile required relationships, prevent reuse across runs, and expose an actual repair interface. The backend resolver `admin:tm:repairBug` exists, but no caller for it was found in the frontend; the runner currently instructs administrators to repair under Test management without providing that operation there.
 
-### F8 — P1 for continuous governance: Done-route enforcement is checked only at setup
+### F8. P1 for continuous governance: Done-route enforcement is checked only at setup
 
 **Source:** `src/usecases/testManagementAdmin.js:66`, `src/jobs/gatecheck.js:201`; acknowledged in `docs/acceptance/test-management-live-checklist-2026-10-22.md:66`.
 
@@ -140,7 +140,7 @@ The current checklist explicitly lists these as absent, and the resolver/model/U
 
 The review completed over all 11 files in `src/testmgmt`, including untracked files: **1 major, 3 minor findings**. It did not cover every use-case or frontend file; the direct review and reproductions above cover those separately.
 
-- **Major:** a failed audit compensation can leave an effective signature with no ledger entry. Current code confirms the swallowed delete failure; F1 additionally reproduces advancement before successful compensation.
+- **Major:** a failed audit compensation can leave an effective signature with no ledger entry. Current code confirms the swallowed delete failure; F1 also reproduces advancement before successful compensation.
 - **Minor:** create-screen pagination stops when `isLast` is absent even if `total` indicates more fields. A local adapter probe with `total: 101` and 100 first-page fields returned 100 after one request. Confirm the live response shape when remediating.
 - **Minor:** HTTP 429 becomes permanent NEEDS_REPAIR rather than a controlled transient retry. This matches the current all-4xx branch but creates avoidable manual recovery during throttling.
 - **Minor:** distinct-signer matching uses exhaustive backtracking. A six-step local case with 40 Tester holders and the same sole QA/Approver visited 60,880 Tester entries before rejecting; larger organizations need a bounded matching implementation or measured limits.
@@ -170,6 +170,6 @@ Before a scoped customer announcement:
 
 ## Reproduction artifacts
 
-- `fixtures/2026-10-21-test-management-readiness-probes.mjs` — six executable boundary/failure reproductions using the repository's in-memory world and production use cases. Run from a checkout with its dependencies installed: `node docs/reviews/fixtures/2026-10-21-test-management-readiness-probes.mjs`.
-- `fixtures/2026-10-21-test-management-readiness-results.json` — captured adverse outcomes. Assertions deliberately establish the defects; exit code 0 means the defects reproduced, not that the product passed acceptance.
+- `fixtures/2026-10-21-test-management-readiness-probes.mjs` contains six executable boundary/failure reproductions using the repository's in-memory world and production use cases. Run from a checkout with its dependencies installed: `node docs/reviews/fixtures/2026-10-21-test-management-readiness-probes.mjs`.
+- `fixtures/2026-10-21-test-management-readiness-results.json` records adverse outcomes. Assertions deliberately establish the defects; exit code 0 means the defects reproduced, not that the product passed acceptance.
 - F4 was separately checked by rendering the actual React component with different draft/published text. No live signature, Jira issue, or tenant state was used for these probes.
