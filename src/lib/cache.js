@@ -1,37 +1,25 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 /**
- * Per-invocation memo cache for Forge SQL reads.
+ * Cache repeated Forge SQL reads within one invocation.
  *
- * WHAT IT IS. A Map, scoped to one Forge function invocation via
- * AsyncLocalStorage, entered by withRequestCache() at every Forge entry point
- * (resolvers, triggers, scheduled jobs, the gate validator, the restore
- * worker). The first call for a given key executes `fn` and stores the
- * resulting Promise; every subsequent call for the same key within the same
- * invocation returns that same Promise without touching the database again.
+ * withRequestCache() enters an AsyncLocalStorage context at each Forge entry
+ * point, including resolvers, triggers, scheduled jobs, the gate validator and
+ * restore worker. Each context owns a Map. The first memo() call for a key
+ * stores fn's Promise; later calls in that invocation reuse the same Promise.
  *
- * WHY THIS NEEDS A BOUNDARY, NOT JUST MODULE SCOPE. A Forge function (e.g.
- * `panel-resolver`) is deployed once and shared by every installation of the
- * app across every Jira site, the same way one AWS Lambda function serves all
- * its callers. The platform reuses warm execution environments across
- * invocations for performance — module-level state such as a plain
- * `new Map()` therefore is NOT guaranteed to be empty at the start of a
- * request, and a stale entry can leak a previous installation's config or
- * gate data into the current one's response. `context.installContext` /
- * `context.accountId` are re-injected fresh by `@forge/resolver` on every
- * call, which is the platform's own tell that nothing else is.
- * AsyncLocalStorage gives each invocation an isolated Map regardless of
- * container reuse, without needing a tenant id threaded through every call
- * site.
+ * A module-level Map can survive warm-container reuse and return stale
+ * configuration or gate data from an earlier invocation or installation.
+ * AsyncLocalStorage isolates each invocation without requiring every caller
+ * to include a tenant ID. @forge/resolver supplies fresh installContext and
+ * accountId values on each call.
  *
- * WHY IT MATTERS OTHERWISE. A single `panel:getState` call reads `va_config`
- * (twice for projectConfig), `va_controlled_field`, and `va_controlled_transition`
- * multiple times during snapshot() + getState(). When ten panels load
- * concurrently those same rows are fetched ten times each — identical reads
- * that hit Forge SQL's per-installation rate limit. Memoising them within a
- * single invocation collapses those repeated reads to one.
+ * panel:getState reads va_config, va_controlled_field and
+ * va_controlled_transition repeatedly during snapshot() and getState().
+ * Memoisation reduces each repeated read to one per invocation. Concurrent
+ * invocations still have separate caches and still perform their own reads.
  *
- * USAGE:
+ * Usage:
  *   import { memo, withRequestCache, getCacheStats } from '../lib/cache.js';
  *   export const handler = (...args) => withRequestCache(() => realHandler(...args));
  *   const result = await memo(`config:site`, () => getConfig('site'));
@@ -42,7 +30,13 @@ const _storage = new AsyncLocalStorage();
 // Only reachable from code that runs outside any withRequestCache() boundary
 // (e.g. a test that calls a store function directly). Never populated in
 // production, where every entry point opens its own scope first.
-const _fallback = { map: new Map(), stats: { hits: 0, misses: 0, evictions: 0 } };
+const _fallback = newScope();
+
+// A miss is POST_EVICTION when the key was cached earlier in this scope and
+// its promise rejected; every other miss is a COLD first read.
+function newScope() {
+  return { map: new Map(), evicted: new Set(), stats: { hits: 0, misses: 0, evictions: 0, coldMisses: 0, postEvictionMisses: 0 } };
+}
 
 function currentScope() {
   return _storage.getStore() ?? _fallback;
@@ -54,10 +48,29 @@ function currentCache() {
 
 /**
  * Run `fn` with a fresh, isolated memo cache for its entire async call tree.
- * Call this once at each Forge entry point, wrapping the real handler.
+ * Call this once at each Forge entry point, wrapping the real handler. A call
+ * nested inside an existing scope (a resolver's own wrapper under
+ * wrapWithHarness) joins that scope, so one invocation has one cache.
+ *
+ * When the outermost scope settles, one `[CACHE_TELEMETRY]` line is logged
+ * with its counters and rates (denominator: hits + misses), tagged with
+ * `label` when given. A scope that never touched the cache logs nothing.
  */
-export function withRequestCache(fn) {
-  return _storage.run({ map: new Map(), stats: { hits: 0, misses: 0, evictions: 0 } }, fn);
+export function withRequestCache(fn, { label } = {}) {
+  if (_storage.getStore()) return fn();
+  const scope = newScope();
+  const result = _storage.run(scope, fn);
+  return Promise.resolve(result).finally(() => logCacheTelemetry(scope.stats, label));
+}
+
+function logCacheTelemetry(stats, label) {
+  const { hits, misses, evictions } = stats;
+  const totalOps = hits + misses;
+  if (totalOps === 0) return;
+  const rate = n => Number((n / totalOps).toFixed(4));
+  console.log('[CACHE_TELEMETRY]', JSON.stringify({
+    label, ...stats, totalOps, hitRate: rate(hits), missRate: rate(misses), evictionRate: rate(evictions)
+  }));
 }
 
 /**
@@ -79,11 +92,14 @@ export function memo(key, fn) {
     return cache.get(key);
   }
   scope.stats.misses++;
+  if (scope.evicted.has(key)) scope.stats.postEvictionMisses++;
+  else scope.stats.coldMisses++;
   const promise = fn();
   cache.set(key, promise);
   promise.catch(() => {
     if (cache.get(key) === promise) {
       cache.delete(key);
+      scope.evicted.add(key);
       scope.stats.evictions++;
     }
   });
@@ -91,11 +107,9 @@ export function memo(key, fn) {
 }
 
 /**
- * Return this scope's running { hits, misses, evictions } counters. A hit is
- * a memo() call served from the map without calling fn(); a miss is a memo()
- * call that invoked fn(); an eviction is a cached promise that rejected and
- * was removed (see memo() above). Counters live and die with the scope they
- * belong to — a fresh withRequestCache() call always starts at zero.
+ * Return this scope's running hit, miss and eviction counters. Hits reuse a
+ * cached Promise; misses invoke fn. A rejected cached Promise increments the
+ * eviction counter when removed. Each withRequestCache() starts new counters.
  */
 export function getCacheStats() {
   const { hits, misses, evictions } = currentScope().stats;
@@ -103,8 +117,8 @@ export function getCacheStats() {
 }
 
 /**
- * Evict a single entry. Use only in tests that need to reset state between
- * calls — production code should never call this.
+ * Evict one entry for tests that reset state between calls. Production code
+ * must not call this function.
  */
 export function _evict(key) {
   currentCache().delete(key);

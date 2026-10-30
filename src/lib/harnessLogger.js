@@ -146,7 +146,7 @@ export function wrapWithHarness(definitions, { resolverName = 'resolver' } = {})
 
     const execute = async () => {
       try {
-        const result = await withRequestCache(() => definitions(...args));
+        const result = await withRequestCache(() => definitions(...args), { label: `${resolverName}:${functionKey}` });
         const durationMs = Date.now() - startedAt;
 
         if (!isHarnessLog) {
