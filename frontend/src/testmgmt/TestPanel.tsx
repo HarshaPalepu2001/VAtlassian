@@ -8,6 +8,7 @@ import ExecutionView from './ExecutionView';
 import PlanningView, { type PlanningViewModel } from './PlanningView';
 import CoverageView from './CoverageView';
 import SourceDecisions from './SourceDecisions';
+import GovernanceView from './GovernanceView';
 import type { ExecutionViewModel, Failure, TestViewModel } from './types';
 
 type Context = { role: 'TEST' | 'EXECUTION' | 'PLAN' | 'SET' | 'PRECONDITION' | 'SOURCE' | 'BUG' | null; enabled: boolean; issueKey?: string };
@@ -45,7 +46,7 @@ export default function TestPanel() {
   if (!ctx) return <Loading />;
   if (!ctx.enabled) return <Page variant="panel"><EmptyState title="Test management is off">A VAtlassian administrator can enable it for this project.</EmptyState></Page>;
   if (ctx.role === 'BUG') return <Page variant="panel"><Notice>This bug was created automatically from a failed, signed test run. Its run is on the linked test execution.</Notice></Page>;
-  if (ctx.role === 'SOURCE' && issueKey) return <Page variant="panel"><div className="tm"><CoverageView issueKey={issueKey} scope="SOURCE" /></div></Page>;
+  if (ctx.role === 'SOURCE' && issueKey) return <Page variant="panel"><div className="tm"><CoverageView issueKey={issueKey} scope="SOURCE" /><GovernanceView key={issueKey} issueKey={issueKey} /></div></Page>;
   if (!ctx.role) {
     return <Page variant="panel"><EmptyState title="Not a test-management work item">Tests and test executions show their details here.</EmptyState></Page>;
   }

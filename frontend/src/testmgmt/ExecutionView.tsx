@@ -7,13 +7,14 @@ import EvidenceDownload from './EvidenceDownload';
 import RetestControls from './RetestControls';
 import { Disclosure, Tabs } from './ui';
 import ExecutionSummary from './ExecutionSummary';
+import IntakeControls from './IntakeControls';
 import { PROBLEMS, resultTone, stateTone, words } from './labels';
 import type { ExecutionViewModel, Failure, Run, RunStep } from './types';
 
 const STATUSES = ['PASSED', 'FAILED', 'BLOCKED', 'NOT_APPLICABLE'] as const;
-type RunForm = { testKey: string; environment: string; configuration: string; releaseId: string };
+type RunForm = { testKey: string; environment: string; configuration: string; releaseId: string; level?: string; method?: string; buildId?: string };
 type AddRunRequest = { requestId: string; form: RunForm };
-const emptyRunForm: RunForm = { testKey: '', environment: '', configuration: '', releaseId: '' };
+const emptyRunForm: RunForm = { testKey: '', environment: '', configuration: '', releaseId: '', level: '', method: '', buildId: '' };
 // These addRun checks precede its first write. A persistence/audit failure may already have a durable run.
 const addRunRefusals = new Set(['NOT_A_TEST', 'NO_SIGNED_VERSION', 'VERSION_PROOF_INVALID', 'NO_EDIT_PERMISSION',
   'NO_PARENT', 'EXECUTION_DONE', 'INVALID_INPUT', 'NO_ELIGIBLE_SIGNER', 'STARTER_NOT_ELIGIBLE',
@@ -38,6 +39,7 @@ type ErrorAt = (at: string) => string | null;
 
 export default function ExecutionView({ model, onModel }: { model: ExecutionViewModel; onModel: (m: ExecutionViewModel) => void }) {
   const [tab, setTab] = useState('runs');
+  const [intakeOpened, setIntakeOpened] = useState(false);
   const [busy, setBusy] = useState(false);
   // A located error shows at its control; one without a place shows at the top.
   const [error, setError] = useState<{ message: string; at: string | null } | null>(null);
@@ -49,7 +51,7 @@ export default function ExecutionView({ model, onModel }: { model: ExecutionView
   currentExecution.current = model.issue.id;
   useEffect(() => {
     const saved = savedAddRun(model.issue.id); setAddRequest(saved); setForm(saved?.form ?? emptyRunForm);
-    setOpen(null); setError(null); setBusy(false);
+    setOpen(null); setError(null); setBusy(false); setTab('runs'); setIntakeOpened(false);
   }, [model.issue.id]);
 
   const call: Call = async (key, payload, at) => {
@@ -70,7 +72,10 @@ export default function ExecutionView({ model, onModel }: { model: ExecutionView
     const executionId = model.issue.id;
     const request = addRequest ?? { requestId: crypto.randomUUID().replaceAll('-', ''), form: { ...form } };
     setAddRequest(request); rememberAddRun(executionId, request);
-    const ok = await call('tm:exec:addRun', { issueKey: model.issue.key, ...request.form, releaseId: request.form.releaseId || null, requestId: request.requestId });
+    const { level, method, buildId, ...context } = request.form;
+    const ok = await call('tm:exec:addRun', { issueKey: model.issue.key, ...context, releaseId: context.releaseId || null, requestId: request.requestId,
+      ...(level?.trim() && method?.trim() ? { classification: { level: level.trim(), method: method.trim() } } : {}),
+      ...(buildId?.trim() ? { reportedBuild: { id: buildId.trim() } } : {}) });
     if (currentExecution.current !== executionId) return;
     if (ok) {
       rememberAddRun(executionId, null); setAddRequest(null); setForm({ ...request.form, testKey: '' });
@@ -89,7 +94,7 @@ export default function ExecutionView({ model, onModel }: { model: ExecutionView
       ]} />
       {model.issue.done && <Notice>This execution is done. Its runs are read-only.</Notice>}
 
-      <Tabs label="Execution details" value={tab} onChange={setTab} tabs={[
+      <Tabs label="Execution details" value={tab} onChange={value => { setTab(value); if (value === 'intake') setIntakeOpened(true); }} tabs={[
         { id: 'runs', label: 'Runs', count: model.runs.length, content: <>
       {model.canEdit && !model.issue.done && (
         <Disclosure title={addRequest ? 'Retry pending run' : 'Add a run'} open={!!addRequest || model.runs.length === 0}>
@@ -106,9 +111,14 @@ export default function ExecutionView({ model, onModel }: { model: ExecutionView
             <label className="va-field"><span className="va-label">Release</span>
               <Select value={form.releaseId} onChange={v => setForm({ ...form, releaseId: v })} disabled={busy || !!addRequest}
                 placeholder="No release" options={model.releases.map(r => ({ value: r.id, label: r.name }))} /></label>
+            {([['level', 'Run verification level'], ['method', 'Run verification method'], ['buildId', 'Run reported build ID']] as const).map(([key, label]) => (
+              <label key={key} className="va-field"><span className="va-label">{label}{key === 'buildId' ? ' (sender-attested, optional)' : ' (optional)'}</span>
+                <input className="va-input" aria-label={label} value={form[key] ?? ''} disabled={busy || !!addRequest} onChange={e => setForm({ ...form, [key]: e.target.value })} /></label>
+            ))}
           </div>
+          {(!!form.level?.trim() !== !!form.method?.trim()) && <Notice>Set both verification level and method, or leave both blank.</Notice>}
           {addRequest && <Notice>This add request is waiting for a confirmed outcome. Retrying uses the same submitted test and execution context.</Notice>}
-          <button className="va-button va-button--primary" disabled={busy || !form.testKey.trim()} onClick={addRun}>{addRequest ? 'Retry Add run' : 'Add run'}</button>
+          <button className="va-button va-button--primary" disabled={busy || !form.testKey.trim() || (!!form.level?.trim() !== !!form.method?.trim())} onClick={addRun}>{addRequest ? 'Retry Add run' : 'Add run'}</button>
           <p className="va-subtlest" style={{ fontSize: 12 }}>Uses the latest signed test version and current sign-off chain.</p>
         </Disclosure>
       )}
@@ -122,6 +132,7 @@ export default function ExecutionView({ model, onModel }: { model: ExecutionView
       </Section>
       </> },
         ...(model.issue.done ? [{ id: 'rerun', label: 'Rerun', content: <RetestControls model={model} /> }] : []),
+        { id: 'intake', label: 'CI intake', content: intakeOpened ? <IntakeControls key={model.issue.key} issueKey={model.issue.key} runs={model.runs} canEdit={model.canEdit && !model.issue.done} /> : null },
         { id: 'summary', label: 'Summary', content: <ExecutionSummary issueKey={model.issue.key} /> }
       ]} />
     </div>
@@ -147,6 +158,8 @@ function RunCard({ run, model, busy, expanded, onToggle, call, errorAt }: {
         {run.bug && <Badge tone={run.bug.state === 'CREATED' ? 'neutral' : 'danger'}>{words(run.bug.state)}{run.bug.issueKey ? ` ${run.bug.issueKey}` : ''}</Badge>}
         {run.retestOf && <span className="va-subtlest"> · retest of {run.retestOf.slice(0, 8)}</span>}
       </p>
+      <RunMetadata run={run} />
+      {run.intakePending && <Notice danger>CI receipt {run.intakeReceiptId ?? ''} is not yet APPLIED and audit-confirmed. Every affected run is blocked from sign-off until the whole receipt is ready.</Notice>}
       {run.signatures.map(s => (
         <p key={s.stepIndex} style={{ fontSize: 12 }}>
           {s.decision === 'REJECT' ? '✕' : '✓'} {s.label}: <strong>{s.printedName}</strong>, <When ms={s.signedAt} />{s.reason ? `. ${s.reason}` : ''}
@@ -174,7 +187,8 @@ function Runner({ run, model, busy, editable, call, errorAt }: {
   const [closing, setClosing] = useState(false);
   const [reason, setReason] = useState('');
   const [code, setCode] = useState('');
-  const canSignNow = run.canSign && run.nextStep && (run.state === 'SIGNING' || !run.signabilityProblem);
+  const machine = run.provenance?.kind === 'MACHINE' || run.provenance?.type === 'MACHINE';
+  const canSignNow = !run.intakePending && !run.resultPending && run.canSign && run.nextStep && (run.state === 'SIGNING' || !run.signabilityProblem);
   const frozen = run as { planningSnapshot?: { required?: boolean; plan?: { issueId: string; revisionNo?: number; digest?: string };
     preconditions?: { issueId: string; revisionNo?: number; digest?: string; text: string }[] } | null;
     iterations?: { id: string; values: Record<string, string>; stepIds?: string[] }[] };
@@ -212,13 +226,13 @@ function Runner({ run, model, busy, editable, call, errorAt }: {
         <Notice>Waiting for: {run.nextStep.label} ({run.nextStep.role}).</Notice>
       )}
       {canSignNow && run.nextStep && (
-        <SignBox step={run.nextStep} digest={run.contentHash} allowReject={run.state === 'SIGNING'} busy={busy} error={errorAt(`sign:${run.runId}`)}
+        <SignBox step={machine ? { ...run.nextStep, meaning: 'I reviewed these machine-recorded results and their evidence.' } : run.nextStep} digest={run.contentHash} allowReject={run.state === 'SIGNING'} busy={busy} error={errorAt(`sign:${run.runId}`)}
           onSign={({ code: c, decision, reason: r }) => call('tm:run:sign', { runId: run.runId, code: c, contentHash: run.contentHash, decision, reason: r }, `sign:${run.runId}`)} />
       )}
       {editable && run.canSign && run.result === 'FAILED' && (
         <p className="va-subtlest" style={{ fontSize: 12 }}>A step failed, so this run is signed off as Failed and gets its bug. It cannot be closed as not executed.</p>
       )}
-      {editable && run.canSign && run.result !== 'FAILED' && (
+      {editable && !machine && !run.intakePending && run.canSign && run.result !== 'FAILED' && (
         <div style={{ marginTop: 8 }}>
           {!closing ? <button className="va-button" disabled={busy} onClick={() => setClosing(true)}>Close as not executed…</button> : (
             <div className="va-card va-card--sunken" style={{ padding: 12 }}>
@@ -322,4 +336,20 @@ function StepRow({ run, step, model, busy, editable, signing, call, errorAt }: {
       </div></details>
     </div>
   );
+}
+
+function RunMetadata({ run }: { run: Run }) {
+  const value = (data: unknown): string => {
+    if (data == null || data === '') return 'Not recorded';
+    if (typeof data !== 'object') return String(data);
+    const parts = Object.entries(data).filter(([, entry]) => entry != null && entry !== '').map(([key, entry]) => `${key}: ${typeof entry === 'object' ? JSON.stringify(entry) : entry}`);
+    return parts.join(' · ') || 'Not recorded';
+  };
+  return <Facts items={[
+    { label: 'Attempt sequence', value: value(run.attemptSequence) },
+    { label: 'Classification', value: value(run.classification) },
+    { label: 'Reported build (sender-attested)', value: value(run.reportedBuild) },
+    { label: 'Provenance', value: value(run.provenance) },
+    { label: run.state === 'SIGNED' ? 'Signed evidence digest' : 'Review content digest', value: <code style={{ overflowWrap: 'anywhere' }}>{run.contentHash || 'Not recorded'}</code> }
+  ]} />;
 }

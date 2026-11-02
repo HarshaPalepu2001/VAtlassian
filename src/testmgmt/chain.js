@@ -32,6 +32,13 @@ export const DEFAULT_VERSION_CHAIN = Object.freeze({
   distinctSigners: true
 });
 
+const governingDefault = meaning => ({ steps: [{ label: 'Approved by', role: ROLE.APPROVER, meaning }], distinctSigners: true });
+export const DEFAULT_GOVERNANCE_CHAINS = Object.freeze({
+  assignmentChain: governingDefault('I approve this verification assignment and its mandatory obligations.'),
+  targetChain: governingDefault('I approve this execution and its reported build identity as the closure target.'),
+  exceptionChain: governingDefault('I accept the named missing historical metadata for the exact signed passed evidence.')
+});
+
 /**
  * A chain as stored, or the reason it is refused. Nothing is coerced: a
  * missing role or an empty meaning is an error, never a default.

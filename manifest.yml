@@ -17,6 +17,9 @@ modules:
     - key: va-link-consumer
       queue: va-link-queue
       function: link-worker
+    - key: va-ci-intake-consumer
+      queue: va-ci-intake-queue
+      function: ci-intake-worker
   sql:
     - key: main
       engine: mysql
@@ -193,6 +196,32 @@ modules:
   webtrigger:
     - key: va-probe
       function: probe
+    - key: va-ci-intake
+      function: ci-intake
+      urlFormat: v2
+      response:
+        type: static
+        outputs:
+          - key: accepted
+            statusCode: 202
+            contentType: application/json
+            body: '{"accepted":true}'
+          - key: rejected
+            statusCode: 400
+            contentType: application/json
+            body: '{"accepted":false}'
+          - key: unauthorized
+            statusCode: 401
+            contentType: application/json
+            body: '{"accepted":false}'
+          - key: too-large
+            statusCode: 413
+            contentType: application/json
+            body: '{"accepted":false}'
+          - key: unavailable
+            statusCode: 503
+            contentType: application/json
+            body: '{"accepted":false}'
   scheduledTrigger:
     - key: trigger-five-minute
       function: runner-five-minute
@@ -205,6 +234,11 @@ modules:
       interval: day
 
   function:
+    - key: ci-intake
+      handler: jobs/ciIntake.runCiIntake
+    - key: ci-intake-worker
+      handler: jobs/ciIntake.runCiIntakeWorker
+      timeoutSeconds: 600
     - key: probe
       handler: jobs/probe.handler
     - key: restore-worker

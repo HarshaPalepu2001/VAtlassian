@@ -18,6 +18,7 @@ import { createRunSigning } from './testRunSigning.js';
 import { expandDatasetSteps } from '../testmgmt/planning.js';
 import { verifyVersionProof, verifyRunProof } from '../testmgmt/proof.js';
 import { requestReads } from '../testmgmt/requestReads.js';
+import { assertRunReady, reviewStep, humanRunMetadata } from '../testmgmt/runReadiness.js';
 
 const MAX_LABEL = 255;
 const MAX_REASON = 1000;
@@ -64,6 +65,8 @@ export function createTestExecution(deps) {
     }
     const out = [];
     for (const run of runs) {
+      let intakePending = false;
+      try { await assertRunReady(run, deps); } catch { intakePending = true; }
       const version = versionById.get(run.testVersionId);
       const definition = run.resolvedSteps ?? version?.content?.steps ?? [];
       const steps = runSteps(definition, run.steps);
@@ -85,7 +88,7 @@ export function createTestExecution(deps) {
       let canSign = false;
       const nextRole = run.state === 'IN_PROGRESS' ? run.chain.steps[0].role
         : run.state === 'SIGNING' && position.next != null ? position.step.role : null;
-      if (nextRole && !hidden && planningVisible && sourcesVisible && !pending && !run.stepEventId) {
+      if (nextRole && !hidden && planningVisible && sourcesVisible && !pending && !run.stepEventId && !intakePending) {
         canSign = !separationProblem(run.chain, own, actor.accountId)
           && await deps.isEligibleFor({ accountId: actor.accountId, projectId: project.projectId,
             issueTypeId: issue.fields?.issuetype?.id, role: nextRole });
@@ -93,7 +96,10 @@ export function createTestExecution(deps) {
       const result = computedResult(steps);
       const bug = bugs.find(b => b.runId === run.runId) ?? null;
       out.push({
-        runId: run.runId, state: run.state, result, revision: run.revision, resultPending: !!run.stepEventId,
+        runId: run.runId, state: run.state, result, revision: run.revision, resultPending: !!run.stepEventId || intakePending,
+        evidenceSchema: run.evidenceSchema ?? null, attemptSequence: run.attemptSequence ?? null,
+        classification: run.classification ?? null, reportedBuild: run.reportedBuild ?? null,
+        provenance: run.provenance ?? null, intakeReceiptId: run.intakeReceiptId ?? null, intakePending,
         test: { id: run.testIssueId, key: test?.key ?? null, summary: test?.fields?.summary ?? null, hidden },
         version: { versionId: run.testVersionId, versionNo: version?.versionNo ?? null, digest: run.testDigest },
         environment: run.environment, configuration: run.configuration, release: run.release,
@@ -105,12 +111,12 @@ export function createTestExecution(deps) {
           data: definition[i]?.data ?? '', expected: definition[i]?.expected ?? '' })),
         preconditions: hidden ? '' : version?.content?.preconditions ?? '',
         contentHash: runDigest(run, steps), signabilityProblem: run.state === 'IN_PROGRESS' ? signabilityProblem(steps) : null,
-        chain: run.chain, signatures: own.map(s => ({ stepIndex: s.step_index, label: s.label, role: s.role,
+        chain: { ...run.chain, steps: run.chain.steps.map(step => reviewStep(run, step)) }, signatures: own.map(s => ({ stepIndex: s.step_index, label: s.label, role: s.role,
           decision: s.decision, printedName: s.printedName, signedAt: s.signedAt, reason: s.reason, meaning: s.meaning,
           assuranceLevel: s.assuranceLevel, contentHash: s.contentHash })),
         notExecuted: closed.find(s => s.subjectId === run.runId) ?? null,
-        nextStep: run.state === 'IN_PROGRESS' ? { index: 0, ...run.chain.steps[0] }
-          : position.next != null && run.state === 'SIGNING' ? { index: position.next, ...position.step } : null,
+        nextStep: run.state === 'IN_PROGRESS' ? { index: 0, ...reviewStep(run, run.chain.steps[0]) }
+          : position.next != null && run.state === 'SIGNING' ? { index: position.next, ...reviewStep(run, position.step) } : null,
         canSign, bug,
         // Signed off, but its outcome or its bug was not written: the panel
         // offers to finish it (retryBug).
@@ -127,19 +133,22 @@ export function createTestExecution(deps) {
     };
   }
 
-  async function addRun({ issueKey, testKey, environment = '', configuration = '', releaseId = null, retestOf = null, testVersionId = null, requestId = null }, actor, selection = null) {
+  async function addRun({ issueKey, testKey, environment = '', configuration = '', releaseId = null, retestOf = null, testVersionId = null, requestId = null,
+    classification = null, reportedBuild = null }, actor, selection = null) {
     const { issue, project } = await execution(issueKey);
     if (!await deps.hasIssuePermission(issue.id, 'EDIT_ISSUES')) tmFail('NO_EDIT_PERMISSION');
     if (isDone(issue)) tmFail('EXECUTION_DONE');
     if (!parentOf(issue)) tmFail('NO_PARENT');
     if (String(environment).length > MAX_LABEL || String(configuration).length > MAX_LABEL) tmFail('INVALID_INPUT');
+    const metadata = humanRunMetadata({ classification, reportedBuild }, actor);
     const test = await resolveSubject(String(testKey ?? '').trim(), deps, 'TEST');
     if (test.projectId !== project.projectId) tmFail('NOT_A_TEST');
     if (!parentOf(test.issue)) tmFail('NO_PARENT');
     if (requestId != null && !/^[a-zA-Z0-9_-]{8,100}$/.test(String(requestId))) tmFail('INVALID_INPUT');
     const creationKey = requestId ? contentDigest({ projectId: project.projectId, executionIssueId: String(issue.id), requestId }) : null;
     const creationFingerprint = contentDigest({ testIssueId: String(test.issue.id), environment: String(environment).trim(), configuration: String(configuration).trim(),
-      releaseId: releaseId == null ? null : String(releaseId), retestOf, testVersionId, selection });
+      releaseId: releaseId == null ? null : String(releaseId), retestOf, testVersionId, selection,
+      classification: metadata.classification, reportedBuild: metadata.reportedBuild });
     if (creationKey) {
       const prior = await deps.readRunByCreationKey(creationKey);
       if (prior) {
@@ -184,8 +193,12 @@ export function createTestExecution(deps) {
       resolvedSteps: expanded.steps, iterations, planningSnapshot,
       creationKey, creationFingerprint, creationEventId: deps.newHexId(),
       release: release ? { id: release.id, name: release.name } : null, chain, chainDigest: chainDigest(chain),
-      result: RESULT.NOT_RUN, steps, retestOf: retestOf || null, createdBy: actor.accountId, createdAt: deps.now() };
+      result: RESULT.NOT_RUN, steps, retestOf: retestOf || null, createdBy: actor.accountId, createdAt: deps.now(), ...metadata };
     if (Buffer.byteLength(JSON.stringify(run)) > 384 * 1024) tmFail('RUN_TOO_LARGE');
+    if (metadata.reportedBuild) {
+      if (!deps.claimExecutionCandidate) tmFail('CANDIDATE_PENDING');
+      await deps.claimExecutionCandidate({executionIssueId:String(issue.id),projectId:project.projectId,reportedBuild:metadata.reportedBuild,actorAccountId:actor.accountId});
+    }
     if (!await deps.insertRun(run)) {
       const prior = creationKey ? await deps.readRunByCreationKey(creationKey) : null;
       if (!prior || prior.creationFingerprint !== creationFingerprint) tmFail('IDEMPOTENCY_CONFLICT');
@@ -209,6 +222,7 @@ export function createTestExecution(deps) {
   async function openRun(runId) {
     const run = await deps.readRun(runId);
     if (!run) tmFail('NOT_FOUND');
+    await assertRunReady(run, deps);
     const { issue } = await execution(run.executionIssueId);
     if (!await deps.hasIssuePermission(issue.id, 'EDIT_ISSUES')) tmFail('NO_EDIT_PERMISSION');
     if (run.state !== 'IN_PROGRESS') tmFail('RUN_NOT_OPEN');

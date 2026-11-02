@@ -105,12 +105,17 @@ export function runSteps(versionSteps, recorded) {
  */
 export function runContent(run, steps, result) {
   return {
-    kind: 'TEST_RUN', schema: 1,
+    kind: 'TEST_RUN', schema: run.evidenceSchema === 2 ? 2 : 1,
     runId: run.runId, executionIssueId: String(run.executionIssueId), testIssueId: String(run.testIssueId),
     testVersionId: run.testVersionId, testDigest: run.testDigest,
     environment: run.environment ?? '', configuration: run.configuration ?? '',
     release: run.release ?? null, chainDigest: run.chainDigest,
     retestOf: run.retestOf ?? null,
+    ...(run.evidenceSchema === 2 ? {
+      attemptSequence: run.attemptSequence ?? null, classification: run.classification ?? null,
+      reportedBuild: run.reportedBuild ?? null, provenance: run.provenance ?? null,
+      intakeReceiptId: run.intakeReceiptId ?? null
+    } : {}),
     ...(run.resolvedSteps ? { resolvedSteps: run.resolvedSteps, iterations: run.iterations, planningSnapshot: run.planningSnapshot } : {}),
     steps: steps.map(s => ({ id: s.id, status: s.status, actual: s.actual, comment: s.comment,
       evidence: (s.evidence ?? []).map(e => ({ attachmentId: String(e.attachmentId), sha256: e.sha256, size: Number(e.size),

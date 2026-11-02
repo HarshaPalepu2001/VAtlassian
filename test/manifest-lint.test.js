@@ -37,3 +37,14 @@ test('manifest.yml asks the Jira admin for one rule: the va-gate validator, and 
   assert.equal(/jira:workflowCondition:/.test(manifest), false, 'no workflow condition module');
   assert.equal(manifest.includes('va-drift-lock'), false);
 });
+
+test('CI intake declares only fixed acknowledgments and a recoverable queue consumer', async () => {
+  const manifest = fs.readFileSync('manifest.yml', 'utf8');
+  assert.match(manifest, /key:\s*va-ci-intake\s*\n\s*function:\s*ci-intake\s*\n\s*urlFormat:\s*v2\s*\n\s*response:\s*\n\s*type:\s*static/);
+  assert.match(manifest, /key:\s*va-ci-intake-consumer\s*\n\s*queue:\s*va-ci-intake-queue\s*\n\s*function:\s*ci-intake-worker/);
+  const { CI_INTAKE_OUTPUTS } = await import('../src/jobs/ciIntake.js');
+  for (const output of CI_INTAKE_OUTPUTS) {
+    assert.ok(manifest.includes(`key: ${output.key}\n`));
+    assert.ok(manifest.includes(`body: '${output.body}'`));
+  }
+});

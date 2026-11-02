@@ -12,6 +12,7 @@ export async function triggerRuntime() {
     recordIncident,
     collectAffectedTrees,
     affectedTreeRoots,
-    collectTree
+    collectTree,
+    observeGovernedTransition: (event, transition) => import('../testmgmt/governanceObservation.js').then(m => m.observeTransitionRuntime(event, transition))
   };
 }

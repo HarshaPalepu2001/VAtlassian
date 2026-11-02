@@ -143,3 +143,29 @@ test('the author rule is saved only when switched on explicitly, and is part of 
   await saveTestManagementConfig(request(payload({ authorSeparation: 'yes' })), truthy.deps);
   assert.equal(truthy.saved[0].authorSeparation, false, 'only a real true switches it on');
 });
+
+test('separate assignment target and exception chains survive a configuration save', async () => {
+  const { deps, saved } = world();
+  const chain = label => ({ steps: [{ label, role: 'APPROVER', meaning: `I approve ${label}.` }], distinctSigners: true });
+  const extra = { assignmentChain: chain('assignment'), targetChain: chain('target'), exceptionChain: chain('exception'), governanceAuthorSeparation: true };
+  const result = await saveTestManagementConfig(request(payload(extra)), deps);
+  assert.equal(result.success, true, result.error);
+  for (const key of Object.keys(extra)) assert.deepEqual(saved[0][key], extra[key], key);
+});
+
+test('malformed governing approval policies cannot be saved', async () => {
+  const { deps, saved } = world();
+  const result = await saveTestManagementConfig(request(payload({ assignmentChain: { steps: [] } })), deps);
+  assert.equal(result.success, false);
+  assert.match(result.error, /assignment/i);
+  assert.equal(saved.length, 0);
+});
+
+test('governing default signature meanings identify their actual decisions', async () => {
+  const { deps, saved } = world();
+  const result = await saveTestManagementConfig(request(payload()), deps);
+  assert.equal(result.success, true, result.error);
+  assert.match(saved[0].assignmentChain.steps[0].meaning, /verification assignment/i);
+  assert.match(saved[0].targetChain.steps[0].meaning, /closure target/i);
+  assert.match(saved[0].exceptionChain.steps[0].meaning, /missing historical metadata/i);
+});

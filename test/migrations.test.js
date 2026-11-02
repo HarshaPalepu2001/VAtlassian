@@ -128,7 +128,8 @@ test('v075-v087 stay in the list: they may already have run on a site', () => {
 test('migration ids are unique and include the manual-test schema through rerun provenance', () => {
   const ids = MIGRATIONS.map(m => m.id);
   assert.equal(new Set(ids).size, ids.length);
-  assert.equal(MIGRATIONS.at(-1).id, 'v143_tm_project_author_separation');
+  assert.ok(ids.includes('v143_tm_project_author_separation'));
+  assert.equal(MIGRATIONS.at(-1).id, 'v182_tm_execution_candidate');
 });
 
 test('v137-v142 record authors and pending step changes, one statement each', () => {
@@ -221,4 +222,17 @@ test('a mixed drift decision stores the exact field map it signed, NULL on every
   assert.match(sql, /ALTER TABLE va_approval/);
   assert.match(sql, /ADD COLUMN IF NOT EXISTS decision_map TEXT NULL/);
   assert.match(sql, /ADD COLUMN IF NOT EXISTS decision_map_hash CHAR\(64\) NULL/);
+});
+
+test('governed verification migrations preserve historical rows and add governing records', () => {
+  for (const [index, suffix] of ['assignment_chain', 'target_chain', 'exception_chain', 'governance_author_separation'].entries()) {
+    assert.match(sqlFor(`v${144 + index}_tm_${suffix}`), /ADD COLUMN IF NOT EXISTS .* NULL$/);
+  }
+  assert.ok(MIGRATIONS.some(m => m.sql.includes('CREATE TABLE IF NOT EXISTS tm_governance_record')));
+  assert.ok(MIGRATIONS.some(m => m.sql.includes('CREATE TABLE IF NOT EXISTS tm_closure_evaluation')));
+  assert.ok(MIGRATIONS.some(m => m.sql.includes('CREATE TABLE IF NOT EXISTS tm_intake_receipt')));
+  for (const m of MIGRATIONS.filter(m => /tm_run_(attempt_sequence|evidence_schema|classification|reported_build|provenance|intake_receipt)/.test(m.id))) {
+    assert.doesNotMatch(m.sql, /UPDATE\s+tm_run/i, m.id);
+    assert.match(m.sql, /NULL/);
+  }
 });

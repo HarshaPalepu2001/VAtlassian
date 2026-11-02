@@ -9,6 +9,10 @@ import { BUG_MIGRATIONS } from '../testmgmt/bugStore.js';
 import { RETEST_MIGRATIONS } from '../testmgmt/retestMigrations.js';
 import { SOURCE_LINK_MIGRATIONS } from '../testmgmt/sourceLinkMigrations.js';
 import { BASELINE_LINK_POLICY_MIGRATIONS } from './baselineLinkPolicyMigrations.js';
+import { GOVERNANCE_MIGRATIONS } from '../testmgmt/governanceStore.js';
+import { INTAKE_MIGRATIONS } from '../testmgmt/intakeStore.js';
+import { OBSERVATION_MIGRATIONS } from '../testmgmt/governanceObservation.js';
+import { CANDIDATE_MIGRATIONS } from '../testmgmt/executionCandidate.js';
 
 export const MIGRATIONS = [
   { id: 'v001_config', sql: `CREATE TABLE IF NOT EXISTS va_config (
@@ -1102,5 +1106,12 @@ export const MIGRATIONS = [
   { id: 'v141_tm_run_step_event', sql: 'ALTER TABLE tm_run ADD COLUMN IF NOT EXISTS step_event_id CHAR(32) NULL' },
   { id: 'v142_tm_run_step_prior', sql: 'ALTER TABLE tm_run ADD COLUMN IF NOT EXISTS step_prior MEDIUMTEXT NULL' },
   // The project's switch for the author rule; absent is off (testmgmt/authorship.js#authorProblem).
-  { id: 'v143_tm_project_author_separation', sql: 'ALTER TABLE tm_project ADD COLUMN IF NOT EXISTS author_separation TINYINT NULL' }
+  { id: 'v143_tm_project_author_separation', sql: 'ALTER TABLE tm_project ADD COLUMN IF NOT EXISTS author_separation TINYINT NULL' },
+  ...['assignment_chain', 'target_chain', 'exception_chain', 'governance_author_separation'].map((column, index) => ({
+    id: `v${144 + index}_tm_${column}`, sql: `ALTER TABLE tm_project ADD COLUMN IF NOT EXISTS ${column} ${index === 3 ? 'TINYINT' : 'TEXT'} NULL`
+  })),
+  ...GOVERNANCE_MIGRATIONS.map((m, index) => ({ ...m, id: `v${148 + index}_${m.id.replaceAll('-', '_')}` })),
+  ...INTAKE_MIGRATIONS,
+  ...OBSERVATION_MIGRATIONS.map(m => ({ ...m, id: 'v181_tm_closure_observation' })),
+  ...CANDIDATE_MIGRATIONS
 ];

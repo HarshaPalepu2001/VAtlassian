@@ -93,7 +93,9 @@ test('a query over the slow-query threshold logs a distinguishable SLOW_QUERY_AL
   assert.equal(payload.operation, 'SELECT');
   assert.deepEqual(payload.tables, ['va_config']);
   assert.equal(payload.thresholdMs, 1);
-  assert.ok(payload.durationMs >= 5);
+  // Timers can fire just before their nominal millisecond boundary. The
+  // alert contract is the configured threshold, not the requested sleep.
+  assert.ok(payload.durationMs >= payload.thresholdMs);
   assert.equal(payload.succeeded, true);
   assert.doesNotMatch(JSON.stringify(payload), /secret-literal/);
 });

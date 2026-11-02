@@ -10,7 +10,7 @@ export async function testManagementRuntime() {
     import('./sourceRuntime.js'), import('../usecases/testPlanning.js'), import('./retestStore.js'), import('./retestJira.js')
   ]);
   const audit = (event) => ledger.append(auditStore.auditStore, { eventId: auditStore.newId(), ...event });
-  const deps = {
+  let deps = {
     ...store, ...jira, ...planningStore, ...bugStore, ...retestStore, ...retestJira,
     retainEvidence: evidence.retainEvidence, verifyEvidence: evidence.verifyEvidence,
     readRetainedEvidence: evidence.readRetainedEvidence, readRetainedEvidenceRange: evidence.readRetainedEvidenceRange,
@@ -27,5 +27,7 @@ export async function testManagementRuntime() {
   deps.verifyRunProof = (run, version) => proof.verifyRunProof(run, version, deps);
   deps.validateRunPlanningSnapshot = (run, _version, { viewer } = {}) => planning.createTestPlanning(deps).validateRunPlanningSnapshot(run,
     typeof viewer === 'string' ? { accountId: viewer } : viewer);
-  return reporting.sourceReportingRuntime(deps);
+  deps = await reporting.sourceReportingRuntime(deps);
+  deps = await (await import('./governedRuntime.js')).governedTestRuntime(deps);
+  return deps;
 }

@@ -9,11 +9,11 @@ type ChainStep = { label: string; role: string; meaning: string };
 type Chain = { steps: ChainStep[]; distinctSigners: boolean };
 type Config = { enabled: boolean; testTypeId: string; executionTypeId: string; planTypeId: string | null;
   setTypeId: string | null; preconditionTypeId: string | null; defectTypeId: string;
-  linkTypeName: string; sourceLinkTypeId: string | null; runChain: Chain; versionChain: Chain; authorSeparation?: boolean; revision: number };
+  linkTypeName: string; sourceLinkTypeId: string | null; runChain: Chain; versionChain: Chain; authorSeparation?: boolean; assignmentChain?: Chain; targetChain?: Chain; exceptionChain?: Chain; governanceAuthorSeparation?: boolean; revision: number };
 type Loaded = { success: boolean; error?: string; config: Config | null;
   project: { style: string | null; issueTypes: { id: string; name: string; subtask: boolean }[] };
   linkTypes: { id: string; name: string }[];
-  defaults: { runChain: Chain; versionChain: Chain; linkTypeName: string };
+  defaults: { runChain: Chain; versionChain: Chain; assignmentChain?: Chain; targetChain?: Chain; exceptionChain?: Chain; linkTypeName: string };
   repairs?: { items: { runId: string; issueKey: string | null; lastError: string | null }[]; complete: boolean };
   workflowHealth?: { readable: boolean; missingDoneRoutes: string[] } };
 
@@ -25,6 +25,7 @@ type Loaded = { success: boolean; error?: string; config: Config | null;
 export default function TestManagementPage({ projects }: { projects: Project[] }) {
   const [tab, setTab] = useState('setup');
   const [projectId, setProjectId] = useState('');
+  const [sourceTypeId, setSourceTypeId] = useState('');
   const [data, setData] = useState<Loaded | null>(null);
   const [form, setForm] = useState<Config | null>(null);
   const [message, setMessage] = useState<{ danger: boolean; text: string } | null>(null);
@@ -33,15 +34,18 @@ export default function TestManagementPage({ projects }: { projects: Project[] }
 
   useEffect(() => {
     let cancelled = false;
-    setTab('setup'); setData(null); setForm(null); setMessage(null); setRepair({ runId: '', bugKey: '', reason: '' });
+    setTab('setup'); setSourceTypeId(''); setData(null); setForm(null); setMessage(null); setRepair({ runId: '', bugKey: '', reason: '' });
     if (!projectId) return;
     invoke<Loaded>('admin:tm:get', { projectId }).then(res => {
       if (cancelled) return;
       if (!res.success) { setMessage({ danger: true, text: res.error ?? 'Could not load the configuration.' }); return; }
       setData(res);
-      setForm(res.config ? { ...res.config, setTypeId: res.config.setTypeId ?? null, preconditionTypeId: res.config.preconditionTypeId ?? null, sourceLinkTypeId: res.config.sourceLinkTypeId ?? null }
+      setForm(res.config ? { ...res.config, assignmentChain: res.config.assignmentChain ?? res.defaults.assignmentChain ?? res.config.versionChain, targetChain: res.config.targetChain ?? res.defaults.targetChain ?? res.config.versionChain,
+        exceptionChain: res.config.exceptionChain ?? res.defaults.exceptionChain ?? res.config.versionChain, governanceAuthorSeparation: res.config.governanceAuthorSeparation !== false, setTypeId: res.config.setTypeId ?? null, preconditionTypeId: res.config.preconditionTypeId ?? null, sourceLinkTypeId: res.config.sourceLinkTypeId ?? null }
         : { enabled: false, testTypeId: '', executionTypeId: '', planTypeId: null, setTypeId: null, preconditionTypeId: null, defectTypeId: '',
-        linkTypeName: res.defaults.linkTypeName, sourceLinkTypeId: null, runChain: res.defaults.runChain, versionChain: res.defaults.versionChain, revision: 0 });
+        linkTypeName: res.defaults.linkTypeName, sourceLinkTypeId: null, runChain: res.defaults.runChain, versionChain: res.defaults.versionChain,
+        assignmentChain: res.defaults.assignmentChain ?? res.defaults.versionChain, targetChain: res.defaults.targetChain ?? res.defaults.versionChain,
+        exceptionChain: res.defaults.exceptionChain ?? res.defaults.versionChain, governanceAuthorSeparation: true, revision: 0 });
     }).catch(e => { if (!cancelled) setMessage({ danger: true, text: e?.message ?? 'Could not load the configuration.' }); });
     return () => { cancelled = true; };
   }, [projectId]);
@@ -75,7 +79,8 @@ export default function TestManagementPage({ projects }: { projects: Project[] }
   // Test versions are signed on the Test, runs on the Execution.
   const versionRoles = useGrantedRoles(projectId, form?.testTypeId || null);
   const runRoles = useGrantedRoles(projectId, form?.executionTypeId || null);
-  const rolesError = versionRoles.error ?? runRoles.error;
+  const sourceRoles = useGrantedRoles(projectId, sourceTypeId || null);
+  const rolesError = versionRoles.error ?? runRoles.error ?? sourceRoles.error;
 
   return (
     <div className="tm tm--admin"><Page title="Test management"
@@ -132,6 +137,22 @@ export default function TestManagementPage({ projects }: { projects: Project[] }
             onChange={c => setForm(f => f && { ...f, runChain: c })} />
           <p className="va-hint">Assign chain roles under Approver roles. Every step needs an eligible signer before a run can start.</p>
           </> },
+            { id: 'governance', label: 'Governed verification', content: <>
+          <Section title="Source approval scope">
+            <p>Assignments, closure targets and exceptions use the source requirement's project and work type. Intake grants use the execution's scope.</p>
+            <Field label="Source work type to inspect role grants"><Select ariaLabel="Source work type to inspect role grants" value={sourceTypeId} onChange={setSourceTypeId} disabled={busy}
+              placeholder="Choose a source work type" options={types.filter(type => ![form.testTypeId, form.executionTypeId, form.defectTypeId].includes(type.value))} /></Field>
+            <p className="va-hint">This picker checks available roles. Each governing record is authorized against its actual source work item. Existing chain roles remain selected when a preview has no matching grant.</p>
+          </Section>
+          {([['assignmentChain', 'Verification assignment approval'], ['targetChain', 'Closure target approval'], ['exceptionChain', 'Evidence exception approval']] as const).map(([key, title]) => (
+            <ChainEditor key={key} title={title} scope="source requirement" chain={form[key] ?? data.defaults[key] ?? form.versionChain}
+              roles={sourceRoles.roles} busy={busy} preserveUnavailable onChange={c => setForm(f => f && { ...f, [key]: c })} />
+          ))}
+          <Section title="Independent governance approval"><label>
+            <input type="checkbox" aria-label="Governance authors cannot approve their own records" checked={form.governanceAuthorSeparation === true} disabled={busy}
+              onChange={e => setForm(f => f && { ...f, governanceAuthorSeparation: e.target.checked })} /> Governance authors cannot approve their own records
+          </label><p className="va-hint">Exceptions may accept only named missing historical metadata. The server requires an approval floor meeting both the assignment and target chains.</p></Section>
+          </> },
             { id: 'repairs', label: 'Repairs', count: data.repairs?.items.length ?? 0, content:
           <Section title="Repair automatic bug">
             <p>Review the run and Jira history, then link the existing bug. The bug must match the run's project, work type, and parent. Your reason is recorded.</p>
@@ -182,14 +203,14 @@ function useGrantedRoles(projectId: string, issueTypeId: string | null) {
   return state;
 }
 
-function ChainEditor({ title, scope, chain, roles, busy, onChange }: {
-  title: string; scope: string; chain: Chain; roles: string[] | null; busy: boolean; onChange: (c: Chain) => void;
+function ChainEditor({ title, scope, chain, roles, busy, onChange, preserveUnavailable = false }: {
+  title: string; scope: string; chain: Chain; roles: string[] | null; busy: boolean; onChange: (c: Chain) => void; preserveUnavailable?: boolean;
 }) {
   const set = (i: number, patch: Partial<ChainStep>) => onChange({ ...chain, steps: chain.steps.map((s, j) => (j === i ? { ...s, ...patch } : s)) });
   // A role nobody holds any more is cleared, as on controlled transitions, so
   // what is shown is what would be saved.
   useEffect(() => {
-    if (roles && chain.steps.some(s => s.role && !roles.includes(s.role))) {
+    if (!preserveUnavailable && roles && chain.steps.some(s => s.role && !roles.includes(s.role))) {
       onChange({ ...chain, steps: chain.steps.map(s => (roles.includes(s.role) ? s : { ...s, role: '' })) });
     }
   }, [roles]);
@@ -202,7 +223,7 @@ function ChainEditor({ title, scope, chain, roles, busy, onChange }: {
             <td>{i + 1}</td>
             <td><input className="va-input" aria-label={`${title} step ${i + 1} label`} value={s.label} disabled={busy} onChange={e => set(i, { label: e.target.value })} /></td>
             <td><Select ariaLabel={`${title} step ${i + 1} role`} value={s.role} onChange={v => set(i, { role: v })} disabled={busy || !roles} placeholder="Choose a role…"
-              options={(roles ?? []).map(r => ({ value: r, label: r }))} /></td>
+              options={[...new Set([...(roles ?? []), ...(preserveUnavailable ? chain.steps.map(step => step.role).filter(Boolean) : [])])].map(r => ({ value: r, label: r }))} /></td>
             <td><textarea className="va-input" aria-label={`${title} step ${i + 1} meaning`} rows={2} value={s.meaning} disabled={busy} onChange={e => set(i, { meaning: e.target.value })} /></td>
             <td><button className="va-button" disabled={busy || chain.steps.length === 1}
               onClick={() => onChange({ ...chain, steps: chain.steps.filter((_, j) => j !== i) })}>Remove</button></td>

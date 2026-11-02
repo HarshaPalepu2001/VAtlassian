@@ -1,6 +1,7 @@
 import { chainDigest, chainPosition } from './chain.js';
 import { contentDigest, runContent, runSteps } from './content.js';
 import { runResult } from './results.js';
+import { assertRunReady, machineRecorded, MACHINE_REVIEW_MEANING } from './runReadiness.js';
 
 /** A terminal label is never sufficient proof of the signatures behind it. */
 export function terminalProofProblem(run, signatures, closures = []) {
@@ -12,6 +13,7 @@ export function terminalProofProblem(run, signatures, closures = []) {
       && closures[0].step_index === 0 && String(closures[0].reason ?? '').trim() ? null : 'RUN_PROOF_INVALID';
   }
   if (signatures.some((s, i) => !usable(s) || s.role !== run.chain.steps[i]?.role)) return 'RUN_PROOF_INVALID';
+  if (machineRecorded(run) && signatures.some(s => s.decision === 'SIGN' && s.meaning !== MACHINE_REVIEW_MEANING)) return 'RUN_PROOF_INVALID';
   if (run.chain.distinctSigners && new Set(signatures.map(s => s.account_id)).size !== signatures.length) return 'RUN_PROOF_INVALID';
   const position = chainPosition(run.chain, signatures);
   if (run.state === 'SIGNED') return position.complete && signatures.every(s => s.decision === 'SIGN') ? null : 'RUN_PROOF_INVALID';
@@ -31,6 +33,8 @@ export async function verifyVersionProof(version, deps) {
 }
 
 export async function verifyRunProof(run, version, deps) {
+  try { await assertRunReady(run, deps); }
+  catch { return { ok: false, reason: 'INTAKE_PENDING' }; }
   if (!(await verifyVersionProof(version, deps)).ok || run.testVersionId !== version.versionId || run.testDigest !== version.digest) return { ok: false, reason: 'VERSION_PROOF_INVALID' };
   const [signatures, closures] = await Promise.all([deps.listSignatures('RUN', run.runId), deps.listSignatures('RUN_NOT_EXECUTED', run.runId)]);
   const issue = terminalProofProblem(run, signatures, closures);
@@ -38,6 +42,7 @@ export async function verifyRunProof(run, version, deps) {
   const definition = run.resolvedSteps ?? version.content.steps;
   const steps = runSteps(definition, run.steps);
   const result = runResult([{ steps: steps.map(s => s.status) }]);
+  if (result !== run.result) return { ok: false, reason: 'RUN_RESULT_CHANGED' };
   if (contentDigest(runContent(run, steps, result)) !== run.frozenDigest) return { ok: false, reason: 'RUN_CONTENT_CHANGED' };
   return { ok: true };
 }

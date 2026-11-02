@@ -1,6 +1,7 @@
 import { executeQuery } from '../lib/db.js';
 import { FailClosed } from '../lib/errors.js';
 import { terminalProofProblem } from './proof.js';
+import { INITIALISE_ATTEMPT_CLOCK } from './attemptOrder.js';
 
 // The same test as db/store.js#isDuplicateKey, kept local: tests replace that
 // module wholesale, and this one must not depend on what they stub.
@@ -48,6 +49,8 @@ function projectFrom(row) {
     defectTypeId: String(row.defect_type_id), linkTypeName: row.link_type_name,
     sourceLinkTypeId: row.source_link_type_id == null ? null : String(row.source_link_type_id),
     runChain: json(row.run_chain, null), versionChain: json(row.version_chain, null),
+    assignmentChain: json(row.assignment_chain, null), targetChain: json(row.target_chain, null),
+    exceptionChain: json(row.exception_chain, null), governanceAuthorSeparation: row.governance_author_separation == null || Number(row.governance_author_separation) === 1,
     authorSeparation: Number(row.author_separation) === 1,
     revision: Number(row.revision), updatedAt: Number(row.updated_at), updatedBy: row.updated_by
   };
@@ -64,17 +67,18 @@ export async function listProjects() {
 /** Insert or update with an expected revision; false when someone else saved first. */
 export async function saveProject(p, { expectedRevision, now, actor }) {
   const values = [p.enabled ? 1 : 0, p.testTypeId, p.executionTypeId, p.planTypeId ?? null, p.setTypeId ?? null, p.preconditionTypeId ?? null, p.defectTypeId,
-    p.linkTypeName, p.sourceLinkTypeId ?? null, JSON.stringify(p.runChain), JSON.stringify(p.versionChain), p.authorSeparation ? 1 : 0, now, actor];
+    p.linkTypeName, p.sourceLinkTypeId ?? null, JSON.stringify(p.runChain), JSON.stringify(p.versionChain), p.authorSeparation ? 1 : 0,
+    JSON.stringify(p.assignmentChain ?? null), JSON.stringify(p.targetChain ?? null), JSON.stringify(p.exceptionChain ?? null), p.governanceAuthorSeparation === false ? 0 : 1, now, actor];
   if (!expectedRevision) {
     try {
       await q(`INSERT INTO tm_project (enabled, test_type_id, execution_type_id, plan_type_id, set_type_id, precondition_type_id, defect_type_id,
-        link_type_name, source_link_type_id, run_chain, version_chain, author_separation, updated_at, updated_by, project_id, revision)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`, [...values, Number(p.projectId)]);
+        link_type_name, source_link_type_id, run_chain, version_chain, author_separation, assignment_chain, target_chain, exception_chain, governance_author_separation, updated_at, updated_by, project_id, revision)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`, [...values, Number(p.projectId)]);
       return true;
     } catch (error) { if (error.duplicate) return false; throw error; }
   }
   const result = await q(`UPDATE tm_project SET enabled = ?, test_type_id = ?, execution_type_id = ?, plan_type_id = ?, set_type_id = ?, precondition_type_id = ?,
-    defect_type_id = ?, link_type_name = ?, source_link_type_id = ?, run_chain = ?, version_chain = ?, author_separation = ?, updated_at = ?, updated_by = ?,
+    defect_type_id = ?, link_type_name = ?, source_link_type_id = ?, run_chain = ?, version_chain = ?, author_separation = ?, assignment_chain = ?, target_chain = ?, exception_chain = ?, governance_author_separation = ?, updated_at = ?, updated_by = ?,
     revision = revision + 1 WHERE project_id = ? AND revision = ?`, [...values, Number(p.projectId), Number(expectedRevision)]);
   return affected(result) === 1;
 }
@@ -162,6 +166,12 @@ function runFrom(row) {
     steps: json(row.steps, []), revision: Number(row.revision), frozenDigest: row.frozen_digest ?? null,
     retestOf: hex(row.retest_of), createdBy: row.created_by, createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
+    attemptSequence: row.attempt_sequence == null ? null : Number(row.attempt_sequence),
+    evidenceSchema: row.evidence_schema == null ? null : Number(row.evidence_schema),
+    classification: row.classification == null ? null : json(row.classification, null),
+    reportedBuild: row.reported_build == null ? null : json(row.reported_build, null),
+    provenance: row.provenance == null ? null : json(row.provenance, null),
+    intakeReceiptId: row.intake_receipt_id ?? null, intakeApplied: Number(row.intake_applied) === 1,
     resolvedSteps: json(row.resolved_steps, null), iterations: json(row.iterations, null), planningSnapshot: json(row.planning_snapshot, null),
     creationKey: row.creation_key ?? null, creationFingerprint: row.creation_fingerprint ?? null, creationEventId: row.creation_event_id ?? null,
     stepEventId: row.step_event_id ?? null, stepPrior: row.step_prior == null ? null : json(row.step_prior, null)
@@ -169,15 +179,39 @@ function runFrom(row) {
 }
 
 export async function insertRun(r) {
-  try { await q(`INSERT INTO tm_run (run_id, execution_issue_id, project_id, test_issue_id, test_version_id, test_digest,
+  // The allocator is independent of client timestamps/build identity and is
+  // never backfilled onto historical rows. Gaps from interrupted insertions
+  // are harmless; sequence order, not contiguity, decides latest attempts.
+  try {
+    await q(INITIALISE_ATTEMPT_CLOCK);
+    let allocated = null;
+    for (let retry = 0; retry < 10; retry += 1) {
+      const clock = (await rows('SELECT last_sequence FROM tm_attempt_clock WHERE clock_id = 1'))[0];
+      const prior = Number(clock?.last_sequence);
+      if (!Number.isSafeInteger(prior) || prior < 0 || prior >= Number.MAX_SAFE_INTEGER) throw new FailClosed('SERVICE_UNAVAILABLE');
+      if (affected(await q('UPDATE tm_attempt_clock SET last_sequence = ? WHERE clock_id = 1 AND last_sequence = ?', [prior + 1, prior])) === 1) {
+        allocated = prior + 1; break;
+      }
+    }
+    if (allocated == null) throw new FailClosed('STALE');
+    await q('INSERT INTO tm_run_attempt (run_id, attempt_sequence) VALUES (?, ?) ON DUPLICATE KEY UPDATE run_id = run_id', [bin(r.runId), allocated]);
+    const allocation = (await rows('SELECT attempt_sequence FROM tm_run_attempt WHERE run_id = ?', [bin(r.runId)]))[0];
+    const sequence = Number(allocation?.attempt_sequence);
+    if (!Number.isSafeInteger(sequence) || sequence < 1) throw new FailClosed('SERVICE_UNAVAILABLE');
+    r.attemptSequence = sequence;
+    r.evidenceSchema = 2;
+    r.provenance ??= { kind: 'HUMAN', accountId: r.createdBy };
+    await q(`INSERT INTO tm_run (run_id, execution_issue_id, project_id, test_issue_id, test_version_id, test_digest,
     environment, configuration, release_id, release_name, chain, chain_digest, state, result, steps, revision,
-    retest_of, created_by, created_at, updated_at, resolved_steps, iterations, planning_snapshot, creation_key, creation_fingerprint, creation_event_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'CREATING', ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    retest_of, created_by, created_at, updated_at, resolved_steps, iterations, planning_snapshot, creation_key, creation_fingerprint, creation_event_id,
+    attempt_sequence, evidence_schema, classification, reported_build, provenance)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'CREATING', ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   [bin(r.runId), Number(r.executionIssueId), Number(r.projectId), Number(r.testIssueId), bin(r.testVersionId),
     r.testDigest, r.environment, r.configuration, r.release?.id ?? null, r.release?.name ?? null,
     JSON.stringify(r.chain), r.chainDigest, r.result, JSON.stringify(r.steps), r.retestOf ? bin(r.retestOf) : null,
     r.createdBy, r.createdAt, r.createdAt, JSON.stringify(r.resolvedSteps ?? null), JSON.stringify(r.iterations ?? null), JSON.stringify(r.planningSnapshot ?? null),
-    r.creationKey ?? null, r.creationFingerprint ?? null, r.creationEventId]);
+    r.creationKey ?? null, r.creationFingerprint ?? null, r.creationEventId, r.attemptSequence, r.evidenceSchema,
+    JSON.stringify(r.classification ?? null), JSON.stringify(r.reportedBuild ?? null), JSON.stringify(r.provenance)]);
     return true;
   } catch (error) { if (error.duplicate) return false; throw error; }
 }
@@ -203,7 +237,7 @@ export async function readRun(runId) {
 }
 
 export async function listRunsForExecution(executionIssueId) {
-  const all = await rows('SELECT * FROM tm_run WHERE execution_issue_id = ? ORDER BY created_at ASC, run_id ASC LIMIT 501',
+  const all = await rows('SELECT * FROM tm_run WHERE execution_issue_id = ? ORDER BY attempt_sequence ASC, created_at ASC, run_id ASC LIMIT 501',
     [Number(executionIssueId)]);
   if (all.length > 500) throw new FailClosed('RUN_LIST_INCOMPLETE');
   return all.map(runFrom);
@@ -253,7 +287,8 @@ export async function listRunsForTest(testIssueId) {
  */
 export async function updateRunSteps({ runId, expectedRevision, steps, result, now, eventId, prior }) {
   const out = await q(`UPDATE tm_run SET steps = ?, result = ?, revision = revision + 1, updated_at = ?, step_event_id = ?, step_prior = ?
-    WHERE run_id = ? AND revision = ? AND state = 'IN_PROGRESS' AND step_event_id IS NULL`,
+    WHERE run_id = ? AND revision = ? AND state = 'IN_PROGRESS' AND step_event_id IS NULL
+    AND NOT EXISTS (SELECT 1 FROM tm_intake_receipt ir WHERE JSON_CONTAINS(ir.mappings, JSON_OBJECT('runId', tm_run.run_id)) AND ir.status <> 'APPLIED')`,
   [JSON.stringify(steps), result, now, bin(eventId), JSON.stringify(prior), bin(runId), Number(expectedRevision)]);
   return affected(out) === 1;
 }
@@ -291,7 +326,8 @@ export async function settleRunSteps(runId, { now = Date.now(), abandoned = fals
 /** No run is frozen, closed or moved on while a step change waits for its audit event. */
 export async function setRunState({ runId, from, to, expectedRevision, frozenDigest, now }) {
   const out = await q(`UPDATE tm_run SET state = ?, revision = revision + 1, updated_at = ?,
-    frozen_digest = COALESCE(frozen_digest, ?) WHERE run_id = ? AND state = ? AND revision = ? AND step_event_id IS NULL`,
+    frozen_digest = COALESCE(frozen_digest, ?) WHERE run_id = ? AND state = ? AND revision = ? AND step_event_id IS NULL
+    AND NOT EXISTS (SELECT 1 FROM tm_intake_receipt ir WHERE JSON_CONTAINS(ir.mappings, JSON_OBJECT('runId', tm_run.run_id)) AND ir.status <> 'APPLIED')`,
   [to, now, frozenDigest ?? null, bin(runId), from, Number(expectedRevision)]);
   return affected(out) === 1;
 }

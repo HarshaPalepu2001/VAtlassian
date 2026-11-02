@@ -22,6 +22,7 @@ async function runUncached(event, suppliedDeps) {
   const transitionAt = eventTime(event) ?? now;
   const actorAccountId = event?.atlassianId ?? event?.associatedUsers?.[0]?.accountId ?? null;
   try {
+    if (deps.observeGovernedTransition) await deps.observeGovernedTransition(event, transition);
     const result = await deps.captureBaseline({ issueId, issueKey, transition,
       actorAccountId, transitionAt, now });
     if (['NO_APPROVAL', 'INSUFFICIENT_ASSURANCE'].includes(result.reason)) {

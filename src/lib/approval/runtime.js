@@ -11,6 +11,7 @@ import { planTreeCapture } from '../tree/capturePlan.js';
 import { createTreeReader } from '../tree/jira.js';
 import { testManagementExclusion, testManagementRole } from '../../testmgmt/treeExclusion.js';
 import { executionGuard } from '../../testmgmt/executionGuard.js';
+import { governedClosureGuard } from '../../testmgmt/closureGuard.js';
 import { baselineLinkPolicy, hydrateLinkPolicyIssue, hydrateLinkPolicyNodes } from '../linkPolicy.js';
 
 /** A status's category key ('new', 'indeterminate', 'done'). Read as the app: categories are not secret. */
@@ -330,6 +331,10 @@ export async function gateRuntime() {
         testGuard = await executionGuard({ issue, readStatusCategory: () => statusCategory(api, route, toStatusId) });
       } catch { testGuard = { error: true }; }
 
+      let closureGuard = null;
+      try { closureGuard = await governedClosureGuard({ issue, readStatusCategory: () => statusCategory(api, route, toStatusId) }); }
+      catch { closureGuard = { error: true }; }
+
       const edge = await resolve({ issue, fromStatusId, toStatusId, transitionId, approvalId, configuredTransitionId });
       // The approval content hash reads the whole tree for a tree baseline, so
       // it is computed only when a signature is actually being checked.
@@ -345,7 +350,7 @@ export async function gateRuntime() {
       };
       return { ...issue, ...edge, health, item, contentHash, hashBasis: () => basis, driftCount: drift.changed.length, linkPending,
         driftedFields: drift.changed, driftDiagnostics: drift.diagnostics ?? null, driftScope: scope,
-        ancestorDrift, ancestorDriftError, testGuard };
+        ancestorDrift, ancestorDriftError, testGuard, closureGuard };
     }
   };
 }

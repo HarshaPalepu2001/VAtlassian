@@ -109,6 +109,7 @@ export default function TestView({ model, onModel, coverage }: { model: TestView
             {v.versionId === signed?.versionId && v.sourceLinks && (v.sourceLinks.state === 'COMMITTED'
               ? <p>Jira source links synchronized.</p>
               : <Notice danger={v.sourceLinks.state === 'BLOCKED'}>{sourceLinkNotice(v.sourceLinks.problem)}</Notice>)}
+            <p className="va-hint">Exact test version ID: <code style={{ overflowWrap: 'anywhere' }}>{v.versionId}</code></p>
             <Disclosure title="Version definition" open={v.state === 'PUBLISHED'}><FrozenDefinition content={v.content} versionNo={v.versionNo} /></Disclosure>
             {v.signatures.map(s => (
               <p key={s.stepIndex} style={{ fontSize: 12 }}>

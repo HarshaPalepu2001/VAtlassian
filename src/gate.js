@@ -137,6 +137,11 @@ export function createGate(deps) {
       if (snapshot.testGuard?.open?.length) {
         return deny('TEST_RUNS_OPEN', 'TEST_RUNS_OPEN', { message: guardMessage(snapshot.testGuard.open) });
       }
+      if (snapshot.closureGuard && (snapshot.closureGuard.error || snapshot.closureGuard.verdict !== 'ALLOWED' || snapshot.closureGuard.auditConfirmed !== true)) {
+        return deny('SERVICE_UNAVAILABLE', 'GOVERNED_CLOSURE_DENIED', {
+          message: 'Governed closure is blocked. Open the requirement’s Test management panel for its recorded closure evaluation.'
+        });
+      }
 
       // ── The edge: a signature only where VAtlassian controls it ──────────
       //

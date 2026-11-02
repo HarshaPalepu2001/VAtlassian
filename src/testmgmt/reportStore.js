@@ -1,4 +1,5 @@
 import { contentDigest } from './content.js';
+import { historicalAttemptOrder } from './attemptOrder.js';
 
 const fail = () => { throw Object.assign(new Error('The complete test record could not be read.'), { reason: 'SERVICE_UNAVAILABLE' }); };
 const parse = (value, fallback) => { if (value == null) return fallback; if (typeof value === 'object') return value; try { return JSON.parse(value); } catch { fail(); } };
@@ -14,7 +15,10 @@ export function reportRunFrom(row) {
     chain: parse(row.chain, null), chainDigest: row.chain_digest, state: row.state, result: row.result,
     steps: parse(row.steps, []), resolvedSteps: parse(row.resolved_steps, null), iterations: parse(row.iterations, []), revision: Number(row.revision), frozenDigest: row.frozen_digest ?? null,
     planSnapshot: parse(row.plan_snapshot, null), planningSnapshot: parse(row.planning_snapshot, null),
-    datasetSnapshot: parse(row.dataset_snapshot, null), sourceSnapshot: parse(row.source_snapshot, null), creationKey: row.creation_key ?? null,
+    datasetSnapshot: parse(row.dataset_snapshot, null), sourceSnapshot: parse(row.source_snapshot, null), creationKey: row.creation_key ?? null, creationEventId: row.creation_event_id ?? null, creationFingerprint: row.creation_fingerprint ?? null,
+    attemptSequence: row.attempt_sequence == null ? null : Number(row.attempt_sequence), evidenceSchema: row.evidence_schema == null ? null : Number(row.evidence_schema),
+    classification: parse(row.classification, null), reportedBuild: parse(row.reported_build, null), provenance: parse(row.provenance, null),
+    intakeReceiptId: row.intake_receipt_id ?? null, intakeApplied: Number(row.intake_applied) === 1,
     retestOf: row.retest_of ?? null, createdBy: row.created_by, createdAt: Number(row.created_at), updatedAt: Number(row.updated_at) };
 }
 
@@ -24,7 +28,11 @@ export function createReportStore({ query = defaultQuery, maxRecords = 1000 } = 
   const q = async (sql, params = []) => { const result = await query(sql, params); if (!result?.result) fail(); return result; };
   const read = async (sql, params) => { const data = (await q(sql, params)).data; if (!Array.isArray(data)) fail(); return data; };
   const bounded = (rows, convert = value => value) => ({ records: rows.slice(0, bound).map(convert), complete: rows.length <= bound });
-  const runList = async (where, value) => bounded(await read(`SELECT * FROM tm_run WHERE ${where} = ? ORDER BY created_at DESC, run_id DESC LIMIT ${bound + 1}`, [issueId(value)]), reportRunFrom);
+  const runList = async (where, value) => {
+    const envelope = bounded(await read(`SELECT * FROM tm_run WHERE ${where} = ? ORDER BY created_at DESC, run_id DESC LIMIT ${bound + 1}`, [issueId(value)]), reportRunFrom);
+    if (envelope.complete) envelope.records = await historicalAttemptOrder(envelope.records, query);
+    return envelope;
+  };
   const readRunsForTestComplete = testIssueId => runList('test_issue_id', testIssueId);
   const readRunsForExecutionComplete = executionIssueId => runList('execution_issue_id', executionIssueId);
   async function beginSignedSourceProjection(version) {

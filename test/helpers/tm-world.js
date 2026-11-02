@@ -1,3 +1,4 @@
+import { candidateWorld } from './tm-candidates.js';
 /**
  * An in-memory test-management world: the store functions, the Jira reads and
  * writes, signing and audit, with the same contracts as src/testmgmt/runtime.js.
@@ -227,5 +228,6 @@ export function tmWorld({ chain = DEFAULT_RUN_CHAIN, versionChain = DEFAULT_VERS
   };
   w.deps.verifyEvidence = async entries => { if (entries.some(e => !e.retained)) throw Object.assign(new Error('evidence not retained'), { reason: 'EVIDENCE_RETENTION_REQUIRED' }); return { ok: true }; };
   w.deps.recordSignature = (args, deps) => recordSignature(args, deps);
+  Object.assign(w.deps, candidateWorld(w.deps));
   return w;
 }

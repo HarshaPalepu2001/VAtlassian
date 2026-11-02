@@ -19,11 +19,13 @@ import { signabilityProblem, runResult } from '../testmgmt/results.js';
 import { chainPosition, separationProblem } from '../testmgmt/chain.js';
 import { ensureBug, bugDescription } from '../testmgmt/bug.js';
 import { parentOf } from './testAuthoring.js';
+import { assertRunReady, machineRecorded, reviewStep } from '../testmgmt/runReadiness.js';
 
 export function createRunSigning(deps, { execution, view, isDone }) {
   async function context(runId) {
     let run = await deps.readRun(runId);
     if (!run) tmFail('NOT_FOUND');
+    await assertRunReady(run, deps);
     // Nothing is signed over a step change that is not yet in the audit chain.
     if (run.stepEventId) {
       if (!await deps.settleRunSteps(runId, { now: deps.now() })) tmFail('RESULT_PENDING');
@@ -69,7 +71,7 @@ export function createRunSigning(deps, { execution, view, isDone }) {
       if (problem) tmFail(problem);
       // Attribution (spec, settled item 7): "Executed by" is signed by someone
       // who recorded results in this run.
-      if (!c.steps.some(s => s.recordedBy === actor.accountId)) tmFail('NOT_A_RECORDER');
+      if (!machineRecorded(run) && !c.steps.some(s => s.recordedBy === actor.accountId)) tmFail('NOT_A_RECORDER');
       if (contentHash !== c.digest) tmFail('CONTENT_CHANGED');
       stepIndex = 0;
     } else if (run.state === 'SIGNING') {
@@ -80,14 +82,14 @@ export function createRunSigning(deps, { execution, view, isDone }) {
       if (c.digest !== run.frozenDigest || contentHash !== run.frozenDigest) tmFail('CONTENT_CHANGED');
       stepIndex = position.next;
     } else tmFail('RUN_NOT_SIGNING');
-    const step = run.chain.steps[stepIndex];
+    const step = reviewStep(run, run.chain.steps[stepIndex]);
     if (!await deps.isEligibleFor({ accountId: actor.accountId, projectId: project.projectId,
       issueTypeId: issue.fields?.issuetype?.id, role: step.role })) tmFail('NOT_ELIGIBLE');
     const separation = separationProblem(run.chain, signatures, actor.accountId);
     if (separation) tmFail(separation);
     if (decision === 'REJECT' && !String(reason ?? '').trim()) tmFail('REASON_REQUIRED');
 
-    if (stepIndex === 0 && !c.steps.some(s => s.recordedBy === actor.accountId)) tmFail('NOT_A_RECORDER');
+    if (stepIndex === 0 && !machineRecorded(run) && !c.steps.some(s => s.recordedBy === actor.accountId)) tmFail('NOT_A_RECORDER');
     if (stepIndex === 0 && run.state === 'IN_PROGRESS') {
       const frozen = await deps.setRunState({ runId, from: 'IN_PROGRESS', to: 'SIGNING', expectedRevision: run.revision,
         frozenDigest: c.digest, now: deps.now() });

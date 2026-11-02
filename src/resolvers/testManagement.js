@@ -4,6 +4,8 @@ import * as execution from '../usecases/testExecution.js';
 import * as planning from '../usecases/testPlanning.js';
 import * as coverage from '../usecases/testCoverage.js';
 import * as summary from '../usecases/testSummary.js';
+import * as governance from '../usecases/testGovernance.js';
+import * as intake from '../usecases/testIntake.js';
 import { startTestPlanExecution } from '../usecases/testPlanExecution.js';
 import { retestTestExecution } from '../usecases/testRetest.js';
 import { getRunEvidence } from '../usecases/testEvidence.js';
@@ -48,5 +50,22 @@ resolver.define('tm:sources:finishDecision', cached(coverage.finishSourceDecisio
 resolver.define('tm:sources:getDecision', cached(coverage.getSourceDecision));
 resolver.define('tm:summary:generate', cached(summary.generateExecutionSummary));
 resolver.define('tm:summary:read', cached(summary.readExecutionSummary));
+
+for (const [name, fn] of Object.entries({
+  'tm:governance:view': governance.tmGovernanceView,
+  'tm:governance:prepareAssignment': governance.tmPrepareVerificationAssignment,
+  'tm:governance:prepareTarget': governance.tmPrepareClosureTarget,
+  'tm:governance:prepareException': governance.tmPrepareEvidenceException,
+  'tm:governance:sign': governance.tmSignGovernanceRecord,
+  'tm:governance:evaluate': governance.tmEvaluateClosure,
+  'tm:governance:export': governance.tmExportClosureDossier,
+  'tm:intake:view': intake.getIntake,
+  'tm:intake:createToken': intake.createIntakeToken,
+  'tm:intake:revokeToken': intake.revokeIntakeToken,
+  'tm:intake:grant': intake.grantIntake,
+  'tm:intake:revokeGrant': intake.revokeIntakeGrant,
+  'tm:intake:receipt': intake.getIntakeReceipt,
+  'tm:intake:retry': intake.retryIntakeReceipt
+})) resolver.define(name, cached(fn));
 
 export const handler = wrapWithHarness(resolver.getDefinitions(), { resolverName: 'testManagement' });

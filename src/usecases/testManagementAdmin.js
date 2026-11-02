@@ -27,10 +27,11 @@
  * delete them.
  */
 import { runAdmin, query, audit } from './adminRuntime.js';
-import { validateChain, DEFAULT_RUN_CHAIN, DEFAULT_VERSION_CHAIN } from '../testmgmt/chain.js';
+import { validateChain, DEFAULT_RUN_CHAIN, DEFAULT_VERSION_CHAIN, DEFAULT_GOVERNANCE_CHAINS } from '../testmgmt/chain.js';
 import { isOurGate, isDisabled } from '../lib/gateDrift.js';
 import { requireRoleHolder } from './transitionsValidation.js';
 import { verifyRunProof } from '../testmgmt/proof.js';
+import { governancePolicyProblem } from '../testmgmt/governance.js';
 
 const validProjectId = (v) => /^\d+$/.test(String(v ?? '')) && Number(v) > 0;
 
@@ -56,7 +57,9 @@ export async function getTestManagementConfig(req, overrides) {
       success: true, project, linkTypes,
       config: config ?? null,
       repairs, workflowHealth: { readable: missing !== null, missingDoneRoutes: missing ?? [] },
-      defaults: { runChain: DEFAULT_RUN_CHAIN, versionChain: DEFAULT_VERSION_CHAIN, linkTypeName: 'Relates' }
+      defaults: { runChain: DEFAULT_RUN_CHAIN, versionChain: DEFAULT_VERSION_CHAIN, linkTypeName: 'Relates',
+        ...DEFAULT_GOVERNANCE_CHAINS,
+        governanceAuthorSeparation: true }
     };
   }, overrides);
 }
@@ -137,6 +140,16 @@ export async function saveTestManagementConfig(req, overrides) {
     if (runChain.error) throw new Error(`Run sign-off chain: ${chainProblem(runChain.error)}`);
     const versionChain = validateChain(p.versionChain);
     if (versionChain.error) throw new Error(`Test version sign-off chain: ${chainProblem(versionChain.error)}`);
+    const governing = {};
+    for (const [key, label] of [['assignmentChain', 'Verification assignment'], ['targetChain', 'Closure target'], ['exceptionChain', 'Evidence exception']]) {
+      const checked = validateChain(p[key] ?? existing?.[key] ?? DEFAULT_GOVERNANCE_CHAINS[key]);
+      if (checked.error) throw new Error(`${label} sign-off chain: ${chainProblem(checked.error)}`);
+      governing[key] = checked.chain;
+    }
+    governing.governanceAuthorSeparation = p.governanceAuthorSeparation ?? existing?.governanceAuthorSeparation ?? true;
+    if (typeof governing.governanceAuthorSeparation !== 'boolean') throw new Error('Choose whether governing record authors must be separate from signers.');
+    const policyProblem = governancePolicyProblem(governing);
+    if (policyProblem) throw new Error(policyProblem === 'EXCEPTION_CHAIN_TOO_WEAK' ? 'The evidence exception approval chain must meet both the assignment and target approval chains, including role order and distinct signers.' : 'The governing approval policy is invalid.');
     const enabled = p.enabled === true;
     if (enabled) {
       const inside = await typesInsideBaselineTrees(deps, p.projectId, managed);
@@ -171,7 +184,7 @@ export async function saveTestManagementConfig(req, overrides) {
       }
     }
     const next ={ projectId: String(p.projectId), enabled, testTypeId, executionTypeId, planTypeId, setTypeId, preconditionTypeId, defectTypeId,
-      linkTypeName, sourceLinkTypeId, runChain: runChain.chain, versionChain: versionChain.chain, authorSeparation: p.authorSeparation === true };
+      linkTypeName, sourceLinkTypeId, runChain: runChain.chain, versionChain: versionChain.chain, authorSeparation: p.authorSeparation === true, ...governing };
     const saved = await t.saveProject(next, { expectedRevision: existing ? Number(p.expectedRevision) : 0,
       now: Date.now(), actor: req.context.accountId });
     if (!saved) throw new Error('Someone else changed this configuration since you opened it. Reload and try again.');
