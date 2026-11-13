@@ -1,0 +1,113 @@
+{
+  "date": "2026-10-30",
+  "site": "mgtechdemo.atlassian.net",
+  "cases": [
+    {
+      "key": "VAT-89",
+      "titleVerified": true,
+      "sourceVerified": true,
+      "stepCount": 3,
+      "preparationOnly": true,
+      "draft": true,
+      "editing": false
+    },
+    {
+      "key": "VAT-90",
+      "titleVerified": true,
+      "sourceVerified": true,
+      "stepCount": 3,
+      "preparationOnly": true,
+      "draft": true,
+      "editing": false
+    },
+    {
+      "key": "VAT-91",
+      "titleVerified": true,
+      "sourceVerified": true,
+      "stepCount": 3,
+      "preparationOnly": true,
+      "draft": true,
+      "editing": false
+    },
+    {
+      "key": "VAT-92",
+      "titleVerified": true,
+      "sourceVerified": true,
+      "stepCount": 3,
+      "preparationOnly": true,
+      "draft": true,
+      "editing": false
+    },
+    {
+      "key": "VAT-93",
+      "titleVerified": true,
+      "sourceVerified": true,
+      "stepCount": 3,
+      "preparationOnly": true,
+      "draft": true,
+      "editing": false
+    },
+    {
+      "key": "VAT-94",
+      "titleVerified": true,
+      "sourceVerified": true,
+      "stepCount": 3,
+      "preparationOnly": true,
+      "draft": true,
+      "editing": false
+    },
+    {
+      "key": "VAT-95",
+      "titleVerified": true,
+      "sourceVerified": true,
+      "stepCount": 3,
+      "preparationOnly": true,
+      "draft": true,
+      "editing": false
+    },
+    {
+      "key": "VAT-96",
+      "titleVerified": true,
+      "sourceVerified": true,
+      "stepCount": 3,
+      "preparationOnly": true,
+      "draft": true,
+      "editing": false
+    },
+    {
+      "key": "VAT-97",
+      "titleVerified": true,
+      "sourceVerified": true,
+      "stepCount": 3,
+      "preparationOnly": true,
+      "draft": true,
+      "editing": false
+    },
+    {
+      "key": "VAT-98",
+      "titleVerified": true,
+      "sourceVerified": true,
+      "stepCount": 3,
+      "preparationOnly": true,
+      "draft": true,
+      "editing": false
+    }
+  ],
+  "planLinks": [
+    "VAT-89",
+    "VAT-90",
+    "VAT-91",
+    "VAT-92",
+    "VAT-93",
+    "VAT-94",
+    "VAT-95",
+    "VAT-96",
+    "VAT-97",
+    "VAT-98",
+    "VAT-100",
+    "VAT-101"
+  ],
+  "attachmentUpload": "BLOCKED_BY_CHROME_FILE_URL_ACCESS",
+  "appNativePreparation": "BLOCKED_PANEL_LOADING",
+  "productExecution": "NOT_RUN"
+}

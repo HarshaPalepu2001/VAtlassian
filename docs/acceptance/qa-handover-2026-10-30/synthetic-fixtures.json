@@ -1,0 +1,237 @@
+{
+  "schema": "QA design fixture; map to actual service schema before use",
+  "classification": "synthetic only; NOT EXECUTED; not the September replay dataset",
+  "batchId": "BATCH-QA-20261030-01",
+  "exact": [
+    {
+      "id": "X01",
+      "settlement": {
+        "merchant_ref": "QA-X01",
+        "amount_minor": 10000,
+        "currency": "INR"
+      },
+      "ledger": {
+        "merchant_ref": "QA-X01",
+        "amount_minor": 10000,
+        "currency": "INR"
+      },
+      "expectedExactRule": "EXACT_ELIGIBLE"
+    },
+    {
+      "id": "X02",
+      "settlement": {
+        "merchant_ref": "QA-X02",
+        "amount_minor": 10000,
+        "currency": "INR"
+      },
+      "ledger": {
+        "merchant_ref": "QA-OTHER",
+        "amount_minor": 10000,
+        "currency": "INR"
+      },
+      "expectedExactRule": "NOT_EXACT_ELIGIBLE"
+    },
+    {
+      "id": "X03",
+      "settlement": {
+        "merchant_ref": "QA-X03",
+        "amount_minor": 10001,
+        "currency": "INR"
+      },
+      "ledger": {
+        "merchant_ref": "QA-X03",
+        "amount_minor": 10000,
+        "currency": "INR"
+      },
+      "expectedExactRule": "NOT_EXACT_ELIGIBLE"
+    },
+    {
+      "id": "X04",
+      "settlement": {
+        "merchant_ref": "QA-X04",
+        "amount_minor": 10000,
+        "currency": "INR"
+      },
+      "ledger": {
+        "merchant_ref": "QA-X04",
+        "amount_minor": 10000,
+        "currency": "USD"
+      },
+      "expectedExactRule": "NOT_EXACT_ELIGIBLE"
+    }
+  ],
+  "split": [
+    {
+      "id": "S01",
+      "merchant_ref": "QA-S01",
+      "settlements": [
+        {
+          "settlement_id": "S01-1",
+          "amount_minor": 6000,
+          "currency": "INR"
+        },
+        {
+          "settlement_id": "S01-2",
+          "amount_minor": 4000,
+          "currency": "INR"
+        }
+      ],
+      "ledger": {
+        "amount_minor": 10000,
+        "currency": "INR"
+      },
+      "expectedSplitRule": "EXACT_SUM_ELIGIBLE",
+      "groupingAndCardinality": "REQUIRES_OWNER_CONFIRMATION"
+    },
+    {
+      "id": "S02",
+      "merchant_ref": "QA-S02",
+      "settlements": [
+        {
+          "settlement_id": "S02-1",
+          "amount_minor": 6000,
+          "currency": "INR"
+        },
+        {
+          "settlement_id": "S02-2",
+          "amount_minor": 3999,
+          "currency": "INR"
+        }
+      ],
+      "ledger": {
+        "amount_minor": 10000,
+        "currency": "INR"
+      },
+      "expectedSplitRule": "SUM_TOO_LOW",
+      "groupingAndCardinality": "REQUIRES_OWNER_CONFIRMATION"
+    },
+    {
+      "id": "S03",
+      "merchant_ref": "QA-S03",
+      "settlements": [
+        {
+          "settlement_id": "S03-1",
+          "amount_minor": 6000,
+          "currency": "INR"
+        },
+        {
+          "settlement_id": "S03-2",
+          "amount_minor": 4001,
+          "currency": "INR"
+        }
+      ],
+      "ledger": {
+        "amount_minor": 10000,
+        "currency": "INR"
+      },
+      "expectedSplitRule": "SUM_TOO_HIGH",
+      "groupingAndCardinality": "REQUIRES_OWNER_CONFIRMATION"
+    },
+    {
+      "id": "S04",
+      "merchant_ref": "QA-S04",
+      "settlements": [
+        {
+          "settlement_id": "S04-1",
+          "amount_minor": 6000,
+          "currency": "INR"
+        },
+        {
+          "settlement_id": "S04-2",
+          "amount_minor": 4000,
+          "currency": "USD"
+        }
+      ],
+      "ledger": {
+        "amount_minor": 10000,
+        "currency": "INR"
+      },
+      "expectedSplitRule": "DO_NOT_MIX_CURRENCIES",
+      "groupingAndCardinality": "REQUIRES_OWNER_CONFIRMATION"
+    }
+  ],
+  "fx": [
+    {
+      "id": "FX-2",
+      "ledgerCurrency": "INR",
+      "ledgerMinor": 9381121,
+      "expectedConvertedMinor": 9381119,
+      "deltaMinor": -2,
+      "withinStatedTolerance": false,
+      "sourceAmountRateAndRounding": "NOT_SUPPLIED; design boundary only; requires independently derived exact rate inputs"
+    },
+    {
+      "id": "FX-1",
+      "ledgerCurrency": "INR",
+      "ledgerMinor": 9381121,
+      "expectedConvertedMinor": 9381120,
+      "deltaMinor": -1,
+      "withinStatedTolerance": true,
+      "sourceAmountRateAndRounding": "NOT_SUPPLIED; design boundary only; requires independently derived exact rate inputs"
+    },
+    {
+      "id": "FX0",
+      "ledgerCurrency": "INR",
+      "ledgerMinor": 9381121,
+      "expectedConvertedMinor": 9381121,
+      "deltaMinor": 0,
+      "withinStatedTolerance": true,
+      "sourceAmountRateAndRounding": "NOT_SUPPLIED; design boundary only; requires independently derived exact rate inputs"
+    },
+    {
+      "id": "FX1",
+      "ledgerCurrency": "INR",
+      "ledgerMinor": 9381121,
+      "expectedConvertedMinor": 9381122,
+      "deltaMinor": 1,
+      "withinStatedTolerance": true,
+      "sourceAmountRateAndRounding": "NOT_SUPPLIED; design boundary only; requires independently derived exact rate inputs"
+    },
+    {
+      "id": "FX2",
+      "ledgerCurrency": "INR",
+      "ledgerMinor": 9381121,
+      "expectedConvertedMinor": 9381123,
+      "deltaMinor": 2,
+      "withinStatedTolerance": false,
+      "sourceAmountRateAndRounding": "NOT_SUPPLIED; design boundary only; requires independently derived exact rate inputs"
+    }
+  ],
+  "ambiguity": [
+    {
+      "id": "D01",
+      "settlementIds": [
+        "QA-D01-S1"
+      ],
+      "eligibleLedgerIds": [
+        "QA-D01-L1",
+        "QA-D01-L2"
+      ],
+      "expected": "No unexplained multiple match; tie-break/exception policy needs approval"
+    },
+    {
+      "id": "D02",
+      "settlementIds": [
+        "QA-D02-S1",
+        "QA-D02-S2"
+      ],
+      "eligibleLedgerIds": [
+        "QA-D02-L1"
+      ],
+      "expected": "No unexplained double consumption; ledger reuse/split policy needs approval"
+    }
+  ],
+  "rateArithmetic": {
+    "acceptedExample": {
+      "correctMatches": 199,
+      "eligibleRows": 200,
+      "percent": "99.5"
+    },
+    "rejectedExample": {
+      "correctMatches": 198,
+      "eligibleRows": 200,
+      "percent": "99.0"
+    },
+    "denominatorPolicy": "PROVISIONAL; owner approval required"
+  }
+}

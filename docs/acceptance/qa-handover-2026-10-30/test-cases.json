@@ -1,0 +1,277 @@
+{
+  "schema": 1,
+  "preparedAt": "2026-10-30",
+  "site": "mgtechdemo.atlassian.net",
+  "requirement": "VAT-12",
+  "dependencies": [
+    "VAT-13",
+    "VAT-15"
+  ],
+  "plan": "VAT-99",
+  "prerequisite": "VAT-100",
+  "execution": "VAT-101",
+  "state": "DRAFT_NOT_EXECUTED",
+  "commonPreconditions": "Preparation only: NOT EXECUTED. Handover simulation authorized 30 Oct 2026. No source repository, verified build, deployed matcher URL, September dataset or real payment access supplied. Use synthetic data only. Source behavior is based on the Jira text read today; assumptions need review. Evidence required at execution: identifiable environment/build receipt, input manifest, raw outputs, timestamps and reviewed results. No product pass/fail or compliance sign-off is asserted.",
+  "cases": [
+    {
+      "n": "01",
+      "title": "Exact matching requires merchant reference, amount and currency",
+      "level": "System",
+      "sources": "VAT-12 / Exact rule",
+      "risk": "P1: false financial match",
+      "steps": [
+        [
+          "Load four isolated synthetic settlement/ledger pairs.",
+          "X01 same ref/10000 INR; X02 different ref/10000 INR; X03 same ref/10001 vs 10000 INR; X04 same ref/10000 INR vs USD.",
+          "Only X01 is eligible for the exact rule; each fixture has a unique identifier."
+        ],
+        [
+          "Run matching once and inspect allocation records and exceptions.",
+          "Use the documented matcher UI/API once supplied; capture request/job id and raw output.",
+          "X01 has exactly one correct ledger allocation. X02-X04 are not matched by the exact rule; an approved alternative rule must not be inferred."
+        ],
+        [
+          "Compare before/after ledger and exception counts.",
+          "Save exported records and the tested build/environment receipt.",
+          "No unrelated ledger entry changes and no missing/duplicate settlement result."
+        ]
+      ],
+      "jiraKey": "VAT-89",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "n": "02",
+      "title": "Split settlements match the exact sum without currency mixing",
+      "level": "Integration",
+      "sources": "VAT-12 / Split-settlement rule",
+      "risk": "P1: incorrect allocation or double counting",
+      "steps": [
+        [
+          "Prepare isolated split groups with a shared merchant reference.",
+          "S01 INR 6000+4000 -> ledger INR10000; S02 6000+3999; S03 6000+4001; S04 INR6000+USD4000.",
+          "Group identifiers are unique; exact FX and grouping policy is recorded before execution."
+        ],
+        [
+          "Execute matching and inspect the component-to-ledger relationships.",
+          "S01-S04; test-group/window and cardinality are assumptions requiring confirmation.",
+          "S01 may aggregate to 10000 with no loss/double count. S02/S03 do not pass zero-tolerance split matching. S04 must not mix currencies under this rule."
+        ],
+        [
+          "Replay S01 and compare allocation totals.",
+          "Same input and batch identity.",
+          "The sum and allocation identities remain unchanged; no second allocation is created."
+        ]
+      ],
+      "jiraKey": "VAT-90",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "n": "03",
+      "title": "FX tolerance boundaries and the VAT-15 double-rounding regression",
+      "level": "System",
+      "sources": "VAT-12 / FX rule; VAT-15 known defect",
+      "risk": "P1: false mismatch or excessive tolerance",
+      "steps": [
+        [
+          "Prepare five converted amounts around a fixed ledger amount.",
+          "Ledger INR9381121 minor units; converted INR9381119,9381120,9381121,9381122,9381123. Rate source/time and rounding mode must be supplied.",
+          "Differences are -2,-1,0,+1,+2 minor units using independently checked decimal arithmetic."
+        ],
+        [
+          "Execute FX matching with one documented conversion/rounding stage.",
+          "For each row use a unique merchant reference; include VAT-15 reference M-88213 as a separate known-defect reproduction.",
+          "Differences -1,0,+1 are within the stated tolerance; -2,+2 are not. No double rounding; do not invent an FX rate to reproduce the historical file."
+        ],
+        [
+          "Inspect both match results and exception reasons.",
+          "Capture rate, raw/rounded conversion, ledger amount, job/build identity and outputs.",
+          "The +1-minor-unit case is not falsely AMOUNT_MISMATCH. VAT-15 remains an existing defect until actually reproduced/retested."
+        ]
+      ],
+      "jiraKey": "VAT-91",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "n": "04",
+      "title": "Ambiguous matches never silently consume multiple ledger entries",
+      "level": "System",
+      "sources": "VAT-12 / exactly-one-ledger-entry user story",
+      "risk": "P1: duplicate or arbitrary financial allocation",
+      "steps": [
+        [
+          "Prepare one settlement with two equally eligible ledger candidates and a second settlement competing for one candidate.",
+          "D01: same ref/amount/currency for L1,L2; D02: two distinct settlements competing for L3.",
+          "Ambiguous-cardinality scenarios are isolated and initial allocations are empty."
+        ],
+        [
+          "Run the matcher and inspect persisted relationships.",
+          "The split-settlement cardinality exception and duplicate selection policy are unresolved requirement questions.",
+          "Confirmed invariant: no settlement has multiple unexplained matches. Proposed safety expectation: ambiguous candidates are surfaced, not selected arbitrarily; business owner must approve this oracle."
+        ],
+        [
+          "Inspect exceptions, allocation totals and audit records.",
+          "Record exact ambiguity/duplicate reason returned.",
+          "No silent dropped or double-consumed amount. Exact reason code and ledger-reuse policy remain review items, not asserted approved behavior."
+        ]
+      ],
+      "jiraKey": "VAT-92",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "n": "05",
+      "title": "Every unmatched settlement appears with a defensible reason code",
+      "level": "Integration",
+      "sources": "VAT-12 AC2; VAT-13 reason codes",
+      "risk": "P1: missing financial exceptions",
+      "steps": [
+        [
+          "Prepare four isolated unmatched conditions.",
+          "E01 no ledger ref; E02 same ref/currency but amount differs beyond applicable tolerance; E03 same ref/amount with wrong currency and no approved FX path; E04 duplicate business settlement identity.",
+          "Synthetic rows are uniquely tagged; no real payments or financial side effects."
+        ],
+        [
+          "Run reconciliation and inspect the exception queue and raw result export.",
+          "Expected vocabulary from VAT-13: NO_LEDGER_ENTRY, AMOUNT_MISMATCH, CURRENCY_MISMATCH, DUPLICATE_SETTLEMENT.",
+          "Every unmatched row is represented with a nonblank, defensible reason. E01-E03 use their isolated reason; duplicate identity/precedence for E04 requires owner confirmation."
+        ],
+        [
+          "Reconcile input count against matched and exception output.",
+          "Store input, match and exception exports and row identifiers.",
+          "No missing unmatched rows and no unexplained duplicates; multi-reason precedence is recorded as an open question."
+        ]
+      ],
+      "jiraKey": "VAT-93",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "n": "06",
+      "title": "Re-running a completed batch is idempotent",
+      "level": "Integration",
+      "sources": "VAT-12 AC3",
+      "risk": "P1: duplicate matches or exceptions on retry",
+      "steps": [
+        [
+          "Run an isolated mixed batch to completion and capture durable output.",
+          "BATCH-QA-20261030-01 includes one exact match, one split group and unmatched cases.",
+          "Baseline match ids, allocations, ledger totals and exception ids/counts are saved."
+        ],
+        [
+          "Submit the identical batch identity and payload again, then repeat once more.",
+          "Same batch/idempotency identity; identity contract must be confirmed before execution.",
+          "Repeated completion does not create a second business allocation, duplicate exception or extra financial effect. Transport/job-attempt logs may legitimately grow."
+        ],
+        [
+          "Compare normalized business records before and after both replays.",
+          "Ignore documented attempt timestamps; retain raw evidence.",
+          "Stable business identities/counts/totals; new payload under a reused key is handled according to an explicitly approved conflict policy."
+        ]
+      ],
+      "jiraKey": "VAT-94",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "n": "07",
+      "title": "Interrupted and concurrent retries preserve reconciliation integrity",
+      "level": "Integration",
+      "sources": "VAT-12 AC3; proposed recovery extension",
+      "risk": "P1: partial commit or duplicate consumption",
+      "steps": [
+        [
+          "Prepare an isolated batch and a controlled recovery window.",
+          "No production; obtain a supported timeout/fault method. Include a mixed match/exception batch.",
+          "Test owner authorizes safe interruption; before-state and recovery/reset procedure are recorded."
+        ],
+        [
+          "Interrupt after processing may have started; retry the same batch and submit two concurrent retries.",
+          "Use documented matcher/job controls; do not kill arbitrary shared services.",
+          "Proposed expectation: one final business outcome per settlement, no partial duplicate allocation and an observable recoverable job state. Exact concurrency contract needs approval."
+        ],
+        [
+          "Wait for the documented completion limit and reconcile all outputs.",
+          "Capture attempt ids, errors, row counts and final allocations.",
+          "No lost rows, double consumption or duplicated exception. Without supported fault controls this case remains blocked, not passed."
+        ]
+      ],
+      "jiraKey": "VAT-95",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "n": "08",
+      "title": "September replay meets the 99.5 percent auto-match acceptance target",
+      "level": "Acceptance",
+      "sources": "VAT-12 AC1",
+      "risk": "P1: accepting the feature on an incorrect rate",
+      "steps": [
+        [
+          "Obtain the authoritative September replay dataset and its expected eligible population.",
+          "Dataset manifest/checksum, exclusions, FX rates and independent expected outcomes are required; none has been supplied.",
+          "Dataset version and denominator are approved; planted incorrect/ambiguous matches cannot inflate successful matches."
+        ],
+        [
+          "Run the full replay on the identified build and compute the rate independently.",
+          "Provisional formula: correct auto-matched eligible settlement rows / all eligible settlement rows * 100; owner must confirm split/duplicate/exclusion counting.",
+          "Observed correct rate >=99.5%, with exact numerator/denominator and no unsupported rounding up."
+        ],
+        [
+          "Check threshold arithmetic and retain the complete evidence set.",
+          "Synthetic threshold examples: 199/200=99.5% and 198/200=99.0%; these do not replace the September replay.",
+          "Threshold arithmetic is transparent; raw replay results, exceptions, manifest and build receipt are retained. Actual acceptance stays unexecuted until the real dataset and service exist."
+        ]
+      ],
+      "jiraKey": "VAT-96",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "n": "09",
+      "title": "Exception queue displays complete unmatched rows within 15 minutes",
+      "level": "Integration",
+      "sources": "VAT-12 AC2; VAT-13 AC1 and AC4",
+      "risk": "P1: delayed or incomplete operational visibility",
+      "steps": [
+        [
+          "Submit a known unmatched settlement in a controlled test environment.",
+          "Synthetic merchant/ref/amount/currency and settlement timestamp; synchronized UTC clocks; queue access.",
+          "Settlement identity and authoritative time origin are captured. Timing-start interpretation must be confirmed."
+        ],
+        [
+          "Observe queue ingestion and capture the first visible timestamp.",
+          "Poll at a documented interval; inspect just-before/at/after 15-minute boundary using a controllable clock or supported timestamp fixture.",
+          "Within 15 minutes the item is visible with merchant, amount, currency, settlement time and reason code. No invented performance measurement."
+        ],
+        [
+          "Replay the settlement and verify queue consistency.",
+          "Save queue export/screenshots and event/job times.",
+          "No duplicate active exception from a transport replay; missing fields or excessive measured delay are recorded as actual failures only when observed."
+        ]
+      ],
+      "jiraKey": "VAT-97",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "n": "10",
+      "title": "Exception resolution needs a comment and aging highlights only after 24 hours",
+      "level": "System",
+      "sources": "VAT-13 AC2 and AC3; adjacent workflow coverage",
+      "risk": "P2: unauditable resolution or missed overdue items",
+      "steps": [
+        [
+          "Prepare unmatched items at 23:59:59,24:00:00 and24:00:01 of age.",
+          "Synthetic timestamps; supported clock/fixture control; UTC comparison; displayed timezone recorded.",
+          "Items and unambiguous age calculations are captured; requirement says older than 24h, so exactly24h is not older."
+        ],
+        [
+          "Attempt resolution with empty and whitespace-only comments, then with a meaningful comment.",
+          "Perform only on isolated synthetic queue items with an authorized finance-analyst account.",
+          "Mandatory-comment rule prevents blank resolution; meaningful comment is retained with the result. Whitespace handling is a proposed interpretation to confirm."
+        ],
+        [
+          "Inspect highlighting and resolution visibility after refresh.",
+          "Capture before/after queue records and actor/time evidence if the product exposes it.",
+          "The >24h item is highlighted; <24h is not. Exact boundary/timezone and resolution audit expectations are reviewed before formal acceptance."
+        ]
+      ],
+      "jiraKey": "VAT-98",
+      "status": "NOT_EXECUTED"
+    }
+  ]
+}
