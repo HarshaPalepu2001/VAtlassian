@@ -1,0 +1,936 @@
+[
+  {
+    "id": "GV-TC-01",
+    "scenario": "S01",
+    "title": "Source authorization and author separation",
+    "requirements": [
+      "R01"
+    ],
+    "priority": "P0",
+    "level": "System / integration",
+    "method": "Manual live acceptance with local regression support",
+    "preconditions": "E1\u2013E7 in test-plan.md satisfied; use isolated demo fixtures only; human signatures performed by authorized human.",
+    "fixture": "F-AUTH: source author, independent approver, Test-only approver and viewer",
+    "steps": [
+      {
+        "action": "Create/reset the isolated fixture and capture before-state, actual build/environment, actor and stable identities.",
+        "expected": "Preconditions and independent expected values are recorded; no production data or secrets in artifacts."
+      },
+      {
+        "action": "Attempt assignment, target and exception preparation/approval using each actor. Repeat with wrong source issue type and author separation enabled.",
+        "expected": "Only source-scoped eligible actors succeed; Test-only rights and author self-approval are denied; rejected attempts do not activate records."
+      },
+      {
+        "action": "Refresh/read back durable records; retain sanitized request/response, audit proof, screenshots/exports and fixture digest; record actual versus expected.",
+        "expected": "Result is PASS only if every assertion holds; otherwise FAIL or BLOCKED with linked defect/prerequisite. Preserve attempts."
+      }
+    ],
+    "automation": "test/testmgmt-governance.test.js",
+    "status": "NOT RUN",
+    "actual": "",
+    "evidence": [],
+    "defects": [],
+    "jiraKey": "VAT-108"
+  },
+  {
+    "id": "GV-TC-02",
+    "scenario": "S01",
+    "title": "Issue-security and nonmandatory receipt member access",
+    "requirements": [
+      "R01",
+      "R14"
+    ],
+    "priority": "P0",
+    "level": "System / integration",
+    "method": "Manual live acceptance with local regression support",
+    "preconditions": "E1\u2013E7 in test-plan.md satisfied; use isolated demo fixtures only; human signatures performed by authorized human.",
+    "fixture": "F-AUTH; receipt includes mandatory T1 and nonmandatory T2; T2 is unreadable to viewer",
+    "steps": [
+      {
+        "action": "Create/reset the isolated fixture and capture before-state, actual build/environment, actor and stable identities.",
+        "expected": "Preconditions and independent expected values are recorded; no production data or secrets in artifacts."
+      },
+      {
+        "action": "Open source governance view, receipt detail and frozen dossier as viewer after T2 access is removed.",
+        "expected": "No hidden Test data or dossier is disclosed; incomplete view is explicit; every mapped Test is authorized."
+      },
+      {
+        "action": "Refresh/read back durable records; retain sanitized request/response, audit proof, screenshots/exports and fixture digest; record actual versus expected.",
+        "expected": "Result is PASS only if every assertion holds; otherwise FAIL or BLOCKED with linked defect/prerequisite. Preserve attempts."
+      }
+    ],
+    "automation": "test/testmgmt-governance.test.js",
+    "status": "NOT RUN",
+    "actual": "",
+    "evidence": [],
+    "defects": [],
+    "jiraKey": "VAT-109"
+  },
+  {
+    "id": "GV-TC-03",
+    "scenario": "S02",
+    "title": "Pinned obligations and complete positive journey",
+    "requirements": [
+      "R02",
+      "R11",
+      "R13"
+    ],
+    "priority": "P0",
+    "level": "System / integration",
+    "method": "Manual live acceptance with local regression support",
+    "preconditions": "E1\u2013E7 in test-plan.md satisfied; use isolated demo fixtures only; human signatures performed by authorized human.",
+    "fixture": "F-GREEN: signed source B1, T1 v1, two mandatory contexts, candidate A",
+    "steps": [
+      {
+        "action": "Create/reset the isolated fixture and capture before-state, actual build/environment, actor and stable identities.",
+        "expected": "Preconditions and independent expected values are recorded; no production data or secrets in artifacts."
+      },
+      {
+        "action": "Prepare/approve assignment and target; execute and human-review every required combination; request guarded Done; export evaluation.",
+        "expected": "All exact combinations qualify; gate returns ALLOWED only with confirmed evaluation; selected versions/contexts/build match and evidence is retrievable."
+      },
+      {
+        "action": "Refresh/read back durable records; retain sanitized request/response, audit proof, screenshots/exports and fixture digest; record actual versus expected.",
+        "expected": "Result is PASS only if every assertion holds; otherwise FAIL or BLOCKED with linked defect/prerequisite. Preserve attempts."
+      }
+    ],
+    "automation": "test/testmgmt-governance.test.js",
+    "status": "NOT RUN",
+    "actual": "",
+    "evidence": [],
+    "defects": [],
+    "jiraKey": "VAT-110"
+  },
+  {
+    "id": "GV-TC-04",
+    "scenario": "S02",
+    "title": "Invalid version and competing assignment replacements",
+    "requirements": [
+      "R02",
+      "R03"
+    ],
+    "priority": "P0",
+    "level": "System / integration",
+    "method": "Manual live acceptance with local regression support",
+    "preconditions": "E1\u2013E7 in test-plan.md satisfied; use isolated demo fixtures only; human signatures performed by authorized human.",
+    "fixture": "F-GREEN plus drafts D1 and D2 based on same active head",
+    "steps": [
+      {
+        "action": "Create/reset the isolated fixture and capture before-state, actual build/environment, actor and stable identities.",
+        "expected": "Preconditions and independent expected values are recorded; no production data or secrets in artifacts."
+      },
+      {
+        "action": "Prepare two replacements; inspect active head before signing; activate D1 then D2. Separately invalidate a pinned Test approval before signing.",
+        "expected": "Drafts preserve old head; D1 activation is audited; stale D2 fails; unverifiable Test approval prevents signing."
+      },
+      {
+        "action": "Refresh/read back durable records; retain sanitized request/response, audit proof, screenshots/exports and fixture digest; record actual versus expected.",
+        "expected": "Result is PASS only if every assertion holds; otherwise FAIL or BLOCKED with linked defect/prerequisite. Preserve attempts."
+      }
+    ],
+    "automation": "test/testmgmt-governance.test.js",
+    "status": "NOT RUN",
+    "actual": "",
+    "evidence": [],
+    "defects": [],
+    "jiraKey": "VAT-111"
+  },
+  {
+    "id": "GV-TC-05",
+    "scenario": "S02",
+    "title": "Source drift and broken governing signatures",
+    "requirements": [
+      "R03",
+      "R11"
+    ],
+    "priority": "P0",
+    "level": "System / integration",
+    "method": "Manual live acceptance with local regression support",
+    "preconditions": "E1\u2013E7 in test-plan.md satisfied; use isolated demo fixtures only; human signatures performed by authorized human.",
+    "fixture": "F-GREEN; record original source digest and signature meaning",
+    "steps": [
+      {
+        "action": "Create/reset the isolated fixture and capture before-state, actual build/environment, actor and stable identities.",
+        "expected": "Preconditions and independent expected values are recorded; no production data or secrets in artifacts."
+      },
+      {
+        "action": "Change a controlled source field/baseline after approval; separately remove activation proof or alter signature meaning in isolated fault harness.",
+        "expected": "Stale source or invalid governing proof denies closure; prior signatures are not silently reused; retain exact denial finding."
+      },
+      {
+        "action": "Refresh/read back durable records; retain sanitized request/response, audit proof, screenshots/exports and fixture digest; record actual versus expected.",
+        "expected": "Result is PASS only if every assertion holds; otherwise FAIL or BLOCKED with linked defect/prerequisite. Preserve attempts."
+      }
+    ],
+    "automation": "test/testmgmt-governance.test.js",
+    "status": "NOT RUN",
+    "actual": "",
+    "evidence": [],
+    "defects": [],
+    "jiraKey": "VAT-112"
+  },
+  {
+    "id": "GV-TC-06",
+    "scenario": "S03",
+    "title": "Concurrent first candidate binding",
+    "requirements": [
+      "R04"
+    ],
+    "priority": "P0",
+    "level": "System / integration",
+    "method": "Manual live acceptance with local regression support",
+    "preconditions": "E1\u2013E7 in test-plan.md satisfied; use isolated demo fixtures only; human signatures performed by authorized human.",
+    "fixture": "F-CAND: fresh execution, candidates A and B with distinct identities",
+    "steps": [
+      {
+        "action": "Create/reset the isolated fixture and capture before-state, actual build/environment, actor and stable identities.",
+        "expected": "Preconditions and independent expected values are recorded; no production data or secrets in artifacts."
+      },
+      {
+        "action": "Race supported first-candidate claims from two authorized paths; read back candidate binding and audit confirmation.",
+        "expected": "At most one candidate wins; loser receives mismatch/conflict; stored identity matches winning audited binding."
+      },
+      {
+        "action": "Refresh/read back durable records; retain sanitized request/response, audit proof, screenshots/exports and fixture digest; record actual versus expected.",
+        "expected": "Result is PASS only if every assertion holds; otherwise FAIL or BLOCKED with linked defect/prerequisite. Preserve attempts."
+      }
+    ],
+    "automation": "test/testmgmt-execution-candidate.test.js",
+    "status": "NOT RUN",
+    "actual": "",
+    "evidence": [],
+    "defects": [],
+    "jiraKey": "VAT-113"
+  },
+  {
+    "id": "GV-TC-07",
+    "scenario": "S03",
+    "title": "Candidate reuse through manual, CI and target paths",
+    "requirements": [
+      "R04"
+    ],
+    "priority": "P0",
+    "level": "System / integration",
+    "method": "Manual live acceptance with local regression support",
+    "preconditions": "E1\u2013E7 in test-plan.md satisfied; use isolated demo fixtures only; human signatures performed by authorized human.",
+    "fixture": "F-CAND bound to A; prepared second run and proposed target B",
+    "steps": [
+      {
+        "action": "Create/reset the isolated fixture and capture before-state, actual build/environment, actor and stable identities.",
+        "expected": "Preconditions and independent expected values are recorded; no production data or secrets in artifacts."
+      },
+      {
+        "action": "Attempt manual addRun, CI intake and closure target using B; then create a separate execution for B.",
+        "expected": "All reuse paths reject mismatch without mutating A; separate execution can bind B subject to ordinary authorization."
+      },
+      {
+        "action": "Refresh/read back durable records; retain sanitized request/response, audit proof, screenshots/exports and fixture digest; record actual versus expected.",
+        "expected": "Result is PASS only if every assertion holds; otherwise FAIL or BLOCKED with linked defect/prerequisite. Preserve attempts."
+      }
+    ],
+    "automation": "test/testmgmt-execution-candidate.test.js",
+    "status": "NOT RUN",
+    "actual": "",
+    "evidence": [],
+    "defects": [],
+    "jiraKey": "VAT-114"
+  },
+  {
+    "id": "GV-TC-08",
+    "scenario": "S04",
+    "title": "Token and grant scope rejection",
+    "requirements": [
+      "R05"
+    ],
+    "priority": "P0",
+    "level": "System / integration",
+    "method": "Manual live acceptance with local regression support",
+    "preconditions": "E1\u2013E7 in test-plan.md satisfied; use isolated demo fixtures only; human signatures performed by authorized human.",
+    "fixture": "F-CI: one-time token, grant for exact runs, wrong installation/project/execution/run variants",
+    "steps": [
+      {
+        "action": "Create/reset the isolated fixture and capture before-state, actual build/environment, actor and stable identities.",
+        "expected": "Preconditions and independent expected values are recorded; no production data or secrets in artifacts."
+      },
+      {
+        "action": "Submit valid request, then wrong token/secret and each scope variant; inspect run/receipt state without recording secrets.",
+        "expected": "Valid scoped request can enter processing; unauthorized variants have fixed denial and zero result writes."
+      },
+      {
+        "action": "Refresh/read back durable records; retain sanitized request/response, audit proof, screenshots/exports and fixture digest; record actual versus expected.",
+        "expected": "Result is PASS only if every assertion holds; otherwise FAIL or BLOCKED with linked defect/prerequisite. Preserve attempts."
+      }
+    ],
+    "automation": "test/testmgmt-intake.test.js",
+    "status": "NOT RUN",
+    "actual": "",
+    "evidence": [],
+    "defects": [],
+    "jiraKey": "VAT-115"
+  },
+  {
+    "id": "GV-TC-09",
+    "scenario": "S04",
+    "title": "Mapping, revision and dataset iteration errors",
+    "requirements": [
+      "R05"
+    ],
+    "priority": "P0",
+    "level": "System / integration",
+    "method": "Manual live acceptance with local regression support",
+    "preconditions": "E1\u2013E7 in test-plan.md satisfied; use isolated demo fixtures only; human signatures performed by authorized human.",
+    "fixture": "F-CI contains T1 v1 and two resolved dataset iterations",
+    "steps": [
+      {
+        "action": "Create/reset the isolated fixture and capture before-state, actual build/environment, actor and stable identities.",
+        "expected": "Preconditions and independent expected values are recorded; no production data or secrets in artifacts."
+      },
+      {
+        "action": "Submit missing/duplicate/foreign run, wrong revision, omitted/duplicate step and wrong iteration variants; preserve payload digests.",
+        "expected": "Exact mapping failures reject before applying results; legitimate two-iteration payload maps only to prepared identities."
+      },
+      {
+        "action": "Refresh/read back durable records; retain sanitized request/response, audit proof, screenshots/exports and fixture digest; record actual versus expected.",
+        "expected": "Result is PASS only if every assertion holds; otherwise FAIL or BLOCKED with linked defect/prerequisite. Preserve attempts."
+      }
+    ],
+    "automation": "test/testmgmt-intake.test.js",
+    "status": "NOT RUN",
+    "actual": "",
+    "evidence": [],
+    "defects": [],
+    "jiraKey": "VAT-116"
+  },
+  {
+    "id": "GV-TC-10",
+    "scenario": "S04",
+    "title": "Expiry and revocation after queue admission",
+    "requirements": [
+      "R05",
+      "R08"
+    ],
+    "priority": "P0",
+    "level": "System / integration",
+    "method": "Manual live acceptance with local regression support",
+    "preconditions": "E1\u2013E7 in test-plan.md satisfied; use isolated demo fixtures only; human signatures performed by authorized human.",
+    "fixture": "F-CI with queued receipt; controllable supported clock and per-write pause",
+    "steps": [
+      {
+        "action": "Create/reset the isolated fixture and capture before-state, actual build/environment, actor and stable identities.",
+        "expected": "Preconditions and independent expected values are recorded; no production data or secrets in artifacts."
+      },
+      {
+        "action": "Revoke token or grant, or expire it, after queueing and before next worker write; repeat during partial application.",
+        "expected": "SQL and runtime checks stop subsequent writes; receipt stays blocked; human signing/correction cannot bypass pending intake."
+      },
+      {
+        "action": "Refresh/read back durable records; retain sanitized request/response, audit proof, screenshots/exports and fixture digest; record actual versus expected.",
+        "expected": "Result is PASS only if every assertion holds; otherwise FAIL or BLOCKED with linked defect/prerequisite. Preserve attempts."
+      }
+    ],
+    "automation": "test/testmgmt-intake-store.test.js",
+    "status": "NOT RUN",
+    "actual": "",
+    "evidence": [],
+    "defects": [],
+    "jiraKey": "VAT-117"
+  },
+  {
+    "id": "GV-TC-11",
+    "scenario": "S05",
+    "title": "Intake size, count and text boundaries",
+    "requirements": [
+      "R06"
+    ],
+    "priority": "P1",
+    "level": "System / integration",
+    "method": "Manual live acceptance with local regression support",
+    "preconditions": "E1\u2013E7 in test-plan.md satisfied; use isolated demo fixtures only; human signatures performed by authorized human.",
+    "fixture": "F-LIMIT: exact and one-over variants: 262144 UTF-8 bytes, 50 runs, 500 steps, 4000 actual/comment chars, 16000 log chars",
+    "steps": [
+      {
+        "action": "Create/reset the isolated fixture and capture before-state, actual build/environment, actor and stable identities.",
+        "expected": "Preconditions and independent expected values are recorded; no production data or secrets in artifacts."
+      },
+      {
+        "action": "Submit independently valid at-limit and over-limit payloads; include multibyte text; ensure other fields remain in bounds.",
+        "expected": "At-limit parser inputs are accepted when all other constraints hold; over-limit inputs reject without writes. Live payload limits may be stricter and must be recorded."
+      },
+      {
+        "action": "Refresh/read back durable records; retain sanitized request/response, audit proof, screenshots/exports and fixture digest; record actual versus expected.",
+        "expected": "Result is PASS only if every assertion holds; otherwise FAIL or BLOCKED with linked defect/prerequisite. Preserve attempts."
+      }
+    ],
+    "automation": "test/testmgmt-intake.test.js",
+    "status": "NOT RUN",
+    "actual": "",
+    "evidence": [],
+    "defects": [],
+    "jiraKey": "VAT-118"
+  },
+  {
+    "id": "GV-TC-12",
+    "scenario": "S05",
+    "title": "Static acknowledgment and unsupported payloads",
+    "requirements": [
+      "R06"
+    ],
+    "priority": "P0",
+    "level": "System / integration",
+    "method": "Manual live acceptance with local regression support",
+    "preconditions": "E1\u2013E7 in test-plan.md satisfied; use isolated demo fixtures only; human signatures performed by authorized human.",
+    "fixture": "F-CI; wrong method/content type, malformed JSON, raw XML/JUnit, evidence array and controlled URL marker",
+    "steps": [
+      {
+        "action": "Create/reset the isolated fixture and capture before-state, actual build/environment, actor and stable identities.",
+        "expected": "Preconditions and independent expected values are recorded; no production data or secrets in artifacts."
+      },
+      {
+        "action": "Submit variants through deployed trigger; inspect status/body. Observe controlled outbound marker using approved test instrumentation.",
+        "expected": "Fixed responses reveal no token/receipt/results; invalid input rejects; URL is retained as sender text only, with no server fetch; CI evidence arrays are rejected."
+      },
+      {
+        "action": "Refresh/read back durable records; retain sanitized request/response, audit proof, screenshots/exports and fixture digest; record actual versus expected.",
+        "expected": "Result is PASS only if every assertion holds; otherwise FAIL or BLOCKED with linked defect/prerequisite. Preserve attempts."
+      }
+    ],
+    "automation": "test/testmgmt-ci-intake-handler.test.js",
+    "status": "NOT RUN",
+    "actual": "",
+    "evidence": [],
+    "defects": [],
+    "jiraKey": "VAT-119"
+  },
+  {
+    "id": "GV-TC-13",
+    "scenario": "S06",
+    "title": "Byte-identical retry and key conflict",
+    "requirements": [
+      "R07"
+    ],
+    "priority": "P0",
+    "level": "System / integration",
+    "method": "Manual live acceptance with local regression support",
+    "preconditions": "E1\u2013E7 in test-plan.md satisfied; use isolated demo fixtures only; human signatures performed by authorized human.",
+    "fixture": "F-CI original JSON P and exact bytes P; P2 changes actual/comment or JSON whitespace under same key",
+    "steps": [
+      {
+        "action": "Create/reset the isolated fixture and capture before-state, actual build/environment, actor and stable identities.",
+        "expected": "Preconditions and independent expected values are recorded; no production data or secrets in artifacts."
+      },
+      {
+        "action": "Send P twice; resend P after APPLIED; submit changed P2 with same idempotency key. Compare receipt IDs, hashes and business writes.",
+        "expected": "Identical bytes reuse original receipt and do not duplicate results; changed bytes conflict, including semantically equivalent reserialized JSON."
+      },
+      {
+        "action": "Refresh/read back durable records; retain sanitized request/response, audit proof, screenshots/exports and fixture digest; record actual versus expected.",
+        "expected": "Result is PASS only if every assertion holds; otherwise FAIL or BLOCKED with linked defect/prerequisite. Preserve attempts."
+      }
+    ],
+    "automation": "test/testmgmt-intake.test.js",
+    "status": "NOT RUN",
+    "actual": "",
+    "evidence": [],
+    "defects": [],
+    "jiraKey": "VAT-120"
+  },
+  {
+    "id": "GV-TC-14",
+    "scenario": "S06",
+    "title": "Partial application and worker redelivery",
+    "requirements": [
+      "R08"
+    ],
+    "priority": "P0",
+    "level": "System / integration",
+    "method": "Manual live acceptance with local regression support",
+    "preconditions": "E1\u2013E7 in test-plan.md satisfied; use isolated demo fixtures only; human signatures performed by authorized human.",
+    "fixture": "F-RECOVERY: two runs in one receipt; supported fault after first durable member write",
+    "steps": [
+      {
+        "action": "Create/reset the isolated fixture and capture before-state, actual build/environment, actor and stable identities.",
+        "expected": "Preconditions and independent expected values are recorded; no production data or secrets in artifacts."
+      },
+      {
+        "action": "Pause/fail after member one; try sign/correct both runs; redeliver same receipt and compare final result records.",
+        "expected": "Both remain unsignable while pending; redelivery resumes without duplicate/lost results or changed original provenance; readiness requires every member."
+      },
+      {
+        "action": "Refresh/read back durable records; retain sanitized request/response, audit proof, screenshots/exports and fixture digest; record actual versus expected.",
+        "expected": "Result is PASS only if every assertion holds; otherwise FAIL or BLOCKED with linked defect/prerequisite. Preserve attempts."
+      }
+    ],
+    "automation": "test/testmgmt-intake.test.js",
+    "status": "NOT RUN",
+    "actual": "",
+    "evidence": [],
+    "defects": [],
+    "jiraKey": "VAT-121"
+  },
+  {
+    "id": "GV-TC-15",
+    "scenario": "S06",
+    "title": "Audit failure and serialized pending receipts",
+    "requirements": [
+      "R08"
+    ],
+    "priority": "P0",
+    "level": "System / integration",
+    "method": "Manual live acceptance with local regression support",
+    "preconditions": "E1\u2013E7 in test-plan.md satisfied; use isolated demo fixtures only; human signatures performed by authorized human.",
+    "fixture": "F-RECOVERY; fail receipt audit confirmation; second distinct request for same execution",
+    "steps": [
+      {
+        "action": "Create/reset the isolated fixture and capture before-state, actual build/environment, actor and stable identities.",
+        "expected": "Preconditions and independent expected values are recorded; no production data or secrets in artifacts."
+      },
+      {
+        "action": "Apply results with audit unavailable; attempt second admission and signing; restore audit, redeliver and inspect readiness.",
+        "expected": "No APPLIED/signable state without matching audit proof; one pending receipt owns execution admission; successful recovery releases lock."
+      },
+      {
+        "action": "Refresh/read back durable records; retain sanitized request/response, audit proof, screenshots/exports and fixture digest; record actual versus expected.",
+        "expected": "Result is PASS only if every assertion holds; otherwise FAIL or BLOCKED with linked defect/prerequisite. Preserve attempts."
+      }
+    ],
+    "automation": "test/testmgmt-intake-store.test.js",
+    "status": "NOT RUN",
+    "actual": "",
+    "evidence": [],
+    "defects": [],
+    "jiraKey": "VAT-122"
+  },
+  {
+    "id": "GV-TC-16",
+    "scenario": "S07",
+    "title": "Human review and reasoned correction",
+    "requirements": [
+      "R09"
+    ],
+    "priority": "P0",
+    "level": "System / integration",
+    "method": "Manual live acceptance with local regression support",
+    "preconditions": "E1\u2013E7 in test-plan.md satisfied; use isolated demo fixtures only; human signatures performed by authorized human.",
+    "fixture": "F-CI APPLIED results, original logs, eligible independent human reviewer",
+    "steps": [
+      {
+        "action": "Create/reset the isolated fixture and capture before-state, actual build/environment, actor and stable identities.",
+        "expected": "Preconditions and independent expected values are recorded; no production data or secrets in artifacts."
+      },
+      {
+        "action": "Inspect review meaning; correct one actual result with reason then sign using human ceremony; compare originals, correction and signed content.",
+        "expected": "Meaning explicitly states review of machine-recorded results; machine remains executor; reason/history/original receipt are preserved; signed content matches review."
+      },
+      {
+        "action": "Refresh/read back durable records; retain sanitized request/response, audit proof, screenshots/exports and fixture digest; record actual versus expected.",
+        "expected": "Result is PASS only if every assertion holds; otherwise FAIL or BLOCKED with linked defect/prerequisite. Preserve attempts."
+      }
+    ],
+    "automation": "frontend/test/testmgmt-governance.test.mjs",
+    "status": "NOT RUN",
+    "actual": "",
+    "evidence": [],
+    "defects": [],
+    "jiraKey": "VAT-123"
+  },
+  {
+    "id": "GV-TC-17",
+    "scenario": "S07",
+    "title": "Signed failure, defect and clean retest",
+    "requirements": [
+      "R09",
+      "R11"
+    ],
+    "priority": "P0",
+    "level": "System / integration",
+    "method": "Manual live acceptance with local regression support",
+    "preconditions": "E1\u2013E7 in test-plan.md satisfied; use isolated demo fixtures only; human signatures performed by authorized human.",
+    "fixture": "F-DEFECT: FAILED signed run under configured defect policy; corrected candidate on fresh execution",
+    "steps": [
+      {
+        "action": "Create/reset the isolated fixture and capture before-state, actual build/environment, actor and stable identities.",
+        "expected": "Preconditions and independent expected values are recorded; no production data or secrets in artifacts."
+      },
+      {
+        "action": "Human-review failure; inspect configured defect creation without duplicates; execute fix retest and review resolution/qualification.",
+        "expected": "Failure remains FAILED; defect safeguards apply; closure denies until required blocker/retest conditions are satisfied; original failed attempt persists."
+      },
+      {
+        "action": "Refresh/read back durable records; retain sanitized request/response, audit proof, screenshots/exports and fixture digest; record actual versus expected.",
+        "expected": "Result is PASS only if every assertion holds; otherwise FAIL or BLOCKED with linked defect/prerequisite. Preserve attempts."
+      }
+    ],
+    "automation": "test/testmgmt-closure-gate.test.js",
+    "status": "NOT RUN",
+    "actual": "",
+    "evidence": [],
+    "defects": [],
+    "jiraKey": "VAT-124"
+  },
+  {
+    "id": "GV-TC-18",
+    "scenario": "S08",
+    "title": "Newer unfinished or adverse attempt blocks old pass",
+    "requirements": [
+      "R10"
+    ],
+    "priority": "P0",
+    "level": "System / integration",
+    "method": "Manual live acceptance with local regression support",
+    "preconditions": "E1\u2013E7 in test-plan.md satisfied; use isolated demo fixtures only; human signatures performed by authorized human.",
+    "fixture": "F-LATEST: signed PASSED run sequence n and same-context replacement n+1",
+    "steps": [
+      {
+        "action": "Create/reset the isolated fixture and capture before-state, actual build/environment, actor and stable identities.",
+        "expected": "Preconditions and independent expected values are recorded; no production data or secrets in artifacts."
+      },
+      {
+        "action": "Independently test replacement IN_PROGRESS with blank build, FAILED, REJECTED and CANCELLED; evaluate after each.",
+        "expected": "Every newer replacement blocks; no build filtering or fallback selects old pass; evaluation freezes n+1 as selected attempt."
+      },
+      {
+        "action": "Refresh/read back durable records; retain sanitized request/response, audit proof, screenshots/exports and fixture digest; record actual versus expected.",
+        "expected": "Result is PASS only if every assertion holds; otherwise FAIL or BLOCKED with linked defect/prerequisite. Preserve attempts."
+      }
+    ],
+    "automation": "test/testmgmt-governance.test.js",
+    "status": "NOT RUN",
+    "actual": "",
+    "evidence": [],
+    "defects": [],
+    "jiraKey": "VAT-125"
+  },
+  {
+    "id": "GV-TC-19",
+    "scenario": "S08",
+    "title": "Missing order, duplicate order and concurrent new attempt",
+    "requirements": [
+      "R10"
+    ],
+    "priority": "P0",
+    "level": "System / integration",
+    "method": "Manual live acceptance with local regression support",
+    "preconditions": "E1\u2013E7 in test-plan.md satisfied; use isolated demo fixtures only; human signatures performed by authorized human.",
+    "fixture": "F-LATEST; supported isolated faults for missing/duplicate sequence or creation during proof read",
+    "steps": [
+      {
+        "action": "Create/reset the isolated fixture and capture before-state, actual build/environment, actor and stable identities.",
+        "expected": "Preconditions and independent expected values are recorded; no production data or secrets in artifacts."
+      },
+      {
+        "action": "Evaluate with each invalid order; inject newer attempt between proof and final consistency read.",
+        "expected": "Missing/duplicate order and concurrent attempt change deny with explicit findings; historical order requires valid audit facts before cutoff."
+      },
+      {
+        "action": "Refresh/read back durable records; retain sanitized request/response, audit proof, screenshots/exports and fixture digest; record actual versus expected.",
+        "expected": "Result is PASS only if every assertion holds; otherwise FAIL or BLOCKED with linked defect/prerequisite. Preserve attempts."
+      }
+    ],
+    "automation": "test/testmgmt-governance.test.js",
+    "status": "NOT RUN",
+    "actual": "",
+    "evidence": [],
+    "defects": [],
+    "jiraKey": "VAT-126"
+  },
+  {
+    "id": "GV-TC-20",
+    "scenario": "S09",
+    "title": "Nonwaivable proof and build failures",
+    "requirements": [
+      "R11",
+      "R12"
+    ],
+    "priority": "P0",
+    "level": "System / integration",
+    "method": "Manual live acceptance with local regression support",
+    "preconditions": "E1\u2013E7 in test-plan.md satisfied; use isolated demo fixtures only; human signatures performed by authorized human.",
+    "fixture": "F-GREEN isolated variants: mismatched build, broken Test/run/evidence proof, pending intake, signed steps FAILED but stored PASSED",
+    "steps": [
+      {
+        "action": "Create/reset the isolated fixture and capture before-state, actual build/environment, actor and stable identities.",
+        "expected": "Preconditions and independent expected values are recorded; no production data or secrets in artifacts."
+      },
+      {
+        "action": "Evaluate each variant and attempt exception where supported; compare signed step outcome to stored summary.",
+        "expected": "Every invalid proof or mismatch denies; failure cannot be waived or masked by PASSED summary; no qualifying evidence is fabricated."
+      },
+      {
+        "action": "Refresh/read back durable records; retain sanitized request/response, audit proof, screenshots/exports and fixture digest; record actual versus expected.",
+        "expected": "Result is PASS only if every assertion holds; otherwise FAIL or BLOCKED with linked defect/prerequisite. Preserve attempts."
+      }
+    ],
+    "automation": "test/testmgmt-governance.test.js",
+    "status": "NOT RUN",
+    "actual": "",
+    "evidence": [],
+    "defects": [],
+    "jiraKey": "VAT-127"
+  },
+  {
+    "id": "GV-TC-21",
+    "scenario": "S09",
+    "title": "Incomplete reads, blockers and missing retest",
+    "requirements": [
+      "R11"
+    ],
+    "priority": "P0",
+    "level": "System / integration",
+    "method": "Manual live acceptance with local regression support",
+    "preconditions": "E1\u2013E7 in test-plan.md satisfied; use isolated demo fixtures only; human signatures performed by authorized human.",
+    "fixture": "F-GREEN variants: bounded incomplete histories, inaccessible required Test, blocking defect or absent retest",
+    "steps": [
+      {
+        "action": "Create/reset the isolated fixture and capture before-state, actual build/environment, actor and stable identities.",
+        "expected": "Preconditions and independent expected values are recorded; no production data or secrets in artifacts."
+      },
+      {
+        "action": "Evaluate each variant; restore one prerequisite at a time and inspect findings across all obligations.",
+        "expected": "Unavailable/incomplete data is not empty success; any remaining mandatory blocker denies with actionable finding."
+      },
+      {
+        "action": "Refresh/read back durable records; retain sanitized request/response, audit proof, screenshots/exports and fixture digest; record actual versus expected.",
+        "expected": "Result is PASS only if every assertion holds; otherwise FAIL or BLOCKED with linked defect/prerequisite. Preserve attempts."
+      }
+    ],
+    "automation": "test/testmgmt-closure-gate.test.js",
+    "status": "NOT RUN",
+    "actual": "",
+    "evidence": [],
+    "defects": [],
+    "jiraKey": "VAT-128"
+  },
+  {
+    "id": "GV-TC-22",
+    "scenario": "S10",
+    "title": "Permitted historical metadata exception",
+    "requirements": [
+      "R12"
+    ],
+    "priority": "P0",
+    "level": "System / integration",
+    "method": "Manual live acceptance with local regression support",
+    "preconditions": "E1\u2013E7 in test-plan.md satisfied; use isolated demo fixtures only; human signatures performed by authorized human.",
+    "fixture": "F-LEGACY: genuine schema-1 signed PASSED fixture, missing allowed metadata, valid historical audit ordering",
+    "steps": [
+      {
+        "action": "Create/reset the isolated fixture and capture before-state, actual build/environment, actor and stable identities.",
+        "expected": "Preconditions and independent expected values are recorded; no production data or secrets in artifacts."
+      },
+      {
+        "action": "Hash signed bytes; approve exception for exact evidence digest using chain meeting both floors; evaluate and export; hash historical bytes again.",
+        "expected": "Only named historical gap is accepted; VERIFIED_WITH_EXCEPTION identifies gap and unproved build absence; original signed bytes/digests are unchanged."
+      },
+      {
+        "action": "Refresh/read back durable records; retain sanitized request/response, audit proof, screenshots/exports and fixture digest; record actual versus expected.",
+        "expected": "Result is PASS only if every assertion holds; otherwise FAIL or BLOCKED with linked defect/prerequisite. Preserve attempts."
+      }
+    ],
+    "automation": "test/testmgmt-governance.test.js",
+    "status": "NOT RUN",
+    "actual": "",
+    "evidence": [],
+    "defects": [],
+    "jiraKey": "VAT-129"
+  },
+  {
+    "id": "GV-TC-23",
+    "scenario": "S10",
+    "title": "Rejected exception variants",
+    "requirements": [
+      "R12"
+    ],
+    "priority": "P0",
+    "level": "System / integration",
+    "method": "Manual live acceptance with local regression support",
+    "preconditions": "E1\u2013E7 in test-plan.md satisfied; use isolated demo fixtures only; human signatures performed by authorized human.",
+    "fixture": "F-LEGACY variants: schema-2 omission, actual mismatch, FAILED outcome, stale source, weak approval chain, wrong digest",
+    "steps": [
+      {
+        "action": "Create/reset the isolated fixture and capture before-state, actual build/environment, actor and stable identities.",
+        "expected": "Preconditions and independent expected values are recorded; no production data or secrets in artifacts."
+      },
+      {
+        "action": "Attempt each exception and evaluate; include changed evidence after exception approval.",
+        "expected": "No forbidden condition is waived; weak chain rejected; exception binds exact evidence/scope and cannot authorize changed content."
+      },
+      {
+        "action": "Refresh/read back durable records; retain sanitized request/response, audit proof, screenshots/exports and fixture digest; record actual versus expected.",
+        "expected": "Result is PASS only if every assertion holds; otherwise FAIL or BLOCKED with linked defect/prerequisite. Preserve attempts."
+      }
+    ],
+    "automation": "test/testmgmt-governance.test.js",
+    "status": "NOT RUN",
+    "actual": "",
+    "evidence": [],
+    "defects": [],
+    "jiraKey": "VAT-130"
+  },
+  {
+    "id": "GV-TC-24",
+    "scenario": "S11",
+    "title": "Evaluation insertion, audit and read-back failures",
+    "requirements": [
+      "R13"
+    ],
+    "priority": "P0",
+    "level": "System / integration",
+    "method": "Manual live acceptance with local regression support",
+    "preconditions": "E1\u2013E7 in test-plan.md satisfied; use isolated demo fixtures only; human signatures performed by authorized human.",
+    "fixture": "F-PERSIST: green candidate plus supported insertion/confirmation/read-back faults",
+    "steps": [
+      {
+        "action": "Create/reset the isolated fixture and capture before-state, actual build/environment, actor and stable identities.",
+        "expected": "Preconditions and independent expected values are recorded; no production data or secrets in artifacts."
+      },
+      {
+        "action": "Request closure separately at each fault stage, including no durable denial possible during outage.",
+        "expected": "Never ALLOWED without exact stored confirmed digest read-back; failure denies; inability to record denial is disclosed."
+      },
+      {
+        "action": "Refresh/read back durable records; retain sanitized request/response, audit proof, screenshots/exports and fixture digest; record actual versus expected.",
+        "expected": "Result is PASS only if every assertion holds; otherwise FAIL or BLOCKED with linked defect/prerequisite. Preserve attempts."
+      }
+    ],
+    "automation": "test/testmgmt-governance.test.js",
+    "status": "NOT RUN",
+    "actual": "",
+    "evidence": [],
+    "defects": [],
+    "jiraKey": "VAT-131"
+  },
+  {
+    "id": "GV-TC-25",
+    "scenario": "S11",
+    "title": "Frozen allowed and denied dossier stability",
+    "requirements": [
+      "R13",
+      "R14"
+    ],
+    "priority": "P0",
+    "level": "System / integration",
+    "method": "Manual live acceptance with local regression support",
+    "preconditions": "E1\u2013E7 in test-plan.md satisfied; use isolated demo fixtures only; human signatures performed by authorized human.",
+    "fixture": "F-GREEN and denied evaluation; original CI logs/proofs; later unavailable source baseline",
+    "steps": [
+      {
+        "action": "Create/reset the isolated fixture and capture before-state, actual build/environment, actor and stable identities.",
+        "expected": "Preconditions and independent expected values are recorded; no production data or secrets in artifacts."
+      },
+      {
+        "action": "Export allowed and recorded denied evaluations; save hashes; change later state and export same evaluation again.",
+        "expected": "Original frozen contents/digest remain stable; export includes selected attempts, meanings, receipts/log bytes, exceptions, evaluation time and verdict."
+      },
+      {
+        "action": "Refresh/read back durable records; retain sanitized request/response, audit proof, screenshots/exports and fixture digest; record actual versus expected.",
+        "expected": "Result is PASS only if every assertion holds; otherwise FAIL or BLOCKED with linked defect/prerequisite. Preserve attempts."
+      }
+    ],
+    "automation": "test/testmgmt-governance.test.js",
+    "status": "NOT RUN",
+    "actual": "",
+    "evidence": [],
+    "defects": [],
+    "jiraKey": "VAT-132"
+  },
+  {
+    "id": "GV-TC-26",
+    "scenario": "S11",
+    "title": "Tampered receipt and export authorization",
+    "requirements": [
+      "R07",
+      "R14"
+    ],
+    "priority": "P0",
+    "level": "System / integration",
+    "method": "Manual live acceptance with local regression support",
+    "preconditions": "E1\u2013E7 in test-plan.md satisfied; use isolated demo fixtures only; human signatures performed by authorized human.",
+    "fixture": "F-CI and frozen dossier; isolated tamper of payload, mappings, build or original logs; unreadable extra Test",
+    "steps": [
+      {
+        "action": "Create/reset the isolated fixture and capture before-state, actual build/environment, actor and stable identities.",
+        "expected": "Preconditions and independent expected values are recorded; no production data or secrets in artifacts."
+      },
+      {
+        "action": "Apply/read/export variants using authorized fault harness; repeat with nonmandatory mapped Test unreadable.",
+        "expected": "Tampered proof cannot become ready/qualifying; unauthorized exports fail and do not leak hidden members; original immutable receipt remains the authority."
+      },
+      {
+        "action": "Refresh/read back durable records; retain sanitized request/response, audit proof, screenshots/exports and fixture digest; record actual versus expected.",
+        "expected": "Result is PASS only if every assertion holds; otherwise FAIL or BLOCKED with linked defect/prerequisite. Preserve attempts."
+      }
+    ],
+    "automation": "test/testmgmt-intake.test.js",
+    "status": "NOT RUN",
+    "actual": "",
+    "evidence": [],
+    "defects": [],
+    "jiraKey": "VAT-133"
+  },
+  {
+    "id": "GV-TC-27",
+    "scenario": "S12",
+    "title": "Real workflow routing and automation identity",
+    "requirements": [
+      "R15"
+    ],
+    "priority": "P0",
+    "level": "System / integration",
+    "method": "Manual live acceptance with local regression support",
+    "preconditions": "E1\u2013E7 in test-plan.md satisfied; use isolated demo fixtures only; human signatures performed by authorized human.",
+    "fixture": "F-WORKFLOW: disposable source with va-gate on all intended Done routes; human and supported automation actors",
+    "steps": [
+      {
+        "action": "Create/reset the isolated fixture and capture before-state, actual build/environment, actor and stable identities.",
+        "expected": "Preconditions and independent expected values are recorded; no production data or secrets in artifacts."
+      },
+      {
+        "action": "Enumerate routes; try denied transition then qualified transition with human actor; repeat through supported automation actor lacking user-scoped read.",
+        "expected": "Guard runs on each intended route; denied source remains non-Done; qualified route can move; unavailable user-scoped reads fail closed. Capture tenant workflow configuration."
+      },
+      {
+        "action": "Refresh/read back durable records; retain sanitized request/response, audit proof, screenshots/exports and fixture digest; record actual versus expected.",
+        "expected": "Result is PASS only if every assertion holds; otherwise FAIL or BLOCKED with linked defect/prerequisite. Preserve attempts."
+      }
+    ],
+    "automation": "test/testmgmt-closure-gate.test.js",
+    "status": "NOT RUN",
+    "actual": "",
+    "evidence": [],
+    "defects": [],
+    "jiraKey": "VAT-134"
+  },
+  {
+    "id": "GV-TC-28",
+    "scenario": "S12",
+    "title": "Transition observation, duplicate event and UI read-back",
+    "requirements": [
+      "R15"
+    ],
+    "priority": "P1",
+    "level": "System / integration",
+    "method": "Manual live acceptance with local regression support",
+    "preconditions": "E1\u2013E7 in test-plan.md satisfied; use isolated demo fixtures only; human signatures performed by authorized human.",
+    "fixture": "F-WORKFLOW completed Jira move and corresponding event; duplicate delivery",
+    "steps": [
+      {
+        "action": "Create/reset the isolated fixture and capture before-state, actual build/environment, actor and stable identities.",
+        "expected": "Preconditions and independent expected values are recorded; no production data or secrets in artifacts."
+      },
+      {
+        "action": "Read governance UI and observation; redeliver duplicate event using supported harness; compare observation count and source state.",
+        "expected": "Jira status and audited observation are separately visible; duplicate reuses confirmed observation; timestamp proximity is not presented as verified evaluation linkage."
+      },
+      {
+        "action": "Refresh/read back durable records; retain sanitized request/response, audit proof, screenshots/exports and fixture digest; record actual versus expected.",
+        "expected": "Result is PASS only if every assertion holds; otherwise FAIL or BLOCKED with linked defect/prerequisite. Preserve attempts."
+      }
+    ],
+    "automation": "test/testmgmt-transition-observation.test.js",
+    "status": "NOT RUN",
+    "actual": "",
+    "evidence": [],
+    "defects": [],
+    "jiraKey": "VAT-135"
+  }
+]

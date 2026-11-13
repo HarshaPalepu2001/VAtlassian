@@ -1,0 +1,16 @@
+{
+  "README.md": "c6970a145b124cc1ea3933179db9934a69f566974a0797845fe7633b8f4710a2",
+  "complete-qa-package.md": "4a6e1214ec80869cbaca3f18c98bf9e273f0cbfdcac79738805c0d35c9aa48d6",
+  "execution-register.md": "d0647c0078d50082cd5ff1aa36972373729a16d3b30c3d6ba0188dac03774239",
+  "fixtures.md": "1ddd9b87813cc9c16e8b0e02c507da77194f4e67b9f35a003aab8cf755322c74",
+  "jira-records.md": "e98844d6f5cf74cc75bd4ae8b0f0662e9ca14317b4af87850461ea7a81cf15eb",
+  "live-readback.json": "762eca5f76ae1c5b1e533a34ad55572781d044c9175c1bcffd8065aa3cf08cff",
+  "local-focused-regression.log": "68fcb60b39ff6fa7f191c80c7b0f76d0ee97da5b239bf56be7c25c856cabd25f",
+  "requirements.md": "f6f9c7b379a39af1da2c8a07d1114b65d152bdf4499cbbfbe465def150829993",
+  "scenarios.md": "836c2fb67f37936607839c8542b54456084cf564467bd1ea20cec8cb3adf66d3",
+  "test-cases.json": "9db0d6f24211cf7261627d37effdef786cf230e306b9de709841fea1761ee781",
+  "test-cases.md": "d3070d988a08bce542ad1033a36f3df4e6ea235e8dfb9557aed5b76653f33aeb",
+  "test-plan.md": "7c8d4a0b0f170400b832e93b8ab2c84f7457494b6bdc3ae5086a42d2a8a07428",
+  "test-summary-template.md": "1884a1b0b3cf623b74c8ac02ca5c5525ff9d68b75f48962e4a7222ebabdb7594",
+  "verification.md": "8bbf1bf923a66891fdfbbd2b913f972b04748280b3829befb17361b7498ad39d"
+}

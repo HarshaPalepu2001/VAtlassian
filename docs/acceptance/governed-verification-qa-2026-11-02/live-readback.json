@@ -1,0 +1,189 @@
+{
+  "epic": "VAT-102",
+  "development": "VAT-103",
+  "requirements": "VAT-104",
+  "plan": "VAT-105",
+  "prerequisites": "VAT-106",
+  "execution": "VAT-107",
+  "cases": [
+    {
+      "case": "GV-TC-01",
+      "key": "VAT-108",
+      "result": "NOT RUN"
+    },
+    {
+      "case": "GV-TC-02",
+      "key": "VAT-109",
+      "result": "NOT RUN"
+    },
+    {
+      "case": "GV-TC-03",
+      "key": "VAT-110",
+      "result": "NOT RUN"
+    },
+    {
+      "case": "GV-TC-04",
+      "key": "VAT-111",
+      "result": "NOT RUN"
+    },
+    {
+      "case": "GV-TC-05",
+      "key": "VAT-112",
+      "result": "NOT RUN"
+    },
+    {
+      "case": "GV-TC-06",
+      "key": "VAT-113",
+      "result": "NOT RUN"
+    },
+    {
+      "case": "GV-TC-07",
+      "key": "VAT-114",
+      "result": "NOT RUN"
+    },
+    {
+      "case": "GV-TC-08",
+      "key": "VAT-115",
+      "result": "NOT RUN"
+    },
+    {
+      "case": "GV-TC-09",
+      "key": "VAT-116",
+      "result": "NOT RUN"
+    },
+    {
+      "case": "GV-TC-10",
+      "key": "VAT-117",
+      "result": "NOT RUN"
+    },
+    {
+      "case": "GV-TC-11",
+      "key": "VAT-118",
+      "result": "NOT RUN"
+    },
+    {
+      "case": "GV-TC-12",
+      "key": "VAT-119",
+      "result": "NOT RUN"
+    },
+    {
+      "case": "GV-TC-13",
+      "key": "VAT-120",
+      "result": "NOT RUN"
+    },
+    {
+      "case": "GV-TC-14",
+      "key": "VAT-121",
+      "result": "NOT RUN"
+    },
+    {
+      "case": "GV-TC-15",
+      "key": "VAT-122",
+      "result": "NOT RUN"
+    },
+    {
+      "case": "GV-TC-16",
+      "key": "VAT-123",
+      "result": "NOT RUN"
+    },
+    {
+      "case": "GV-TC-17",
+      "key": "VAT-124",
+      "result": "NOT RUN"
+    },
+    {
+      "case": "GV-TC-18",
+      "key": "VAT-125",
+      "result": "NOT RUN"
+    },
+    {
+      "case": "GV-TC-19",
+      "key": "VAT-126",
+      "result": "NOT RUN"
+    },
+    {
+      "case": "GV-TC-20",
+      "key": "VAT-127",
+      "result": "NOT RUN"
+    },
+    {
+      "case": "GV-TC-21",
+      "key": "VAT-128",
+      "result": "NOT RUN"
+    },
+    {
+      "case": "GV-TC-22",
+      "key": "VAT-129",
+      "result": "NOT RUN"
+    },
+    {
+      "case": "GV-TC-23",
+      "key": "VAT-130",
+      "result": "NOT RUN"
+    },
+    {
+      "case": "GV-TC-24",
+      "key": "VAT-131",
+      "result": "NOT RUN"
+    },
+    {
+      "case": "GV-TC-25",
+      "key": "VAT-132",
+      "result": "NOT RUN"
+    },
+    {
+      "case": "GV-TC-26",
+      "key": "VAT-133",
+      "result": "NOT RUN"
+    },
+    {
+      "case": "GV-TC-27",
+      "key": "VAT-134",
+      "result": "NOT RUN"
+    },
+    {
+      "case": "GV-TC-28",
+      "key": "VAT-135",
+      "result": "NOT RUN"
+    }
+  ],
+  "live_readback": {
+    "epic_case_children": 28,
+    "story_plan_execution_parented": true,
+    "requirements_prerequisites_related": true,
+    "all_15_requirement_ids_present": true,
+    "case_bodies_read_back": 28,
+    "duplicate_case_bodies_corrected": [
+      "VAT-116",
+      "VAT-120",
+      "VAT-129",
+      "VAT-135"
+    ],
+    "step_definition": "three explicit actions and expected results per case"
+  },
+  "attachments": {
+    "state": "BLOCKED",
+    "reason": "Chrome extension requires Allow access to file URLs; browser settings were not changed"
+  },
+  "governed_app_preparation": {
+    "signed_test_versions": "NOT ESTABLISHED",
+    "native_plan_membership": "NOT ESTABLISHED",
+    "prepared_runs": "NOT ESTABLISHED",
+    "human_approvals": "NOT PERFORMED"
+  },
+  "formal_ready_for_testing": false,
+  "entry_gates": "E1\u2013E7 pending",
+  "focused_local_tests": {
+    "passed": 58,
+    "failed": 0
+  },
+  "jira_workflow_states": {
+    "VAT-102": "In Review",
+    "VAT-103": "In Review",
+    "VAT-104": "Draft",
+    "VAT-105": "Draft",
+    "VAT-106": "Draft",
+    "VAT-107": "To Do",
+    "TestCases": "Draft"
+  }
+}
