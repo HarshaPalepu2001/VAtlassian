@@ -3,15 +3,15 @@
  * Tests build the same shape from fakes (test/testmgmt-*.test.js).
  */
 export async function testManagementRuntime() {
-  const [store, jira, exclusion, signing, ledger, auditStore, totp, planningStore, bugStore, evidence, proof, reporting, planning, retestStore, retestJira] = await Promise.all([
+  const [store, jira, exclusion, signing, ledger, auditStore, totp, planningStore, bugStore, evidence, proof, reporting, planning, retestStore, retestJira, planExecutionStore] = await Promise.all([
     import('./store.js'), import('./jira.js'), import('./treeExclusion.js'), import('./signing.js'),
     import('../lib/ledger.js'), import('../db/store.js'), import('../lib/approval/totpVerification.js'),
     import('./planningStore.js'), import('./bugStore.js'), import('./evidence.js'), import('./proof.js'),
-    import('./sourceRuntime.js'), import('../usecases/testPlanning.js'), import('./retestStore.js'), import('./retestJira.js')
+    import('./sourceRuntime.js'), import('../usecases/testPlanning.js'), import('./retestStore.js'), import('./retestJira.js'), import('./planExecutionStore.js')
   ]);
   const audit = (event) => ledger.append(auditStore.auditStore, { eventId: auditStore.newId(), ...event });
   let deps = {
-    ...store, ...jira, ...planningStore, ...bugStore, ...retestStore, ...retestJira,
+    ...store, ...jira, ...planningStore, ...bugStore, ...retestStore, ...retestJira, ...planExecutionStore,
     retainEvidence: evidence.retainEvidence, verifyEvidence: evidence.verifyEvidence,
     readRetainedEvidence: evidence.readRetainedEvidence, readRetainedEvidenceRange: evidence.readRetainedEvidenceRange,
     testManagementRole: exclusion.testManagementRole,

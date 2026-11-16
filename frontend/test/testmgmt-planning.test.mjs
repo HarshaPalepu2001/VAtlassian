@@ -16,7 +16,7 @@ const hooks = registerHooks({
     return next(specifier, context);
   },
   load(url, context, next) {
-    if (url === 'planning:bridge') return { format: 'module', shortCircuit: true, source: `export const invoke=(...args)=>globalThis.transport(...args);export const events={emit:async()=>{}};export const router={open:async()=>{}};export const view={getContext:async()=>({extension:{issue:{key:'VAT-21'}}})};` };
+    if (url === 'planning:bridge') return { format: 'module', shortCircuit: true, source: `export const invoke=(...args)=>globalThis.transport(...args);export const events={emit:async()=>{}};export const router={open:async()=>{}};export const view={getContext:async()=>({extension:{issue:{key:'VAT-21'}}})};export const requestJira=async()=>({ok:true,json:async()=>[]});` };
     if (url === 'planning:kit') return { format: 'module', shortCircuit: true, source: `import React from '${new URL('../node_modules/react/index.js', import.meta.url).href}';export default function Kit({children}){return React.createElement('div',{},children);}` };
     if (/\.tsx?$/.test(url)) return { format: 'module', shortCircuit: true, source: ts.transpileModule(fs.readFileSync(fileURLToPath(url), 'utf8'),
       { compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText };
@@ -167,10 +167,12 @@ test('a signed plan starts real execution through signed scope and a retry-stabl
   globalThis.transport = async (key, payload) => { if (key === 'harness:logAction') return {}; calls.push({ key, payload });
     if (calls.length === 1) return { error: 'Retry safely' }; return { issue: { key: 'VAT-31' }, runs: [{}] }; };
   await mount(PlanningView, { model: { ...model, revisions: [rev] }, onModel: () => {} });
-  const input = container.querySelector('[aria-label="Execution Jira key for revision 1"]');
+  const input = container.querySelector('[aria-label="Existing Test Execution key for revision 1"]')
+    ?? container.querySelector('[aria-label="Execution Jira key for revision 1"]');
   assert.ok(input, 'signed plan offers real execution startup');
   await type(input, 'VAT-31');
-  await act(() => button('Start execution').click()); await act(() => button('Start execution').click());
+  const startBtn = () => button('Add runs to execution') ?? button('Start execution');
+  await act(() => startBtn().click()); await act(() => startBtn().click());
   assert.equal(calls[0].key, 'tm:plan:startExecution'); assert.equal(calls[0].payload.executionKey, 'VAT-31');
   assert.equal(calls[0].payload.contentHash, rev.digest); assert.equal(calls[0].payload.revisionId, rev.revisionId);
   assert.equal(calls[1].payload.requestId, calls[0].payload.requestId); assert.ok(calls[0].payload.requestId);

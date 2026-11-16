@@ -129,7 +129,7 @@ test('migration ids are unique and include the manual-test schema through rerun 
   const ids = MIGRATIONS.map(m => m.id);
   assert.equal(new Set(ids).size, ids.length);
   assert.ok(ids.includes('v143_tm_project_author_separation'));
-  assert.equal(MIGRATIONS.at(-1).id, 'v182_tm_execution_candidate');
+  assert.equal(MIGRATIONS.at(-1).id, 'v183_tm_plan_execution_intent');
 });
 
 test('v137-v142 record authors and pending step changes, one statement each', () => {

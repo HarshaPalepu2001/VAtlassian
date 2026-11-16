@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { requestJira } from '@forge/bridge';
 import { invoke } from '../lib/bridge';
 import { Badge, CodeInput, EmptyState, Facts, Section, Select } from '../ui/primitives';
 import { Notice, When } from '../ui/feedback';
@@ -260,6 +261,10 @@ function StepRow({ run, step, model, busy, editable, signing, call, errorAt }: {
   const [actual, setActual] = useState(step.actual);
   const [comment, setComment] = useState(step.comment);
   const [attachmentId, setAttachmentId] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
   const [reason, setReason] = useState('');
   // A recorded result is changed only with a reason; the earlier one stays in the history.
   const recorded = step.recordedBy != null;
@@ -267,6 +272,29 @@ function StepRow({ run, step, model, busy, editable, signing, call, errorAt }: {
   const needsReason = (status: string) => recorded && changes(status) && !reason.trim();
   const done = (ok: boolean) => { if (ok) setReason(''); return ok; };
   const here = `step:${run.runId}:${step.id}`;
+  const uploadEvidence = async (file?: File) => {
+    if (!file || busy || uploading) return;
+    setUploadError(null);
+    if (file.size > 20 * 1024 * 1024) { setUploadError('Files must be 20 MB or smaller.'); return; }
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append('file', file, file.name);
+      const response = await requestJira(`/rest/api/3/issue/${encodeURIComponent(model.issue.key)}/attachments`, {
+        method: 'POST', headers: { 'X-Atlassian-Token': 'no-check' }, body: form
+      });
+      if (!response.ok) throw new Error('Jira could not upload this file to the execution.');
+      const created = await response.json() as { id?: string | number }[];
+      const uploaded = Array.isArray(created) ? created[0] : null;
+      if (!uploaded?.id) throw new Error('Jira uploaded the file but did not return its attachment ID. Refresh the execution before retrying.');
+      const saved = await call('tm:run:attachEvidence', { runId: run.runId, expectedRevision: run.revision,
+        stepId: step.id, attachmentId: String(uploaded.id) }, here);
+      if (saved) setAttachmentId('');
+      else setUploadError('The file is attached to the execution, but it was not recorded for this step. Refresh, then select it from the execution attachments list.');
+    } catch (error) {
+      setUploadError(error instanceof Error ? error.message : 'The file could not be uploaded.');
+    } finally { setUploading(false); }
+  };
   const record = async (status: string) => done(await call('tm:run:recordStep', { runId: run.runId, expectedRevision: run.revision,
     stepId: step.id, status, actual, comment, ...(recorded ? { reason } : {}) }, here));
   return (
@@ -310,6 +338,17 @@ function StepRow({ run, step, model, busy, editable, signing, call, errorAt }: {
             onClick={async () => done(await call('tm:run:removeEvidence', { runId: run.runId, expectedRevision: run.revision, stepId: step.id, attachmentId: e.attachmentId, reason }, here))}>Remove</button>}
         </p>
       ))}
+      {editable && <div className={`va-row${dragOver ? ' tm-evidence-drop--active' : ''}`} style={{ gap: 8, alignItems: 'center', padding: 10, border: '1px dashed var(--ds-border, #8590a2)', borderRadius: 6 }}
+        onDragOver={event => { event.preventDefault(); setDragOver(true); }} onDragLeave={() => setDragOver(false)}
+        onDrop={event => { event.preventDefault(); setDragOver(false); void uploadEvidence(event.dataTransfer.files[0]); }}>
+        <input ref={fileInput} type="file" hidden aria-label={`Upload evidence for step ${step.position}`}
+          onChange={event => { void uploadEvidence(event.currentTarget.files?.[0]); event.currentTarget.value = ''; }} />
+        <button className="va-button" type="button" disabled={busy || uploading} onClick={() => fileInput.current?.click()}>
+          {uploading ? 'Uploading evidence…' : 'Upload evidence'}
+        </button>
+        <span className="va-subtlest">or drop one file here · up to 20 MB · attaches to this execution and step</span>
+      </div>}
+      {uploadError && <Notice danger>{uploadError}</Notice>}
       {!!step.history?.length && (
         <Disclosure title={`Change history (${step.history.length})`} open={signing}>
         <div aria-label={`Changes to step ${step.position}`}>
@@ -327,12 +366,12 @@ function StepRow({ run, step, model, busy, editable, signing, call, errorAt }: {
       {editable && model.attachments.length > 0 && (
         <div className="va-row" style={{ gap: 6 }}>
           <Select ariaLabel={`Step ${step.position} evidence attachment`} value={attachmentId} onChange={setAttachmentId} disabled={busy} placeholder="Add evidence from this execution's attachments"
-            options={model.attachments.map(a => ({ value: a.id, label: a.filename }))} />
+            options={model.attachments.map(a => ({ value: a.id, label: `${a.filename} · ${a.created ? new Date(a.created).toLocaleString() : 'date unavailable'} · ${a.size.toLocaleString()} bytes${a.author?.displayName ? ` · ${a.author.displayName}` : ''}` }))} />
           <button className="va-button" disabled={busy || !attachmentId}
             onClick={async () => { if (await call('tm:run:attachEvidence', { runId: run.runId, expectedRevision: run.revision, stepId: step.id, attachmentId }, here)) setAttachmentId(''); }}>Add evidence</button>
         </div>
       )}
-      {editable && model.attachments.length === 0 && <p className="va-hint">To add evidence, attach the file to this execution first.</p>}
+      {editable && model.attachments.length === 0 && <p className="va-hint">Upload evidence here, or choose an attachment already on this execution.</p>}
       </div></details>
     </div>
   );

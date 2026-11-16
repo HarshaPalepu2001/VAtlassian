@@ -128,7 +128,8 @@ export function createTestExecution(deps) {
       role: 'EXECUTION', issue: { id: String(issue.id), key: issue.key, summary: issue.fields?.summary ?? '',
         status: issue.fields?.status?.name ?? '', done: isDone(issue) },
       parent: parentOf(issue), canEdit, releases,
-      attachments: (issue.fields?.attachment ?? []).map(a => ({ id: String(a.id), filename: a.filename, size: a.size })),
+      attachments: (issue.fields?.attachment ?? []).map(a => ({ id: String(a.id), filename: a.filename, size: a.size,
+        created: a.created ?? null, author: a.author ? { displayName: a.author.displayName ?? null } : null })),
       runChain: project.runChain, runs: out
     };
   }

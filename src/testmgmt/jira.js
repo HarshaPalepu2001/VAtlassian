@@ -124,6 +124,15 @@ export async function searchByLabelAsApp(label) {
   return { complete: !data?.nextPageToken, issues: (data?.issues ?? []).map(i => ({ id: String(i.id), key: i.key })) };
 }
 
+/** Confirm the identity and parent of an execution created from a signed plan. */
+export async function readPlanExecutionMarkerAsApp(issueId) {
+  const issue = await json(await forge.asApp().requestJira(
+    route`/rest/api/3/issue/${issueId}?fields=project,issuetype,parent&properties=va-tm-plan-execution`));
+  return { projectId: String(issue?.fields?.project?.id ?? ''), issueTypeId: String(issue?.fields?.issuetype?.id ?? ''),
+    parentIssueId: String(issue?.fields?.parent?.id ?? ''), requestId: issue?.properties?.['va-tm-plan-execution']?.requestId ?? null,
+    planIssueId: issue?.properties?.['va-tm-plan-execution']?.planIssueId ?? null };
+}
+
 /** The issue's project and the run its va-tm-bug property names, read by id (not through search, so never stale). */
 export async function readBugMarkerAsApp(issueId) {
   const issue = await json(await forge.asApp().requestJira(

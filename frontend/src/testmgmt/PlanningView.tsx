@@ -70,16 +70,45 @@ export default function PlanningView({ model, onModel, onSelectRuns }: {
     finally { setBusy(false); }
   };
   const start = async (r: PlanningRevision) => {
-    const key = executionKey.trim(); const scope = `${r.revisionId}:${key}`;
-    if (!startAttempt.current || startAttempt.current.scope !== scope) startAttempt.current = { scope, requestId: crypto.randomUUID(), offset: 0 };
-    setBusy(true); setError(null); setStarted(null);
+    const key = executionKey.trim(); const scope = `${r.revisionId}:${key || 'create'}`;
+    const storageKey = `va-plan-execution:${scope}`;
+    if (!startAttempt.current || startAttempt.current.scope !== scope) {
+      let saved: { requestId?: string; offset?: number } | null = null;
+      try { saved = JSON.parse(sessionStorage.getItem(storageKey) ?? 'null'); } catch { /* Start a new stable request when storage is unavailable. */ }
+      startAttempt.current = saved?.requestId && Number.isSafeInteger(saved.offset) && (saved.offset ?? -1) >= 0
+        ? { scope, requestId: saved.requestId, offset: saved.offset! }
+        : { scope, requestId: crypto.randomUUID(), offset: 0 };
+    }
+    setBusy(true); setError(null); setStarted(null); setStartComplete(false);
+    const attempt = startAttempt.current;
+    const saveAttempt = () => { try { sessionStorage.setItem(storageKey, JSON.stringify({ requestId: attempt.requestId, offset: attempt.offset })); } catch { /* In-memory retries remain available. */ } };
+    saveAttempt();
     try {
-      const result = await invoke<{ issue?: { key: string }; execution?: { key: string }; complete?: boolean; nextOffset?: number } & Failure>('tm:plan:startExecution', {
-        revisionId: r.revisionId, contentHash: r.digest, executionKey: key, requestId: startAttempt.current.requestId, offset: startAttempt.current.offset });
-      if (result.error) { setError({ message: result.error, at: null }); return; }
-      setStarted(result.issue?.key ?? result.execution?.key ?? key);
-      setStartComplete(result.complete !== false);
-      startAttempt.current.offset = result.nextOffset ?? startAttempt.current.offset;
+      while (true) {
+        const result = await invoke<{ issue?: { key: string }; execution?: { key: string }; complete?: boolean; nextOffset?: number; reason?: string } & Failure>('tm:plan:startExecution', {
+          revisionId: r.revisionId, contentHash: r.digest, executionKey: key, requestId: attempt.requestId, offset: attempt.offset });
+        if (result.error) {
+          setError({ message: result.error, at: null });
+          if (result.reason === 'PLAN_EXECUTION_CREATE_REPAIR') {
+            startAttempt.current = null;
+            try { sessionStorage.removeItem(storageKey); } catch { /* Ignore unavailable session storage. */ }
+          }
+          return;
+        }
+        setStarted(result.issue?.key ?? result.execution?.key ?? key);
+        const nextOffset = result.nextOffset ?? attempt.offset;
+        if (result.complete === false && nextOffset <= attempt.offset) throw new Error('Run creation did not advance. Retry the same request to resume safely.');
+        attempt.offset = nextOffset;
+        saveAttempt();
+        if (result.complete !== false) {
+          setStartComplete(true);
+          if (!key) {
+            startAttempt.current = null;
+            try { sessionStorage.removeItem(storageKey); } catch { /* Ignore unavailable session storage. */ }
+          }
+          return;
+        }
+      }
     } catch (e) { setError({ message: e instanceof Error ? e.message : 'The execution could not be started. Retry to check the same request.', at: null }); }
     finally { setBusy(false); }
   };
@@ -164,13 +193,13 @@ export default function PlanningView({ model, onModel, onSelectRuns }: {
         {error?.at === `finish:${r.revisionId}` && <Notice danger>{error.message}</Notice>}
         {model.role === 'PLAN' && r.state === 'SIGNED' && <>
           <button className="va-button" disabled={busy} onClick={() => select(r)}>Review run inputs</button>
-          <label className="va-field"><span className="va-label">Execution Jira key</span><input className="va-input" aria-label={`Execution Jira key for revision ${r.revisionNo}`} placeholder="VAT-31" value={executionKey} disabled={busy} onChange={e => { setExecutionKey(e.target.value); setStarted(null); }} /></label>
-          <button className="va-button va-button--primary" disabled={busy || !executionKey.trim()} onClick={() => start(r)}>{started && !startComplete ? 'Continue adding runs' : 'Start execution'}</button>
+          <label className="va-field"><span className="va-label">Existing Test Execution key (optional)</span><input className="va-input" aria-label={`Existing Test Execution key for revision ${r.revisionNo}`} placeholder="Leave blank to create one under this plan’s parent" value={executionKey} disabled={busy} onChange={e => { setExecutionKey(e.target.value); setStarted(null); setStartComplete(false); }} /></label>
+          <button className="va-button va-button--primary" disabled={busy} onClick={() => start(r)}>{busy ? 'Adding runs…' : started && startComplete ? 'Start another execution' : executionKey.trim() ? 'Add runs to execution' : 'Create execution and add runs'}</button>
         </>}
         <details><summary>Audit identifiers</summary><p>Revision <code>{r.revisionId}</code></p><p>Content <code>{r.digest}</code></p></details>
       </Card>)}
     </Section>
-    {started && <Notice>{startComplete ? `Execution ${started} is ready. Open its Test management panel to record results.` : `Execution ${started} has more runs to add. Continue this request to finish the signed plan selection.`}</Notice>}
+    {started && <Notice>{startComplete ? `Execution ${started} is ready with all plan runs. Open its Test management panel to record results.` : `Execution ${started} has runs ready. Retry to resume the signed plan selection.`}</Notice>}
     {selection && <Section title="Frozen run inputs">
       <p>{selection.runs.length} run inputs prepared from the signed revision. Choose these inputs when starting an execution.</p>
       <div className="tm-table-scroll" tabIndex={0}><table className="va-table"><thead><tr><th>Test</th><th>Signed version</th><th>Configuration</th><th>Environment</th><th>Release</th></tr></thead><tbody>

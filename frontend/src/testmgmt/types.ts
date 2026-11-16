@@ -37,6 +37,6 @@ export type Run = { evidenceSchema?: number; attemptSequence?: number | null; cl
   nextStep: NextStep; canSign: boolean; bug: Bug; canFinish: boolean };
 export type ExecutionViewModel = { role: 'EXECUTION'; issue: { id: string; key: string; summary: string; status: string; done: boolean };
   parent: Parent; canEdit: boolean; releases: { id: string; name: string }[];
-  attachments: { id: string; filename: string; size: number }[]; runChain: Chain; runs: Run[] };
+  attachments: { id: string; filename: string; size: number; created?: string | null; author?: { displayName?: string | null } | null }[]; runChain: Chain; runs: Run[] };
 
 export type Failure = { error?: string; reason?: string };

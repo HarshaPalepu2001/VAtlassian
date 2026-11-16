@@ -16,7 +16,7 @@ const hooks = registerHooks({
     return next(specifier, context);
   }, load(url, context, next) {
     if (url === 'tm-ui:bridge') return { format: 'module', shortCircuit: true, source:
-      `export const invoke=(...args)=>globalThis.tmTransport(...args); export const router={open:async()=>{}}; export const events={emit:async()=>{}};` };
+      `export const invoke=(...args)=>globalThis.tmTransport(...args); export const router={open:async()=>{}}; export const events={emit:async()=>{}}; export const requestJira=async()=>({ok:true,json:async()=>[]});` };
     if (url === 'tm-ui:kit') return { format: 'module', shortCircuit: true, source:
       `import React from '${new URL('../node_modules/react/index.js', import.meta.url).href}'; export default function Kit({children}) { return React.createElement('div',{},children); }` };
     if (/\.tsx?$/.test(url)) return { format: 'module', shortCircuit: true, source: ts.transpileModule(fs.readFileSync(fileURLToPath(url), 'utf8'),

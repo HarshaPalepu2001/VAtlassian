@@ -1113,5 +1113,23 @@ export const MIGRATIONS = [
   ...GOVERNANCE_MIGRATIONS.map((m, index) => ({ ...m, id: `v${148 + index}_${m.id.replaceAll('-', '_')}` })),
   ...INTAKE_MIGRATIONS,
   ...OBSERVATION_MIGRATIONS.map(m => ({ ...m, id: 'v181_tm_closure_observation' })),
-  ...CANDIDATE_MIGRATIONS
+  ...CANDIDATE_MIGRATIONS,
+  { id: 'v183_tm_plan_execution_intent', sql: `CREATE TABLE IF NOT EXISTS tm_plan_execution_intent (
+    request_id CHAR(32) NOT NULL PRIMARY KEY,
+    project_id BIGINT NOT NULL,
+    plan_issue_id BIGINT NOT NULL,
+    parent_issue_id BIGINT NOT NULL,
+    actor_account_id VARCHAR(128) NOT NULL,
+    revision_id CHAR(32) NOT NULL,
+    fingerprint CHAR(64) NOT NULL,
+    marker VARCHAR(64) NOT NULL,
+    state VARCHAR(24) NOT NULL,
+    execution_issue_id BIGINT NULL,
+    execution_key VARCHAR(64) NULL,
+    last_error VARCHAR(255) NULL,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    KEY idx_tm_plan_execution_plan (plan_issue_id, created_at),
+    KEY idx_tm_plan_execution_state (project_id, state)
+  )` }
 ];
